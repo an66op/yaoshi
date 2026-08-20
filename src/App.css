@@ -1181,11 +1181,6 @@ button:active {
   text-align: left;
   font-size: 11px;
 }
-.ticket-strip input.ticket-selection {
-  min-width: 0;
-  outline: none;
-  font: inherit;
-}
 .ticket-strip .ticket-toggle {
   display: grid;
   place-items: center;

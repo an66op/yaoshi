@@ -246,6 +246,29 @@
 .parsed-ticket article footer { margin-top: 9px; padding-top: 7px; border-top: 1px solid #e4ecef; color: #168c82; font-weight: 700; }
 .theme-night.game-room .parsed-ticket article strong { color: #efffff; }
 .theme-night.game-room .parsed-ticket article footer { border-top-color: #4bc3cb30; color: #7fe4cb; }
+
+/* 提升下注页阅读性：保留原有布局，仅放大主要文字层级。 */
+.game-room .game-header > b { font-size: 18px; }
+.game-room .game-header small { font-size: 12px; }
+.game-room .game-info span,
+.game-room .game-info button,
+.game-room .last-draw > span,
+.game-room .last-draw > small { font-size: 12px; }
+.game-room .recent-draws header,
+.game-room .recent-draws header b,
+.game-room .recent-draws header small { font-size: 10px; }
+.game-room .recent-draws article,
+.game-room .recent-draws article > span { font-size: 11px; }
+.game-room .bet-chat > p,
+.game-room .admin-message small,
+.game-room .market-bet small,
+.game-room .player-bet small { font-size: 11px; }
+.game-room .admin-message article,
+.game-room .market-bet p,
+.game-room .player-bet article { font-size: 14px; }
+.game-room .parsed-ticket article { font-size: 13px; }
+.game-room .input-bet-keyboard .bet-key { font-size: 18px; }
+.game-room .input-bet-keyboard .bet-key.confirm { font-size: 13px; }
 .bet-feed {
   display: grid;
   gap: 12px;

@@ -11,7 +11,7 @@ type Dialog = 'history' | 'orders' | 'assist' | 'required' | null
 type BetMode = 'quick' | 'dual' | 'numbers'
 type ParsedBet = { content: string; lines: string[]; total: number }
 
-const quickKeys = ['大', '1', '2', '3', '←', '小', '4', '5', '6', '龙', '单', '7', '8', '9', '/', '#', '双', '0', '确认', '虎']
+const quickKeys = ['大', '1', '2', '3', '←', '小', '4', '5', '6', '龙', '单', '7', '8', '9', '冠亚', '双', '0', '#', '/', '虎']
 const quickOptions = new Set(['大', '小', '单', '双', '龙', '虎', '冠亚'])
 const dualOptions = ['冠军大', '冠军小', '冠军单', '冠军双', '冠军龙', '冠军虎', '亚军大', '亚军小', '亚军单', '亚军双', '冠亚和大', '冠亚和小']
 const modes: Array<{ id: BetMode; label: string }> = [{ id: 'quick', label: '快捷' }, { id: 'dual', label: '两面盘' }, { id: 'numbers', label: '号码 1~10' }]

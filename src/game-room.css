@@ -212,9 +212,9 @@
   max-width: 258px;
   padding: 10px 12px;
   border-radius: 12px 3px 12px 12px;
-  background: linear-gradient(135deg, #c7efed, #aee3dc);
-  color: #155f68;
-  font-size: 11px;
+  background: linear-gradient(135deg, #1196bc, #087fa9);
+  color: #fff;
+  font-size: 13px;
   line-height: 1.75;
   box-shadow: 0 4px 10px #1b7b7d25;
 }
@@ -236,9 +236,16 @@
   color: #9ac5ce;
 }
 .theme-night.game-room .player-bet article {
-  background: #176e75;
+  background: #0c7fa3;
   color: #efffff;
 }
+.parsed-ticket { margin-top: 8px; }
+.parsed-ticket article { font-size: 12px; line-height: 1.8; }
+.parsed-ticket article strong { display: inline-block; margin: 4px 0 6px; color: #243f4d; }
+.parsed-line { display: block; }
+.parsed-ticket article footer { margin-top: 9px; padding-top: 7px; border-top: 1px solid #e4ecef; color: #168c82; font-weight: 700; }
+.theme-night.game-room .parsed-ticket article strong { color: #efffff; }
+.theme-night.game-room .parsed-ticket article footer { border-top-color: #4bc3cb30; color: #7fe4cb; }
 .bet-feed {
   display: grid;
   gap: 12px;

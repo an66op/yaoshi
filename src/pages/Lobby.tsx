@@ -17,8 +17,7 @@ export function Lobby({ account, room, games, theme, onOpenGame, onToggleTheme }
 
   return <>
     <header className="lobby-hero">
-      <div className="hero-top"><span className="brand-word">曜图</span><div className="hero-tools"><button className="theme-switch" onClick={onToggleTheme} aria-label="切换昼夜模式">{theme === 'day' ? '☾' : '☀'}</button><button className="avatar-user" aria-label="用户资料">{account.slice(0, 1).toUpperCase()}</button></div></div>
-      <div className="room-badge"><small>房间号</small><b>{room}</b></div>
+      <div className="hero-top"><span className="brand-word">曜图</span><div className="room-badge"><b>{room}</b></div><div className="hero-tools"><button className="theme-switch" onClick={onToggleTheme} aria-label="切换昼夜模式">{theme === 'day' ? '☾' : '☀'}</button><button className="avatar-user" aria-label="用户资料">{account.slice(0, 1).toUpperCase()}</button></div></div>
       <button className="announcement" onClick={() => setAnnouncementOpen(true)}><span>●</span><p>【公告】本周系统维护安排与活动说明</p><Icon name="arrow" /></button>
     </header>
     <section className="lobby-body">

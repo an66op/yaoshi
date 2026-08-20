@@ -1,0 +1,112 @@
+.service-history {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+.service-time {
+  margin: 2px 0 4px;
+  color: #879aa6;
+  text-align: center;
+  font-size: 10px;
+}
+.service-message {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.service-message.outgoing {
+  justify-content: flex-end;
+}
+.service-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 31px;
+  height: 31px;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #d93a42, #ed6b43);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+}
+.service-avatar.user {
+  background: linear-gradient(145deg, #4e90b9, #85bcc8);
+}
+.service-bubble {
+  max-width: 245px;
+  padding: 10px 12px;
+  border-radius: 4px 13px 13px;
+  background: #fff;
+  color: #314956;
+  font-size: 12px;
+  line-height: 1.65;
+  box-shadow: 0 3px 10px #23405b18;
+}
+.service-message.outgoing .service-bubble {
+  border-radius: 13px 4px 13px 13px;
+  background: linear-gradient(135deg, #caeef0, #bde9e5);
+  color: #155f68;
+}
+.service-replies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 2px 39px;
+}
+.service-replies button {
+  padding: 7px 9px;
+  border: 1px solid #70c9cc75;
+  border-radius: 12px;
+  background: #f6ffffd9;
+  color: #20767d;
+  font-size: 10px;
+}
+.service-replies button:disabled {
+  opacity: 0.65;
+}
+.theme-night .service-bubble {
+  background: #143753;
+  color: #e2f7fb;
+  box-shadow: 0 4px 12px #0004;
+}
+.theme-night .service-message.outgoing .service-bubble {
+  background: #176e75;
+  color: #efffff;
+}
+.theme-night .service-replies button {
+  border-color: #4cc4cf70;
+  background: #103b56;
+  color: #b8eff1;
+}
+.service-avatar.app-avatar {
+  display: block;
+}
+
+/* 通知以置顶会话呈现，进入后再查看各自的消息流。 */
+.notification-page { min-height: 100%; background: linear-gradient(180deg, #f4fbfc, #edf6f7); }
+.notification-pinned-title { margin: 0; padding: 15px 17px 8px; color: #668593; font-size: 11px; font-weight: 700; }
+.notification-thread-list { margin: 0 12px; overflow: hidden; border: 1px solid #dfecee; border-radius: 16px; background: #fff; box-shadow: 0 5px 15px #31566d0d; }
+.notification-thread { position: relative; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto 13px; align-items: center; gap: 10px; width: 100%; min-height: 72px; padding: 12px; border: 0; border-bottom: 1px solid #edf2f3; background: #fff; color: #2e4a58; text-align: left; }
+.notification-thread:last-child { border-bottom: 0; }
+.notification-thread > span, .notification-messages > button > span { position: relative; display: grid; place-items: center; width: 39px; height: 39px; border-radius: 13px; color: #fff; font-size: 14px; font-weight: 700; }
+.notification-thread > span.system, .notification-messages > button > span.system { background: linear-gradient(135deg, #4b94cf, #3d6fc4); }
+.notification-thread > span.activity, .notification-messages > button > span.activity { background: linear-gradient(135deg, #ed9470, #df637a); }
+.notification-thread > span i { position: absolute; top: -7px; left: -5px; padding: 2px 4px; border: 1px solid #fff; border-radius: 6px; background: #ed735d; color: #fff; font-size: 7px; font-style: normal; white-space: nowrap; }
+.notification-thread > div { display: grid; gap: 4px; min-width: 0; }
+.notification-thread b { font-size: 13px; }
+.notification-thread p { overflow: hidden; margin: 0; color: #8297a1; font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+.notification-thread time { align-self: start; color: #9bacb4; font-size: 9px; }
+.notification-thread > svg { width: 13px; color: #a5b5bb; }
+.notification-messages { display: grid; gap: 11px; padding: 15px; }
+.notification-messages > p { margin: 0 0 2px; color: #78919b; text-align: center; font-size: 10px; }
+.notification-messages > button { display: flex; gap: 10px; padding: 13px; border: 1px solid #e2ecee; border-radius: 15px; background: #fff; color: #314c59; text-align: left; box-shadow: 0 4px 11px #355a6a0d; }
+.notification-messages > button > div { display: grid; gap: 5px; min-width: 0; }
+.notification-messages time { color: #98aab1; font-size: 9px; }
+.notification-messages b { font-size: 13px; }
+.notification-messages p { margin: 0; color: #748d98; font-size: 10px; line-height: 1.65; }
+.notification-messages em { display: flex; align-items: center; gap: 2px; margin-top: 2px; color: #168e99; font-size: 10px; font-style: normal; }
+.notification-messages em svg { width: 12px; height: 12px; }
+.theme-night .notification-page { background: #092842; }
+.theme-night .notification-thread-list, .theme-night .notification-thread, .theme-night .notification-messages > button { border-color: #43bac72c; background: #103651; color: #dceff3; box-shadow: none; }
+.theme-night .notification-thread p, .theme-night .notification-messages p { color: #9fc2ca; }
+.theme-night .notification-pinned-title, .theme-night .notification-thread time, .theme-night .notification-messages time { color: #91bbc4; }

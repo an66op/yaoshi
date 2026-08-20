@@ -1,0 +1,268 @@
+.login-page {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 24px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 84% 11%, #a5edf4a8, transparent 28%),
+    linear-gradient(145deg, #ecfcff, #c3edf4 58%, #eafaff);
+  color: #16475f;
+  font-family: "Noto Sans SC", system-ui, sans-serif;
+}
+.login-page::before,
+.login-page::after {
+  position: absolute;
+  border: 1px solid #fff9;
+  border-radius: 50%;
+  content: "";
+}
+.login-page::before {
+  width: 440px;
+  height: 440px;
+  top: -250px;
+  right: -200px;
+  background: #d6fbff59;
+}
+.login-page::after {
+  width: 310px;
+  height: 310px;
+  bottom: -200px;
+  left: -150px;
+  background: #a4e8e766;
+}
+.login-card {
+  position: relative;
+  width: min(390px, 100%);
+  overflow: hidden;
+  padding: 27px 23px 22px;
+  border: 1px solid #fff;
+  border-radius: 28px;
+  background: linear-gradient(145deg, #ffffffeb, #f0fdfee3);
+  box-shadow:
+    0 22px 56px #1a72854a,
+    inset 0 1px #fff;
+  backdrop-filter: blur(18px);
+}
+.login-glow {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.glow-one {
+  top: -42px;
+  right: -37px;
+  width: 150px;
+  height: 150px;
+  background: #b6f4f03b;
+}
+.glow-two {
+  bottom: -68px;
+  left: -45px;
+  width: 135px;
+  height: 135px;
+  background: #8ccef437;
+}
+.login-brand {
+  position: relative;
+  display: grid;
+  grid-template-columns: 43px 1fr auto;
+  align-items: center;
+  gap: 11px;
+}
+.login-brand > span {
+  display: grid;
+  place-items: center;
+  width: 43px;
+  height: 43px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #147caa, #2cbab1);
+  box-shadow: 0 7px 15px #17899d44;
+  color: #fff;
+  font: 700 15px "DM Mono";
+}
+.login-brand div {
+  display: grid;
+  gap: 3px;
+}
+.login-brand b {
+  font-size: 18px;
+  letter-spacing: 0.1em;
+}
+.login-brand small {
+  color: #5c8799;
+  font: 700 8px "DM Mono";
+  letter-spacing: 0.08em;
+}
+.login-brand em {
+  padding: 4px 6px;
+  border: 1px solid #a7dbd8;
+  border-radius: 6px;
+  background: #edfbf9;
+  color: #21867f;
+  font-size: 9px;
+  font-style: normal;
+}
+.login-progress {
+  position: relative;
+  display: flex;
+  gap: 6px;
+  margin: 25px 0 21px;
+}
+.login-progress i {
+  display: block;
+  flex: 1;
+  height: 4px;
+  border-radius: 4px;
+  background: #d7e9ed;
+}
+.login-progress i.active,
+.login-progress i.done {
+  background: linear-gradient(90deg, #1a8eb0, #2bb8ad);
+}
+.login-copy {
+  position: relative;
+  display: grid;
+  gap: 5px;
+  margin-bottom: 20px;
+}
+.login-copy small {
+  color: #168a94;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+.login-copy h1 {
+  margin: 0;
+  color: #163f56;
+  font-size: 25px;
+}
+.login-copy p {
+  margin: 0;
+  color: #688695;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.login-field {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+.login-field > span {
+  color: #4c7182;
+  font-size: 11px;
+  font-weight: 700;
+}
+.login-field > div {
+  display: flex;
+  align-items: center;
+  border: 1px solid #a9d5da;
+  border-radius: 12px;
+  background: #ffffffc7;
+  transition:
+    border-color 0.18s,
+    box-shadow 0.18s;
+}
+.login-field > div:focus-within {
+  border-color: #21aaa6;
+  box-shadow: 0 0 0 4px #22b3ae20;
+}
+.login-field i {
+  padding-left: 13px;
+  color: #27979a;
+  font-size: 12px;
+  font-style: normal;
+}
+.login-field input {
+  width: 100%;
+  padding: 13px 14px 13px 9px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #153f55;
+  font: 600 16px "DM Mono";
+  letter-spacing: 0.05em;
+}
+.login-primary {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  margin-top: 16px;
+  padding: 13px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #1984aa, #2dbbb1);
+  box-shadow: 0 8px 18px #16869a35;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+}
+.login-primary span {
+  font-size: 18px;
+  line-height: 0;
+}
+.login-error {
+  margin: 2px 0 0;
+  color: #d55c50;
+  font-size: 10px;
+}
+.login-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 17px;
+  padding: 9px 10px;
+  border: 1px solid #bee8e660;
+  border-radius: 9px;
+  background: #effdfbab;
+  color: #638794;
+}
+.login-status span {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #33aaa1;
+  color: #fff;
+  font-size: 9px;
+}
+.login-status p {
+  margin: 0;
+  font-size: 9px;
+}
+.login-foot {
+  position: relative;
+  margin: 14px 0 0;
+  color: #7f9ca8;
+  font-size: 9px;
+  text-align: center;
+}
+@media (min-width: 620px) {
+  .login-page {
+    min-height: 100%;
+    padding: 0;
+  }
+  .login-card {
+    width: 390px;
+  }
+}
+
+/* 曜图登录入口：让品牌图形成为页面锚点。 */
+.login-page { background: radial-gradient(circle at 82% 7%, #99e8eb70, transparent 26%), linear-gradient(145deg, #f7fcfc, #d9f1f5 55%, #effbfc); }
+.login-card { padding: 30px 25px 23px; border-color: #ffffffd9; border-radius: 30px; background: linear-gradient(145deg, #ffffffef, #f5fdfde8); box-shadow: 0 24px 60px #316c7b2b; }
+.login-brand { grid-template-columns: 50px 1fr auto; gap: 12px; }
+.login-brand > img { width: 50px; height: 50px; border-radius: 16px; object-fit: cover; box-shadow: 0 7px 15px #16899b33; }
+.login-brand b { font-size: 20px; letter-spacing: .12em; }
+.login-brand small { font-size: 8px; }
+.login-primary { min-height: 47px; border-radius: 14px; background: linear-gradient(135deg, #147ca7, #2bb8ae); }
+.login-primary svg { width: 18px; height: 18px; }
+.login-foot { display: grid; gap: 7px; margin-top: 16px; }
+.login-foot span { justify-self: center; padding: 4px 9px; border: 1px solid #b8dfe1; border-radius: 20px; background: #effafb; color: #3e7785; font: 700 8px 'DM Mono'; letter-spacing: .08em; }
+.login-foot p { margin: 0; }

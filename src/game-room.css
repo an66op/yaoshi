@@ -667,7 +667,7 @@
   box-shadow:
     inset 0 1px #fff,
     0 2px 4px #1a51610d;
-  color: #263b47;
+  color: #102e3d;
   font-size: 16px;
   font-weight: 600;
   transition:
@@ -680,13 +680,13 @@
   box-shadow: inset 0 2px 5px #1d708620;
 }
 .input-bet-keyboard .bet-key.number {
-  color: #284d5a;
+  color: #123f50;
   font-family: "DM Mono";
 }
 .input-bet-keyboard .bet-key.option {
   border-color: #b8dfe2;
   background: linear-gradient(145deg, #e8fbfa, #d4f0ef);
-  color: #137b80;
+  color: #075e69;
 }
 .input-bet-keyboard .bet-key.command {
   background: linear-gradient(145deg, #f6f9fb, #dce9ec);

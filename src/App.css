@@ -1177,9 +1177,10 @@ button:active {
   border: 0;
   border-radius: 6px;
   background: #f3f5f6;
-  color: #85909a;
+  color: #183b4a;
   text-align: left;
   font-size: 11px;
+  font-weight: 700;
 }
 .ticket-strip .ticket-toggle {
   display: grid;

@@ -322,6 +322,18 @@
   width: 19px;
   height: 19px;
 }
+.ticket-strip .ticket-add.ticket-send {
+  width: auto;
+  min-width: 48px;
+  padding: 0 11px;
+  border-color: #0d91a4;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #159eb4, #20b69f);
+  box-shadow: 0 4px 9px #16959648;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
 .bet-mode-tabs {
   display: flex;
   gap: 4px;

@@ -29,7 +29,7 @@ button:active {
   padding-bottom: 8px;
 }
 .lobby-hero {
-  padding: 17px 17px 20px;
+  padding: 19px 18px 24px;
   border-radius: 0 0 26px 26px;
   background:
     radial-gradient(circle at 86% 2%, #50d3d2 0, transparent 35%),
@@ -39,8 +39,9 @@ button:active {
 }
 .hero-top {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
+  min-height: 34px;
 }
 .brand-word {
   font-size: 19px;
@@ -56,6 +57,12 @@ button:active {
   letter-spacing: 0.14em;
 }
 .hero-tools { justify-self: end; }
+.lobby-hero .announcement {
+  min-height: 42px;
+  margin-top: 16px;
+  padding: 10px 12px;
+  box-shadow: 0 6px 15px #063f5c24;
+}
 .theme-day .room-badge { border: 0; background: transparent; box-shadow: none; }
 .avatar-user {
   display: grid;

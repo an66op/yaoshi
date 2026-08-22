@@ -1,0 +1,61 @@
+/* Final dark-mode surfaces for screens that keep their own light cards. */
+.theme-night .chat-list {
+  background:
+    radial-gradient(circle at 88% 6%, #16728a42, transparent 30%),
+    linear-gradient(180deg, #071d35, #092842);
+  color: #e5f7fa;
+}
+
+.theme-night .chat-subhead {
+  color: #d5eef2;
+}
+
+.theme-night .chat-subhead button {
+  color: #91bec8;
+}
+
+.theme-night .chat-row {
+  border-bottom-color: #63d3dc24;
+  background: #0d2d49;
+  color: #e7f8fa;
+}
+
+.theme-night .chat-row b {
+  color: #f0fdff;
+}
+
+.theme-night .chat-row small,
+.theme-night .chat-row time {
+  color: #9dc3cc;
+}
+
+.theme-night.game-room .game-info,
+.theme-night.game-room .last-draw {
+  border-bottom-color: #60d2dc2d;
+  background: #0c2d49;
+  color: #d9f2f5;
+}
+
+.theme-night.game-room .game-info > div,
+.theme-night.game-room .last-draw > span,
+.theme-night.game-room .last-draw small {
+  color: #b8d9df;
+}
+
+.theme-night.game-room .game-info i {
+  background: #17425c;
+  color: #9cedef;
+}
+
+.theme-night.game-room .game-info button {
+  background: #16415a;
+  color: #9eeff0;
+}
+
+.theme-night.game-room .last-draw small > b {
+  color: #ff987f;
+}
+
+.theme-night.game-room .last-draw::after {
+  color: #91ebec;
+}

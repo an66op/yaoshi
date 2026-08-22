@@ -1,0 +1,413 @@
+package services
+
+import (
+	"backend/data/models/activity"
+	membernotify "backend/data/models/notify"
+	"backend/data/models/user"
+	apperrors "backend/errors"
+	"encoding/json"
+	"fmt"
+	"math/rand"
+	"strconv"
+	"strings"
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+type MemberPortalService struct {
+	db       *gorm.DB
+	settings *SettingsAdminService
+	trading  *TradingAdminService
+	activity *ActivityAdminService
+}
+
+type MemberRoomSettingsView struct {
+	RoomName          string          `json:"room_name"`
+	RoomNotice        string          `json:"room_notice"`
+	ShowOdds          bool            `json:"show_odds"`
+	SoundEnabled      bool            `json:"sound_enabled"`
+	MinCreditAmount   float64         `json:"min_credit_amount"`
+	MinDebitAmount    float64         `json:"min_debit_amount"`
+	MinChatScore      float64         `json:"min_chat_score"`
+	ChatNickname      string          `json:"chat_nickname"`
+	Game              json.RawMessage `json:"game"`
+	QuickReplies      json.RawMessage `json:"quick_replies"`
+}
+
+type MemberOddsView struct {
+	GameID   string                   `json:"game_id"`
+	GameName string                   `json:"game_name"`
+	ShowOdds bool                     `json:"show_odds"`
+	Items    []MemberOddsItem         `json:"items"`
+}
+
+type MemberOddsItem struct {
+	PlayCode      string  `json:"play_code"`
+	PlayName      string  `json:"play_name"`
+	Odds          float64 `json:"odds"`
+	MinBet        float64 `json:"min_bet"`
+	MaxBet        float64 `json:"max_bet"`
+	MaxUserPeriod float64 `json:"max_user_period"`
+}
+
+type ActivityStatusView struct {
+	ActivityID   uint64  `json:"activity_id"`
+	Type         string  `json:"type"`
+	Title        string  `json:"title"`
+	CheckedIn    bool    `json:"checked_in"`
+	Claimed      bool    `json:"claimed"`
+	Streak       int     `json:"streak"`
+	Reward       float64 `json:"reward"`
+	Participants int64   `json:"participants"`
+	Config       any     `json:"config"`
+}
+
+type ActivityActionResult struct {
+	Reward  float64 `json:"reward"`
+	Streak  int     `json:"streak"`
+	Balance float64 `json:"balance"`
+	Message string  `json:"message"`
+}
+
+type MemberNotificationView struct {
+	ID        uint64    `json:"id"`
+	Title     string    `json:"title"`
+	Content   string    `json:"content"`
+	Level     string    `json:"level"`
+	Category  string    `json:"category"`
+	Link      string    `json:"link"`
+	Read      bool      `json:"read"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func NewMemberPortalService(db *gorm.DB) *MemberPortalService {
+	return &MemberPortalService{
+		db:       db,
+		settings: NewSettingsAdminService(db),
+		trading:  NewTradingAdminService(db),
+		activity: NewActivityAdminService(db),
+	}
+}
+
+func (s *MemberPortalService) RoomSettings() (*MemberRoomSettingsView, error) {
+	cfg, err := s.settings.Get()
+	if err != nil {
+		return nil, err
+	}
+	return &MemberRoomSettingsView{
+		RoomName: cfg.RoomName, RoomNotice: cfg.RoomNotice, ShowOdds: cfg.ShowOdds,
+		SoundEnabled: cfg.SoundEnabled, MinCreditAmount: cfg.MinCreditAmount,
+		MinDebitAmount: cfg.MinDebitAmount, MinChatScore: cfg.MinChatScore,
+		ChatNickname: cfg.ChatNickname,
+		Game: cfg.Game, QuickReplies: cfg.QuickReplies,
+	}, nil
+}
+
+func (s *MemberPortalService) GameOdds(userID uint64, gameID string) (*MemberOddsView, error) {
+	cfg, err := s.settings.Get()
+	if err != nil {
+		return nil, err
+	}
+	trading, err := s.trading.Get(userID, gameID)
+	if err != nil {
+		return nil, err
+	}
+	limits, err := NewOddsAdminService(s.db).Get(trading.GameID)
+	if err != nil {
+		return nil, err
+	}
+	limitMap := map[string]PlayLimitItem{}
+	for _, item := range limits.Items {
+		limitMap[item.PlayCode] = item
+	}
+	items := make([]MemberOddsItem, 0, len(trading.Odds))
+	for _, row := range trading.Odds {
+		limit := limitMap[row.PlayCode]
+		odds := row.Effective
+		if !cfg.ShowOdds {
+			odds = 0
+		}
+		items = append(items, MemberOddsItem{
+			PlayCode: row.PlayCode, PlayName: row.PlayName, Odds: odds,
+			MinBet: limit.MinBet, MaxBet: limit.MaxBet, MaxUserPeriod: limit.MaxUserPeriod,
+		})
+	}
+	return &MemberOddsView{
+		GameID: trading.GameID, GameName: trading.GameName,
+		ShowOdds: cfg.ShowOdds, Items: items,
+	}, nil
+}
+
+func (s *MemberPortalService) ListActivities(activityType string) ([]ActivityView, error) {
+	items, err := s.activity.List("active")
+	if err != nil {
+		return nil, err
+	}
+	if typ := strings.TrimSpace(activityType); typ != "" && typ != "all" {
+		filtered := make([]ActivityView, 0, len(items))
+		for _, item := range items {
+			if item.Type == typ {
+				filtered = append(filtered, item)
+			}
+		}
+		return filtered, nil
+	}
+	return items, nil
+}
+
+func (s *MemberPortalService) ActivityStatus(userID, activityID uint64) (*ActivityStatusView, error) {
+	var row activity.Activity
+	if err := s.db.First(&row, activityID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, apperrors.NewBusinessError("NOT_FOUND", "活动不存在")
+		}
+		return nil, err
+	}
+	if row.Status != "active" {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "活动未开启")
+	}
+	start, end := dayRange(time.Now())
+	view := &ActivityStatusView{
+		ActivityID: row.ID, Type: row.Type, Title: row.Title,
+		Reward: centsToAmount(row.RewardCents), Participants: row.Participants,
+	}
+	var cfg any
+	_ = json.Unmarshal([]byte(defaultJSON(row.ConfigJSON, "{}")), &cfg)
+	view.Config = cfg
+
+	action := row.Type
+	if action == "redpacket" {
+		action = "redpacket"
+	} else if action == "checkin" {
+		action = "checkin"
+	}
+	var today int64
+	_ = s.db.Model(&activity.Participation{}).
+		Where("user_id = ? AND activity_id = ? AND action = ? AND participated_at >= ? AND participated_at < ?",
+			userID, activityID, action, start, end).Count(&today).Error
+	if row.Type == "checkin" {
+		view.CheckedIn = today > 0
+		view.Streak = s.checkinStreak(userID, activityID)
+	} else if row.Type == "redpacket" {
+		view.Claimed = today > 0
+	}
+	return view, nil
+}
+
+func (s *MemberPortalService) CheckIn(userID, activityID uint64) (*ActivityActionResult, error) {
+	return s.participate(userID, activityID, "checkin")
+}
+
+func (s *MemberPortalService) ClaimRedPacket(userID, activityID uint64) (*ActivityActionResult, error) {
+	return s.participate(userID, activityID, "redpacket")
+}
+
+func (s *MemberPortalService) participate(userID, activityID uint64, action string) (*ActivityActionResult, error) {
+	var row activity.Activity
+	if err := s.db.First(&row, activityID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, apperrors.NewBusinessError("NOT_FOUND", "活动不存在")
+		}
+		return nil, err
+	}
+	if row.Status != "active" {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "活动未开启")
+	}
+	if action == "checkin" && row.Type != "checkin" {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "该活动不支持签到")
+	}
+	if action == "redpacket" && row.Type != "redpacket" {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "该活动不支持领红包")
+	}
+	start, end := dayRange(time.Now())
+	var exists int64
+	if err := s.db.Model(&activity.Participation{}).
+		Where("user_id = ? AND activity_id = ? AND action = ? AND participated_at >= ? AND participated_at < ?",
+			userID, activityID, action, start, end).Count(&exists).Error; err != nil {
+		return nil, err
+	}
+	if exists > 0 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "今日已参与，请明日再来")
+	}
+
+	rewardCents := row.RewardCents
+	streak := 1
+	if action == "checkin" {
+		prev := s.checkinStreak(userID, activityID)
+		streak = prev + 1
+		if rewardCents <= 0 {
+			rewardCents = int64(streak) * 100
+		}
+	}
+	if action == "redpacket" {
+		pool := 8800
+		var cfg map[string]any
+		_ = json.Unmarshal([]byte(defaultJSON(row.ConfigJSON, "{}")), &cfg)
+		if v, ok := cfg["pool"].(float64); ok && v > 0 {
+			pool = int(v * 100)
+		}
+		if pool <= 0 {
+			pool = int(rewardCents)
+		}
+		if pool <= 0 {
+			pool = 880
+		}
+		rewardCents = int64(rand.Intn(pool/2+1) + pool/10)
+		if rewardCents < 100 {
+			rewardCents = 100
+		}
+	}
+
+	var result ActivityActionResult
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
+		if err := tx.Create(&activity.Participation{
+			UserID: userID, ActivityID: activityID, Action: action,
+			RewardCents: rewardCents, Streak: streak, ParticipatedAt: now,
+		}).Error; err != nil {
+			return err
+		}
+		var account user.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, userID).Error; err != nil {
+			return err
+		}
+		after := account.BalanceCents + rewardCents
+		if err := tx.Model(&account).Update("balance_cents", after).Error; err != nil {
+			return err
+		}
+		remark := row.Title
+		if action == "checkin" {
+			remark = "签到奖励 · 连续" + itoa(streak) + "天"
+		} else {
+			remark = "红包奖励 · " + row.Title
+		}
+		if err := tx.Create(&user.BalanceTransaction{
+			UserID: userID, AmountCents: rewardCents, BeforeCents: account.BalanceCents, AfterCents: after,
+			Type: action, Remark: remark, Operator: "系统",
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&row).Update("participants", gorm.Expr("participants + 1")).Error; err != nil {
+			return err
+		}
+		title := "签到成功"
+		content := remark + "，到账 " + formatAmount(rewardCents) + " 元"
+		if action == "redpacket" {
+			title = "红包领取成功"
+		}
+		_ = tx.Create(&membernotify.MemberNotification{
+			UserID: userID, Title: title, Content: content,
+			Level: "success", Category: "activity",
+		}).Error
+		result = ActivityActionResult{
+			Reward: centsToAmount(rewardCents), Streak: streak,
+			Balance: centsToAmount(after), Message: content,
+		}
+		return nil
+	})
+	if err != nil {
+		if app, ok := err.(*apperrors.AppError); ok {
+			return nil, app
+		}
+		return nil, apperrors.NewSystemError("ACTIVITY_ACTION_FAILED", "参与活动失败", err)
+	}
+	return &result, nil
+}
+
+func (s *MemberPortalService) ListNotifications(userID uint64, limit int) ([]MemberNotificationView, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	var rows []membernotify.MemberNotification
+	if err := s.db.Where("user_id = ?", userID).Order("read asc, created_at desc").Limit(limit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]MemberNotificationView, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, MemberNotificationView{
+			ID: row.ID, Title: row.Title, Content: row.Content, Level: row.Level,
+			Category: row.Category, Link: row.Link, Read: row.Read, CreatedAt: row.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+func (s *MemberPortalService) UnreadCount(userID uint64) (int64, error) {
+	var count int64
+	err := s.db.Model(&membernotify.MemberNotification{}).Where("user_id = ? AND read = ?", userID, false).Count(&count).Error
+	return count, err
+}
+
+func (s *MemberPortalService) MarkNotificationRead(userID, id uint64) error {
+	return s.db.Model(&membernotify.MemberNotification{}).
+		Where("user_id = ? AND id = ?", userID, id).Update("read", true).Error
+}
+
+func (s *MemberPortalService) MarkAllNotificationsRead(userID uint64) error {
+	return s.db.Model(&membernotify.MemberNotification{}).
+		Where("user_id = ? AND read = ?", userID, false).Update("read", true).Error
+}
+
+func (s *MemberPortalService) EnsureWelcomeNotification(userID uint64) error {
+	var count int64
+	if err := s.db.Model(&membernotify.MemberNotification{}).Where("user_id = ?", userID).Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	cfg, err := s.settings.Get()
+	if err != nil {
+		return err
+	}
+	notice := strings.TrimSpace(cfg.RoomNotice)
+	if notice == "" {
+		notice = "欢迎来到曜图，祝您游戏愉快。"
+	}
+	return s.db.Create(&membernotify.MemberNotification{
+		UserID: userID, Title: "系统公告", Content: notice, Level: "info", Category: "system",
+	}).Error
+}
+
+func (s *MemberPortalService) checkinStreak(userID, activityID uint64) int {
+	var last activity.Participation
+	err := s.db.Where("user_id = ? AND activity_id = ? AND action = ?", userID, activityID, "checkin").
+		Order("participated_at desc").First(&last).Error
+	if err == gorm.ErrRecordNotFound {
+		return 0
+	}
+	if err != nil {
+		return 0
+	}
+	lastDay := dayStart(last.ParticipatedAt)
+	today := dayStart(time.Now())
+	yesterday := today.AddDate(0, 0, -1)
+	if lastDay.Equal(today) {
+		return last.Streak
+	}
+	if lastDay.Equal(yesterday) {
+		return last.Streak
+	}
+	return 0
+}
+
+func dayRange(now time.Time) (time.Time, time.Time) {
+	start := dayStart(now)
+	return start, start.AddDate(0, 0, 1)
+}
+
+func dayStart(now time.Time) time.Time {
+	loc := time.FixedZone("CST", 8*3600)
+	local := now.In(loc)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc).UTC()
+}
+
+func formatAmount(cents int64) string {
+	return fmt.Sprintf("%.2f", centsToAmount(cents))
+}
+
+func itoa(v int) string {
+	return strconv.Itoa(v)
+}

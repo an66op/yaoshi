@@ -1,0 +1,29 @@
+.packet-modal {
+  min-height: 400px;
+}
+
+.packet-modal-top {
+  gap: 5px;
+  padding-top: 34px;
+}
+
+.packet-modal-top b {
+  font-size: 15px;
+}
+
+.packet-gift {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 46px;
+  margin: 20px auto 9px;
+  color: #ffe4a8;
+}
+
+.packet-gift svg {
+  width: 46px;
+  height: 46px;
+  filter: drop-shadow(0 3px 2px #a8402e70);
+}

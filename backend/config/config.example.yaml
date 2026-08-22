@@ -1,0 +1,26 @@
+server:
+  port: 8080
+  mode: release
+  # Add the actual frontend origin(s), including scheme and port when applicable.
+  allowed_origins:
+    - https://example.com
+  # For a local Nginx reverse proxy, use 127.0.0.1.
+  trusted_proxies:
+    - 127.0.0.1
+
+database:
+  host: 127.0.0.1
+  port: 5432
+  user: postgres
+  password: CHANGE_ME
+  dbname: lottery
+  sslmode: require
+
+redis:
+  addr: 127.0.0.1:6379
+  password: ""
+  db: 0
+
+jwt:
+  secret: REPLACE_WITH_A_RANDOM_SECRET_AT_LEAST_16_CHARACTERS
+  expire: 86400

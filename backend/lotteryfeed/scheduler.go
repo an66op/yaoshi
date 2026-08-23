@@ -78,6 +78,9 @@ func DefaultJobs() []JobConfig {
 		{ID: "china-welfare", Name: "中国福利彩票开奖", Group: "china-welfare", GameIDs: []string{"official-fc3d", "official-kl8"}, Timezone: "Asia/Shanghai", FastStart: "20:45", FastEnd: "22:30", FastInterval: 20 * time.Second, NormalInterval: 15 * time.Minute, Timeout: 40 * time.Second},
 		{ID: "china-sport", Name: "中国体育彩票开奖", Group: "china-sport", GameIDs: []string{"official-pl3", "official-qxc"}, Timezone: "Asia/Shanghai", FastStart: "21:00", FastEnd: "22:30", FastInterval: 20 * time.Second, NormalInterval: 15 * time.Minute, Timeout: 40 * time.Second},
 		{ID: "taiwan-lottery", Name: "台湾彩券晚间开奖", Group: "taiwan-lottery", GameIDs: []string{"official-tw-super-lotto", "official-tw-daily539", "official-tw-lotto649"}, Timezone: "Asia/Taipei", FastStart: "20:15", FastEnd: "22:15", FastInterval: 20 * time.Second, NormalInterval: 15 * time.Minute, Timeout: 20 * time.Second},
+		{ID: "168-highfreq", Name: "168高频彩开奖", Group: "168-highfreq", GameIDs: []string{"speed-racing", "au-lucky-10", "au-lucky-5", "fly-racing", "speed-fly", "sg-fly", "speed-ssc"}, Timezone: "Asia/Shanghai", FastStart: "00:00", FastEnd: "23:59", FastInterval: 15 * time.Second, NormalInterval: 15 * time.Second, Timeout: 15 * time.Second},
+		{ID: "168-bingo", Name: "168宾果映射开奖", Group: "168-bingo", GameIDs: []string{"bingo-ssc-1", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4", "bingo-racing-a", "bingo-racing-b", "bingo-mark-six"}, Timezone: "Asia/Taipei", FastStart: "00:00", FastEnd: "23:59", FastInterval: 20 * time.Second, NormalInterval: 20 * time.Second, Timeout: 15 * time.Second},
+		{ID: "168-marksix", Name: "168六合彩开奖", Group: "168-marksix", GameIDs: []string{"hong-kong-mark-six", "new-macau-mark-six", "old-macau-mark-six"}, Timezone: "Asia/Shanghai", FastStart: "21:00", FastEnd: "22:30", FastInterval: 30 * time.Second, NormalInterval: 10 * time.Minute, Timeout: 20 * time.Second},
 	}
 }
 

@@ -5,9 +5,12 @@ import "time"
 // Bet is a single stake placed on a game issue. Amounts use integer cents.
 // Position 1-5 = ball slots, 6 = sum column used by the live monitor matrix.
 type Bet struct {
-	ID          uint64    `gorm:"primaryKey" json:"id"`
-	GameID      string    `gorm:"size:40;not null;index;uniqueIndex:idx_bet_dedupe" json:"game_id"`
-	Issue       string    `gorm:"size:64;not null;index;uniqueIndex:idx_bet_dedupe" json:"issue"`
+	ID     uint64 `gorm:"primaryKey" json:"id"`
+	GameID string `gorm:"size:40;not null;index;uniqueIndex:idx_bet_dedupe;index:idx_bet_feed_scope,priority:2" json:"game_id"`
+	Issue  string `gorm:"size:64;not null;index;uniqueIndex:idx_bet_dedupe;index:idx_bet_feed_scope,priority:3" json:"issue"`
+	// RoomScope is frozen at placement time. It prevents a member moving rooms
+	// later from exposing a previous room's live betting feed.
+	RoomScope   string    `gorm:"size:64;not null;default:legacy;index;uniqueIndex:idx_bet_dedupe;index:idx_bet_feed_scope,priority:1" json:"-"`
 	UserID      uint64    `gorm:"not null;index;uniqueIndex:idx_bet_dedupe" json:"user_id"`
 	Username    string    `gorm:"size:50;not null;index" json:"username"`
 	PlayCode    string    `gorm:"size:40;not null;uniqueIndex:idx_bet_dedupe" json:"play_code"`
@@ -21,8 +24,22 @@ type Bet struct {
 	FlyCents    int64     `gorm:"not null;default:0" json:"-"`
 	Remark      string    `gorm:"size:300" json:"remark"`
 	Operator    string    `gorm:"size:80" json:"operator"`
-	CreatedAt   time.Time `gorm:"index" json:"created_at"`
+	CreatedAt   time.Time `gorm:"index;index:idx_bet_feed_scope,priority:4" json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 func (Bet) TableName() string { return "lottery_bets" }
+
+// AssistantRequest makes compact-text betting safe to retry. A client can
+// resend the same request_id after a transient network failure without paying
+// for the ticket twice.
+type AssistantRequest struct {
+	ID         uint64    `gorm:"primaryKey" json:"id"`
+	UserID     uint64    `gorm:"not null;uniqueIndex:idx_assistant_request" json:"user_id"`
+	RequestID  string    `gorm:"size:96;not null;uniqueIndex:idx_assistant_request" json:"request_id"`
+	ResultJSON string    `gorm:"type:text" json:"-"`
+	CreatedAt  time.Time `gorm:"index" json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+func (AssistantRequest) TableName() string { return "lottery_assistant_requests" }

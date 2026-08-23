@@ -22,12 +22,14 @@ button:active {
   display: grid;
   grid-template-rows: minmax(0, 1fr) 72px;
 }
+.mobile-app.theme-night { background: #061a34; }
 .app-content {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-bottom: 8px;
 }
+.app-loading { padding: 24px; color: #6e8c98; font-size: 12px; text-align: center; }
 .lobby-hero {
   padding: 19px 18px 24px;
   border-radius: 0 0 26px 26px;
@@ -570,7 +572,6 @@ button:active {
   text-align: left;
 }
 .service-logo,
-.group-logo,
 .gift-logo {
   display: grid;
   place-items: center;
@@ -583,27 +584,23 @@ button:active {
   font-size: 19px;
   font-weight: 700;
 }
-.group-logo {
-  position: relative;
-  background: linear-gradient(140deg, #7b70e8, #aa76db);
-}
 .gift-logo {
   background: linear-gradient(140deg, #f4b238, #f3794a);
 }
-.group-logo i {
-  position: absolute;
-  top: -7px;
-  right: -8px;
-  display: grid;
-  place-items: center;
-  min-width: 20px;
-  height: 20px;
-  border: 2px solid #fff;
-  border-radius: 11px;
-  background: #d93832;
-  color: #fff;
-  font: 10px "DM Mono";
-  font-style: normal;
+.draw-assistant-logo {
+	overflow: hidden;
+	width: 42px;
+	height: 42px;
+	border-radius: 12px;
+	background: #eaf6ff;
+	box-shadow: inset 0 0 0 1px #9fdcff, 0 3px 8px #0b80b51f;
+}
+.draw-assistant-logo img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	object-position: center;
+	transform: none;
 }
 .chat-row div {
   flex: 1;
@@ -626,6 +623,21 @@ button:active {
   color: #aab2bc;
   font-size: 10px;
 }
+.chat-row-pinned {
+  position: relative;
+  border-bottom-color: #efe4c9;
+  background: linear-gradient(110deg, #fffdf7, #fff8e9);
+}
+.chat-row-pinned::before {
+  position: absolute;
+  top: 9px;
+  right: 14px;
+  color: #cc8c2e;
+  content: "置顶";
+  font-size: 9px;
+  font-weight: 700;
+}
+.chat-row-pinned time { margin-top: 15px; }
 .chat-room {
   height: 100dvh;
   display: grid;
@@ -961,7 +973,8 @@ button:active {
 }
 .game-header {
   display: grid;
-  grid-template-columns: 37px 1fr auto;
+  grid-template-columns: 37px minmax(0, 1fr) max-content;
+  column-gap: 4px;
   align-items: center;
   padding: 0 12px;
   background: linear-gradient(100deg, #135ea0, #14a5ad);
@@ -980,15 +993,20 @@ button:active {
   height: 100%;
 }
 .game-header > b {
+  overflow: hidden;
+  min-width: 0;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: 18px;
 }
-.game-header div {
+.game-header .game-header-meta {
   display: grid;
-  grid-template-columns: repeat(2, auto);
-  gap: 3px 8px;
-  font-size: 9px;
+  justify-items: end;
+  gap: 2px;
+  text-align: right;
   opacity: 0.88;
 }
+.game-header .game-header-meta small { white-space: nowrap; }
 .game-info {
   display: flex;
   align-items: center;
@@ -1009,6 +1027,19 @@ button:active {
   display: flex;
   gap: 2px;
 }
+.game-acceptance {
+  margin-left: 2px;
+  padding: 3px 5px;
+  border-radius: 5px;
+  background: #e9f6f3;
+  color: #16877f;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.game-acceptance.closing { background: #fff4de; color: #bd781e; }
+.game-acceptance.closed { background: #fff0ed; color: #ce6253; }
+.game-acceptance.syncing { background: #edf1f3; color: #7d8d95; }
 .game-info button {
   padding: 7px 9px;
   border: 0;

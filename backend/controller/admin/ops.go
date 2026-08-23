@@ -17,6 +17,7 @@ type OpsHandler struct {
 	entertainment *services.EntertainmentAdminService
 	notify        *services.NotifyAdminService
 	rebates       *services.RebateAdminService
+	chat          *services.ChatAdminService
 }
 
 func NewOpsHandler(db *gorm.DB) *OpsHandler {
@@ -26,7 +27,106 @@ func NewOpsHandler(db *gorm.DB) *OpsHandler {
 		entertainment: services.NewEntertainmentAdminService(db),
 		notify:        services.NewNotifyAdminService(db),
 		rebates:       services.NewRebateAdminService(db),
+		chat:          services.NewChatAdminService(db),
 	}
+}
+
+func (h *OpsHandler) ListChatConversations(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "30"))
+	result, err := h.chat.Conversations(c.Query("room_type"), c.Query("query"), page, pageSize)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "读取会话失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+func (h *OpsHandler) ListChatMessages(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	beforeID, _ := strconv.ParseUint(c.DefaultQuery("before_id", "0"), 10, 64)
+	result, err := h.chat.Messages(c.Query("scope"), c.Query("room_type"), limit, beforeID)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "读取聊天记录失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+func (h *OpsHandler) ReplyChat(c *gin.Context) {
+	var request struct {
+		Scope    string `json:"scope" binding:"required"`
+		RoomType string `json:"room_type" binding:"required"`
+		Content  string `json:"content" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "回复参数不正确", err)
+		return
+	}
+	operator, _ := c.Get("username")
+	result, err := h.chat.Reply(request.Scope, request.RoomType, request.Content, operatorName(operator))
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "发送回复失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusCreated, "回复已发送", result)
+}
+
+func (h *OpsHandler) DeleteChatMessage(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		constants.SendError(c, http.StatusBadRequest, "消息 ID 不正确", err)
+		return
+	}
+	operator, _ := c.Get("username")
+	if err := h.chat.DeleteMessage(id, operatorName(operator)); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "撤回消息失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "消息已撤回", gin.H{"id": id})
+}
+
+func (h *OpsHandler) SetChatMute(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("userID"), 10, 64)
+	if err != nil || id == 0 {
+		constants.SendError(c, http.StatusBadRequest, "用户 ID 不正确", err)
+		return
+	}
+	var request struct {
+		Minutes int    `json:"minutes"`
+		Reason  string `json:"reason"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "禁言参数不正确", err)
+		return
+	}
+	result, err := h.chat.SetMute(id, request.Minutes, request.Reason)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "更新禁言失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "禁言状态已更新", gin.H{"user_id": result.UserID, "muted_until": result.MutedUntil, "mute_reason": result.MuteReason})
+}
+
+func (h *OpsHandler) SetChatAnnouncement(c *gin.Context) {
+	var request struct {
+		Content string `json:"content"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "公告参数不正确", err)
+		return
+	}
+	content, err := h.chat.SetAnnouncement(request.Content)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "更新公告失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "房间公告已更新", gin.H{"content": content})
+}
+
+func operatorName(value any) string {
+	name, _ := value.(string)
+	return name
 }
 
 func (h *OpsHandler) ListActivities(c *gin.Context) {

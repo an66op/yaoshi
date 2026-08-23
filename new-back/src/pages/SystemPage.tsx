@@ -26,8 +26,8 @@ import { PageHeader } from '../components/PageHeader'
 import { useFeedback } from '../components/feedback'
 
 const emptySettings = (): SystemSettings => ({
-  room_name: '曜图',
-  room_code: '1231',
+  room_name: '王者',
+  room_code: '8801',
   chat_nickname: '群主',
   nickname_display_length: 0,
   min_chat_score: 0,
@@ -40,7 +40,17 @@ const emptySettings = (): SystemSettings => ({
   abnormal_login_alert: false,
   security_password_check: false,
   room_notice: '',
-  game: { seal_seconds: 30, allow_cancel: true, default_fly_rate: 0, max_open_games: 8 },
+  game: {
+    seal_seconds: 30,
+    allow_cancel: true,
+    default_fly_rate: 0,
+    max_open_games: 8,
+    room_activity_enabled: true,
+    room_activity_interval_secs: 10,
+    room_activity_bots_per_room: 6,
+    room_activity_bets_per_cycle: 2,
+    room_activity_chat_chance_percent: 28,
+  },
   quick_replies: [],
   rebate: { enabled: true, rate_percent: 0.5, min_turnover: 0, settle_mode: 'daily', auto_credit: false },
 })
@@ -185,17 +195,37 @@ export function SystemPage() {
               />
             </Box>
           ) : tab === 1 ? (
-            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)' }, gap: 2, maxWidth: 720 }}>
-              <TextField type="number" label="封盘秒数" value={settings.game.seal_seconds ?? 30} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, seal_seconds: Number(e.target.value) } }))} />
-              <TextField type="number" label="默认可开游戏数" value={settings.game.max_open_games ?? 8} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, max_open_games: Number(e.target.value) } }))} />
-              <TextField type="number" label="默认飞单比例 %" value={settings.game.default_fly_rate ?? 0} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, default_fly_rate: Number(e.target.value) } }))} />
-              <Paper variant="outlined" sx={{ p: 1.2 }}>
-                <FormControlLabel
-                  control={<Switch checked={Boolean(settings.game.allow_cancel)} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, allow_cancel: e.target.checked } }))} />}
-                  label="允许待结算撤单"
-                />
+            <Stack gap={2} maxWidth={820}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)' }, gap: 2 }}>
+                <TextField type="number" label="封盘秒数" value={settings.game.seal_seconds ?? 30} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, seal_seconds: Number(e.target.value) } }))} />
+                <TextField type="number" label="默认可开游戏数" value={settings.game.max_open_games ?? 8} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, max_open_games: Number(e.target.value) } }))} />
+                <TextField type="number" label="默认飞单比例 %" value={settings.game.default_fly_rate ?? 0} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, default_fly_rate: Number(e.target.value) } }))} />
+                <Paper variant="outlined" sx={{ p: 1.2 }}>
+                  <FormControlLabel
+                    control={<Switch checked={Boolean(settings.game.allow_cancel)} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, allow_cancel: e.target.checked } }))} />}
+                    label="允许待结算撤单"
+                  />
+                </Paper>
+              </Box>
+              <Paper variant="outlined" sx={{ p: 2, borderColor: 'primary.main', bgcolor: 'action.hover' }}>
+                <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} gap={1} mb={2}>
+                  <Box>
+                    <Typography fontWeight={800}>房间自动活跃</Typography>
+                    <Typography variant="body2" color="text.secondary">为每个启用房间创建独立虚拟会员，自动产生真实注单与持久化群聊；客户端不显示机器人标识。</Typography>
+                  </Box>
+                  <FormControlLabel
+                    control={<Switch checked={Boolean(settings.game.room_activity_enabled)} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, room_activity_enabled: e.target.checked } }))} />}
+                    label={settings.game.room_activity_enabled ? '运行中' : '已关闭'}
+                  />
+                </Stack>
+                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)' }, gap: 2 }}>
+                  <TextField type="number" label="执行间隔（秒）" inputProps={{ min: 5, max: 120 }} value={settings.game.room_activity_interval_secs ?? 10} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, room_activity_interval_secs: Number(e.target.value) } }))} helperText="5–120 秒；保存后自动生效" />
+                  <TextField type="number" label="每个房间机器人数量" inputProps={{ min: 1, max: 16 }} value={settings.game.room_activity_bots_per_room ?? 6} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, room_activity_bots_per_room: Number(e.target.value) } }))} helperText="1–16 个，账户和昵称互相独立" />
+                  <TextField type="number" label="每轮每房间注单数" inputProps={{ min: 1, max: 8 }} value={settings.game.room_activity_bets_per_cycle ?? 2} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, room_activity_bets_per_cycle: Number(e.target.value) } }))} helperText="随机分布到启用彩种" />
+                  <TextField type="number" label="群聊发言概率 %" inputProps={{ min: 0, max: 100 }} value={settings.game.room_activity_chat_chance_percent ?? 28} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, room_activity_chat_chance_percent: Number(e.target.value) } }))} helperText="每轮、每个房间独立判断" />
+                </Box>
               </Paper>
-            </Box>
+            </Stack>
           ) : tab === 2 ? (
             <Stack gap={1.5}>
               {(settings.quick_replies ?? []).map((item, index) => (

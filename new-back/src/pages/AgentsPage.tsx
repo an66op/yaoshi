@@ -1,174 +1,90 @@
-import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  Chip,
-  CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  MenuItem,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TablePagination,
-  TableRow,
-  TextField,
-  Typography,
-} from '@mui/material'
+import AddRounded from '@mui/icons-material/AddRounded'
+import BadgeRounded from '@mui/icons-material/BadgeRounded'
+import EditRounded from '@mui/icons-material/EditRounded'
+import GroupsRounded from '@mui/icons-material/GroupsRounded'
+import KeyRounded from '@mui/icons-material/KeyRounded'
+import PersonAddAlt1Rounded from '@mui/icons-material/PersonAddAlt1Rounded'
 import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
-import { useCallback, useEffect, useState } from 'react'
-import { adminApi, type AgentItem, type SpecialOverview } from '../api'
+import StorefrontRounded from '@mui/icons-material/StorefrontRounded'
+import { Alert, Box, Button, Card, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Grid, IconButton, InputAdornment, Stack, Switch, Table, TableBody, TableCell, TableContainer, TableHead, TablePagination, TableRow, TextField, Tooltip, Typography } from '@mui/material'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { adminApi, type AgentItem, type AgentListResponse } from '../api'
 import { PageHeader } from '../components/PageHeader'
 import { useFeedback } from '../components/feedback'
 
 const money = (value: number) => new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
+const emptyAgent = () => ({ username: '', password: '', nickname: '', email: '', phone: '', room_code: '', remark: '', status: 1 })
+const validRoom = (room: string) => /^\d{4,12}$/.test(room.trim())
+
+function StatCard({ icon, label, value, tone = 'primary' }: { icon: React.ReactNode; label: string; value: string | number; tone?: 'primary' | 'success' | 'warning' | 'secondary' }) {
+  return <Card variant="outlined" sx={{ p: 1.5, height: '100%' }}><Stack direction="row" alignItems="center" gap={1.2}><Box sx={{ width: 38, height: 38, borderRadius: 2, display: 'grid', placeItems: 'center', color: `${tone}.main`, bgcolor: `${tone}.lighter` }}>{icon}</Box><Box><Typography variant="caption" color="text.secondary">{label}</Typography><Typography fontWeight={900} fontSize={19}>{value}</Typography></Box></Stack></Card>
+}
 
 export function AgentsPage() {
-  const [items, setItems] = useState<AgentItem[]>([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(0)
-  const [pageSize, setPageSize] = useState(20)
-  const [query, setQuery] = useState('')
-  const [applied, setApplied] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [assignOpen, setAssignOpen] = useState(false)
-  const [special, setSpecial] = useState<SpecialOverview | null>(null)
-  const [resourceId, setResourceId] = useState(0)
-  const [userId, setUserId] = useState('')
-  const [saving, setSaving] = useState(false)
-  const { showMessage } = useFeedback()
+  const [data, setData] = useState<AgentListResponse | null>(null)
+  const [page, setPage] = useState(0); const [pageSize, setPageSize] = useState(20)
+  const [query, setQuery] = useState(''); const [applied, setApplied] = useState('')
+  const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [saving, setSaving] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false); const [promoteOpen, setPromoteOpen] = useState(false)
+  const [editing, setEditing] = useState<AgentItem | null>(null); const [resetting, setResetting] = useState<AgentItem | null>(null)
+  const [form, setForm] = useState(emptyAgent); const [promote, setPromote] = useState({ user_id: '', room_code: '' }); const [newPassword, setNewPassword] = useState('')
+  const { showMessage } = useFeedback(); const items = data?.items ?? []; const summary = data?.summary ?? { total: 0, active: 0, disabled: 0, members: 0 }
 
   const load = useCallback(async (notify = false) => {
-    setLoading(true)
-    setError('')
-    try {
-      const list = await adminApi.agents({ query: applied, page: page + 1, pageSize })
-      setItems(list.items)
-      setTotal(list.total)
-      if (notify) showMessage('代理列表已刷新')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '读取代理失败')
-    } finally {
-      setLoading(false)
-    }
+    setLoading(true); setError('')
+    try { const result = await adminApi.agents({ query: applied, page: page + 1, pageSize }); setData(result); if (notify) showMessage('代理数据已刷新') }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '读取代理失败') }
+    finally { setLoading(false) }
   }, [applied, page, pageSize, showMessage])
+  useEffect(() => { void load() }, [load])
 
-  useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load])
-
-  const openAssign = async () => {
-    setAssignOpen(true)
-    try {
-      const overview = await adminApi.specialOverview()
-      setSpecial(overview)
-      const first = overview.resources.find(item => item.status === 'available')
-      setResourceId(first?.id ?? 0)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '读取房间号池失败')
-    }
-  }
-
-  const assign = async () => {
-    if (!resourceId || !Number(userId)) {
-      setError('请选择可用房间号并填写用户 ID')
-      return
-    }
+  const openCreate = () => { setForm(emptyAgent()); setCreateOpen(true) }
+  const openEdit = (agent: AgentItem) => { setForm({ username: agent.username, password: '', nickname: agent.nickname, email: agent.email, phone: agent.phone, room_code: agent.room_code, remark: agent.remark, status: agent.status }); setEditing(agent) }
+  const saveNew = async () => {
+    if (!form.username.trim() || !form.password || !validRoom(form.room_code)) { setError('请填写登录账号、至少 6 位密码和 4–12 位数字房间号'); return }
     setSaving(true)
-    try {
-      await adminApi.assignAgentRoom({ resource_id: resourceId, user_id: Number(userId) })
-      showMessage('房间号已分配，用户已升为代理')
-      setAssignOpen(false)
-      setUserId('')
-      await load()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '分配失败')
-    } finally {
-      setSaving(false)
-    }
+    try { await adminApi.createAgent({ ...form, username: form.username.trim(), room_code: form.room_code.trim() }); showMessage('代理账号已创建，可使用该账号登录会员端'); setCreateOpen(false); await load() }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '创建代理失败') } finally { setSaving(false) }
   }
+  const saveEdit = async () => {
+    if (!editing) return
+    if (!validRoom(form.room_code)) { setError('房间号须为 4–12 位数字'); return }
+    setSaving(true)
+    try { await adminApi.updateAgent(editing.id, { email: form.email, nickname: form.nickname, phone: form.phone, room_code: form.room_code.trim(), remark: form.remark, status: form.status }); showMessage('代理资料与房间号已保存；原房间成员归属不变'); setEditing(null); await load() }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '保存代理失败') } finally { setSaving(false) }
+  }
+  const promoteExisting = async () => {
+    const id = Number(promote.user_id)
+    if (!id || !validRoom(promote.room_code)) { setError('请填写已有用户 ID 和 4–12 位数字房间号'); return }
+    setSaving(true)
+    try { await adminApi.promoteAgent(id, promote.room_code.trim()); showMessage('已有用户已升为代理，房间号已分配'); setPromoteOpen(false); setPromote({ user_id: '', room_code: '' }); await load() }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '转换代理失败') } finally { setSaving(false) }
+  }
+  const resetPassword = async () => {
+    if (!resetting || newPassword.length < 6) { setError('新密码至少需要 6 个字符'); return }
+    setSaving(true)
+    try { await adminApi.resetAgentPassword(resetting.id, newPassword); showMessage('代理登录密码已重置'); setResetting(null); setNewPassword('') }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '重置密码失败') } finally { setSaving(false) }
+  }
+  const stats = useMemo(() => [
+    { label: '代理总数', value: summary.total, icon: <BadgeRounded fontSize="small" /> },
+    { label: '正常运营', value: summary.active, icon: <StorefrontRounded fontSize="small" />, tone: 'success' as const },
+    { label: '已停用', value: summary.disabled, icon: <StorefrontRounded fontSize="small" />, tone: 'warning' as const },
+    { label: '归属会员', value: summary.members, icon: <GroupsRounded fontSize="small" />, tone: 'secondary' as const },
+  ], [summary])
 
-  return (
-    <Box p={{ xs: 2, lg: 2.5 }}>
-      <PageHeader
-        eyebrow="业务管理 / 代理"
-        title="代理管理"
-        description="代理通过购买/获发靓号房间号运营；用户输入房间号进入对应代理房间。"
-        actions={
-          <>
-            <Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)}>刷新</Button>
-            <Button variant="contained" onClick={() => void openAssign()}>分配房间号</Button>
-          </>
-        }
-      />
-      {error && <Alert severity="error" sx={{ mt: 2 }} onClose={() => setError('')}>{error}</Alert>}
-      <Card sx={{ mt: 2.5, p: 2 }}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} gap={1.5}>
-          <TextField size="small" fullWidth placeholder="搜索代理用户名 / 昵称 / 房间号" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { setPage(0); setApplied(query.trim()) } }} />
-          <Button variant="contained" startIcon={<SearchRounded />} onClick={() => { setPage(0); setApplied(query.trim()) }}>查询</Button>
-        </Stack>
-      </Card>
-      <Card sx={{ mt: 1.5 }}>
-        {loading && <Box px={2} py={1}><CircularProgress size={18} /></Box>}
-        <TableContainer>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>代理</TableCell>
-                <TableCell>房间号（靓号）</TableCell>
-                <TableCell align="right">余额</TableCell>
-                <TableCell align="right">下级会员</TableCell>
-                <TableCell>状态</TableCell>
-                <TableCell>创建时间</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {items.map(item => (
-                <TableRow key={item.id} hover>
-                  <TableCell>
-                    <Typography fontSize={12} fontWeight={800}>{item.nickname || item.username}</Typography>
-                    <Typography variant="caption" color="text.secondary">@{item.username} · ID {item.id}</Typography>
-                  </TableCell>
-                  <TableCell>
-                    {item.room_code ? <Chip size="small" color="primary" label={item.room_code} /> : <Typography variant="caption" color="text.secondary">未分配</Typography>}
-                  </TableCell>
-                  <TableCell align="right">{money(item.balance)}</TableCell>
-                  <TableCell align="right">{item.member_count}</TableCell>
-                  <TableCell><Chip size="small" color={item.status === 1 ? 'success' : 'default'} label={item.status === 1 ? '正常' : '停用'} /></TableCell>
-                  <TableCell>{item.created_at}</TableCell>
-                </TableRow>
-              ))}
-              {!loading && !items.length && <TableRow><TableCell colSpan={6} align="center" sx={{ py: 6, color: 'text.secondary' }}>暂无代理，可先在用户管理设为代理，或通过「分配房间号」发放靓号</TableCell></TableRow>}
-            </TableBody>
-          </Table>
-        </TableContainer>
-        <TablePagination component="div" count={total} page={page} onPageChange={(_, next) => setPage(next)} rowsPerPage={pageSize} onRowsPerPageChange={e => { setPageSize(Number(e.target.value)); setPage(0) }} rowsPerPageOptions={[10, 20, 50]} labelRowsPerPage="每页" />
-      </Card>
-
-      <Dialog open={assignOpen} onClose={() => setAssignOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>分配靓号房间号给代理</DialogTitle>
-        <DialogContent>
-          <Alert severity="info" sx={{ mb: 2 }}>发放后：用户角色升为代理，房间号写入代理资料；前端输入该号即可进入代理房间。</Alert>
-          <Stack gap={1.5} mt={1}>
-            <TextField select label="可用房间号" value={resourceId || ''} onChange={e => setResourceId(Number(e.target.value))}>
-              {(special?.resources ?? []).filter(item => item.status === 'available').map(item => (
-                <MenuItem key={item.id} value={item.id}>{item.number} · {item.level}</MenuItem>
-              ))}
-            </TextField>
-            <TextField type="number" label="用户 ID" value={userId} onChange={e => setUserId(e.target.value)} helperText="普通会员或已有代理均可；发放后绑定该房间号" />
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAssignOpen(false)}>取消</Button>
-          <Button variant="contained" disabled={saving} onClick={() => void assign()}>{saving ? '分配中…' : '确认分配'}</Button>
-        </DialogActions>
-      </Dialog>
-    </Box>
-  )
+  return <Box p={{ xs: 2, lg: 2.5 }}>
+    <PageHeader eyebrow="业务管理 / 代理" title="代理管理" description="完整管理代理登录账号、房间号与运营状态。修改房间号后，已归属成员仍留在该代理名下。" actions={<><Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)}>刷新</Button><Button variant="outlined" startIcon={<PersonAddAlt1Rounded />} onClick={() => setPromoteOpen(true)}>已有用户转代理</Button><Button variant="contained" startIcon={<AddRounded />} onClick={openCreate}>新增代理</Button></>} />
+    {error && <Alert severity="error" sx={{ mt: 2 }} onClose={() => setError('')}>{error}</Alert>}
+    <Grid container spacing={1.5} sx={{ mt: 1 }}>{stats.map(stat => <Grid size={{ xs: 6, md: 3 }} key={stat.label}><StatCard {...stat} /></Grid>)}</Grid>
+    <Card variant="outlined" sx={{ mt: 2, p: 1.5 }}><Stack direction={{ xs: 'column', sm: 'row' }} gap={1.25}><TextField size="small" fullWidth placeholder="搜索登录账号、昵称、手机号或房间号" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { setPage(0); setApplied(query.trim()) } }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRounded fontSize="small" /></InputAdornment> } }} /><Button variant="contained" onClick={() => { setPage(0); setApplied(query.trim()) }}>查询</Button></Stack></Card>
+    <Card sx={{ mt: 1.5 }}>{loading && <Box px={2} py={1}><CircularProgress size={18} /></Box>}<TableContainer><Table size="small" sx={{ minWidth: 1050 }}><TableHead><TableRow><TableCell>代理登录账号</TableCell><TableCell>房间号</TableCell><TableCell>联系方式</TableCell><TableCell align="right">归属会员</TableCell><TableCell align="right">账户余额</TableCell><TableCell>最近登录</TableCell><TableCell>运营状态</TableCell><TableCell align="right">操作</TableCell></TableRow></TableHead><TableBody>
+      {items.map(item => <TableRow hover key={item.id}><TableCell><Typography fontWeight={850} fontSize={12}>{item.nickname || item.username}</Typography><Typography fontSize={10} color="text.secondary">@{item.username} · ID {item.public_id || item.id}</Typography></TableCell><TableCell><Chip size="small" color="primary" label={item.room_code || '未分配'} /></TableCell><TableCell><Typography fontSize={11}>{item.phone || '未填写手机'}</Typography><Typography fontSize={10} color="text.secondary">{item.email || '未填写邮箱'}</Typography></TableCell><TableCell align="right"><Typography fontWeight={800}>{item.member_count}</Typography></TableCell><TableCell align="right">{money(item.balance)}</TableCell><TableCell><Typography fontSize={10}>{item.last_login_at || '尚未登录'}</Typography><Typography fontSize={9} color="text.secondary">累计 {item.login_count} 次</Typography></TableCell><TableCell><Stack direction="row" alignItems="center" gap={.5}><Switch size="small" checked={item.status === 1} onChange={() => openEdit({ ...item, status: item.status === 1 ? 0 : 1 })} /><Typography fontSize={10}>{item.status === 1 ? '正常' : '已停用'}</Typography></Stack></TableCell><TableCell align="right"><Tooltip title="编辑账号与房间"><IconButton size="small" onClick={() => openEdit(item)}><EditRounded fontSize="small" /></IconButton></Tooltip><Tooltip title="重置登录密码"><IconButton size="small" onClick={() => { setResetting(item); setNewPassword('') }}><KeyRounded fontSize="small" /></IconButton></Tooltip></TableCell></TableRow>)}
+      {!loading && !items.length && <TableRow><TableCell colSpan={8} align="center" sx={{ py: 7, color: 'text.secondary' }}>暂无代理。可新建代理账号，或将用户管理中的已有用户转为代理。</TableCell></TableRow>}
+    </TableBody></Table></TableContainer><TablePagination component="div" count={data?.total ?? 0} page={page} onPageChange={(_, next) => setPage(next)} rowsPerPage={pageSize} onRowsPerPageChange={event => { setPageSize(Number(event.target.value)); setPage(0) }} rowsPerPageOptions={[10, 20, 50]} labelRowsPerPage="每页" /></Card>
+    <Dialog open={createOpen || Boolean(editing)} onClose={() => !saving && (setCreateOpen(false), setEditing(null))} fullWidth maxWidth="sm"><DialogTitle>{editing ? `编辑代理 · ${editing.username}` : '新增代理账号'}</DialogTitle><DialogContent><Alert severity="info" sx={{ mt: 1, mb: 2 }}>{editing ? '房间号修改后，新的用户需输入新号进入；已有成员和客服会话仍归属该代理。' : '创建后可直接使用“登录账号 + 初始密码”登录会员端，房间号立即开通。'}</Alert><Stack gap={1.5}>{!editing && <Stack direction={{ xs: 'column', sm: 'row' }} gap={1.5}><TextField required fullWidth label="登录账号" value={form.username} onChange={event => setForm(current => ({ ...current, username: event.target.value }))} helperText="3–50 个字符，不可重复" /><TextField required fullWidth type="password" label="初始登录密码" value={form.password} onChange={event => setForm(current => ({ ...current, password: event.target.value }))} helperText="至少 6 个字符" /></Stack>}<Stack direction={{ xs: 'column', sm: 'row' }} gap={1.5}><TextField fullWidth label="代理昵称" value={form.nickname} onChange={event => setForm(current => ({ ...current, nickname: event.target.value }))} /><TextField required fullWidth label="房间号" value={form.room_code} onChange={event => setForm(current => ({ ...current, room_code: event.target.value.replace(/\D/g, '') }))} helperText="4–12 位数字，必须唯一" /></Stack><Stack direction={{ xs: 'column', sm: 'row' }} gap={1.5}><TextField fullWidth label="手机号" value={form.phone} onChange={event => setForm(current => ({ ...current, phone: event.target.value }))} /><TextField fullWidth type="email" label="邮箱" value={form.email} onChange={event => setForm(current => ({ ...current, email: event.target.value }))} /></Stack><TextField label="运营备注" multiline minRows={2} value={form.remark} onChange={event => setForm(current => ({ ...current, remark: event.target.value }))} /><Stack direction="row" alignItems="center" gap={1}><Switch checked={form.status === 1} onChange={(_, checked) => setForm(current => ({ ...current, status: checked ? 1 : 0 }))} /><Typography fontSize={13}>{form.status === 1 ? '账号正常启用' : '账号创建后停用'}</Typography></Stack></Stack></DialogContent><DialogActions><Button disabled={saving} onClick={() => { setCreateOpen(false); setEditing(null) }}>取消</Button><Button variant="contained" disabled={saving} onClick={() => void (editing ? saveEdit() : saveNew())}>{saving ? '保存中…' : '保存并开通'}</Button></DialogActions></Dialog>
+    <Dialog open={promoteOpen} onClose={() => !saving && setPromoteOpen(false)} fullWidth maxWidth="xs"><DialogTitle>已有用户转为代理</DialogTitle><DialogContent><Alert severity="info" sx={{ mt: 1, mb: 2 }}>输入用户管理里的内部用户 ID。转换后，该用户可继续用原登录账号和密码进入会员端。</Alert><Stack gap={1.5}><TextField required type="number" label="已有用户 ID" value={promote.user_id} onChange={event => setPromote(current => ({ ...current, user_id: event.target.value }))} /><TextField required label="分配房间号" value={promote.room_code} onChange={event => setPromote(current => ({ ...current, room_code: event.target.value.replace(/\D/g, '') }))} helperText="4–12 位数字且不可与其他代理重复" /></Stack></DialogContent><DialogActions><Button onClick={() => setPromoteOpen(false)}>取消</Button><Button variant="contained" disabled={saving} onClick={() => void promoteExisting()}>{saving ? '处理中…' : '确认转换'}</Button></DialogActions></Dialog>
+    <Dialog open={Boolean(resetting)} onClose={() => !saving && setResetting(null)} fullWidth maxWidth="xs"><DialogTitle>重置代理登录密码</DialogTitle><DialogContent><Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 2 }}>将为 @{resetting?.username} 设置新的会员端登录密码。</Typography><TextField autoFocus fullWidth type="password" label="新登录密码" value={newPassword} onChange={event => setNewPassword(event.target.value)} helperText="至少 6 个字符" /></DialogContent><DialogActions><Button onClick={() => setResetting(null)}>取消</Button><Button variant="contained" disabled={saving} onClick={() => void resetPassword()}>{saving ? '重置中…' : '确认重置'}</Button></DialogActions></Dialog>
+  </Box>
 }

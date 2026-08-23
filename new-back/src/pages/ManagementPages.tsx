@@ -52,7 +52,7 @@ function ActivitiesPage() {
   const [error, setError] = useState('')
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<OpsActivity | null>(null)
-  const [form, setForm] = useState({ type: 'checkin', title: '', subtitle: '', status: 'draft', reward: 0, sort_order: 0 })
+  const [form, setForm] = useState({ type: 'checkin', title: '', subtitle: '', status: 'draft', reward: 0, sort_order: 0, pool: 88, min_amount: 1, max_amount: 8.8 })
   const [saving, setSaving] = useState(false)
   const { showMessage } = useFeedback()
 
@@ -73,15 +73,38 @@ function ActivitiesPage() {
 
   const openCreate = () => {
     setEditing(null)
-    setForm({ type: 'checkin', title: '', subtitle: '', status: 'draft', reward: 0, sort_order: 0 })
+    setForm({ type: 'checkin', title: '', subtitle: '', status: 'draft', reward: 0, sort_order: 0, pool: 88, min_amount: 1, max_amount: 8.8 })
     setOpen(true)
   }
 
   const openEdit = (item: OpsActivity) => {
     setEditing(item)
-    setForm({ type: item.type, title: item.title, subtitle: item.subtitle, status: item.status, reward: item.reward, sort_order: item.sort_order })
+    const cfg = item.config ?? {}
+    setForm({
+      type: item.type,
+      title: item.title,
+      subtitle: item.subtitle,
+      status: item.status,
+      reward: item.reward,
+      sort_order: item.sort_order,
+      pool: Number(cfg.pool ?? item.pool_total ?? 88),
+      min_amount: Number(cfg.min_amount ?? 1),
+      max_amount: Number(cfg.max_amount ?? 8.8),
+    })
     setOpen(true)
   }
+
+  const buildPayload = () => ({
+    type: form.type,
+    title: form.title,
+    subtitle: form.subtitle,
+    status: form.status,
+    reward: form.reward,
+    sort_order: form.sort_order,
+    config: form.type === 'redpacket'
+      ? { pool: form.pool, min_amount: form.min_amount, max_amount: form.max_amount }
+      : {},
+  })
 
   const save = async () => {
     if (!form.title.trim()) {
@@ -90,8 +113,8 @@ function ActivitiesPage() {
     }
     setSaving(true)
     try {
-      if (editing) await adminApi.updateActivity(editing.id, form)
-      else await adminApi.createActivity(form)
+      if (editing) await adminApi.updateActivity(editing.id, buildPayload())
+      else await adminApi.createActivity(buildPayload())
       setOpen(false)
       showMessage(editing ? '活动已更新' : '活动已创建')
       await load()
@@ -132,7 +155,12 @@ function ActivitiesPage() {
                 </Box>
                 <Chip size="small" color={statusColor(item.status)} label={statusLabel(item.status)} />
               </Stack>
-              <Typography variant="caption" color="text.secondary" display="block" mt={1.5}>参与 {item.participants} · 奖励 {item.reward}</Typography>
+              <Typography variant="caption" color="text.secondary" display="block" mt={1.5}>
+                参与 {item.participants} · 奖励 {item.reward}
+                {item.type === 'redpacket' && (
+                  <> · 奖池 {item.pool_remaining ?? item.pool_total ?? 0}/{item.pool_total ?? 0} 元</>
+                )}
+              </Typography>
               <Stack direction="row" gap={1} mt={2} flexWrap="wrap">
                 <Button size="small" variant="outlined" onClick={() => openEdit(item)}>编辑</Button>
                 {item.status !== 'active' && <Button size="small" onClick={() => void adminApi.setActivityStatus(item.id, 'active').then(() => load()).then(() => showMessage('已上线'))}>上线</Button>}
@@ -159,6 +187,13 @@ function ActivitiesPage() {
               <MenuItem value="ended">已结束</MenuItem>
             </TextField>
             <TextField type="number" label="奖励金额" value={form.reward} onChange={e => setForm(current => ({ ...current, reward: Number(e.target.value) }))} />
+            {form.type === 'redpacket' && (
+              <>
+                <TextField type="number" label="奖池总额（元）" value={form.pool} onChange={e => setForm(current => ({ ...current, pool: Number(e.target.value) }))} helperText="真实奖池，领完即止" />
+                <TextField type="number" label="单次最低（元）" value={form.min_amount} onChange={e => setForm(current => ({ ...current, min_amount: Number(e.target.value) }))} />
+                <TextField type="number" label="单次最高（元）" value={form.max_amount} onChange={e => setForm(current => ({ ...current, max_amount: Number(e.target.value) }))} />
+              </>
+            )}
             <TextField type="number" label="排序" value={form.sort_order} onChange={e => setForm(current => ({ ...current, sort_order: Number(e.target.value) }))} />
           </Stack>
         </DialogContent>

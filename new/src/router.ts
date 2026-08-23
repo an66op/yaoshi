@@ -3,19 +3,34 @@ import type { Tab } from "./types";
 
 export type ChatView =
   | "list"
-  | "notices"
-  | "notices-system"
-  | "notices-activity"
+  | "system"
+  | "winning"
+  | "activity"
   | "group"
   | "service";
+
+export type WalletActionSlug =
+  | "credit"
+  | "debit"
+  | "channels"
+  | "applications"
+  | "quota"
+  | "bets"
+  | "pending-bets"
+  | "ledger"
+  | "rebate"
+  | "welfare"
+  | "redpacket"
+  | "invite";
 
 export type AppRoute =
   | { kind: "login" }
   | { kind: "register" }
   | { kind: "room" }
-  | { kind: "tab"; tab: Exclude<Tab, "chat"> }
-  | { kind: "chat"; tab: "chat"; view: ChatView }
-  | { kind: "game"; gameId: string };
+  | { kind: "tab"; tab: Exclude<Tab, "chat">; walletAction?: WalletActionSlug; returnGameId?: string }
+  | { kind: "chat"; tab: "chat"; view: ChatView; returnGameId?: string }
+  | { kind: "results"; gameId?: string; returnGameId?: string }
+  | { kind: "game"; gameId: string; quickMenu?: boolean };
 
 const tabPaths: Record<Tab, string> = {
   lobby: "/lobby",
@@ -25,33 +40,45 @@ const tabPaths: Record<Tab, string> = {
 };
 
 function currentPath() {
-  return window.location.pathname.replace(/\/+$/, "") || "/";
+  const pathname = window.location.pathname.replace(/\/+$/, "") || "/";
+  return `${pathname}${window.location.search}`;
 }
 
 export function parseRoute(pathname: string): AppRoute {
-  const path = pathname.replace(/\/+$/, "") || "/";
+  const [rawPath, rawQuery = ""] = pathname.split("?", 2);
+  const path = rawPath.replace(/\/+$/, "") || "/";
+  const query = new URLSearchParams(rawQuery);
   if (path === "/" || path === "/login") return { kind: "login" };
   if (path === "/register") return { kind: "register" };
   if (path === "/room") return { kind: "room" };
   if (path === "/lobby") return { kind: "tab", tab: "lobby" };
+  const returnGameId = query.get("from_game")?.trim() || undefined;
   if (path === "/wallet" || path === "/shop")
-    return { kind: "tab", tab: "shop" };
+    return { kind: "tab", tab: "shop", returnGameId };
+  if (path.startsWith("/wallet/")) {
+    const slug = path.slice("/wallet/".length) as WalletActionSlug;
+    return { kind: "tab", tab: "shop", walletAction: slug, returnGameId };
+  }
   if (path === "/profile") return { kind: "tab", tab: "profile" };
-  if (path === "/messages/notices")
-    return { kind: "chat", tab: "chat", view: "notices" };
-  if (path === "/messages/notices-system")
-    return { kind: "chat", tab: "chat", view: "notices-system" };
-  if (path === "/messages/notices-activity")
-    return { kind: "chat", tab: "chat", view: "notices-activity" };
+  if (path === "/results") return { kind: "results", gameId: query.get("game")?.trim() || undefined, returnGameId };
+  if (path === "/messages/system")
+    return { kind: "chat", tab: "chat", view: "system" };
+  if (path === "/messages/winning")
+    return { kind: "chat", tab: "chat", view: "winning" };
+  if (path === "/messages/activity")
+    return { kind: "chat", tab: "chat", view: "activity" };
   if (path === "/messages/group")
     return { kind: "chat", tab: "chat", view: "group" };
-  if (path === "/messages/service")
-    return { kind: "chat", tab: "chat", view: "service" };
+  if (path === "/messages/service") {
+    const returnGameId = query.get("from_game")?.trim();
+    return { kind: "chat", tab: "chat", view: "service", returnGameId: returnGameId || undefined };
+  }
   if (path === "/messages") return { kind: "chat", tab: "chat", view: "list" };
   if (path.startsWith("/games/"))
     return {
       kind: "game",
       gameId: decodeURIComponent(path.slice("/games/".length)),
+      quickMenu: query.get("quick_menu") === "1",
     };
   return { kind: "login" };
 }
@@ -64,12 +91,35 @@ export function pathForTab(tab: Tab) {
   return tabPaths[tab];
 }
 
-export function pathForChat(view: ChatView) {
-  return view === "list" ? tabPaths.chat : `/messages/${view}`;
+export function pathForWallet(action?: WalletActionSlug, fromGameId?: string) {
+  const path = action ? `/wallet/${action}` : tabPaths.shop;
+  return fromGameId ? `${path}?from_game=${encodeURIComponent(fromGameId)}` : path;
 }
 
-export function pathForGame(gameId: string) {
-  return `/games/${encodeURIComponent(gameId)}`;
+export function pathForChat(view: ChatView, fromGameId?: string) {
+  const routes: Record<ChatView, string> = {
+    list: tabPaths.chat,
+    system: "/messages/system",
+    winning: "/messages/winning",
+    activity: "/messages/activity",
+    group: "/messages/group",
+    service: "/messages/service",
+  };
+  const path = routes[view];
+  return view === "service" && fromGameId ? `${path}?from_game=${encodeURIComponent(fromGameId)}` : path;
+}
+
+export function pathForGame(gameId: string, quickMenu = false) {
+  const path = `/games/${encodeURIComponent(gameId)}`;
+  return quickMenu ? `${path}?quick_menu=1` : path;
+}
+
+export function pathForResults(gameId?: string, fromGameId?: string) {
+  const query = new URLSearchParams();
+  if (gameId) query.set("game", gameId);
+  if (fromGameId) query.set("from_game", fromGameId);
+  const suffix = query.toString();
+  return `/results${suffix ? `?${suffix}` : ""}`;
 }
 
 export function useAppRouter() {
@@ -91,5 +141,5 @@ export function useAppRouter() {
     setPathname(path);
   }, []);
 
-  return { route: parseRoute(pathname), navigate };
+  return { route: parseRoute(pathname), pathname, navigate };
 }

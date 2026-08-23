@@ -280,18 +280,30 @@ func toPlatformView(row entertainment.Platform) PlatformView {
 }
 
 func (s *EntertainmentAdminService) ensureDefaults() error {
-	var count int64
-	if err := s.db.Model(&entertainment.Platform{}).Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
 	defaults := []entertainment.Platform{
 		{Code: "kaiyuan", Name: "开元棋牌", Category: "棋牌", MerchantNo: "DEMO001", LaunchPath: "/portal", SecretKey: "demo", Status: "enabled", SortOrder: 1, Remark: "演示桥接页，可在管理端配置真实 API 地址"},
 		{Code: "pg", Name: "PG电子", Category: "电子", MerchantNo: "DEMO002", LaunchPath: "/portal", SecretKey: "demo", Status: "maintenance", SortOrder: 2, Remark: "维护中"},
 		{Code: "ag", Name: "AG真人", Category: "真人", MerchantNo: "DEMO003", LaunchPath: "/portal", SecretKey: "demo", Status: "disabled", SortOrder: 3},
 		{Code: "im", Name: "IM电竞", Category: "电竞", MerchantNo: "DEMO004", LaunchPath: "/portal", SecretKey: "demo", Status: "disabled", SortOrder: 4},
+		{Code: "fish-lobby", Name: "捕鱼大厅", Category: "捕鱼", Status: "maintenance", SortOrder: 101, Remark: "第三方捕鱼线路接入中"},
+		{Code: "fish-king-3d", Name: "捕鱼王3D", Category: "捕鱼", Status: "maintenance", SortOrder: 102, Remark: "第三方捕鱼线路接入中"},
+		{Code: "fb-sports", Name: "FB体育", Category: "体育", Status: "maintenance", SortOrder: 201, Remark: "等待配置现有 FB 体育接口"},
+		{Code: "im-sports", Name: "IM体育", Category: "体育", Status: "maintenance", SortOrder: 202, Remark: "第三方体育线路接入中"},
+		{Code: "live-baccarat", Name: "百家乐", Category: "真人", Status: "maintenance", SortOrder: 301, Remark: "真人线路接入中"},
+		{Code: "live-dragon-tiger", Name: "龙虎", Category: "真人", Status: "maintenance", SortOrder: 302, Remark: "真人线路接入中"},
+		{Code: "live-golden-flower", Name: "炸金花", Category: "真人", Status: "maintenance", SortOrder: 303, Remark: "真人线路接入中"},
+		{Code: "live-texas", Name: "德州扑克", Category: "真人", Status: "maintenance", SortOrder: 304, Remark: "真人线路接入中"},
+		{Code: "slot-bounty-captain", Name: "赏金船长", Category: "电子", Status: "maintenance", SortOrder: 401, Remark: "电子线路接入中"},
+		{Code: "slot-mahjong-ways", Name: "麻将胡了", Category: "电子", Status: "maintenance", SortOrder: 402, Remark: "电子线路接入中"},
+		{Code: "esports-honor", Name: "王者荣耀", Category: "电竞", Status: "maintenance", SortOrder: 501, Remark: "电竞线路接入中"},
+		{Code: "esports-hearthstone", Name: "炉石传说", Category: "电竞", Status: "maintenance", SortOrder: 502, Remark: "电竞线路接入中"},
+		{Code: "esports-lol", Name: "英雄联盟", Category: "电竞", Status: "maintenance", SortOrder: 503, Remark: "电竞线路接入中"},
 	}
-	return s.db.Create(&defaults).Error
+	for _, template := range defaults {
+		row := template
+		if err := s.db.Where("code = ?", row.Code).FirstOrCreate(&row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }

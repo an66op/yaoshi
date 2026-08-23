@@ -34,6 +34,7 @@ export type ActivityItem = {
   type: string
   title: string
   subtitle: string
+  cover: string
   status: string
   reward: number
   participants: number
@@ -70,6 +71,12 @@ export type MemberNotification = {
   created_at: string
 }
 
+export type MemberNotificationPage = {
+  items: MemberNotification[]
+  has_more: boolean
+  next_before_id?: number
+}
+
 export type GameFeedItem = {
   nickname: string
   detail: string
@@ -89,7 +96,11 @@ export const portalApi = {
   activityStatus: (id: number) => request<ActivityStatus>(`/member/activities/${id}/status`),
   checkIn: (id: number) => request<ActivityActionResult>(`/member/activities/${id}/checkin`, { method: 'POST' }),
   claimRedPacket: (id: number) => request<ActivityActionResult>(`/member/activities/${id}/redpacket`, { method: 'POST' }),
-  notifications: (limit = 30) => request<MemberNotification[]>(`/member/notifications?limit=${limit}`),
+  notifications: (limit = 20, cursor?: { before_id?: number; category?: 'system' | 'activity' | 'winning' | 'all' }) => {
+    const query = new URLSearchParams({ limit: String(limit), category: cursor?.category ?? 'all' })
+    if (cursor?.before_id) query.set('before_id', String(cursor.before_id))
+    return request<MemberNotificationPage>(`/member/notifications?${query}`)
+  },
   unreadCount: () => request<{ unread: number }>('/member/notifications/unread'),
   markRead: (id: number) => request<null>(`/member/notifications/${id}/read`, { method: 'POST' }),
   markAllRead: () => request<null>('/member/notifications/read-all', { method: 'POST' }),

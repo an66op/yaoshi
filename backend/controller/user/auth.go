@@ -37,7 +37,7 @@ func (h *authHandler) Register(c *gin.Context) {
 		return
 	}
 	constants.SendSuccess(c, http.StatusCreated, constants.UserCreateSuccess, vo.RegisterResponse{
-		ID: account.UserID, Username: account.Username, Email: account.Email, Nickname: account.Nickname, Status: account.Status,
+		ID: account.UserID, PublicID: account.PublicID, Username: account.Username, Email: account.Email, Nickname: account.Nickname, Status: account.Status,
 	})
 }
 
@@ -56,7 +56,7 @@ func (h *authHandler) Login(c *gin.Context) {
 		Token: token,
 		User: vo.UserResponse{
 			ID: account.UserID, Username: account.Username, Email: account.Email,
-			Nickname: account.Nickname, Role: account.Role, Status: account.Status,
+			PublicID: account.PublicID, Nickname: account.Nickname, Role: account.Role, Status: account.Status,
 		},
 	})
 }
@@ -83,6 +83,6 @@ func (h *authHandler) Me(c *gin.Context) {
 	}
 	constants.SendSuccess(c, http.StatusOK, "ok", vo.UserResponse{
 		ID: account.UserID, Username: account.Username, Email: account.Email,
-		Nickname: account.Nickname, Role: account.Role, Status: account.Status,
+		PublicID: account.PublicID, Nickname: account.Nickname, Role: account.Role, Status: account.Status,
 	})
 }

@@ -51,6 +51,75 @@ func (h *AgentHandler) Promote(c *gin.Context) {
 	constants.SendSuccess(c, http.StatusOK, "已设为代理", result)
 }
 
+func (h *AgentHandler) Create(c *gin.Context) {
+	var request struct {
+		Username string `json:"username" binding:"required,min=3,max=50"`
+		Password string `json:"password" binding:"required,min=6,max=72"`
+		Email    string `json:"email" binding:"omitempty,email"`
+		Nickname string `json:"nickname" binding:"max=50"`
+		Phone    string `json:"phone" binding:"max=30"`
+		RoomCode string `json:"room_code" binding:"required"`
+		Remark   string `json:"remark" binding:"max=500"`
+		Status   int    `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "代理资料不正确", err)
+		return
+	}
+	result, err := h.agents.Create(services.CreateAgentInput{Username: request.Username, Password: request.Password, Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, Remark: request.Remark, Status: request.Status})
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "创建代理失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusCreated, "代理账号已创建", result)
+}
+
+func (h *AgentHandler) Update(c *gin.Context) {
+	id, err := services.ParseUserID(c.Param("id"))
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "用户编号不正确", err)
+		return
+	}
+	var request struct {
+		Email    string `json:"email" binding:"omitempty,email"`
+		Nickname string `json:"nickname" binding:"max=50"`
+		Phone    string `json:"phone" binding:"max=30"`
+		RoomCode string `json:"room_code" binding:"required"`
+		Remark   string `json:"remark" binding:"max=500"`
+		Status   int    `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "代理资料不正确", err)
+		return
+	}
+	result, err := h.agents.Update(id, services.UpdateAgentInput{Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, Remark: request.Remark, Status: request.Status})
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "保存代理失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "代理资料已保存", result)
+}
+
+func (h *AgentHandler) ResetPassword(c *gin.Context) {
+	id, err := services.ParseUserID(c.Param("id"))
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "用户编号不正确", err)
+		return
+	}
+	var request struct {
+		Password string `json:"password" binding:"required,min=6,max=72"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "新密码至少需要 6 个字符", err)
+		return
+	}
+	if err := h.agents.ResetPassword(id, request.Password); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "重置密码失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "代理登录密码已重置", gin.H{"id": id})
+}
+
 func (h *AgentHandler) AssignRoom(c *gin.Context) {
 	var request struct {
 		ResourceID uint64 `json:"resource_id" binding:"required"`

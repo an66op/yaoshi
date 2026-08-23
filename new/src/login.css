@@ -212,6 +212,8 @@
   color: #d55c50;
   font-size: 10px;
 }
+.login-success { color: #2eaf7b; }
+.register-back { margin-top: 12px; }
 .login-status {
   display: flex;
   align-items: center;
@@ -266,3 +268,19 @@
 .login-foot { display: grid; gap: 7px; margin-top: 16px; }
 .login-foot span { justify-self: center; padding: 4px 9px; border: 1px solid #b8dfe1; border-radius: 20px; background: #effafb; color: #3e7785; font: 700 8px 'DM Mono'; letter-spacing: .08em; }
 .login-foot p { margin: 0; }
+
+/* 登录与注册页也继承用户已经选择的昼夜主题。 */
+.theme-night.login-page { background: radial-gradient(circle at 82% 7%, #1a708268, transparent 26%), linear-gradient(145deg, #04182e, #092b47 58%, #061e39); color: #dff7f9; }
+.theme-night.login-page::before { border-color: #73dce524; background: #15677d32; }
+.theme-night.login-page::after { border-color: #6fcfd62b; background: #0f4d6638; }
+.theme-night.login-page .login-card { border-color: #62cbd536; background: linear-gradient(145deg, #0d304bfa, #0a2743f2); box-shadow: 0 24px 60px #00000062, inset 0 1px #bfffff12; }
+.theme-night.login-page .login-brand b,.theme-night.login-page .login-copy h1 { color: #e4fbfc; }
+.theme-night.login-page .login-brand small,.theme-night.login-page .login-copy p,.theme-night.login-page .login-field > span,.theme-night.login-page .login-foot { color: #9dc8cf; }
+.theme-night.login-page .login-brand em,.theme-night.login-page .login-foot span { border-color: #4cc9c653; background: #123e55; color: #91eee6; }
+.theme-night.login-page .login-copy > small { color: #7fe1dc; }
+.theme-night.login-page .login-field > div { border-color: #4bc4cc48; background: #0a2741; }
+.theme-night.login-page .login-field > div:focus-within { border-color: #4bd7ce; box-shadow: 0 0 0 4px #45d8d51b; }
+.theme-night.login-page .login-field i { color: #79ddd9; }
+.theme-night.login-page .login-field input { color: #e7fbfc; }
+.theme-night.login-page .login-field input::placeholder { color: #769ea9; }
+.theme-night.login-page .login-status { border-color: #47c9ca38; background: #0e374f; color: #a8d1d6; }

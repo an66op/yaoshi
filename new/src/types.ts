@@ -5,6 +5,7 @@ export type Game = {
   id: string
   title: string
   tag: string
+  category: string
   online: string
   period: string
   due: string
@@ -12,4 +13,4 @@ export type Game = {
   balls: number[]
 }
 
-export type IconName = 'game' | 'shop' | 'chat' | 'user' | 'back' | 'bell' | 'plus' | 'more' | 'gift' | 'arrow'
+export type IconName = 'game' | 'shop' | 'chat' | 'user' | 'back' | 'bell' | 'plus' | 'more' | 'gift' | 'arrow' | 'switch' | 'room'

@@ -78,6 +78,7 @@ export type FeedStatus = {
 
 export type AdminUser = {
   id: number
+  public_id: number
   username: string
   email: string
   nickname: string
@@ -99,7 +100,9 @@ export type AdminUser = {
 
 export type AgentItem = {
   id: number
+  public_id: number
   username: string
+  email: string
   nickname: string
   phone: string
   room_code: string
@@ -108,6 +111,8 @@ export type AgentItem = {
   member_count: number
   remark: string
   created_at: string
+  last_login_at: string
+  login_count: number
 }
 
 export type AgentListResponse = {
@@ -115,6 +120,7 @@ export type AgentListResponse = {
   total: number
   page: number
   page_size: number
+  summary: { total: number; active: number; disabled: number; members: number }
 }
 
 export type RoomResolve = {
@@ -182,6 +188,45 @@ export type BalanceRecord = {
   created_at: string
 }
 
+export type AdminChatConversation = {
+  scope: string
+  room_type: 'group' | 'service'
+  title: string
+  subtitle: string
+  user_id?: number
+  username?: string
+  nickname?: string
+  latest_text: string
+  latest_at: string
+  message_count: number
+  muted_until?: string | null
+}
+
+export type AdminChatConversationList = {
+  items: AdminChatConversation[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export type AdminChatMessage = {
+  id: number
+  user_id: number
+  username: string
+  nickname: string
+  room_type: 'group' | 'service'
+  scope: string
+  content: string
+  is_staff: boolean
+  created_at: string
+}
+
+export type AdminChatMessageList = {
+  items: AdminChatMessage[]
+  has_more: boolean
+  next_before_id?: number
+}
+
 export type AdminApplication = {
   id: number
   user_id: number
@@ -229,6 +274,11 @@ export type FinancialReportSummary = {
   credit_amount: number
   debit_amount: number
   net_change: number
+  finance_credit: number
+  finance_debit: number
+  betting_credit: number
+  betting_debit: number
+  welfare_credit: number
   record_count: number
   active_users: number
   pending_applications: number
@@ -250,7 +300,8 @@ export type FinancialRecord = {
   amount: number
   before: number
   after: number
-  type: 'manual' | 'application_credit' | 'application_debit' | string
+  type: 'manual' | 'application_credit' | 'application_debit' | 'bet' | 'bet_cancel' | 'settlement' | 'rebate' | 'checkin' | 'redpacket' | 'invite' | string
+  category?: 'finance' | 'betting' | 'welfare' | 'other' | string
   remark: string
   operator: string
   created_at: string
@@ -285,6 +336,11 @@ export type SystemSettings = {
     allow_cancel?: boolean
     default_fly_rate?: number
     max_open_games?: number
+    room_activity_enabled?: boolean
+    room_activity_interval_secs?: number
+    room_activity_bots_per_room?: number
+    room_activity_bets_per_cycle?: number
+    room_activity_chat_chance_percent?: number
     [key: string]: unknown
   }
   quick_replies: Array<{ title?: string; content?: string; [key: string]: unknown }>
@@ -306,6 +362,8 @@ export type OpsActivity = {
   status: 'draft' | 'active' | 'ended' | string
   cover: string
   reward: number
+  pool_total?: number
+  pool_remaining?: number
   config: Record<string, unknown>
   participants: number
   sort_order: number
@@ -397,6 +455,21 @@ export type PlayLimitItem = {
   max_user_period: number
   max_period_total: number
   sort_order: number
+}
+
+export type PlayCatalogItem = {
+  play_code: string
+  play_name: string
+  category: string
+  description: string
+  example: string
+  default_odds: number
+  sort_order: number
+}
+
+export type SyncOddsLimitsResult = {
+  game_count: number
+  seeded_games: string[]
 }
 
 export type GameOddsLimits = {
@@ -611,6 +684,9 @@ export const adminApi = {
   updateSettings: (payload: SystemSettings) => request<SystemSettings>('/admin/settings', { method: 'PUT', body: JSON.stringify(payload) }),
   oddsLimits: (gameId: string) => request<GameOddsLimits>(`/admin/games/${gameId}/odds-limits`),
   updateOddsLimits: (gameId: string, items: PlayLimitItem[]) => request<GameOddsLimits>(`/admin/games/${gameId}/odds-limits`, { method: 'PUT', body: JSON.stringify({ items }) }),
+  playCatalog: () => request<PlayCatalogItem[]>('/admin/plays/catalog'),
+  resetOddsLimits: (gameId: string) => request<GameOddsLimits>(`/admin/games/${gameId}/odds-limits/reset`, { method: 'POST' }),
+  syncOddsLimits: () => request<SyncOddsLimitsResult>('/admin/games/sync-odds-limits', { method: 'POST' }),
   walletChannels: (params?: { query?: string; status?: string }) => {
     const query = new URLSearchParams({
       query: params?.query ?? '',
@@ -678,6 +754,9 @@ export const adminApi = {
     })
     return request<AgentListResponse>(`/admin/agents?${query}`)
   },
+  createAgent: (payload: { username: string; password: string; email?: string; nickname?: string; phone?: string; room_code: string; remark?: string; status: number }) => request<AgentItem>('/admin/agents', { method: 'POST', body: JSON.stringify(payload) }),
+  updateAgent: (id: number, payload: { email?: string; nickname?: string; phone?: string; room_code: string; remark?: string; status: number }) => request<AgentItem>(`/admin/agents/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  resetAgentPassword: (id: number, password: string) => request<{ id: number }>(`/admin/agents/${id}/reset-password`, { method: 'POST', body: JSON.stringify({ password }) }),
   promoteAgent: (id: number, roomCode?: string) => request<AgentItem>(`/admin/agents/${id}/promote`, { method: 'POST', body: JSON.stringify({ room_code: roomCode ?? '' }) }),
   entertainment: () => request<EntertainmentPlatform[]>('/admin/entertainment'),
   upsertEntertainment: (payload: Partial<EntertainmentPlatform> & { code: string; name: string }) => request<EntertainmentPlatform>('/admin/entertainment', { method: 'POST', body: JSON.stringify(payload) }),
@@ -685,6 +764,19 @@ export const adminApi = {
   notifications: (limit = 20) => request<AdminNotification[]>(`/admin/notifications?limit=${limit}`),
   markNotificationRead: (id: number) => request(`/admin/notifications/${id}/read`, { method: 'POST' }),
   markAllNotificationsRead: () => request('/admin/notifications/read-all', { method: 'POST' }),
+  chatConversations: (params: { roomType?: string; query?: string; page?: number; pageSize?: number }) => {
+    const query = new URLSearchParams({ room_type: params.roomType ?? '', query: params.query ?? '', page: String(params.page ?? 1), page_size: String(params.pageSize ?? 30) })
+    return request<AdminChatConversationList>(`/admin/chat/conversations?${query}`)
+  },
+  chatMessages: (params: { scope: string; roomType: string; beforeId?: number; limit?: number }) => {
+    const query = new URLSearchParams({ scope: params.scope, room_type: params.roomType, limit: String(params.limit ?? 50) })
+    if (params.beforeId) query.set('before_id', String(params.beforeId))
+    return request<AdminChatMessageList>(`/admin/chat/messages?${query}`)
+  },
+  replyChat: (payload: { scope: string; room_type: string; content: string }) => request<AdminChatMessage>('/admin/chat/messages', { method: 'POST', body: JSON.stringify(payload) }),
+  deleteChatMessage: (id: number) => request<{ id: number }>(`/admin/chat/messages/${id}`, { method: 'DELETE' }),
+  setChatMute: (userId: number, payload: { minutes: number; reason?: string }) => request<{ user_id: number; muted_until?: string | null; mute_reason?: string }>(`/admin/chat/users/${userId}/mute`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  setChatAnnouncement: (content: string) => request<{ content: string }>('/admin/chat/announcement', { method: 'PUT', body: JSON.stringify({ content }) }),
   rebatePreview: () => request<RebatePreview>('/admin/rebates/preview'),
   runRebate: () => request('/admin/rebates/run', { method: 'POST' }),
 }

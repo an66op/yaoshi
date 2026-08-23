@@ -11,9 +11,11 @@ type Message struct {
 	RoomType string `gorm:"size:20;not null;index" json:"room_type"` // group / service
 	// Scope identifies the audience allowed to read this message. Examples:
 	// agent:42, lobby, and user:17 (one-to-one service chat).
-	Scope     string    `gorm:"size:64;not null;default:lobby;index" json:"-"`
-	Content   string    `gorm:"size:500;not null" json:"content"`
-	CreatedAt time.Time `gorm:"index" json:"created_at"`
+	Scope     string     `gorm:"size:64;not null;default:lobby;index" json:"-"`
+	Content   string     `gorm:"size:500;not null" json:"content"`
+	CreatedAt time.Time  `gorm:"index" json:"created_at"`
+	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"`
+	DeletedBy string     `gorm:"size:80" json:"-"`
 }
 
 func (Message) TableName() string { return "member_chat_messages" }

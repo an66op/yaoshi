@@ -29,6 +29,11 @@ type FinancialReportSummary struct {
 	CreditAmount        float64 `json:"credit_amount"`
 	DebitAmount         float64 `json:"debit_amount"`
 	NetChange           float64 `json:"net_change"`
+	FinanceCredit       float64 `json:"finance_credit"`
+	FinanceDebit        float64 `json:"finance_debit"`
+	BettingCredit       float64 `json:"betting_credit"`
+	BettingDebit        float64 `json:"betting_debit"`
+	WelfareCredit       float64 `json:"welfare_credit"`
 	RecordCount         int64   `json:"record_count"`
 	ActiveUsers         int64   `json:"active_users"`
 	PendingApplications int64   `json:"pending_applications"`
@@ -51,6 +56,7 @@ type FinancialRecord struct {
 	Before    float64   `json:"before"`
 	After     float64   `json:"after"`
 	Type      string    `json:"type"`
+	Category  string    `json:"category"`
 	Remark    string    `json:"remark"`
 	Operator  string    `json:"operator"`
 	CreatedAt time.Time `json:"created_at"`
@@ -77,6 +83,20 @@ type financialAggregate struct {
 	DebitCents  int64 `gorm:"column:debit_cents"`
 	RecordCount int64 `gorm:"column:record_count"`
 	ActiveUsers int64 `gorm:"column:active_users"`
+}
+
+type financialCategoryRow struct {
+	Category    string `gorm:"column:category"`
+	CreditCents int64  `gorm:"column:credit_cents"`
+	DebitCents  int64  `gorm:"column:debit_cents"`
+}
+
+func categoryCaseSQL() string {
+	return `CASE
+		WHEN t.type IN ('manual','application_credit','application_debit') THEN 'finance'
+		WHEN t.type IN ('bet','bet_cancel','settlement') THEN 'betting'
+		WHEN t.type IN ('rebate','checkin','redpacket','invite') THEN 'welfare'
+		ELSE 'other' END`
 }
 
 type financialTrendRow struct {
@@ -130,7 +150,7 @@ func (s *FinancialReportService) Financial(filter FinancialReportFilter) (*Finan
 	}
 
 	var totalBalanceCents int64
-	if err := s.db.Model(&user.User{}).Select("COALESCE(SUM(balance_cents), 0)").Scan(&totalBalanceCents).Error; err != nil {
+	if err := s.db.Model(&user.User{}).Where("remark IS NULL OR remark <> ?", roomActivityRemark).Select("COALESCE(SUM(balance_cents), 0)").Scan(&totalBalanceCents).Error; err != nil {
 		return nil, err
 	}
 	var pendingApplications int64
@@ -139,6 +159,10 @@ func (s *FinancialReportService) Financial(filter FinancialReportFilter) (*Finan
 	}
 
 	trend, err := s.trend(filter, period)
+	if err != nil {
+		return nil, err
+	}
+	categoryTotals, err := s.categoryTotals(filter, period)
 	if err != nil {
 		return nil, err
 	}
@@ -164,29 +188,47 @@ func (s *FinancialReportService) Financial(filter FinancialReportFilter) (*Finan
 		items = append(items, FinancialRecord{
 			ID: row.ID, UserID: row.UserID, Username: row.Username, Nickname: row.Nickname,
 			Amount: centsToAmount(row.AmountCents), Before: centsToAmount(row.BeforeCents), After: centsToAmount(row.AfterCents),
-			Type: row.Type, Remark: row.Remark, Operator: row.Operator, CreatedAt: row.CreatedAt,
+			Type: row.Type, Category: ledgerCategory(row.Type), Remark: row.Remark, Operator: row.Operator, CreatedAt: row.CreatedAt,
 		})
 	}
 
+	summary := FinancialReportSummary{
+		PeriodStart: period.StartDate, PeriodEnd: period.EndDate, TotalBalance: centsToAmount(totalBalanceCents),
+		CreditAmount: centsToAmount(aggregate.CreditCents), DebitAmount: centsToAmount(aggregate.DebitCents),
+		NetChange: centsToAmount(aggregate.CreditCents - aggregate.DebitCents), RecordCount: aggregate.RecordCount,
+		ActiveUsers: aggregate.ActiveUsers, PendingApplications: pendingApplications,
+	}
+	for _, row := range categoryTotals {
+		switch row.Category {
+		case "finance":
+			summary.FinanceCredit = centsToAmount(row.CreditCents)
+			summary.FinanceDebit = centsToAmount(row.DebitCents)
+		case "betting":
+			summary.BettingCredit = centsToAmount(row.CreditCents)
+			summary.BettingDebit = centsToAmount(row.DebitCents)
+		case "welfare":
+			summary.WelfareCredit = centsToAmount(row.CreditCents)
+		}
+	}
+
 	return &FinancialReport{
-		Summary: FinancialReportSummary{
-			PeriodStart: period.StartDate, PeriodEnd: period.EndDate, TotalBalance: centsToAmount(totalBalanceCents),
-			CreditAmount: centsToAmount(aggregate.CreditCents), DebitAmount: centsToAmount(aggregate.DebitCents),
-			NetChange: centsToAmount(aggregate.CreditCents - aggregate.DebitCents), RecordCount: aggregate.RecordCount,
-			ActiveUsers: aggregate.ActiveUsers, PendingApplications: pendingApplications,
-		},
-		Trend: trend, Items: items, Total: total, Page: filter.Page, PageSize: filter.PageSize,
+		Summary: summary,
+		Trend:   trend, Items: items, Total: total, Page: filter.Page, PageSize: filter.PageSize,
 	}, nil
 }
 
 func (s *FinancialReportService) filteredLedger(filter FinancialReportFilter, period reportPeriod) *gorm.DB {
-	query := s.db.Table("user_balance_transactions AS t").Where("t.created_at >= ? AND t.created_at < ?", period.Start, period.End)
+	query := s.db.Table("user_balance_transactions AS t").Where("t.created_at >= ? AND t.created_at < ?", period.Start, period.End).
+		Where(`NOT EXISTS (SELECT 1 FROM "user" activity_account WHERE activity_account.user_id = t.user_id AND activity_account.remark = ?)`, roomActivityRemark)
 	switch strings.TrimSpace(filter.Type) {
 	case "credit":
 		query = query.Where("t.amount_cents > 0")
 	case "debit":
 		query = query.Where("t.amount_cents < 0")
-	case "manual", "application_credit", "application_debit":
+	case "finance", "betting", "welfare":
+		types := ledgerTypesByCategory(filter.Type)
+		query = query.Where("t.type IN ?", types)
+	case "manual", "application_credit", "application_debit", "bet", "bet_cancel", "settlement", "rebate", "checkin", "redpacket", "invite":
 		query = query.Where("t.type = ?", filter.Type)
 	}
 	if keyword := strings.TrimSpace(filter.Query); keyword != "" {
@@ -197,6 +239,29 @@ func (s *FinancialReportService) filteredLedger(filter FinancialReportFilter, pe
 		)`, like, like, like)
 	}
 	return query
+}
+
+func ledgerTypesByCategory(category string) []string {
+	switch category {
+	case "finance":
+		return []string{"manual", "application_credit", "application_debit"}
+	case "betting":
+		return []string{"bet", "bet_cancel", "settlement"}
+	case "welfare":
+		return []string{"rebate", "checkin", "redpacket", "invite"}
+	default:
+		return []string{}
+	}
+}
+
+func (s *FinancialReportService) categoryTotals(filter FinancialReportFilter, period reportPeriod) ([]financialCategoryRow, error) {
+	query := s.filteredLedger(FinancialReportFilter{Query: filter.Query, Type: filter.Type}, period)
+	var rows []financialCategoryRow
+	err := query.Select(fmt.Sprintf(`%s AS category,
+		COALESCE(SUM(CASE WHEN t.amount_cents > 0 THEN t.amount_cents ELSE 0 END), 0) AS credit_cents,
+		COALESCE(SUM(CASE WHEN t.amount_cents < 0 THEN -t.amount_cents ELSE 0 END), 0) AS debit_cents`, categoryCaseSQL())).
+		Group("category").Scan(&rows).Error
+	return rows, err
 }
 
 func (s *FinancialReportService) trend(filter FinancialReportFilter, period reportPeriod) ([]FinancialReportPoint, error) {
@@ -260,7 +325,10 @@ func parseReportPeriod(startText, endText string) (reportPeriod, error) {
 
 func validateLedgerType(value string) error {
 	switch strings.TrimSpace(value) {
-	case "", "all", "credit", "debit", "manual", "application_credit", "application_debit":
+	case "", "all", "credit", "debit", "finance", "betting", "welfare",
+		"manual", "application_credit", "application_debit",
+		"bet", "bet_cancel", "settlement",
+		"rebate", "checkin", "redpacket", "invite":
 		return nil
 	default:
 		return apperrors.NewBusinessError("INVALID_REPORT_TYPE", fmt.Sprintf("不支持的流水类型：%s", value))

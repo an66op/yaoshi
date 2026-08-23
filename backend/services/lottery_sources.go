@@ -25,6 +25,9 @@ var officialGroupLocks = map[string]*sync.Mutex{
 	"china-sport":    {},
 	"taiwan-bingo":   {},
 	"taiwan-lottery": {},
+	"168-highfreq":   {},
+	"168-marksix":    {},
+	"168-bingo":      {},
 }
 
 type SourceSyncResult struct {
@@ -47,7 +50,7 @@ type sourceDraw struct {
 // window to avoid putting pressure on upstream services.
 func (s *LotteryService) SyncOfficialSources(ctx context.Context) []SourceSyncResult {
 	results := make([]SourceSyncResult, 0, 8)
-	for _, group := range []string{"china-welfare", "china-sport", "taiwan-bingo", "taiwan-lottery"} {
+	for _, group := range []string{"china-welfare", "china-sport", "taiwan-bingo", "taiwan-lottery", "168-highfreq", "168-marksix", "168-bingo"} {
 		results = append(results, s.SyncOfficialGroup(ctx, group)...)
 	}
 	return results
@@ -79,15 +82,33 @@ func (s *LotteryService) SyncOfficialGroup(ctx context.Context, group string) []
 		return []SourceSyncResult{s.syncOfficialGame(ctx, "official-tw-bingo", fetchTaiwanBingo)}
 	case "taiwan-lottery":
 		return s.syncTaiwanLatest(ctx)
+	case "168-highfreq":
+		return s.sync168HighFreq(ctx)
+	case "168-marksix":
+		return s.sync168MarkSix(ctx)
+	case "168-bingo":
+		return s.sync168Bingo(ctx)
 	default:
 		return nil
 	}
 }
 
 func (s *LotteryService) syncTaiwanLatest(ctx context.Context) []SourceSyncResult {
+	gameIDs := []string{"official-tw-super-lotto", "official-tw-daily539", "official-tw-lotto649"}
+	enabled, enabledErr := s.enabledOfficialGames(gameIDs)
+	if enabledErr != nil {
+		return []SourceSyncResult{{GameID: "taiwan-lottery", Status: "error", Error: enabledErr.Error()}}
+	}
+	if len(enabled) == 0 {
+		return []SourceSyncResult{{GameID: "taiwan-lottery", Status: "ok"}}
+	}
+
 	latest, err := fetchTaiwanLatest(ctx)
-	results := make([]SourceSyncResult, 0, 3)
-	for _, gameID := range []string{"official-tw-super-lotto", "official-tw-daily539", "official-tw-lotto649"} {
+	results := make([]SourceSyncResult, 0, len(enabled))
+	for _, gameID := range gameIDs {
+		if !enabled[gameID] {
+			continue
+		}
 		if err != nil {
 			results = append(results, s.recordSyncError(gameID, err))
 			continue
@@ -108,12 +129,18 @@ func (s *LotteryService) syncOfficialGame(ctx context.Context, gameID string, fe
 	if err := s.db.First(&game, "id = ?", gameID).Error; err != nil {
 		return SourceSyncResult{GameID: gameID, Status: "error", Error: err.Error()}
 	}
+	// Disabled games remain available in the admin console with their complete
+	// history, but must not consume upstream requests or settle new rounds.
+	if !game.Enabled {
+		return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "ok"}
+	}
 	_ = s.db.Model(&game).Updates(map[string]any{"sync_status": "syncing", "last_sync_error": ""}).Error
 	draws, err := fetch(ctx)
 	if err != nil {
 		return s.recordSyncError(gameID, err)
 	}
 	imported := 0
+	latestDraw := sourceDraw{}
 	for _, item := range draws {
 		if item.Issue == "" || len(item.Numbers) == 0 {
 			continue
@@ -127,9 +154,24 @@ func (s *LotteryService) syncOfficialGame(ctx context.Context, gameID string, fe
 			imported += int(result.RowsAffected)
 			NewBetAdminService(s.db).SettleImportedDraw(gameID, item.Issue)
 		}
+		if latestDraw.DrawAt.IsZero() || item.DrawAt.After(latestDraw.DrawAt) {
+			latestDraw = item
+		}
 	}
 	now := time.Now().UTC()
-	if err := s.db.Model(&game).Updates(map[string]any{"sync_status": "ok", "last_sync_at": now, "last_sync_error": ""}).Error; err != nil {
+	updates := map[string]any{"sync_status": "ok", "last_sync_at": now, "last_sync_error": ""}
+	// A source can return a perfectly valid draw history while the old next
+	// draw timestamp has already passed.  Advancing it from the freshest draw
+	// prevents the member UI from being stuck at 00:00 / 封盘中 after a restart.
+	if !latestDraw.DrawAt.IsZero() && game.DrawInterval > 0 {
+		next := latestDraw.DrawAt.UTC().Add(time.Duration(game.DrawInterval) * time.Second)
+		if !next.After(now) {
+			missed := now.Sub(latestDraw.DrawAt.UTC()) / (time.Duration(game.DrawInterval) * time.Second)
+			next = latestDraw.DrawAt.UTC().Add((missed + 1) * time.Duration(game.DrawInterval) * time.Second)
+		}
+		updates["next_draw_at"] = next
+	}
+	if err := s.db.Model(&game).Updates(updates).Error; err != nil {
 		return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "error", Error: err.Error()}
 	}
 	latestIssue := ""
@@ -137,6 +179,24 @@ func (s *LotteryService) syncOfficialGame(ctx context.Context, gameID string, fe
 		latestIssue = draws[0].Issue
 	}
 	return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "ok", Imported: imported, LatestIssue: latestIssue}
+}
+
+func (s *LotteryService) enabledOfficialGames(gameIDs []string) (map[string]bool, error) {
+	type gameRow struct {
+		ID string
+	}
+	rows := make([]gameRow, 0, len(gameIDs))
+	if err := s.db.Model(&lottery.Game{}).
+		Select("id").
+		Where("id IN ? AND enabled = ?", gameIDs, true).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	enabled := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		enabled[row.ID] = true
+	}
+	return enabled, nil
 }
 
 func (s *LotteryService) recordSyncError(gameID string, syncErr error) SourceSyncResult {

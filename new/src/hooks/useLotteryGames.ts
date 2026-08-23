@@ -12,6 +12,15 @@ const toClock = (seconds: number) => {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
+const resolvedBadgeColor = (item: LotteryGame) => {
+  const color = item.badge_color?.trim().toLowerCase()
+  // 白色徽标会与大厅卡片、六合彩号码底色融在一起；香港六合彩固定采用其红色主题。
+  if (!color || color === 'white' || color === '#fff' || color === '#ffffff') {
+    return item.id === 'hong-kong-mark-six' ? '#d64155' : '#3b83ec'
+  }
+  return item.badge_color
+}
+
 const mapGame = (item: LotteryGame, nowMs: number): Game => {
   const nextMs = new Date(item.next_draw_at).getTime()
   const remaining = Math.max(0, Math.floor((nextMs - nowMs) / 1000))
@@ -19,10 +28,11 @@ const mapGame = (item: LotteryGame, nowMs: number): Game => {
     id: item.id,
     title: item.name,
     tag: item.badge || item.code.toUpperCase(),
+    category: item.category,
     online: item.bettor_count != null ? String(item.bettor_count) : '—',
     period: item.current_issue || item.issue || '—',
     due: toClock(remaining),
-    color: item.badge_color || '#3b83ec',
+    color: resolvedBadgeColor(item),
     balls: item.latest_numbers?.length ? item.latest_numbers : [0, 0, 0, 0, 0],
   }
 }
@@ -81,7 +91,9 @@ export function useLotteryGames() {
 
   return useMemo(() => {
     const nowMs = Date.now() + serverOffsetMs
-    if (remote?.length) {
+    // `remote !== null` means the request succeeded. Preserve an intentionally
+    // empty enabled list instead of silently reviving local demo games.
+    if (remote !== null) {
       return { games: remote.map((item) => mapGame(item, nowMs)), loading, error, live: true }
     }
     return {

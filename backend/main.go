@@ -51,6 +51,8 @@ func main() {
 		return mapped
 	})
 	scheduler.Start(rootContext)
+	services.StartSimulatedDrawLoop(rootContext, db)
+	services.StartRoomActivity(rootContext.Done(), db)
 
 	r := gin.Default()
 	if err := r.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
@@ -110,6 +112,9 @@ func InitDependencies(db *gorm.DB) error {
 
 	if err := services.SeedLotteryData(db); err != nil {
 		return fmt.Errorf("初始化开奖数据失败: %w", err)
+	}
+	if err := services.SeedDemoMember(db); err != nil {
+		return fmt.Errorf("初始化演示会员失败: %w", err)
 	}
 
 	return nil

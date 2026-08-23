@@ -17,7 +17,17 @@ export function usePersistentState<T>(key: string, fallback: T) {
 
   useEffect(() => {
     window.localStorage.setItem(key, JSON.stringify(value))
+    // `storage` does not fire in the same browser tab. Broadcast locally so
+    // independent hook instances (app shell, profile sheet, game room) update
+    // immediately instead of waiting for a page refresh.
+    window.dispatchEvent(new CustomEvent(`seven-star-state:${key}`, { detail: value }))
   }, [key, value])
+
+  useEffect(() => {
+    const sync = (event: Event) => setValue((event as CustomEvent<T>).detail)
+    window.addEventListener(`seven-star-state:${key}`, sync)
+    return () => window.removeEventListener(`seven-star-state:${key}`, sync)
+  }, [key])
 
   return [value, setValue] as const
 }

@@ -56,17 +56,8 @@ func (s *LotteryService) ListGames() ([]GameSummary, error) {
 	if err := s.db.Order("sort_order asc").Find(&games).Error; err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
 	result := make([]GameSummary, 0, len(games))
 	for _, game := range games {
-		if game.SourceKind != "official" && !game.NextDrawAt.After(now) {
-			for !game.NextDrawAt.After(now) {
-				game.NextDrawAt = game.NextDrawAt.Add(time.Duration(game.DrawInterval) * time.Second)
-			}
-			if err := s.db.Model(&game).Update("next_draw_at", game.NextDrawAt).Error; err != nil {
-				return nil, err
-			}
-		}
 		var draw lottery.Draw
 		err := s.db.Where("game_id = ?", game.ID).Order("draw_at desc").First(&draw).Error
 		if err != nil && err != gorm.ErrRecordNotFound {
@@ -81,6 +72,9 @@ func (s *LotteryService) ListGames() ([]GameSummary, error) {
 			ScheduleMode: func() string {
 				if game.SourceKind == "official" {
 					return "official-feed"
+				}
+				if game.SourceKind == "external" {
+					return "external-feed"
 				}
 				return "interval"
 			}(),
@@ -187,6 +181,11 @@ var defaultGames = []seedGame{
 	{"speed-fly", "SPEED_FLY", "极速飞艇", "飞艇", "飞艇", "blue", 180, 25},
 	{"speed-ssc", "SPEED_SSC", "极速时时彩", "时时彩", "时时彩", "orange", 180, 26},
 	{"sg-fly", "SG_FLY", "SG飞艇", "飞艇", "飞艇", "blue", 300, 27},
+	{"sg-ssc", "SG_SSC", "SG时时彩", "时时彩", "时时彩", "orange", 300, 28},
+	// PC 系列暂由平台自动开奖；接入稳定数据源后可在后台切换。
+	{"pc-canada", "PC_CANADA", "PC加拿大", "PC", "PC", "teal", 210, 31},
+	{"canada-28", "CANADA_28", "加拿大28", "PC", "28", "purple", 210, 32},
+	{"canada-20", "CANADA_20", "加拿大2.0", "PC", "2.0", "blue", 120, 33},
 }
 
 var officialGames = []lottery.Game{
@@ -238,7 +237,7 @@ func SeedLotteryData(db *gorm.DB) error {
 			return err
 		}
 	}
-	return nil
+	return Ensure168SourceGames(db)
 }
 
 type SyncTargetResult struct {
@@ -299,6 +298,9 @@ func SyncTargetGames(db *gorm.DB) (*SyncTargetResult, error) {
 	}
 	for id := range targetSet {
 		result.Missing = append(result.Missing, id)
+	}
+	if err := Ensure168SourceGames(db); err != nil {
+		return nil, err
 	}
 	return result, nil
 }

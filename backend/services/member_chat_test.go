@@ -13,9 +13,10 @@ func TestChatScope(t *testing.T) {
 		roomType string
 		want     string
 	}{
-		{"service is always private", user.User{UserID: 11, Role: "member"}, "service", "user:11"},
+		{"service uses the member room", user.User{UserID: 11, Role: "member"}, "service", "lobby"},
 		{"agent owns its room", user.User{UserID: 42, Role: "agent"}, "group", "agent:42"},
 		{"member joins agent room", user.User{UserID: 12, Role: "member", ParentAgentID: &agentID}, "group", "agent:42"},
+		{"member service joins agent room", user.User{UserID: 12, Role: "member", ParentAgentID: &agentID}, "service", "agent:42"},
 		{"unassigned member uses lobby", user.User{UserID: 13, Role: "member"}, "group", "lobby"},
 	}
 	for _, tc := range cases {

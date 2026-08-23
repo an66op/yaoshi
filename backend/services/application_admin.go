@@ -16,21 +16,23 @@ import (
 type ApplicationAdminService struct{ db *gorm.DB }
 
 type AdminApplication struct {
-	ID              uint64     `json:"id"`
-	UserID          uint64     `json:"user_id"`
-	Username        string     `json:"username"`
-	AccountType     string     `json:"account_type"`
-	RequestType     string     `json:"request_type"`
-	PaymentType     string     `json:"payment_type"`
-	RequestedAmount float64    `json:"requested_amount"`
-	ReceivedAmount  float64    `json:"received_amount"`
-	Remark          string     `json:"remark"`
-	Status          string     `json:"status"`
-	Operator        string     `json:"operator"`
-	ReviewRemark    string     `json:"review_remark"`
-	ReviewedAt      *time.Time `json:"reviewed_at"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID                  uint64     `json:"id"`
+	UserID              uint64     `json:"user_id"`
+	Username            string     `json:"username"`
+	AccountType         string     `json:"account_type"`
+	RequestType         string     `json:"request_type"`
+	PaymentType         string     `json:"payment_type"`
+	PaymentAccountID    uint64     `json:"payment_account_id"`
+	PaymentAccountLabel string     `json:"payment_account_label"`
+	RequestedAmount     float64    `json:"requested_amount"`
+	ReceivedAmount      float64    `json:"received_amount"`
+	Remark              string     `json:"remark"`
+	Status              string     `json:"status"`
+	Operator            string     `json:"operator"`
+	ReviewRemark        string     `json:"review_remark"`
+	ReviewedAt          *time.Time `json:"reviewed_at"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 type ApplicationFilter struct {
@@ -54,11 +56,12 @@ type ApplicationStats struct {
 }
 
 type CreateApplicationInput struct {
-	UserID      uint64
-	RequestType string
-	PaymentType string
-	Amount      float64
-	Remark      string
+	UserID           uint64
+	RequestType      string
+	PaymentType      string
+	PaymentAccountID uint64
+	Amount           float64
+	Remark           string
 }
 
 type ReviewApplicationInput struct {
@@ -169,7 +172,18 @@ func (s *ApplicationAdminService) Create(input CreateApplicationInput) (*AdminAp
 	if payment == "" {
 		payment = "manual"
 	}
-	row := application.Application{UserID: account.UserID, Username: account.Username, AccountType: defaultString(account.Role, "member"), RequestType: requestType, PaymentType: payment, RequestedCents: amountCents, Remark: strings.TrimSpace(input.Remark), Status: "pending"}
+	paymentAccountID := uint64(0)
+	paymentAccountLabel := ""
+	if requestType == "debit" {
+		paymentAccount, err := NewMemberPaymentAccountService(s.db).GetOwned(account.UserID, input.PaymentAccountID)
+		if err != nil {
+			return nil, err
+		}
+		payment = paymentAccount.AccountType
+		paymentAccountID = paymentAccount.ID
+		paymentAccountLabel = paymentAccount.Label + " · " + maskPaymentAccountNo(paymentAccount.AccountNo)
+	}
+	row := application.Application{UserID: account.UserID, Username: account.Username, AccountType: defaultString(account.Role, "member"), RequestType: requestType, PaymentType: payment, PaymentAccountID: paymentAccountID, PaymentAccountLabel: paymentAccountLabel, RequestedCents: amountCents, Remark: strings.TrimSpace(input.Remark), Status: "pending"}
 	if err := s.db.Create(&row).Error; err != nil {
 		return nil, err
 	}
@@ -276,7 +290,7 @@ func validRequestType(value string) (string, error) {
 }
 
 func adminApplication(row application.Application) AdminApplication {
-	return AdminApplication{ID: row.ID, UserID: row.UserID, Username: row.Username, AccountType: row.AccountType, RequestType: row.RequestType, PaymentType: row.PaymentType, RequestedAmount: centsToAmount(row.RequestedCents), ReceivedAmount: centsToAmount(row.ReceivedCents), Remark: row.Remark, Status: row.Status, Operator: row.Operator, ReviewRemark: row.ReviewRemark, ReviewedAt: row.ReviewedAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return AdminApplication{ID: row.ID, UserID: row.UserID, Username: row.Username, AccountType: row.AccountType, RequestType: row.RequestType, PaymentType: row.PaymentType, PaymentAccountID: row.PaymentAccountID, PaymentAccountLabel: row.PaymentAccountLabel, RequestedAmount: centsToAmount(row.RequestedCents), ReceivedAmount: centsToAmount(row.ReceivedCents), Remark: row.Remark, Status: row.Status, Operator: row.Operator, ReviewRemark: row.ReviewRemark, ReviewedAt: row.ReviewedAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
 func formatUint(value uint64) string {

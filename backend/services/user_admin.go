@@ -17,6 +17,7 @@ type UserAdminService struct{ db *gorm.DB }
 
 type AdminUser struct {
 	ID            uint64     `json:"id"`
+	PublicID      uint64     `json:"public_id"`
 	Username      string     `json:"username"`
 	Email         string     `json:"email"`
 	Nickname      string     `json:"nickname"`
@@ -92,6 +93,12 @@ type BalanceRecord struct {
 	Remark    string    `json:"remark"`
 	Operator  string    `json:"operator"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type BalanceHistoryPage struct {
+	Items        []BalanceRecord `json:"items"`
+	HasMore      bool            `json:"has_more"`
+	NextBeforeID uint64          `json:"next_before_id"`
 }
 
 func NewUserAdminService(db *gorm.DB) *UserAdminService { return &UserAdminService{db: db} }
@@ -298,6 +305,35 @@ func (s *UserAdminService) BalanceHistory(id uint64, limit int) ([]BalanceRecord
 	return result, nil
 }
 
+// BalanceHistoryPage lets member wallets request a bounded page of ledger
+// records, rather than rendering an entire account history at once.
+func (s *UserAdminService) BalanceHistoryPage(id uint64, limit int, beforeID uint64) (*BalanceHistoryPage, error) {
+	if limit < 1 || limit > 50 {
+		limit = 20
+	}
+	var rows []user.BalanceTransaction
+	query := s.db.Where("user_id = ?", id)
+	if beforeID > 0 {
+		query = query.Where("id < ?", beforeID)
+	}
+	if err := query.Order("id desc").Limit(limit + 1).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+	items := make([]BalanceRecord, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, BalanceRecord{ID: row.ID, UserID: row.UserID, Amount: centsToAmount(row.AmountCents), Before: centsToAmount(row.BeforeCents), After: centsToAmount(row.AfterCents), Type: row.Type, Remark: row.Remark, Operator: row.Operator, CreatedAt: row.CreatedAt})
+	}
+	page := &BalanceHistoryPage{Items: items, HasMore: hasMore}
+	if len(items) > 0 {
+		page.NextBeforeID = items[len(items)-1].ID
+	}
+	return page, nil
+}
+
 func (s *UserAdminService) ensureUnique(excludeID uint64, username, email string) error {
 	if username != "" {
 		query := s.db.Model(&user.User{}).Where("username = ?", username)
@@ -361,7 +397,7 @@ func normalizeStatus(value int) int {
 
 func adminUser(row user.User) AdminUser {
 	return AdminUser{
-		ID: row.UserID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone,
+		ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone,
 		Role: defaultString(row.Role, "member"), Remark: row.Remark, RiskLevel: defaultString(row.RiskLevel, "normal"),
 		Balance: centsToAmount(row.BalanceCents), FlyMode: defaultString(row.FlyMode, "inherit"), FlyRate: row.FlyRate,
 		AgentRoomCode: row.AgentRoomCode, ParentAgentID: row.ParentAgentID,

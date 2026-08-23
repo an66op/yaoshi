@@ -7,7 +7,7 @@ import "time"
 // the admin UI can evolve without schema churn.
 type SystemConfig struct {
 	ID                    uint      `gorm:"primaryKey" json:"id"`
-	RoomName              string    `gorm:"size:80;not null;default:曜图" json:"room_name"`
+	RoomName              string    `gorm:"size:80;not null;default:王者" json:"room_name"`
 	RoomCode              string    `gorm:"size:40;not null;default:1231" json:"room_code"`
 	ChatNickname          string    `gorm:"size:80;not null;default:群主" json:"chat_nickname"`
 	NicknameDisplayLength int       `gorm:"not null;default:0" json:"nickname_display_length"`

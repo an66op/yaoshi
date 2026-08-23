@@ -2,8 +2,8 @@ package services
 
 import (
 	"backend/data/models/activity"
-	"backend/data/models/user"
 	membernotify "backend/data/models/notify"
+	"backend/data/models/user"
 	"backend/data/vo"
 	apperrors "backend/errors"
 	"backend/utils"
@@ -45,11 +45,15 @@ func (s *MemberService) Register(input MemberRegisterInput) (*user.User, int64, 
 		return nil, 0, apperrors.NewSystemError("HASH_PASSWORD_ERROR", "创建帐号失败", err)
 	}
 	nickname := defaultString(strings.TrimSpace(input.Nickname), username)
+	inviteCode := strings.TrimSpace(input.InviteCode)
+	if inviteCode != "" && parseInviteCode(inviteCode) == 0 {
+		return nil, 0, apperrors.NewBusinessError("INVALID_INVITE_CODE", "邀请码至少 4 位且格式正确")
+	}
 	account := user.User{
 		Username: username, Password: hash, Nickname: nickname,
 		Role: "member", Status: 1,
 	}
-	inviterID := parseInviteCode(input.InviteCode)
+	inviterID := parseInviteCode(inviteCode)
 	if inviterID > 0 {
 		account.Remark = fmt.Sprintf("invited_by:%d", inviterID)
 	}
@@ -85,10 +89,10 @@ func (s *MemberService) bindInviter(account *user.User, inviterID uint64) int64 
 	}
 	reward := s.grantInviteRewards(inviterID, account.UserID, account.Username)
 	_ = s.db.Create(&membernotify.MemberNotification{
-		UserID: inviterID,
-		Title:  "邀请成功",
+		UserID:  inviterID,
+		Title:   "邀请成功",
 		Content: fmt.Sprintf("用户 %s 通过您的邀请码完成注册。", account.Username),
-		Level: "success", Category: "activity",
+		Level:   "success", Category: "system",
 	}).Error
 	return reward
 }
@@ -143,7 +147,7 @@ func (s *MemberService) grantInviteRewards(inviterID, inviteeID uint64, inviteeU
 			}
 			_ = tx.Create(&membernotify.MemberNotification{
 				UserID: item.userID, Title: item.title, Content: item.body,
-				Level: "success", Category: "activity",
+				Level: "success", Category: "system",
 			}).Error
 		}
 		return tx.Model(&row).Update("participants", gorm.Expr("participants + 2")).Error
@@ -160,6 +164,9 @@ func parseInviteCode(code string) uint64 {
 		return 0
 	}
 	code = strings.TrimPrefix(strings.ToUpper(code), "U")
+	if len(code) < 4 {
+		return 0
+	}
 	id, err := strconv.ParseUint(code, 10, 64)
 	if err != nil {
 		return 0

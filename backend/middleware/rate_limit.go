@@ -58,6 +58,7 @@ var (
 	authLimiter      = newFixedWindowLimiter(10, time.Minute)
 	wsTicketLimiter  = newFixedWindowLimiter(30, time.Minute)
 	wsConnectLimiter = newFixedWindowLimiter(30, time.Minute)
+	memberBetLimiter = newFixedWindowLimiter(60, time.Minute)
 )
 
 // AuthRateLimit limits login and registration attempts per verified client IP.
@@ -68,3 +69,7 @@ func WSTicketRateLimit() gin.HandlerFunc { return wsTicketLimiter.middleware("ws
 
 // WSConnectRateLimit protects the WebSocket upgrade endpoint from churn.
 func WSConnectRateLimit() gin.HandlerFunc { return wsConnectLimiter.middleware("ws-connect") }
+
+// MemberBetRateLimit limits financial write requests. It is intentionally more
+// generous than auth protection so normal multi-line tickets remain usable.
+func MemberBetRateLimit() gin.HandlerFunc { return memberBetLimiter.middleware("member-bet") }

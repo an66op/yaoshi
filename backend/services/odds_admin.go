@@ -34,22 +34,9 @@ type UpdateOddsLimitsInput struct {
 	Items []PlayLimitItem `json:"items"`
 }
 
-type defaultPlay struct {
-	Code string
-	Name string
-	Odds float64
-}
-
-var defaultPlays = []defaultPlay{
-	{Code: "two_sided", Name: "两面", Odds: 1.993},
-	{Code: "ball_1_5", Name: "1-5球号", Odds: 2.093},
-	{Code: "dragon_tiger", Name: "龙虎", Odds: 2.193},
-	{Code: "leopard", Name: "豹子", Odds: 2.293},
-	{Code: "sum", Name: "和", Odds: 2.393},
-	{Code: "straight", Name: "顺子", Odds: 2.493},
-	{Code: "pair", Name: "对子", Odds: 2.593},
-	{Code: "half_straight", Name: "半顺", Odds: 2.693},
-	{Code: "mixed", Name: "杂六", Odds: 2.793},
+type SyncOddsLimitsResult struct {
+	GameCount   int      `json:"game_count"`
+	SeededGames []string `json:"seeded_games"`
 }
 
 func NewOddsAdminService(db *gorm.DB) *OddsAdminService {
@@ -143,6 +130,43 @@ func (s *OddsAdminService) Update(gameID string, input UpdateOddsLimitsInput) (*
 		return nil, apperrors.NewSystemError("ODDS_SAVE_FAILED", "保存赔率限额失败", err)
 	}
 	return s.Get(game.ID)
+}
+
+func (s *OddsAdminService) Reset(gameID string) (*GameOddsLimits, error) {
+	game, err := s.loadGame(gameID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.db.Where("game_id = ?", game.ID).Delete(&odds.PlayLimit{}).Error; err != nil {
+		return nil, apperrors.NewSystemError("ODDS_RESET_FAILED", "重置赔率限额失败", err)
+	}
+	if err := s.ensureDefaults(game.ID); err != nil {
+		return nil, err
+	}
+	return s.Get(game.ID)
+}
+
+func (s *OddsAdminService) SyncAllGames() (*SyncOddsLimitsResult, error) {
+	var games []lottery.Game
+	if err := s.db.Order("sort_order asc, id asc").Find(&games).Error; err != nil {
+		return nil, apperrors.NewSystemError("GAME_READ_FAILED", "读取游戏列表失败", err)
+	}
+	result := &SyncOddsLimitsResult{SeededGames: make([]string, 0)}
+	for _, game := range games {
+		var count int64
+		if err := s.db.Model(&odds.PlayLimit{}).Where("game_id = ?", game.ID).Count(&count).Error; err != nil {
+			return nil, err
+		}
+		if count > 0 {
+			continue
+		}
+		if err := s.ensureDefaults(game.ID); err != nil {
+			return nil, err
+		}
+		result.SeededGames = append(result.SeededGames, game.ID)
+	}
+	result.GameCount = len(games)
+	return result, nil
 }
 
 func (s *OddsAdminService) loadGame(gameID string) (*lottery.Game, error) {

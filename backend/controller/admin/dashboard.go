@@ -66,12 +66,17 @@ func (h *DashboardHandler) Dashboard(c *gin.Context) {
 	}
 	constants.SendSuccess(c, http.StatusOK, "ok", gin.H{
 		"stats": gin.H{
-			"user_balance":       stats.UserBalance,
-			"today_turnover":     stats.TodayTurnover,
-			"today_profit":       stats.TodayProfit,
-			"today_rebate":       stats.TodayRebate,
-			"total_profit":       stats.TotalProfit,
-			"pending_settlement": stats.PendingSettlement,
+			"user_balance":        stats.UserBalance,
+			"today_turnover":      stats.TodayTurnover,
+			"today_gross_profit":  stats.TodayGrossProfit,
+			"today_net_profit":    stats.TodayNetProfit,
+			"today_rebate":        stats.TodayRebate,
+			"today_welfare":       stats.TodayWelfare,
+			"total_gross_profit":  stats.TotalGrossProfit,
+			"total_net_profit":    stats.TotalNetProfit,
+			"today_profit":        stats.TodayProfit,
+			"total_profit":        stats.TotalProfit,
+			"pending_settlement":  stats.PendingSettlement,
 		},
 		"games": games,
 	})

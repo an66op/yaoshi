@@ -85,7 +85,7 @@ func (s *NotifyAdminService) refreshDerived() error {
 	var count int64
 	_ = s.db.Model(&notify.Notification{}).Count(&count).Error
 	if count == 0 {
-		room := "曜图"
+		room := "王者"
 		var cfg settings.SystemConfig
 		if s.db.First(&cfg, 1).Error == nil && cfg.RoomName != "" {
 			room = cfg.RoomName

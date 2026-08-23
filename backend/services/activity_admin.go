@@ -13,19 +13,21 @@ import (
 type ActivityAdminService struct{ db *gorm.DB }
 
 type ActivityView struct {
-	ID           uint64     `json:"id"`
-	Type         string     `json:"type"`
-	Title        string     `json:"title"`
-	Subtitle     string     `json:"subtitle"`
-	Status       string     `json:"status"`
-	Cover        string     `json:"cover"`
-	Reward       float64    `json:"reward"`
-	Config       any        `json:"config"`
-	Participants int64      `json:"participants"`
-	SortOrder    int        `json:"sort_order"`
-	StartsAt     *time.Time `json:"starts_at"`
-	EndsAt       *time.Time `json:"ends_at"`
-	CreatedAt    time.Time  `json:"created_at"`
+	ID             uint64     `json:"id"`
+	Type           string     `json:"type"`
+	Title          string     `json:"title"`
+	Subtitle       string     `json:"subtitle"`
+	Status         string     `json:"status"`
+	Cover          string     `json:"cover"`
+	Reward         float64    `json:"reward"`
+	PoolTotal      float64    `json:"pool_total,omitempty"`
+	PoolRemaining  float64    `json:"pool_remaining,omitempty"`
+	Config         any        `json:"config"`
+	Participants   int64      `json:"participants"`
+	SortOrder      int        `json:"sort_order"`
+	StartsAt       *time.Time `json:"starts_at"`
+	EndsAt         *time.Time `json:"ends_at"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 type ActivityPayload struct {
@@ -67,6 +69,7 @@ func (s *ActivityAdminService) Create(input ActivityPayload) (*ActivityView, err
 	if err != nil {
 		return nil, err
 	}
+	applyActivityPool(row)
 	if err := s.db.Create(row).Error; err != nil {
 		return nil, apperrors.NewSystemError("ACTIVITY_CREATE_FAILED", "创建活动失败", err)
 	}
@@ -88,6 +91,7 @@ func (s *ActivityAdminService) Update(id uint64, input ActivityPayload) (*Activi
 	}
 	row.Type, row.Title, row.Subtitle, row.Status = next.Type, next.Title, next.Subtitle, next.Status
 	row.Cover, row.RewardCents, row.ConfigJSON, row.SortOrder = next.Cover, next.RewardCents, next.ConfigJSON, next.SortOrder
+	applyActivityPool(&row)
 	if err := s.db.Save(&row).Error; err != nil {
 		return nil, apperrors.NewSystemError("ACTIVITY_UPDATE_FAILED", "更新活动失败", err)
 	}
@@ -138,7 +142,7 @@ func (s *ActivityAdminService) ensureDefaults() error {
 		{Type: "checkin", Title: "每日签到", Subtitle: "连续签到领取积分", Status: "active", RewardCents: 100, Participants: 128, SortOrder: 1, ConfigJSON: `{"days":7}`},
 		{Type: "banner", Title: "首页轮播", Subtitle: "运营位轮播图", Status: "active", SortOrder: 2, ConfigJSON: `{"slides":[]}`},
 		{Type: "invite", Title: "邀请有礼", Subtitle: "邀请好友双方得奖励", Status: "active", RewardCents: 500, SortOrder: 3, ConfigJSON: `{"bonus":5}`},
-		{Type: "redpacket", Title: "幸运红包", Subtitle: "开奖聊天室随机红包", Status: "active", RewardCents: 888, Participants: 56, SortOrder: 4, ConfigJSON: `{"pool":88}`},
+		{Type: "redpacket", Title: "幸运红包", Subtitle: "开奖聊天室随机红包", Status: "active", RewardCents: 888, PoolTotalCents: 8800, PoolRemainingCents: 8800, Participants: 56, SortOrder: 4, ConfigJSON: `{"pool":88,"min_amount":1,"max_amount":8.8}`},
 	}
 	return s.db.Create(&defaults).Error
 }
@@ -170,12 +174,35 @@ func validateActivity(input ActivityPayload) (*activity.Activity, error) {
 	}, nil
 }
 
+func applyActivityPool(row *activity.Activity) {
+	if row.Type != "redpacket" {
+		return
+	}
+	cfg := parseRedPacketConfig(row.ConfigJSON)
+	total := int64(cfg.Pool * 100)
+	if total <= 0 {
+		total = 8800
+	}
+	if row.PoolTotalCents <= 0 {
+		row.PoolTotalCents = total
+	}
+	if row.PoolRemainingCents <= 0 {
+		row.PoolRemainingCents = row.PoolTotalCents
+	}
+}
+
 func toActivityView(row activity.Activity) ActivityView {
 	var cfg any
 	_ = json.Unmarshal([]byte(defaultJSON(row.ConfigJSON, "{}")), &cfg)
-	return ActivityView{
+	view := ActivityView{
 		ID: row.ID, Type: row.Type, Title: row.Title, Subtitle: row.Subtitle, Status: row.Status,
 		Cover: row.Cover, Reward: centsToAmount(row.RewardCents), Config: cfg, Participants: row.Participants,
 		SortOrder: row.SortOrder, StartsAt: row.StartsAt, EndsAt: row.EndsAt, CreatedAt: row.CreatedAt,
 	}
+	if row.Type == "redpacket" {
+		ensureActivityPool(&row)
+		view.PoolTotal = centsToAmount(row.PoolTotalCents)
+		view.PoolRemaining = centsToAmount(row.PoolRemainingCents)
+	}
+	return view
 }

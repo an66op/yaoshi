@@ -6,6 +6,7 @@ import (
 	apperrors "backend/errors"
 	"backend/utils"
 	"strings"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 )
@@ -36,7 +37,7 @@ func (s *MemberService) Profile(userID uint64) (*vo.MemberProfileResponse, error
 	out := &vo.MemberProfileResponse{
 		UserResponse: vo.UserResponse{
 			ID: account.UserID, Username: account.Username, Email: account.Email,
-			Nickname: account.Nickname, Role: account.Role, Status: account.Status,
+			PublicID: account.PublicID, Nickname: account.Nickname, Role: account.Role, Status: account.Status,
 		},
 		Balance:       centsToAmount(account.BalanceCents),
 		ParentAgentID: account.ParentAgentID,
@@ -76,6 +77,28 @@ func (s *MemberService) ChangePassword(userID uint64, oldPassword, newPassword s
 		return apperrors.NewSystemError("PASSWORD_UPDATE_FAILED", "密码更新失败", err)
 	}
 	return nil
+}
+
+// UpdateNickname persists the member's public in-room name. Keeping this in
+// the member service ensures reconnecting or refreshing never restores an old
+// browser-only nickname.
+func (s *MemberService) UpdateNickname(userID uint64, nickname string) (*vo.MemberProfileResponse, error) {
+	nickname = strings.Join(strings.Fields(nickname), " ")
+	if length := utf8.RuneCountInString(nickname); length < 2 || length > 16 {
+		return nil, apperrors.NewBusinessError("INVALID_NICKNAME", "昵称需为 2–16 个字符")
+	}
+	if strings.Contains(nickname, "*") {
+		return nil, apperrors.NewBusinessError("INVALID_NICKNAME", "昵称不能使用遮挡字符")
+	}
+
+	result := s.db.Model(&user.User{}).Where("user_id = ? AND role <> ?", userID, "admin").Update("nickname", nickname)
+	if result.Error != nil {
+		return nil, apperrors.NewSystemError("NICKNAME_UPDATE_FAILED", "昵称更新失败", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+	}
+	return s.Profile(userID)
 }
 
 func (s *MemberService) JoinRoom(userID uint64, roomCode string) (*RoomResolveResult, error) {

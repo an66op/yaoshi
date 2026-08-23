@@ -8,6 +8,9 @@ import (
 // User 用户表模型
 type User struct {
 	UserID uint64 `gorm:"primaryKey" json:"user_id"`
+	// PublicID is the stable member number shown in the product. It must not
+	// change when a member changes their nickname.
+	PublicID uint64 `gorm:"not null;uniqueIndex;default:nextval('member_public_id_seq')" json:"public_id"`
 	// 登录相关
 	Username     string `gorm:"size:50;uniqueIndex;not null" json:"username"` // 用户名（唯一，必填）
 	Email        string `gorm:"size:100" json:"email,omitempty"`              // 邮箱（可选）
@@ -28,7 +31,11 @@ type User struct {
 	// ParentAgentID links a member to the agent room they entered.
 	ParentAgentID *uint64 `gorm:"index" json:"parent_agent_id,omitempty"`
 
-	Status      int        `gorm:"default:1" json:"status"` // 状态：0-禁用 1-启用
+	Status int `gorm:"default:1" json:"status"` // 状态：0-禁用 1-启用
+	// MutedUntil only affects public group chat. Service chat remains available
+	// so a muted member can still contact support.
+	MutedUntil  *time.Time `gorm:"index" json:"muted_until,omitempty"`
+	MuteReason  string     `gorm:"size:300" json:"mute_reason,omitempty"`
 	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
 	LoginCount  int        `gorm:"not null;default:0" json:"login_count"`
 

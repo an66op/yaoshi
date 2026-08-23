@@ -7,7 +7,6 @@ import (
 	apperrors "backend/errors"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -24,23 +23,23 @@ type MemberPortalService struct {
 }
 
 type MemberRoomSettingsView struct {
-	RoomName          string          `json:"room_name"`
-	RoomNotice        string          `json:"room_notice"`
-	ShowOdds          bool            `json:"show_odds"`
-	SoundEnabled      bool            `json:"sound_enabled"`
-	MinCreditAmount   float64         `json:"min_credit_amount"`
-	MinDebitAmount    float64         `json:"min_debit_amount"`
-	MinChatScore      float64         `json:"min_chat_score"`
-	ChatNickname      string          `json:"chat_nickname"`
-	Game              json.RawMessage `json:"game"`
-	QuickReplies      json.RawMessage `json:"quick_replies"`
+	RoomName        string          `json:"room_name"`
+	RoomNotice      string          `json:"room_notice"`
+	ShowOdds        bool            `json:"show_odds"`
+	SoundEnabled    bool            `json:"sound_enabled"`
+	MinCreditAmount float64         `json:"min_credit_amount"`
+	MinDebitAmount  float64         `json:"min_debit_amount"`
+	MinChatScore    float64         `json:"min_chat_score"`
+	ChatNickname    string          `json:"chat_nickname"`
+	Game            json.RawMessage `json:"game"`
+	QuickReplies    json.RawMessage `json:"quick_replies"`
 }
 
 type MemberOddsView struct {
-	GameID   string                   `json:"game_id"`
-	GameName string                   `json:"game_name"`
-	ShowOdds bool                     `json:"show_odds"`
-	Items    []MemberOddsItem         `json:"items"`
+	GameID   string           `json:"game_id"`
+	GameName string           `json:"game_name"`
+	ShowOdds bool             `json:"show_odds"`
+	Items    []MemberOddsItem `json:"items"`
 }
 
 type MemberOddsItem struct {
@@ -82,6 +81,12 @@ type MemberNotificationView struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type MemberNotificationList struct {
+	Items        []MemberNotificationView `json:"items"`
+	HasMore      bool                     `json:"has_more"`
+	NextBeforeID uint64                   `json:"next_before_id,omitempty"`
+}
+
 func NewMemberPortalService(db *gorm.DB) *MemberPortalService {
 	return &MemberPortalService{
 		db:       db,
@@ -101,7 +106,7 @@ func (s *MemberPortalService) RoomSettings() (*MemberRoomSettingsView, error) {
 		SoundEnabled: cfg.SoundEnabled, MinCreditAmount: cfg.MinCreditAmount,
 		MinDebitAmount: cfg.MinDebitAmount, MinChatScore: cfg.MinChatScore,
 		ChatNickname: cfg.ChatNickname,
-		Game: cfg.Game, QuickReplies: cfg.QuickReplies,
+		Game:         cfg.Game, QuickReplies: cfg.QuickReplies,
 	}, nil
 }
 
@@ -168,7 +173,11 @@ func (s *MemberPortalService) ActivityStatus(userID, activityID uint64) (*Activi
 	if row.Status != "active" {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "活动未开启")
 	}
-	start, end := dayRange(time.Now())
+	action := row.Type
+	if action == "checkin" {
+		action = "checkin"
+	}
+	bizDate := bizDateCST(time.Now())
 	view := &ActivityStatusView{
 		ActivityID: row.ID, Type: row.Type, Title: row.Title,
 		Reward: centsToAmount(row.RewardCents), Participants: row.Participants,
@@ -176,17 +185,19 @@ func (s *MemberPortalService) ActivityStatus(userID, activityID uint64) (*Activi
 	var cfg any
 	_ = json.Unmarshal([]byte(defaultJSON(row.ConfigJSON, "{}")), &cfg)
 	view.Config = cfg
-
-	action := row.Type
-	if action == "redpacket" {
-		action = "redpacket"
-	} else if action == "checkin" {
-		action = "checkin"
+	if row.Type == "redpacket" {
+		ensureActivityPool(&row)
+		if cfgMap, ok := cfg.(map[string]any); ok {
+			cfgMap["pool_total"] = centsToAmount(row.PoolTotalCents)
+			cfgMap["pool_remaining"] = centsToAmount(row.PoolRemainingCents)
+			view.Config = cfgMap
+		}
 	}
+
 	var today int64
 	_ = s.db.Model(&activity.Participation{}).
-		Where("user_id = ? AND activity_id = ? AND action = ? AND participated_at >= ? AND participated_at < ?",
-			userID, activityID, action, start, end).Count(&today).Error
+		Where("user_id = ? AND activity_id = ? AND action = ? AND biz_date = ?",
+			userID, activityID, action, bizDate).Count(&today).Error
 	if row.Type == "checkin" {
 		view.CheckedIn = today > 0
 		view.Streak = s.checkinStreak(userID, activityID)
@@ -205,70 +216,70 @@ func (s *MemberPortalService) ClaimRedPacket(userID, activityID uint64) (*Activi
 }
 
 func (s *MemberPortalService) participate(userID, activityID uint64, action string) (*ActivityActionResult, error) {
-	var row activity.Activity
-	if err := s.db.First(&row, activityID).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, apperrors.NewBusinessError("NOT_FOUND", "活动不存在")
-		}
-		return nil, err
-	}
-	if row.Status != "active" {
-		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "活动未开启")
-	}
-	if action == "checkin" && row.Type != "checkin" {
-		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "该活动不支持签到")
-	}
-	if action == "redpacket" && row.Type != "redpacket" {
-		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "该活动不支持领红包")
-	}
-	start, end := dayRange(time.Now())
-	var exists int64
-	if err := s.db.Model(&activity.Participation{}).
-		Where("user_id = ? AND activity_id = ? AND action = ? AND participated_at >= ? AND participated_at < ?",
-			userID, activityID, action, start, end).Count(&exists).Error; err != nil {
-		return nil, err
-	}
-	if exists > 0 {
-		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "今日已参与，请明日再来")
-	}
-
-	rewardCents := row.RewardCents
-	streak := 1
-	if action == "checkin" {
-		prev := s.checkinStreak(userID, activityID)
-		streak = prev + 1
-		if rewardCents <= 0 {
-			rewardCents = int64(streak) * 100
-		}
-	}
-	if action == "redpacket" {
-		pool := 8800
-		var cfg map[string]any
-		_ = json.Unmarshal([]byte(defaultJSON(row.ConfigJSON, "{}")), &cfg)
-		if v, ok := cfg["pool"].(float64); ok && v > 0 {
-			pool = int(v * 100)
-		}
-		if pool <= 0 {
-			pool = int(rewardCents)
-		}
-		if pool <= 0 {
-			pool = 880
-		}
-		rewardCents = int64(rand.Intn(pool/2+1) + pool/10)
-		if rewardCents < 100 {
-			rewardCents = 100
-		}
-	}
-
 	var result ActivityActionResult
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		now := time.Now().UTC()
-		if err := tx.Create(&activity.Participation{
-			UserID: userID, ActivityID: activityID, Action: action,
-			RewardCents: rewardCents, Streak: streak, ParticipatedAt: now,
-		}).Error; err != nil {
+		var row activity.Activity
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, activityID).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return apperrors.NewBusinessError("NOT_FOUND", "活动不存在")
+			}
 			return err
 		}
+		if row.Status != "active" {
+			return apperrors.NewBusinessError("INVALID_REQUEST", "活动未开启")
+		}
+		if action == "checkin" && row.Type != "checkin" {
+			return apperrors.NewBusinessError("INVALID_REQUEST", "该活动不支持签到")
+		}
+		if action == "redpacket" && row.Type != "redpacket" {
+			return apperrors.NewBusinessError("INVALID_REQUEST", "该活动不支持领红包")
+		}
+
+		bizDate := bizDateCST(time.Now())
+		now := time.Now().UTC()
+		rewardCents := row.RewardCents
+		streak := 1
+		if action == "checkin" {
+			prev := s.checkinStreak(userID, activityID)
+			streak = prev + 1
+			if rewardCents <= 0 {
+				rewardCents = int64(streak) * 100
+			}
+		}
+		if action == "redpacket" {
+			ensureActivityPool(&row)
+			cfg := parseRedPacketConfig(row.ConfigJSON)
+			var err error
+			rewardCents, err = drawRedPacketReward(row.PoolRemainingCents, cfg)
+			if err != nil {
+				return err
+			}
+		}
+
+		part := activity.Participation{
+			UserID: userID, ActivityID: activityID, Action: action, BizDate: bizDate,
+			RewardCents: rewardCents, Streak: streak, ParticipatedAt: now,
+		}
+		if err := tx.Create(&part).Error; err != nil {
+			if isDuplicateParticipation(err) {
+				return apperrors.NewBusinessError("INVALID_REQUEST", "今日已参与，请明日再来")
+			}
+			return err
+		}
+
+		if action == "redpacket" {
+			nextRemaining := row.PoolRemainingCents - rewardCents
+			if err := tx.Model(&row).Updates(map[string]any{
+				"pool_total_cents":     row.PoolTotalCents,
+				"pool_remaining_cents": nextRemaining,
+				"participants":         gorm.Expr("participants + 1"),
+			}).Error; err != nil {
+				return err
+			}
+		} else if err := tx.Model(&row).Update("participants", gorm.Expr("participants + 1")).Error; err != nil {
+			return err
+		}
+
 		var account user.User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, userID).Error; err != nil {
 			return err
@@ -289,9 +300,6 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action stri
 		}).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&row).Update("participants", gorm.Expr("participants + 1")).Error; err != nil {
-			return err
-		}
 		title := "签到成功"
 		content := remark + "，到账 " + formatAmount(rewardCents) + " 元"
 		if action == "redpacket" {
@@ -299,7 +307,7 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action stri
 		}
 		_ = tx.Create(&membernotify.MemberNotification{
 			UserID: userID, Title: title, Content: content,
-			Level: "success", Category: "activity",
+			Level: "success", Category: "system",
 		}).Error
 		result = ActivityActionResult{
 			Reward: centsToAmount(rewardCents), Streak: streak,
@@ -316,13 +324,36 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action stri
 	return &result, nil
 }
 
-func (s *MemberPortalService) ListNotifications(userID uint64, limit int) ([]MemberNotificationView, error) {
+func isDuplicateParticipation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate") || strings.Contains(msg, "unique") || strings.Contains(msg, "23505")
+}
+
+func (s *MemberPortalService) ListNotifications(userID uint64, limit int, beforeID uint64, category string) (*MemberNotificationList, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
+	category = strings.TrimSpace(category)
+	if category != "" && category != "all" && category != "system" && category != "activity" && category != "winning" {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "通知分类不正确")
+	}
 	var rows []membernotify.MemberNotification
-	if err := s.db.Where("user_id = ?", userID).Order("read asc, created_at desc").Limit(limit).Find(&rows).Error; err != nil {
+	query := s.db.Where("user_id = ? AND title <> ?", userID, "客服回复")
+	if category != "" && category != "all" {
+		query = query.Where("category = ?", category)
+	}
+	if beforeID > 0 {
+		query = query.Where("id < ?", beforeID)
+	}
+	if err := query.Order("id desc").Limit(limit + 1).Find(&rows).Error; err != nil {
 		return nil, err
+	}
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
 	}
 	out := make([]MemberNotificationView, 0, len(rows))
 	for _, row := range rows {
@@ -331,12 +362,16 @@ func (s *MemberPortalService) ListNotifications(userID uint64, limit int) ([]Mem
 			Category: row.Category, Link: row.Link, Read: row.Read, CreatedAt: row.CreatedAt,
 		})
 	}
-	return out, nil
+	nextBeforeID := uint64(0)
+	if len(out) > 0 {
+		nextBeforeID = out[len(out)-1].ID
+	}
+	return &MemberNotificationList{Items: out, HasMore: hasMore, NextBeforeID: nextBeforeID}, nil
 }
 
 func (s *MemberPortalService) UnreadCount(userID uint64) (int64, error) {
 	var count int64
-	err := s.db.Model(&membernotify.MemberNotification{}).Where("user_id = ? AND read = ?", userID, false).Count(&count).Error
+	err := s.db.Model(&membernotify.MemberNotification{}).Where("user_id = ? AND read = ? AND title <> ?", userID, false, "客服回复").Count(&count).Error
 	return count, err
 }
 
@@ -364,7 +399,7 @@ func (s *MemberPortalService) EnsureWelcomeNotification(userID uint64) error {
 	}
 	notice := strings.TrimSpace(cfg.RoomNotice)
 	if notice == "" {
-		notice = "欢迎来到曜图，祝您游戏愉快。"
+		notice = "欢迎来到王者，祝您游戏愉快。"
 	}
 	return s.db.Create(&membernotify.MemberNotification{
 		UserID: userID, Title: "系统公告", Content: notice, Level: "info", Category: "system",

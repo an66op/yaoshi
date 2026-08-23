@@ -2,13 +2,15 @@ import { useState } from 'react'
 import { Icon } from '../components/Icon'
 import { memberApi } from '../api/member'
 import { setToken } from '../api/client'
+import { BRAND_NAME, DEMO_ACCOUNT, DEMO_PASSWORD } from '../data/brand'
+import type { Theme } from '../types'
 
-type Props = { onContinue: (account: string, nickname: string) => void; onRegister?: () => void }
+type Props = { onContinue: (account: string, nickname: string) => void; onRegister?: () => void; theme?: Theme }
 
 /** 会员登录：调用后端 /api/member/login */
-export function Login({ onContinue, onRegister }: Props) {
-  const [account, setAccount] = useState('')
-  const [password, setPassword] = useState('')
+export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
+  const [account, setAccount] = useState(DEMO_ACCOUNT)
+  const [password, setPassword] = useState(DEMO_PASSWORD)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -30,13 +32,13 @@ export function Login({ onContinue, onRegister }: Props) {
   }
 
   return (
-    <main className="login-page">
+    <main className={`login-page theme-${theme}`}>
       <section className="login-card">
         <div className="login-glow glow-one" />
         <div className="login-glow glow-two" />
         <header className="login-brand">
-          <img alt="曜图" src="/images/yaotu-logo-concept.png" />
-          <div><b>曜图</b><small>YAO TU · GAME SPACE</small></div>
+          <img alt={BRAND_NAME} src="/images/king-racing-mark.jpg" />
+          <div><b>{BRAND_NAME}</b><small>王者 · GAME SPACE</small></div>
           <em>安全入口</em>
         </header>
         <div className="login-copy">
@@ -80,10 +82,10 @@ export function Login({ onContinue, onRegister }: Props) {
         </button>
         <div className="login-status">
           <span>✓</span>
-          <p>登录后还需输入房间号 · 请向代理或管理员获取</p>
+          <p>登录后输入房间号 · 房间由上级配置并发放给代理</p>
         </div>
         <footer className="login-foot">
-          <span>yaotu.app</span>
+          <span>{BRAND_NAME}娱乐</span>
           {onRegister ? <button className="room-entry-back" onClick={onRegister}>没有帐号？注册</button> : <p>会员端已接入后端鉴权</p>}
         </footer>
       </section>

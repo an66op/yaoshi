@@ -13,6 +13,8 @@ export function Icon({ name }: { name: IconName }) {
     more: <path d="M6 12h.01M12 12h.01M18 12h.01"/>,
     gift: <><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M3 8h18v4H3zM12 8v12M12 8S7 7 7 4c0-2 3-1 5 4Zm0 0s5-1 5-4c0-2-3-1-5 4Z"/></>,
     arrow: <path d="m9 18 6-6-6-6"/>,
+    switch: <><path d="M7 7h11l-3-3M18 7l-3 3M17 17H6l3 3M6 17l3-3"/></>,
+    room: <><circle cx="8.5" cy="9.5" r="4.5"/><circle cx="8.5" cy="9.5" r="1"/><path d="m11.8 12.8 8.2 8.2M15.2 16.2l2.2-2.2M17.7 18.7l2.1-2.1"/></>,
   }
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }

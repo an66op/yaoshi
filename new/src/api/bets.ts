@@ -24,6 +24,39 @@ export type BetListResponse = {
   page_size: number
 }
 
+export type AssistantBetLine = {
+  position: number
+  selection: string
+  play_code: string
+  play_name: string
+  amount: number
+  label: string
+}
+
+export type AssistantBetResult = {
+  game_id: string
+  game_name: string
+  issue: string
+  content: string
+  lines: AssistantBetLine[]
+  bet_count: number
+  total: number
+  balance: number
+  accepted_at: string
+}
+
+export type AssistantDrawStatus = {
+  game_id: string
+  game_name: string
+  issue: string
+  accepting: boolean
+  next_draw_at: string
+  latest_issue?: string
+  latest_numbers?: number[]
+  latest_draw_at?: string
+  source_name?: string
+}
+
 export const betsApi = {
   list: (params?: { game_id?: string; issue?: string; status?: string; page?: number; page_size?: number }) => {
     const query = new URLSearchParams({
@@ -45,5 +78,9 @@ export const betsApi = {
     amount: number
     odds?: number
   }) => request<MemberBet>('/member/bets', { method: 'POST', body: JSON.stringify(payload) }),
+  assistantStatus: (gameId: string) => request<AssistantDrawStatus>(`/member/games/${encodeURIComponent(gameId)}/assistant`),
+  assistantHistory: (gameId: string, limit = 20) => request<AssistantBetResult[]>(`/member/games/${encodeURIComponent(gameId)}/assistant/history?limit=${limit}`),
+  assistantPlace: (gameId: string, payload: { issue?: string; content: string; request_id?: string }) =>
+    request<AssistantBetResult>(`/member/games/${encodeURIComponent(gameId)}/assistant/bets`, { method: 'POST', body: JSON.stringify(payload) }),
   cancel: (id: number) => request<MemberBet>(`/member/bets/${id}/cancel`, { method: 'POST' }),
 }

@@ -21,9 +21,10 @@ const MonitorPage = lazy(() => import('./pages/MonitorPage').then(module => ({ d
 const BoardReportPage = lazy(() => import('./pages/BoardReportPage').then(module => ({ default: module.BoardReportPage })))
 const BetsPage = lazy(() => import('./pages/BetsPage').then(module => ({ default: module.BetsPage })))
 const AgentsPage = lazy(() => import('./pages/AgentsPage').then(module => ({ default: module.AgentsPage })))
+const ChatPage = lazy(() => import('./pages/ChatPage').then(module => ({ default: module.ChatPage })))
 const ManagementPage = lazy(() => import('./pages/ManagementPages').then(module => ({ default: module.ManagementPage })))
 
-const routes = new Set(['/', '/users', '/agents', '/applications', '/reports', '/wallet', '/activities', '/monitor', '/bets', '/results', '/limits', '/board-report', '/lottery-network', '/entertainment', '/special-numbers', '/system'])
+const routes = new Set(['/', '/users', '/agents', '/applications', '/chat', '/reports', '/wallet', '/activities', '/monitor', '/bets', '/results', '/limits', '/board-report', '/lottery-network', '/entertainment', '/special-numbers', '/system'])
 const currentPath = () => routes.has(window.location.pathname) ? window.location.pathname : '/'
 
 function App() {
@@ -92,6 +93,7 @@ function App() {
     : path === '/results' ? <ResultsPage />
     : path === '/users' ? <UsersPage />
     : path === '/agents' ? <AgentsPage />
+    : path === '/chat' ? <ChatPage />
     : path === '/applications' ? <ApplicationsPage />
     : path === '/reports' ? <ReportsPage />
     : path === '/wallet' ? <WalletPage />

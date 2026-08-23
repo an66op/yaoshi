@@ -7,10 +7,12 @@ func NotifyDraw(gameID, issue string, numbers []int) {
 	}})
 }
 
-// NotifyBetFeed prompts clients to refresh in-room bet feed.
-func NotifyBetFeed(gameID, issue string) {
-	Publish(Event{Type: "bet_feed", Data: map[string]any{
-		"game_id": gameID, "issue": issue,
+// NotifyBetFeed prompts only members of the originating room to refresh its
+// live betting feed. Broadcasting this event globally would leak the presence
+// and amount of bets across rooms.
+func NotifyBetFeed(userIDs []uint64, gameID, issue, scope string) {
+	PublishToUsers(userIDs, Event{Type: "bet_feed", Data: map[string]any{
+		"game_id": gameID, "issue": issue, "scope": scope,
 	}})
 }
 

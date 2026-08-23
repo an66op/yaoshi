@@ -19,23 +19,23 @@ import (
 type BetAdminService struct{ db *gorm.DB }
 
 type BetView struct {
-	ID         uint64    `json:"id"`
-	GameID     string    `json:"game_id"`
-	Issue      string    `json:"issue"`
-	UserID     uint64    `json:"user_id"`
-	Username   string    `json:"username"`
-	PlayCode   string    `json:"play_code"`
-	PlayName   string    `json:"play_name"`
-	Position   int       `json:"position"`
-	Selection  string    `json:"selection"`
-	Amount     float64   `json:"amount"`
-	Odds       float64   `json:"odds"`
-	Status     string    `json:"status"`
-	Payout     float64   `json:"payout"`
-	FlyAmount  float64   `json:"fly_amount"`
-	Remark     string    `json:"remark"`
-	Operator   string    `json:"operator"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID        uint64    `json:"id"`
+	GameID    string    `json:"game_id"`
+	Issue     string    `json:"issue"`
+	UserID    uint64    `json:"user_id"`
+	Username  string    `json:"username"`
+	PlayCode  string    `json:"play_code"`
+	PlayName  string    `json:"play_name"`
+	Position  int       `json:"position"`
+	Selection string    `json:"selection"`
+	Amount    float64   `json:"amount"`
+	Odds      float64   `json:"odds"`
+	Status    string    `json:"status"`
+	Payout    float64   `json:"payout"`
+	FlyAmount float64   `json:"fly_amount"`
+	Remark    string    `json:"remark"`
+	Operator  string    `json:"operator"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type PlaceBetInput struct {
@@ -54,51 +54,57 @@ type PlaceBetInput struct {
 }
 
 type MonitorSnapshot struct {
-	GameID       string      `json:"game_id"`
-	GameName     string      `json:"game_name"`
-	Issue        string      `json:"issue"`
-	TotalAmount  float64     `json:"total_amount"`
-	BettorCount  int64       `json:"bettor_count"`
-	BetCount     int64       `json:"bet_count"`
-	NextDrawAt   time.Time   `json:"next_draw_at"`
-	DrawAtLabel  string      `json:"draw_at_label"`
-	Matrix       [][]float64 `json:"matrix"` // 10 rows (0-9) x 6 cols (ball1-5 + sum)
-	UpdatedAt    time.Time   `json:"updated_at"`
-	Settlement   *SettlementStatus `json:"settlement,omitempty"`
+	GameID      string            `json:"game_id"`
+	GameName    string            `json:"game_name"`
+	Issue       string            `json:"issue"`
+	TotalAmount float64           `json:"total_amount"`
+	BettorCount int64             `json:"bettor_count"`
+	BetCount    int64             `json:"bet_count"`
+	NextDrawAt  time.Time         `json:"next_draw_at"`
+	DrawAtLabel string            `json:"draw_at_label"`
+	Matrix      [][]float64       `json:"matrix"` // 10 rows (0-9) x 6 cols (ball1-5 + sum)
+	UpdatedAt   time.Time         `json:"updated_at"`
+	Settlement  *SettlementStatus `json:"settlement,omitempty"`
 }
 
 type BoardReportRow struct {
-	GameID       string     `json:"game_id"`
-	GameName     string     `json:"game_name"`
-	Issue        string     `json:"issue"`
-	BetCount     int64      `json:"bet_count"`
-	TotalAmount  float64    `json:"total_amount"`
-	FlyAmount    float64    `json:"fly_amount"`
-	Status       string     `json:"status"`
-	DrawAt       *time.Time `json:"draw_at"`
-	DrawResult   string     `json:"draw_result"`
+	GameID      string     `json:"game_id"`
+	GameName    string     `json:"game_name"`
+	Issue       string     `json:"issue"`
+	BetCount    int64      `json:"bet_count"`
+	TotalAmount float64    `json:"total_amount"`
+	FlyAmount   float64    `json:"fly_amount"`
+	Status      string     `json:"status"`
+	DrawAt      *time.Time `json:"draw_at"`
+	DrawResult  string     `json:"draw_result"`
 }
 
 type BoardReport struct {
-	Items []BoardReportRow `json:"items"`
-	Total int64            `json:"total"`
-	Page  int              `json:"page"`
-	PageSize int           `json:"page_size"`
+	Items    []BoardReportRow `json:"items"`
+	Total    int64            `json:"total"`
+	Page     int              `json:"page"`
+	PageSize int              `json:"page_size"`
 }
 
 type DashboardStats struct {
 	UserBalance       float64 `json:"user_balance"`
 	TodayTurnover     float64 `json:"today_turnover"`
-	TodayProfit       float64 `json:"today_profit"`
+	TodayGrossProfit  float64 `json:"today_gross_profit"`
+	TodayNetProfit    float64 `json:"today_net_profit"`
 	TodayRebate       float64 `json:"today_rebate"`
-	TotalProfit       float64 `json:"total_profit"`
+	TodayWelfare      float64 `json:"today_welfare"`
+	TotalGrossProfit  float64 `json:"total_gross_profit"`
+	TotalNetProfit    float64 `json:"total_net_profit"`
 	PendingSettlement float64 `json:"pending_settlement"`
+	TodayProfit       float64 `json:"today_profit"` // 兼容旧字段 = 毛利
+	TotalProfit       float64 `json:"total_profit"` // 兼容旧字段 = 毛利
 }
 
 type gameMoney struct {
-	GameID   string
-	Turnover float64
-	Profit   float64
+	GameID      string
+	Turnover    float64
+	GrossProfit float64
+	Profit      float64 // 兼容旧字段 = 毛利
 }
 
 func NewBetAdminService(db *gorm.DB) *BetAdminService { return &BetAdminService{db: db} }
@@ -107,6 +113,9 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 	game, err := s.loadGame(input.GameID)
 	if err != nil {
 		return nil, err
+	}
+	if !game.Enabled {
+		return nil, apperrors.NewBusinessError("GAME_DISABLED", "该彩种暂未开放投注")
 	}
 	issue := strings.TrimSpace(input.Issue)
 	if issue == "" {
@@ -132,8 +141,7 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 	if amountCents <= 0 {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "下注金额必须大于 0")
 	}
-	playCode := defaultString(strings.TrimSpace(input.PlayCode), "ball_1_5")
-	playName := defaultString(strings.TrimSpace(input.PlayName), "1-5球号")
+	playCode, playName := InferPlay(input.PlayCode, input.PlayName, input.Position, input.Selection)
 	if err := s.validateBetLimits(game.ID, issue, input.UserID, playCode, input.Position, selection, amountCents); err != nil {
 		return nil, err
 	}
@@ -151,6 +159,7 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 
 	var view *BetView
 	var afterBalance int64
+	var roomScope string
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		var account user.User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, input.UserID).Error; err != nil {
@@ -165,6 +174,7 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 		if account.BalanceCents < amountCents {
 			return apperrors.NewBusinessError("INSUFFICIENT_BALANCE", "用户余额不足")
 		}
+		roomScope = betRoomScope(account)
 		before := account.BalanceCents
 		after := before - amountCents
 		afterBalance = after
@@ -179,15 +189,15 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 			return err
 		}
 		row := bet.Bet{
-			GameID: game.ID, Issue: issue, UserID: account.UserID, Username: account.Username,
+			GameID: game.ID, Issue: issue, RoomScope: roomScope, UserID: account.UserID, Username: account.Username,
 			PlayCode: playCode, PlayName: playName, Position: input.Position, Selection: selection,
 			AmountCents: amountCents, Odds: odds, Status: "pending", FlyCents: flyCents,
 			Remark: strings.TrimSpace(input.Remark), Operator: defaultString(input.Operator, "后台管理员"),
 		}
 		// Upsert: same user/play/position/selection on same issue accumulates amount.
 		existing := bet.Bet{}
-		findErr := tx.Where("game_id = ? AND issue = ? AND user_id = ? AND play_code = ? AND position = ? AND selection = ?",
-			row.GameID, row.Issue, row.UserID, row.PlayCode, row.Position, row.Selection).First(&existing).Error
+		findErr := tx.Where("room_scope = ? AND game_id = ? AND issue = ? AND user_id = ? AND play_code = ? AND position = ? AND selection = ?",
+			row.RoomScope, row.GameID, row.Issue, row.UserID, row.PlayCode, row.Position, row.Selection).First(&existing).Error
 		if findErr == nil {
 			existing.AmountCents += amountCents
 			existing.FlyCents += flyCents
@@ -217,9 +227,194 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 		}
 		return nil, apperrors.NewSystemError("BET_CREATE_FAILED", "创建注单失败", err)
 	}
-	ws.NotifyBetFeed(game.ID, issue)
+	if recipients, recipientsErr := betScopeRecipients(s.db, roomScope); recipientsErr == nil {
+		ws.NotifyBetFeed(recipients, game.ID, issue, roomScope)
+	}
 	ws.NotifyUser(input.UserID, "balance", map[string]any{"balance": centsToAmount(afterBalance)})
 	return view, nil
+}
+
+// PlaceBatch accepts an already-validated ticket as one financial operation.
+// All rows and the balance deduction are committed together, so a later line
+// can never leave the member with a partially accepted ticket.
+func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) {
+	if len(inputs) == 0 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "请至少提供一注投注内容")
+	}
+	game, err := s.loadGame(inputs[0].GameID)
+	if err != nil {
+		return nil, err
+	}
+	if !game.Enabled {
+		return nil, apperrors.NewBusinessError("GAME_DISABLED", "该彩种暂未开放投注")
+	}
+	userID := inputs[0].UserID
+	if userID == 0 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "请选择下注用户")
+	}
+	issue := strings.TrimSpace(inputs[0].Issue)
+	if issue == "" {
+		issue, err = s.CurrentIssue(game.ID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := s.ensureIssueOpen(game, issue); err != nil {
+		return nil, err
+	}
+
+	type preparedBet struct {
+		input       PlaceBetInput
+		playCode    string
+		playName    string
+		selection   string
+		amountCents int64
+		odds        float64
+		flyCents    int64
+	}
+	prepared := make([]preparedBet, 0, len(inputs))
+	var totalCents int64
+	for _, input := range inputs {
+		if strings.TrimSpace(input.GameID) != game.ID || input.UserID != userID {
+			return nil, apperrors.NewBusinessError("INVALID_REQUEST", "同一张投注单只能包含同一彩种和用户")
+		}
+		if requestedIssue := strings.TrimSpace(input.Issue); requestedIssue != "" && requestedIssue != issue {
+			return nil, apperrors.NewBusinessError("ISSUE_MISMATCH", "同一张投注单的期号必须一致")
+		}
+		selection := strings.TrimSpace(input.Selection)
+		if selection == "" {
+			return nil, apperrors.NewBusinessError("INVALID_REQUEST", "投注内容不能为空")
+		}
+		if input.Position < 1 || input.Position > 6 {
+			return nil, apperrors.NewBusinessError("INVALID_REQUEST", "球位不正确")
+		}
+		amountCents := int64(math.Round(input.Amount * 100))
+		if amountCents <= 0 {
+			return nil, apperrors.NewBusinessError("INVALID_REQUEST", "下注金额必须大于 0")
+		}
+		playCode, playName := InferPlay(input.PlayCode, input.PlayName, input.Position, selection)
+		if err := s.validateBetLimits(game.ID, issue, userID, playCode, input.Position, selection, amountCents); err != nil {
+			return nil, err
+		}
+		requestFly := -1.0
+		if input.FlyAmount != nil {
+			requestFly = *input.FlyAmount
+		}
+		resolved, err := NewTradingAdminService(s.db).Resolve(userID, game.ID, playCode, centsToAmount(amountCents), input.Odds, requestFly)
+		if err != nil {
+			return nil, err
+		}
+		prepared = append(prepared, preparedBet{
+			input: input, playCode: playCode, playName: playName, selection: selection,
+			amountCents: amountCents, odds: resolved.Odds,
+			flyCents: clampFlyCents(amountCents, int64(math.Round(resolved.FlyAmount*100))),
+		})
+		totalCents += amountCents
+	}
+
+	views := make([]BetView, 0, len(prepared))
+	var afterBalance int64
+	var roomScope string
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var account user.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, userID).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+			}
+			return err
+		}
+		if account.Status != 1 {
+			return apperrors.NewBusinessError("USER_DISABLED", "用户已被禁用")
+		}
+		if account.BalanceCents < totalCents {
+			return apperrors.NewBusinessError("INSUFFICIENT_BALANCE", "用户余额不足")
+		}
+		roomScope = betRoomScope(account)
+		before := account.BalanceCents
+		afterBalance = before - totalCents
+		if err := tx.Model(&account).Update("balance_cents", afterBalance).Error; err != nil {
+			return err
+		}
+		operator := defaultString(inputs[0].Operator, "开奖助手")
+		if err := tx.Create(&user.BalanceTransaction{
+			UserID: account.UserID, AmountCents: -totalCents, BeforeCents: before, AfterCents: afterBalance,
+			Type: "bet", Remark: fmt.Sprintf("助手下注 %s/%s（%d 注）", game.Name, issue, len(prepared)), Operator: operator,
+		}).Error; err != nil {
+			return err
+		}
+		for _, item := range prepared {
+			row := bet.Bet{
+				GameID: game.ID, Issue: issue, RoomScope: roomScope, UserID: account.UserID, Username: account.Username,
+				PlayCode: item.playCode, PlayName: item.playName, Position: item.input.Position, Selection: item.selection,
+				AmountCents: item.amountCents, Odds: item.odds, Status: "pending", FlyCents: item.flyCents,
+				Remark: strings.TrimSpace(item.input.Remark), Operator: defaultString(item.input.Operator, operator),
+			}
+			existing := bet.Bet{}
+			findErr := tx.Where("room_scope = ? AND game_id = ? AND issue = ? AND user_id = ? AND play_code = ? AND position = ? AND selection = ?",
+				row.RoomScope, row.GameID, row.Issue, row.UserID, row.PlayCode, row.Position, row.Selection).First(&existing).Error
+			if findErr == nil {
+				existing.AmountCents += item.amountCents
+				existing.FlyCents += item.flyCents
+				existing.Odds = item.odds
+				existing.Remark = row.Remark
+				existing.Operator = row.Operator
+				if err := tx.Save(&existing).Error; err != nil {
+					return err
+				}
+				views = append(views, toBetView(existing))
+				continue
+			}
+			if findErr != gorm.ErrRecordNotFound {
+				return findErr
+			}
+			if err := tx.Create(&row).Error; err != nil {
+				return err
+			}
+			views = append(views, toBetView(row))
+		}
+		return nil
+	})
+	if err != nil {
+		if app, ok := err.(*apperrors.AppError); ok {
+			return nil, app
+		}
+		return nil, apperrors.NewSystemError("BET_CREATE_FAILED", "创建注单失败", err)
+	}
+	if recipients, recipientsErr := betScopeRecipients(s.db, roomScope); recipientsErr == nil {
+		ws.NotifyBetFeed(recipients, game.ID, issue, roomScope)
+	}
+	ws.NotifyUser(userID, "balance", map[string]any{"balance": centsToAmount(afterBalance)})
+	return views, nil
+}
+
+// betRoomScope is persisted on the bet, rather than inferred during reads.
+// A member may later join another room, but historic betting dynamics must
+// remain visible only to the room in which they were placed.
+func betRoomScope(account user.User) string {
+	if account.Role == "agent" {
+		return "agent:" + strconv.FormatUint(account.UserID, 10)
+	}
+	if account.ParentAgentID != nil {
+		return "agent:" + strconv.FormatUint(*account.ParentAgentID, 10)
+	}
+	return "lobby"
+}
+
+func betScopeRecipients(db *gorm.DB, scope string) ([]uint64, error) {
+	query := db.Model(&user.User{}).Where("status = ?", 1)
+	if strings.HasPrefix(scope, "agent:") {
+		id, err := strconv.ParseUint(strings.TrimPrefix(scope, "agent:"), 10, 64)
+		if err != nil || id == 0 {
+			return nil, fmt.Errorf("invalid bet room scope")
+		}
+		query = query.Where("user_id = ? OR parent_agent_id = ?", id, id)
+	} else if scope == "lobby" {
+		query = query.Where("parent_agent_id IS NULL AND role <> ?", "agent")
+	} else {
+		return nil, fmt.Errorf("invalid bet room scope")
+	}
+	var ids []uint64
+	return ids, query.Pluck("user_id", &ids).Error
 }
 
 func (s *BetAdminService) Monitor(gameID, issue string) (*MonitorSnapshot, error) {
@@ -363,12 +558,12 @@ func (s *BetAdminService) BoardReport(filter BoardReportFilter) (*BoardReport, e
 		filter.PageSize = 20
 	}
 	type aggRow struct {
-		GameID      string
-		Issue       string
-		BetCount    int64
-		TotalCents  int64
-		FlyCents    int64
-		PendingCnt  int64
+		GameID     string
+		Issue      string
+		BetCount   int64
+		TotalCents int64
+		FlyCents   int64
+		PendingCnt int64
 	}
 	var aggs []aggRow
 	var total int64
@@ -376,7 +571,7 @@ func (s *BetAdminService) BoardReport(filter BoardReportFilter) (*BoardReport, e
 		GameID string
 		Issue  string
 	}
-	pairQuery := s.db.Model(&bet.Bet{}).Select("game_id, issue")
+	pairQuery := s.db.Model(&bet.Bet{}).Where(`user_id NOT IN (SELECT user_id FROM "user" WHERE remark = ?)`, roomActivityRemark).Select("game_id, issue")
 	if gid := strings.TrimSpace(filter.GameID); gid != "" && gid != "all" {
 		pairQuery = pairQuery.Where("game_id = ?", gid)
 	}
@@ -387,7 +582,7 @@ func (s *BetAdminService) BoardReport(filter BoardReportFilter) (*BoardReport, e
 		return nil, apperrors.NewSystemError("BOARD_READ_FAILED", "读取打盘报表失败", err)
 	}
 	total = int64(len(pairs))
-	query := s.db.Model(&bet.Bet{}).
+	query := s.db.Model(&bet.Bet{}).Where(`user_id NOT IN (SELECT user_id FROM "user" WHERE remark = ?)`, roomActivityRemark).
 		Select("game_id, issue, COUNT(*) as bet_count, COALESCE(SUM(amount_cents),0) as total_cents, COALESCE(SUM(fly_cents),0) as fly_cents, SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_cnt").
 		Group("game_id, issue")
 	if gid := strings.TrimSpace(filter.GameID); gid != "" && gid != "all" {
@@ -473,7 +668,11 @@ func (s *BetAdminService) List(filter BetListFilter) (*BetListResult, error) {
 		query = query.Where("user_id = ?", filter.UserID)
 	}
 	if st := strings.TrimSpace(filter.Status); st != "" && st != "all" {
-		query = query.Where("status = ?", st)
+		if st == "settled" {
+			query = query.Where("status IN ?", []string{"won", "lost", "cancelled"})
+		} else {
+			query = query.Where("status = ?", st)
+		}
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -535,61 +734,102 @@ func (s *BetAdminService) Cancel(id uint64, operator string) (*BetView, error) {
 
 func (s *BetAdminService) DashboardStats() (*DashboardStats, error) {
 	var totalBalance int64
-	if err := s.db.Model(&user.User{}).Select("COALESCE(SUM(balance_cents),0)").Scan(&totalBalance).Error; err != nil {
+	if err := s.db.Model(&user.User{}).Where("remark IS NULL OR remark <> ?", roomActivityRemark).Select("COALESCE(SUM(balance_cents),0)").Scan(&totalBalance).Error; err != nil {
 		return nil, err
 	}
 	start := startOfDayCST(time.Now())
-	var todayStake, todayPayout, pending, allStake, allPayout int64
-	if err := s.db.Model(&bet.Bet{}).Where("created_at >= ?", start).Select("COALESCE(SUM(amount_cents),0)").Scan(&todayStake).Error; err != nil {
+	var todayStake, todaySettledStake, todayPayout, pending, allSettledStake, allPayout int64
+	realBets := func() *gorm.DB {
+		return s.db.Model(&bet.Bet{}).Where(`user_id NOT IN (SELECT user_id FROM "user" WHERE remark = ?)`, roomActivityRemark)
+	}
+	if err := realBets().Where("created_at >= ? AND status <> ?", start, "cancelled").
+		Select("COALESCE(SUM(amount_cents),0)").Scan(&todayStake).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&bet.Bet{}).Where("created_at >= ? AND status IN ?", start, []string{"won", "lost"}).
+	if err := realBets().Where("created_at >= ? AND status IN ?", start, []string{"won", "lost"}).
+		Select("COALESCE(SUM(amount_cents),0)").Scan(&todaySettledStake).Error; err != nil {
+		return nil, err
+	}
+	if err := realBets().Where("created_at >= ? AND status IN ?", start, []string{"won", "lost"}).
 		Select("COALESCE(SUM(payout_cents),0)").Scan(&todayPayout).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&bet.Bet{}).Where("status = ?", "pending").Select("COALESCE(SUM(amount_cents),0)").Scan(&pending).Error; err != nil {
+	if err := realBets().Where("status = ?", "pending").Select("COALESCE(SUM(amount_cents),0)").Scan(&pending).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&bet.Bet{}).Select("COALESCE(SUM(amount_cents),0)").Scan(&allStake).Error; err != nil {
+	if err := realBets().Where("status IN ?", []string{"won", "lost"}).
+		Select("COALESCE(SUM(amount_cents),0)").Scan(&allSettledStake).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&bet.Bet{}).Where("status IN ?", []string{"won", "lost"}).Select("COALESCE(SUM(payout_cents),0)").Scan(&allPayout).Error; err != nil {
+	if err := realBets().Where("status IN ?", []string{"won", "lost"}).
+		Select("COALESCE(SUM(payout_cents),0)").Scan(&allPayout).Error; err != nil {
 		return nil, err
 	}
 	todayRebate, err := NewRebateAdminService(s.db).TodayAmount()
 	if err != nil {
 		todayRebate = 0
 	}
+	todayWelfare, err := s.welfareCostSince(start)
+	if err != nil {
+		todayWelfare = 0
+	}
+	allWelfare, err := s.welfareCostSince(time.Time{})
+	if err != nil {
+		allWelfare = 0
+	}
+	todayGross := centsToAmount(todaySettledStake - todayPayout)
+	totalGross := centsToAmount(allSettledStake - allPayout)
 	return &DashboardStats{
-		UserBalance: centsToAmount(totalBalance),
-		TodayTurnover: centsToAmount(todayStake),
-		TodayProfit: centsToAmount(todayStake - todayPayout),
-		TodayRebate: todayRebate,
-		TotalProfit: centsToAmount(allStake - allPayout),
+		UserBalance:       centsToAmount(totalBalance),
+		TodayTurnover:     centsToAmount(todayStake),
+		TodayGrossProfit:  todayGross,
+		TodayNetProfit:    todayGross - todayWelfare,
+		TodayRebate:       todayRebate,
+		TodayWelfare:      todayWelfare,
+		TotalGrossProfit:  totalGross,
+		TotalNetProfit:    totalGross - allWelfare,
 		PendingSettlement: centsToAmount(pending),
+		TodayProfit:       todayGross,
+		TotalProfit:       totalGross,
 	}, nil
+}
+
+func (s *BetAdminService) welfareCostSince(start time.Time) (float64, error) {
+	query := s.db.Model(&user.BalanceTransaction{}).Where("type IN ? AND amount_cents > 0",
+		[]string{"rebate", "checkin", "redpacket", "invite"})
+	if !start.IsZero() {
+		query = query.Where("created_at >= ?", start)
+	}
+	var cents int64
+	if err := query.Select("COALESCE(SUM(amount_cents),0)").Scan(&cents).Error; err != nil {
+		return 0, err
+	}
+	return centsToAmount(cents), nil
 }
 
 func (s *BetAdminService) GameMoneyMap() (map[string]gameMoney, error) {
 	start := startOfDayCST(time.Now())
 	type row struct {
-		GameID      string
-		StakeCents  int64
-		PayoutCents int64
+		GameID            string
+		StakeCents        int64
+		SettledStakeCents int64
+		PayoutCents       int64
 	}
 	var today []row
-	if err := s.db.Model(&bet.Bet{}).
-		Select("game_id, COALESCE(SUM(amount_cents),0) as stake_cents, COALESCE(SUM(CASE WHEN status IN ('won','lost') THEN payout_cents ELSE 0 END),0) as payout_cents").
+	if err := s.db.Model(&bet.Bet{}).Where(`user_id NOT IN (SELECT user_id FROM "user" WHERE remark = ?)`, roomActivityRemark).
+		Select("game_id, COALESCE(SUM(CASE WHEN status <> 'cancelled' THEN amount_cents ELSE 0 END),0) as stake_cents, COALESCE(SUM(CASE WHEN status IN ('won','lost') THEN amount_cents ELSE 0 END),0) as settled_stake_cents, COALESCE(SUM(CASE WHEN status IN ('won','lost') THEN payout_cents ELSE 0 END),0) as payout_cents").
 		Where("created_at >= ?", start).
 		Group("game_id").Scan(&today).Error; err != nil {
 		return nil, err
 	}
 	result := map[string]gameMoney{}
 	for _, item := range today {
+		gross := centsToAmount(item.SettledStakeCents - item.PayoutCents)
 		result[item.GameID] = gameMoney{
-			GameID: item.GameID,
-			Turnover: centsToAmount(item.StakeCents),
-			Profit: centsToAmount(item.StakeCents - item.PayoutCents),
+			GameID:      item.GameID,
+			Turnover:    centsToAmount(item.StakeCents),
+			GrossProfit: gross,
+			Profit:      gross,
 		}
 	}
 	return result, nil

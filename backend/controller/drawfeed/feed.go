@@ -46,7 +46,7 @@ func (h *Handler) Games(c *gin.Context) {
 	}
 	official := make([]services.GameSummary, 0, len(games))
 	for _, game := range games {
-		if game.SourceKind == "official" && game.Enabled {
+		if (game.SourceKind == "official" || game.SourceKind == "external") && game.Enabled {
 			official = append(official, game)
 		}
 	}
@@ -104,7 +104,7 @@ func (h *Handler) Latest(c *gin.Context) {
 	}
 	items := make([]latestGame, 0, len(games))
 	for _, game := range games {
-		if game.SourceKind != "official" || !game.Enabled {
+		if (game.SourceKind != "official" && game.SourceKind != "external") || !game.Enabled {
 			continue
 		}
 		draws, drawErr := h.lottery.ListDraws(game.ID, 1)

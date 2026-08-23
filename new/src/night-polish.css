@@ -6,6 +6,15 @@
   color: #e5f7fa;
 }
 
+.theme-night .app-content:has(.chat-list) { background: #071d35; }
+
+.theme-night .chat-list .blue-header {
+  border-bottom: 1px solid #56cbd535;
+  background: linear-gradient(115deg, #0a385d, #0d6979 58%, #118b87);
+  box-shadow: 0 5px 17px #0004;
+  color: #edffff;
+}
+
 .theme-night .chat-subhead {
   color: #d5eef2;
 }
@@ -15,9 +24,14 @@
 }
 
 .theme-night .chat-row {
+  width: calc(100% - 24px);
+  margin: 9px 12px;
+  border: 1px solid #63d3dc29;
+  border-radius: 15px;
   border-bottom-color: #63d3dc24;
   background: #0d2d49;
   color: #e7f8fa;
+  box-shadow: 0 8px 18px #0003;
 }
 
 .theme-night .chat-row b {
@@ -27,6 +41,15 @@
 .theme-night .chat-row small,
 .theme-night .chat-row time {
   color: #9dc3cc;
+}
+
+.theme-night .chat-row-pinned {
+  border-color: #e4b45b48;
+  background: linear-gradient(110deg, #183d52, #12324e);
+}
+
+.theme-night .chat-row-pinned::before {
+  color: #f0c86a;
 }
 
 .theme-night.game-room .game-info,
@@ -41,6 +64,10 @@
 .theme-night.game-room .last-draw small {
   color: #b8d9df;
 }
+
+.theme-night.game-room .game-acceptance { background: #154854; color: #92ebe0; }
+.theme-night.game-room .game-acceptance.closing { background: #50431f; color: #ffd880; }
+.theme-night.game-room .game-acceptance.closed { background: #512e38; color: #ffb0a4; }
 
 .theme-night.game-room .game-info i {
   background: #17425c;

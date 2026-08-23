@@ -76,6 +76,9 @@ func (s *BetAdminService) SettleIssue(gameID, issue, operator string) (*Settleme
 		PendingBefore: int64(len(pending)), SettledAt: time.Now().UTC(),
 	}
 	if len(pending) == 0 {
+		// A draw is still a room event even when nobody placed a bet. Clients use
+		// it to refresh the clock and let the draw assistant announce the result.
+		ws.NotifyDraw(gameID, issue, numbers)
 		return result, nil
 	}
 
@@ -139,9 +142,9 @@ func (s *BetAdminService) SettleIssue(gameID, issue, operator string) (*Settleme
 }
 
 type settleUserSummary struct {
-	wonCount   int
-	lostCount  int
-	stakeCents int64
+	wonCount    int
+	lostCount   int
+	stakeCents  int64
 	payoutCents int64
 }
 
@@ -165,10 +168,10 @@ func notifySettlementResults(db *gorm.DB, gameName, issue string, numbers []int,
 		}
 		_ = db.Create(&membernotify.MemberNotification{
 			UserID: userID, Title: title, Content: content,
-			Level: level, Category: "activity",
+			Level: level, Category: "winning",
 		}).Error
 		ws.NotifyUser(userID, "notification", map[string]any{
-			"title": title, "content": content, "level": level, "category": "activity",
+			"title": title, "content": content, "level": level, "category": "winning",
 		})
 	}
 }
@@ -272,10 +275,9 @@ func (s *BetAdminService) SettleImportedDraw(gameID, issue string) {
 	if strings.TrimSpace(gameID) == "" || strings.TrimSpace(issue) == "" {
 		return
 	}
-	var pending int64
-	if err := s.db.Model(&bet.Bet{}).Where("game_id = ? AND issue = ? AND status = ?", gameID, issue, "pending").Count(&pending).Error; err != nil || pending == 0 {
-		return
-	}
+	// Always pass a newly imported official draw through SettleIssue. Besides
+	// settling bets, it publishes draw_update so rooms without bets also receive
+	// the automatic draw announcement.
 	_, _ = s.SettleIssue(gameID, issue, "官方开奖自动结算")
 }
 

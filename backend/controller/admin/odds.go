@@ -37,3 +37,25 @@ func (h *OddsHandler) Update(c *gin.Context) {
 	}
 	constants.SendSuccess(c, http.StatusOK, "赔率限额已保存", result)
 }
+
+func (h *OddsHandler) Catalog(c *gin.Context) {
+	constants.SendSuccess(c, http.StatusOK, "ok", services.PlayCatalog())
+}
+
+func (h *OddsHandler) Reset(c *gin.Context) {
+	result, err := h.odds.Reset(c.Param("id"))
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "重置赔率限额失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "已恢复默认玩法赔率", result)
+}
+
+func (h *OddsHandler) SyncAll(c *gin.Context) {
+	result, err := h.odds.SyncAllGames()
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "同步玩法赔率失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "玩法赔率已同步", result)
+}

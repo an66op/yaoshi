@@ -2,14 +2,19 @@ import { useState } from 'react'
 import { Icon } from '../components/Icon'
 import { memberApi } from '../api/member'
 
+import { BRAND_NAME, DEMO_ROOM } from '../data/brand'
+import type { Theme } from '../types'
+
 type Props = {
   onBack: () => void
   onEnter: (room: string, roomName: string) => void
+  theme?: Theme
+  fromLobby?: boolean
 }
 
 /** 房间入口：校验房间号并绑定 parent_agent_id */
-export function RoomEntry({ onBack, onEnter }: Props) {
-  const [room, setRoom] = useState('')
+export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }: Props) {
+  const [room, setRoom] = useState(DEMO_ROOM)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -29,21 +34,20 @@ export function RoomEntry({ onBack, onEnter }: Props) {
   }
 
   return (
-    <main className="room-entry-page">
+    <main className={`room-entry-page theme-${theme}`}>
       <header className="room-entry-hero">
         <div className="room-entry-top">
-          <img alt="曜图" src="/images/yaotu-logo-concept.png" />
-          <div><b>曜图</b><small>YAO TU · PRIVATE ROOM</small></div>
+          <img alt={BRAND_NAME} src="/images/king-racing-mark.jpg" />
+          <div><b>{BRAND_NAME}</b><small>王者 · PRIVATE ROOM</small></div>
         </div>
       </header>
       <section className="room-entry-content">
-        <button className="room-entry-back" onClick={onBack}><Icon name="back" />返回登录</button>
+        <button className="room-entry-back" onClick={onBack}><Icon name="back" />{fromLobby ? '返回大厅' : '返回登录'}</button>
         <article className="room-entry-card">
-          <div className="room-entry-icon"><Icon name="game" /></div>
           <div className="room-entry-copy">
             <small>PRIVATE ROOM</small>
             <h1>输入房间号</h1>
-            <p>房间号即代理靓号，由管理员发放给代理；输入后进入对应代理房间。</p>
+            <p>房间号由上级配置并发放给代理；输入后进入对应代理房间。</p>
           </div>
           <label className="room-entry-field">
             <span>房间号</span>

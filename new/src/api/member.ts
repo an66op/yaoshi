@@ -4,6 +4,7 @@ export type LoginResult = {
   token: string
   user: {
     id: number
+    public_id: number
     username: string
     email: string
     nickname: string
@@ -37,6 +38,9 @@ export type MemberApplication = {
   id: number
   request_type: 'credit' | 'debit' | string
   payment_type: string
+
+  payment_account_id: number
+  payment_account_label: string
   requested_amount: number
   received_amount: number
   remark: string
@@ -62,6 +66,12 @@ export type BalanceRecord = {
   created_at: string
 }
 
+export type BalanceHistoryPage = {
+  items: BalanceRecord[]
+  has_more: boolean
+  next_before_id: number
+}
+
 export type WalletChannel = {
   id: number
   provider: string
@@ -70,6 +80,16 @@ export type WalletChannel = {
   min_amount: number
   max_amount: number
   remark: string
+}
+
+export type MemberPaymentAccount = {
+  id: number
+  account_type: 'wechat' | 'alipay' | 'bank' | 'usdt' | string
+  label: string
+  account_name: string
+  account_no: string
+  holder_name: string
+  is_default: boolean
 }
 
 export type WalletSummary = {
@@ -138,10 +158,18 @@ export const memberApi = {
     })
     return request<ApplicationListResponse>(`/member/applications?${query}`)
   },
-  createApplication: (payload: { request_type: 'credit' | 'debit'; amount: number; payment_type?: string; remark?: string }) =>
+  createApplication: (payload: { request_type: 'credit' | 'debit'; amount: number; payment_type?: string; payment_account_id?: number; remark?: string }) =>
     request<MemberApplication>('/member/applications', { method: 'POST', body: JSON.stringify(payload) }),
-  balanceHistory: (limit = 30) => request<BalanceRecord[]>(`/member/balance-history?limit=${limit}`),
+  balanceHistory: (limit = 30, beforeID?: number) => {
+    const query = new URLSearchParams({ limit: String(limit) })
+    if (beforeID) query.set('before_id', String(beforeID))
+    return request<BalanceHistoryPage>(`/member/balance-history?${query}`)
+  },
   walletChannels: () => request<WalletChannel[]>('/member/wallet/channels'),
+  paymentAccounts: () => request<MemberPaymentAccount[]>('/member/payment-accounts'),
+  createPaymentAccount: (payload: { account_type: string; label?: string; account_name: string; account_no: string; holder_name?: string; is_default?: boolean }) =>
+    request<MemberPaymentAccount>('/member/payment-accounts', { method: 'POST', body: JSON.stringify(payload) }),
+  deletePaymentAccount: (id: number) => request<null>(`/member/payment-accounts/${id}`, { method: 'DELETE' }),
   walletSummary: () => request<WalletSummary>('/member/wallet/summary'),
   rebatePreview: () => request<RebatePreview>('/member/wallet/rebate'),
   inviteInfo: () => request<InviteInfo>('/member/invite'),
@@ -150,4 +178,6 @@ export const memberApi = {
     request<EntertainmentLaunch>(`/member/entertainment/${encodeURIComponent(code)}/launch`, { method: 'POST' }),
   changePassword: (old_password: string, new_password: string) =>
     request<null>('/member/password', { method: 'POST', body: JSON.stringify({ old_password, new_password }) }),
+  updateNickname: (nickname: string) =>
+    request<MemberProfile>('/member/nickname', { method: 'PATCH', body: JSON.stringify({ nickname }) }),
 }

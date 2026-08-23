@@ -4,6 +4,7 @@ import (
 	"backend/constants"
 	"backend/data/models/bet"
 	"backend/data/vo"
+	apperrors "backend/errors"
 	"backend/services"
 	"net/http"
 	"strconv"
@@ -25,9 +26,15 @@ type MemberHandler interface {
 	CreateApplication(c *gin.Context)
 	BalanceHistory(c *gin.Context)
 	WalletChannels(c *gin.Context)
+	ListPaymentAccounts(c *gin.Context)
+	CreatePaymentAccount(c *gin.Context)
+	DeletePaymentAccount(c *gin.Context)
 	RoomSettings(c *gin.Context)
 	GameOdds(c *gin.Context)
 	ListActivities(c *gin.Context)
+	AssistantBet(c *gin.Context)
+	AssistantBetHistory(c *gin.Context)
+	AssistantStatus(c *gin.Context)
 	ActivityStatus(c *gin.Context)
 	CheckIn(c *gin.Context)
 	ClaimRedPacket(c *gin.Context)
@@ -39,6 +46,7 @@ type MemberHandler interface {
 	RebatePreview(c *gin.Context)
 	GameFeed(c *gin.Context)
 	ChangePassword(c *gin.Context)
+	UpdateNickname(c *gin.Context)
 	InviteInfo(c *gin.Context)
 	ListEntertainment(c *gin.Context)
 	LaunchEntertainment(c *gin.Context)
@@ -48,31 +56,106 @@ type MemberHandler interface {
 }
 
 type memberHandler struct {
-	auth          services.AuthService
-	member        *services.MemberService
-	bets          *services.BetAdminService
-	apps          *services.ApplicationAdminService
-	users         *services.UserAdminService
-	wallet        *services.WalletAdminService
-	portal        *services.MemberPortalService
-	entertainment *services.EntertainmentAdminService
-	chat          *services.MemberChatService
-	db            *gorm.DB
+	auth            services.AuthService
+	member          *services.MemberService
+	bets            *services.BetAdminService
+	apps            *services.ApplicationAdminService
+	users           *services.UserAdminService
+	wallet          *services.WalletAdminService
+	paymentAccounts *services.MemberPaymentAccountService
+	portal          *services.MemberPortalService
+	assistant       *services.BetAssistantService
+	entertainment   *services.EntertainmentAdminService
+	chat            *services.MemberChatService
+	db              *gorm.DB
 }
 
 func NewMemberHandler(db *gorm.DB) MemberHandler {
 	return &memberHandler{
-		auth:          services.NewAuthService(db),
-		member:        services.NewMemberService(db),
-		bets:          services.NewBetAdminService(db),
-		apps:          services.NewApplicationAdminService(db),
-		users:         services.NewUserAdminService(db),
-		wallet:        services.NewWalletAdminService(db),
-		portal:        services.NewMemberPortalService(db),
-		entertainment: services.NewEntertainmentAdminService(db),
-		chat:          services.NewMemberChatService(db),
-		db:            db,
+		auth:            services.NewAuthService(db),
+		member:          services.NewMemberService(db),
+		bets:            services.NewBetAdminService(db),
+		apps:            services.NewApplicationAdminService(db),
+		users:           services.NewUserAdminService(db),
+		wallet:          services.NewWalletAdminService(db),
+		paymentAccounts: services.NewMemberPaymentAccountService(db),
+		portal:          services.NewMemberPortalService(db),
+		assistant:       services.NewBetAssistantService(db),
+		entertainment:   services.NewEntertainmentAdminService(db),
+		chat:            services.NewMemberChatService(db),
+		db:              db,
 	}
+}
+
+// AssistantBet accepts the compact room syntax and delegates every financial
+// operation to the server-side ticket parser. The browser never decides what
+// gets deducted from the member's balance.
+func (h *memberHandler) AssistantBet(c *gin.Context) {
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Issue     string `json:"issue"`
+		Content   string `json:"content" binding:"required"`
+		RequestID string `json:"request_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "投注内容不正确", err)
+		return
+	}
+	username, _ := c.Get("username")
+	operator, _ := username.(string)
+	requestID := strings.TrimSpace(req.RequestID)
+	if requestID == "" {
+		requestID = strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	}
+	result, err := h.assistant.Place(userID, c.Param("id"), req.Issue, req.Content, operator, requestID)
+	if err != nil {
+		if apperrors.IsBusinessError(err) {
+			constants.SendError(c, http.StatusBadRequest, "投注未受理", err)
+			return
+		}
+		constants.SendError(c, http.StatusInternalServerError, "投注助手暂时不可用", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusCreated, "开奖助手已受理投注", result)
+}
+
+// AssistantBetHistory rebuilds the member's own room messages after a refresh.
+// It never returns another member's requests and is scoped to the requested game.
+func (h *memberHandler) AssistantBetHistory(c *gin.Context) {
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	result, err := h.assistant.History(userID, c.Param("id"), limit)
+	if err != nil {
+		if apperrors.IsBusinessError(err) {
+			constants.SendError(c, http.StatusBadRequest, "读取投注消息失败", err)
+			return
+		}
+		constants.SendError(c, http.StatusInternalServerError, "读取投注消息失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+// AssistantStatus supplies the assistant's current acceptance and result
+// summary. Publishing a draw intentionally remains an administrator-only
+// operation and is never exposed through this member route.
+func (h *memberHandler) AssistantStatus(c *gin.Context) {
+	result, err := h.assistant.Status(c.Param("id"))
+	if err != nil {
+		if apperrors.IsBusinessError(err) {
+			constants.SendError(c, http.StatusBadRequest, "读取开奖助手状态失败", err)
+			return
+		}
+		constants.SendError(c, http.StatusInternalServerError, "读取开奖助手状态失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
 }
 
 func (h *memberHandler) Login(c *gin.Context) {
@@ -90,7 +173,7 @@ func (h *memberHandler) Login(c *gin.Context) {
 		Token: token,
 		User: vo.UserResponse{
 			ID: account.UserID, Username: account.Username, Email: account.Email,
-			Nickname: account.Nickname, Role: account.Role, Status: account.Status,
+			PublicID: account.PublicID, Nickname: account.Nickname, Role: account.Role, Status: account.Status,
 		},
 	})
 }
@@ -250,10 +333,11 @@ func (h *memberHandler) CreateApplication(c *gin.Context) {
 		return
 	}
 	var req struct {
-		RequestType string  `json:"request_type" binding:"required"`
-		PaymentType string  `json:"payment_type"`
-		Amount      float64 `json:"amount"`
-		Remark      string  `json:"remark"`
+		RequestType      string  `json:"request_type" binding:"required"`
+		PaymentType      string  `json:"payment_type"`
+		PaymentAccountID uint64  `json:"payment_account_id"`
+		Amount           float64 `json:"amount"`
+		Remark           string  `json:"remark"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		constants.SendError(c, http.StatusBadRequest, "申请参数不正确", err)
@@ -265,8 +349,9 @@ func (h *memberHandler) CreateApplication(c *gin.Context) {
 	}
 	result, err := h.apps.Create(services.CreateApplicationInput{
 		UserID: userID, RequestType: req.RequestType,
-		PaymentType: defaultString(req.PaymentType, "manual"),
-		Amount: req.Amount, Remark: req.Remark,
+		PaymentType:      defaultString(req.PaymentType, "manual"),
+		PaymentAccountID: req.PaymentAccountID,
+		Amount:           req.Amount, Remark: req.Remark,
 	})
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "提交申请失败", err)
@@ -281,7 +366,8 @@ func (h *memberHandler) BalanceHistory(c *gin.Context) {
 		return
 	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "30"))
-	result, err := h.users.BalanceHistory(userID, limit)
+	beforeID, _ := strconv.ParseUint(c.DefaultQuery("before_id", "0"), 10, 64)
+	result, err := h.users.BalanceHistoryPage(userID, limit, beforeID)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取账变失败", err)
 		return
@@ -290,23 +376,23 @@ func (h *memberHandler) BalanceHistory(c *gin.Context) {
 }
 
 func (h *memberHandler) WalletChannels(c *gin.Context) {
-	channels, err := h.wallet.List(services.WalletListFilter{Status: "active"})
+	channels, err := h.wallet.List(services.WalletListFilter{Status: "enabled"})
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取收款方式失败", err)
 		return
 	}
 	type memberChannel struct {
-		ID        uint64  `json:"id"`
-		Provider  string  `json:"provider"`
-		Name      string  `json:"name"`
-		CreditType string `json:"credit_type"`
-		MinAmount float64 `json:"min_amount"`
-		MaxAmount float64 `json:"max_amount"`
-		Remark    string  `json:"remark"`
+		ID         uint64  `json:"id"`
+		Provider   string  `json:"provider"`
+		Name       string  `json:"name"`
+		CreditType string  `json:"credit_type"`
+		MinAmount  float64 `json:"min_amount"`
+		MaxAmount  float64 `json:"max_amount"`
+		Remark     string  `json:"remark"`
 	}
 	out := make([]memberChannel, 0, len(channels))
 	for _, ch := range channels {
-		if ch.Status != "active" {
+		if ch.Status != "enabled" {
 			continue
 		}
 		out = append(out, memberChannel{
@@ -315,6 +401,54 @@ func (h *memberHandler) WalletChannels(c *gin.Context) {
 		})
 	}
 	constants.SendSuccess(c, http.StatusOK, "ok", out)
+}
+
+func (h *memberHandler) ListPaymentAccounts(c *gin.Context) {
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	items, err := h.paymentAccounts.List(userID)
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取收款方式失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", items)
+}
+
+func (h *memberHandler) CreatePaymentAccount(c *gin.Context) {
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	var req services.CreateMemberPaymentAccountInput
+	if err := c.ShouldBindJSON(&req); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "收款方式参数不正确", err)
+		return
+	}
+	item, err := h.paymentAccounts.Create(userID, req)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "新增收款方式失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusCreated, "收款方式已保存", item)
+}
+
+func (h *memberHandler) DeletePaymentAccount(c *gin.Context) {
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		constants.SendError(c, http.StatusBadRequest, "收款方式 ID 不正确", err)
+		return
+	}
+	if err := h.paymentAccounts.Delete(userID, id); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "删除收款方式失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "收款方式已删除", nil)
 }
 
 func defaultString(value, fallback string) string {
@@ -415,7 +549,8 @@ func (h *memberHandler) ListNotifications(c *gin.Context) {
 		return
 	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	result, err := h.portal.ListNotifications(userID, limit)
+	beforeID, _ := strconv.ParseUint(c.Query("before_id"), 10, 64)
+	result, err := h.portal.ListNotifications(userID, limit, beforeID, c.DefaultQuery("category", "all"))
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取通知失败", err)
 		return
@@ -492,12 +627,12 @@ func (h *memberHandler) RebatePreview(c *gin.Context) {
 }
 
 func (h *memberHandler) GameFeed(c *gin.Context) {
-	_, ok := memberUserID(c)
+	userID, ok := memberUserID(c)
 	if !ok {
 		return
 	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	result, err := h.portal.GameFeed(c.Param("id"), c.Query("issue"), limit)
+	result, err := h.portal.GameFeed(userID, c.Param("id"), c.Query("issue"), limit)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取投注动态失败", err)
 		return
@@ -523,6 +658,26 @@ func (h *memberHandler) ChangePassword(c *gin.Context) {
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "密码已更新", nil)
+}
+
+func (h *memberHandler) UpdateNickname(c *gin.Context) {
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Nickname string `json:"nickname" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "昵称参数不正确", err)
+		return
+	}
+	profile, err := h.member.UpdateNickname(userID, req.Nickname)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "昵称修改失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "昵称已更新", profile)
 }
 
 func (h *memberHandler) InviteInfo(c *gin.Context) {
@@ -587,8 +742,10 @@ func (h *memberHandler) ListChatMessages(c *gin.Context) {
 	if !ok {
 		return
 	}
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	result, err := h.chat.List(userID, c.DefaultQuery("room_type", "group"), limit)
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	beforeID, _ := strconv.ParseUint(c.Query("before_id"), 10, 64)
+	afterID, _ := strconv.ParseUint(c.Query("after_id"), 10, 64)
+	result, err := h.chat.List(userID, c.DefaultQuery("room_type", "group"), limit, beforeID, afterID)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取聊天消息失败", err)
 		return

@@ -3,6 +3,7 @@ package vo
 // RegisterResponse 用户注册后的返回对象
 type RegisterResponse struct {
 	ID       uint64 `json:"id"`
+	PublicID uint64 `json:"public_id"`
 	Username string `json:"username"`
 	Email    string `json:"email"`
 	Nickname string `json:"nickname,omitempty"`
@@ -12,6 +13,7 @@ type RegisterResponse struct {
 // UserResponse 登录时返回的用户信息（去掉敏感字段）
 type UserResponse struct {
 	ID       uint64 `json:"id"`
+	PublicID uint64 `json:"public_id"`
 	Username string `json:"username"`
 	Email    string `json:"email,omitempty"`
 	Nickname string `json:"nickname,omitempty"`

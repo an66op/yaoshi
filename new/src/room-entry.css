@@ -89,17 +89,6 @@
     inset 0 1px #fff;
   backdrop-filter: blur(13px);
 }
-.room-entry-icon {
-  display: grid;
-  place-items: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 13px;
-  background: linear-gradient(135deg, #1688aa, #2bbab1);
-  box-shadow: 0 6px 13px #168d9c3b;
-  color: #fff;
-  font-size: 21px;
-}
 .room-entry-copy {
   display: grid;
   gap: 4px;
@@ -209,8 +198,6 @@
 .room-entry-back { display: flex; align-items: center; gap: 4px; padding: 5px 2px; color: #477588; }
 .room-entry-back svg { width: 15px; height: 15px; }
 .room-entry-card { gap: 16px; padding: 23px 20px 19px; border: 1px solid #ffffffdd; border-radius: 23px; background: #ffffffdf; box-shadow: 0 17px 33px #315f6f26, inset 0 1px #fff; backdrop-filter: blur(18px); }
-.room-entry-icon { width: 45px; height: 45px; border-radius: 15px; background: linear-gradient(135deg, #177fa5, #32bab0); }
-.room-entry-icon svg { width: 22px; }
 .room-entry-copy { gap: 5px; }
 .room-entry-copy small { font: 700 9px 'DM Mono'; letter-spacing: .12em; }
 .room-entry-copy h1 { font-size: 24px; letter-spacing: .02em; }
@@ -224,3 +211,17 @@
 .room-entry-note { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-color: #ffffffa6; background: #ffffffa6; box-shadow: 0 4px 11px #4c82941c; }
 .room-entry-note span { flex: none; padding: 2px 5px; border-radius: 5px; background: #e4f5f4; color: #237f85; font-size: 8px; font-weight: 700; }
 .room-entry-note p { margin: 0; }
+
+/* 独立房间入口与主站共用夜间深海底色。 */
+.theme-night.room-entry-page { background: #061b32 url('/images/yaotu-room-dawn.png') center / cover; color: #dff6f8; }
+.theme-night.room-entry-page::before { background: linear-gradient(180deg, #061a34cf, #082943c9 43%, #061d37e8); }
+.theme-night.room-entry-page .room-entry-hero { background: linear-gradient(180deg, #0a2d48e8, #0d3d54cf); box-shadow: inset 0 -1px #75dce331, 0 8px 20px #0005; }
+.theme-night.room-entry-page .room-entry-top small,.theme-night.room-entry-page .room-entry-welcome small,.theme-night.room-entry-page .room-entry-welcome p,.theme-night.room-entry-page .room-entry-back,.theme-night.room-entry-page .room-entry-copy p,.theme-night.room-entry-page .room-entry-field span { color: #9fc8cf; }
+.theme-night.room-entry-page .room-entry-top > span { border-color: #5acbd056; background: #0e3c56; color: #9be9e7; }
+.theme-night.room-entry-page .room-entry-card { border-color: #5bcad13b; background: #0a2b46e8; box-shadow: 0 17px 33px #0000004a, inset 0 1px #baffff13; }
+.theme-night.room-entry-page .room-entry-copy h1 { color: #e5fbfc; }
+.theme-night.room-entry-page .room-entry-copy small { color: #7ee0dd; }
+.theme-night.room-entry-page .room-entry-field input { border-color: #4fc7cd4a; background: #08253e; color: #e8fcfc; }
+.theme-night.room-entry-page .room-entry-field input::placeholder,.theme-night.room-entry-page .room-entry-field i { color: #769ea9; }
+.theme-night.room-entry-page .room-entry-note { border-color: #4dc7cd37; background: #0c314bd9; box-shadow: 0 4px 11px #0003; color: #a8d1d6; }
+.theme-night.room-entry-page .room-entry-note span { background: #123f54; color: #91e6e2; }

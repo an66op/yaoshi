@@ -1,7 +1,7 @@
 .service-history {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 0;
 }
 .service-time {
   margin: 2px 0 4px;
@@ -17,6 +17,10 @@
 .service-message.outgoing {
   justify-content: flex-end;
 }
+.chat-history > .chat-message-row { margin: 0 0 12px; }
+.chat-history > .chat-message-row.outgoing { margin-top: 6px; margin-bottom: 17px; }
+.chat-load-history { display: block; width: max-content; margin: 2px auto 10px; padding: 6px 11px; border: 1px solid #9edee0; border-radius: 999px; background: #f6ffff; color: #237d86; font-size: 10px; font-weight: 700; }
+.chat-load-history:disabled { opacity: .7; }
 .service-avatar {
   display: grid;
   place-items: center;
@@ -41,6 +45,28 @@
   font-size: 12px;
   line-height: 1.65;
   box-shadow: 0 3px 10px #23405b18;
+}
+.chat-history .service-bubble > small {
+  display: block;
+  margin-bottom: 3px;
+  color: #7f96a0;
+  font-size: 9px;
+  line-height: 1;
+}
+.chat-history .service-message.outgoing .service-bubble > small { color: #3b8990; }
+.chat-history .service-bubble > span { display: block; }
+.message-bubble-time {
+  display: block;
+  margin-top: 4px;
+  color: #91a3aa;
+  font-size: 8px;
+  line-height: 1;
+  text-align: right;
+  white-space: nowrap;
+}
+.service-message.outgoing .message-bubble-time {
+  color: #43878c;
+  text-align: left;
 }
 .service-message.outgoing .service-bubble {
   border-radius: 13px 4px 13px 13px;
@@ -73,6 +99,10 @@
   background: #176e75;
   color: #efffff;
 }
+.theme-night .chat-history .service-bubble > small { color: #a3cbd2; }
+.theme-night .message-bubble-time { color: #86aeb8; }
+.theme-night .service-message.outgoing .message-bubble-time { color: #a4d8d7; }
+.theme-night .chat-load-history { border-color: #4bc6ca70; background: #103b56; color: #b8eff1; }
 .theme-night .service-replies button {
   border-color: #4cc4cf70;
   background: #103b56;
@@ -82,6 +112,13 @@
   display: block;
 }
 .chat-input input{flex:1;min-width:0;padding:9px 11px;border:0;border-radius:7px;outline:0;background:#f1f3f6;color:#294653;font:inherit;font-size:12px}.chat-input input::placeholder{color:#9aa7b0}.chat-input .service-send{border-radius:9px;background:#1b98a7;color:#fff}.chat-input .service-send:disabled{background:transparent;color:#aab4ba}.theme-night .chat-input input{background:#143a56;color:#e2f7fb}.theme-night .chat-input input::placeholder{color:#8eb9c6}
+.chat-input-muted{justify-content:center}.chat-input .chat-muted-placeholder{display:flex;flex:none;align-items:center;justify-content:center;gap:7px;width:calc(100% - 12px);padding:10px 13px;background:#f0f4f5;color:#90a1a8;font-size:12px;letter-spacing:.04em}.chat-muted-placeholder::before{width:13px;height:13px;border:1.5px solid currentColor;border-radius:50%;background:linear-gradient(135deg,transparent 44%,currentColor 45% 55%,transparent 56%);content:''}.theme-night .chat-input .chat-muted-placeholder{background:#143a56;color:#7faab4}
+
+/* 消息入口：四种身份统一为一套线性图标语言，颜色用于区分而非文字缩写。 */
+.message-logo{position:relative;display:grid;place-items:center;flex:none;width:47px;height:47px;overflow:visible;border:1px solid #ffffff8c;border-radius:15px;box-shadow:inset 0 1px #ffffff80,0 7px 14px #1f586a22;color:#fff}.message-logo::before{position:absolute;top:5px;right:6px;width:11px;height:6px;border-radius:999px;background:#ffffff35;content:'';transform:rotate(-38deg)}.message-logo svg{position:relative;z-index:1;width:25px;height:25px}.message-logo-service{background:linear-gradient(145deg,#137ba9,#20b9b5)}.message-logo-group{background:linear-gradient(145deg,#6d76da,#a26ad7)}.message-logo-notice{background:linear-gradient(145deg,#e1913f,#ef7054)}.message-logo-activity{background:linear-gradient(145deg,#e85983,#bd58a8)}.message-logo i{position:absolute;z-index:2;top:-6px;right:-7px;display:grid;place-items:center;min-width:19px;height:19px;padding:0 4px;border:2px solid #fff;border-radius:10px;background:#e55252;color:#fff;font:700 9px "DM Mono",monospace;font-style:normal;box-shadow:0 3px 6px #a7383f3d}.message-logo-notice svg{transform:translateX(-1px)}.message-logo-activity svg{stroke-width:1.7}.theme-night .message-logo{border-color:#b9ffff35;box-shadow:inset 0 1px #d9ffff33,0 7px 14px #0005}.theme-night .message-logo-service{background:linear-gradient(145deg,#135a89,#188d92)}.theme-night .message-logo-group{background:linear-gradient(145deg,#585eaf,#8654ae)}.theme-night .message-logo-notice{background:linear-gradient(145deg,#bb7031,#ba4c4e)}.theme-night .message-logo-activity{background:linear-gradient(145deg,#b64d73,#873e7a)}
+.message-logo-winning { background: linear-gradient(145deg, #e89a2f, #ffd15b 55%, #ee7550); }
+.message-logo-winning svg { filter: drop-shadow(0 2px 2px #a24f285c); }
+.theme-night .message-logo-winning { background: linear-gradient(145deg, #9b641f, #d69a32 58%, #a94735); }
 
 /* 通知以置顶会话呈现，进入后再查看各自的消息流。 */
 .notification-page { min-height: 100%; background: linear-gradient(180deg, #f4fbfc, #edf6f7); }
@@ -104,6 +141,7 @@
 .notification-messages > button > div { display: grid; gap: 5px; min-width: 0; }
 .notification-messages time { color: #98aab1; font-size: 9px; }
 .notification-messages b { font-size: 13px; }
+.notification-unread-dot { display: inline-block; width: 6px; height: 6px; margin: 0 0 1px 5px; border-radius: 50%; background: #ec6d5b; vertical-align: middle; }
 .notification-messages p { margin: 0; color: #748d98; font-size: 10px; line-height: 1.65; }
 .notification-messages em { display: flex; align-items: center; gap: 2px; margin-top: 2px; color: #168e99; font-size: 10px; font-style: normal; }
 .notification-messages em svg { width: 12px; height: 12px; }
@@ -111,3 +149,54 @@
 .theme-night .notification-thread-list, .theme-night .notification-thread, .theme-night .notification-messages > button { border-color: #43bac72c; background: #103651; color: #dceff3; box-shadow: none; }
 .theme-night .notification-thread p, .theme-night .notification-messages p { color: #9fc2ca; }
 .theme-night .notification-pinned-title, .theme-night .notification-thread time, .theme-night .notification-messages time { color: #91bbc4; }
+
+/* 独立公告：刻意不复用消息列表卡片，保持正式阅读场景。 */
+.system-notice-page { min-height: 100%; background: radial-gradient(circle at 93% 4%, #c8f0ef 0 6%, transparent 28%), linear-gradient(180deg, #edfafa 0, #f8fcfc 38%, #edf5f6 100%); }
+.system-notice-page .blue-header > span, .activity-notice-page .blue-header > span { width: 29px; }
+.system-notice-intro { position: relative; overflow: hidden; margin: 17px 15px 13px; padding: 20px 18px; border: 1px solid #b9e4e6; border-radius: 20px; background: linear-gradient(130deg, #e0f8f7, #f8ffff); box-shadow: 0 11px 24px #2b7b8014; }
+.system-notice-intro::after { position: absolute; right: -18px; bottom: -38px; width: 124px; height: 124px; border: 17px solid #51bac032; border-radius: 50%; content: ""; }
+.system-notice-intro > span { display: inline-block; padding: 4px 8px; border-radius: 20px; background: #198f9b; color: #fff; font-size: 9px; font-weight: 800; letter-spacing: .08em; }
+.system-notice-intro h1 { margin: 10px 0 6px; color: #184f5a; font-size: 19px; letter-spacing: .03em; }
+.system-notice-intro p { position: relative; z-index: 1; margin: 0; color: #6d8e97; font-size: 11px; line-height: 1.7; }
+.system-notice-list { display: grid; gap: 12px; padding: 0 15px 23px; }
+.system-notice-card { display: grid; gap: 11px; width: 100%; padding: 16px; border: 1px solid #d8e9eb; border-radius: 18px; background: #fff; color: #244754; text-align: left; box-shadow: 0 8px 20px #2c5b6910; }
+.system-notice-card.is-unread { border-color: #85ced1; box-shadow: inset 3px 0 #1aa0a8, 0 8px 20px #2c5b6910; }
+.system-notice-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.system-notice-card-top span { color: #1b939c; font-size: 10px; font-weight: 800; letter-spacing: .06em; }
+.system-notice-card-top time { color: #9badb3; font-size: 9px; }
+.system-notice-card > div:last-child { display: grid; gap: 8px; }
+.system-notice-card b { color: #234a58; font-size: 15px; }
+.system-notice-card p { display: -webkit-box; overflow: hidden; margin: 0; color: #708a95; font-size: 11px; line-height: 1.75; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.system-notice-card em, .activity-notice-copy em { display: inline-flex; align-items: center; gap: 2px; width: max-content; color: #168c96; font-size: 10px; font-style: normal; font-weight: 700; }
+.system-notice-card em svg, .activity-notice-copy em svg { width: 12px; height: 12px; }
+.empty-notice { margin: 30px 0; color: #79949d; text-align: center; font-size: 11px; }
+
+/* 活动采用海报流：支持后台 Cover，未配置时展示品牌化视觉兜底。 */
+.activity-notice-page { min-height: 100%; background: #f7fafb; }
+.activity-notice-list { display: grid; gap: 14px; padding: 16px 15px 27px; }
+.activity-notice-card { position: relative; isolation: isolate; display: block; overflow: hidden; width: 100%; aspect-ratio: 2.22 / 1; border: 0; border-radius: 18px; background: #164f72; color: #fff; text-align: left; box-shadow: 0 10px 20px #1f52652b; }
+.activity-notice-card > img { position: absolute; inset: 0; z-index: -2; width: 100%; height: 100%; object-fit: cover; }
+.activity-notice-shade { position: absolute; inset: 0; z-index: -1; background: linear-gradient(90deg, #062d47df 0%, #07365094 48%, #07365013 100%); }
+.activity-notice-art { position: absolute; inset: 0; display: grid; align-content: center; justify-items: end; padding: 13px 18px; background: radial-gradient(circle at 83% 28%, #fff9 0 3%, transparent 3.5%), radial-gradient(circle at 77% 74%, #fff7 0 2%, transparent 2.5%), linear-gradient(125deg, #2757ae, #6748bc 52%, #bc68c4); }
+.activity-notice-art::before { position: absolute; right: -17px; bottom: -42px; width: 142px; height: 142px; border: 24px solid #f8d0ff43; border-radius: 50%; content: ""; }
+.activity-notice-art i { color: #fff; font-size: 26px; font-style: normal; font-weight: 900; letter-spacing: .12em; text-shadow: 0 3px 0 #52349e; transform: rotate(-4deg); }
+.activity-notice-art b { margin-top: 2px; color: #f7e7ff; font-size: 12px; letter-spacing: .2em; }
+.card-tone-1 .activity-notice-art { background: radial-gradient(circle at 85% 20%, #fff9 0 3%, transparent 3.5%), linear-gradient(130deg, #0b617b, #199887 57%, #75c56c); }
+.card-tone-1 .activity-notice-art i { text-shadow: 0 3px 0 #137064; }
+.card-tone-2 .activity-notice-art { background: radial-gradient(circle at 80% 28%, #ffe7 0 3%, transparent 3.5%), linear-gradient(130deg, #80254d, #d44f7b 55%, #f89b65); }
+.card-tone-2 .activity-notice-art i { text-shadow: 0 3px 0 #912e54; }
+.card-tone-3 .activity-notice-art { background: radial-gradient(circle at 83% 22%, #fff9 0 3%, transparent 3.5%), linear-gradient(130deg, #183f7f, #2369a8 55%, #29a5b0); }
+.card-tone-3 .activity-notice-art i { text-shadow: 0 3px 0 #245285; }
+.activity-notice-copy { position: absolute; inset: auto 0 0; display: grid; gap: 4px; padding: 13px 15px; }
+.activity-notice-copy small { width: max-content; padding: 3px 6px; border: 1px solid #ffffff57; border-radius: 10px; background: #ffffff24; color: #fff; font-size: 8px; font-weight: 700; }
+.activity-notice-copy b { font-size: 17px; line-height: 1.15; text-shadow: 0 2px 7px #001a3399; }
+.activity-notice-copy p { overflow: hidden; margin: 0; color: #eefbfc; font-size: 10px; white-space: nowrap; text-overflow: ellipsis; text-shadow: 0 1px 4px #001a3377; }
+.activity-notice-copy em { color: #e4ffff; text-shadow: 0 1px 3px #001a3377; }
+
+.theme-night .system-notice-page { background: radial-gradient(circle at 93% 4%, #2d6570 0 6%, transparent 28%), linear-gradient(180deg, #082945, #0c314a 45%, #082a43); }
+.theme-night .system-notice-intro { border-color: #49c5c958; background: linear-gradient(130deg, #113e57, #0d324d); box-shadow: none; }
+.theme-night .system-notice-intro h1, .theme-night .system-notice-card b { color: #e0faff; }
+.theme-night .system-notice-intro p, .theme-night .system-notice-card p { color: #9bc4cd; }
+.theme-night .system-notice-card { border-color: #4bb6bd42; background: #103650; color: #d8f1f5; box-shadow: none; }
+.theme-night .system-notice-card.is-unread { border-color: #51cdd1; }
+.theme-night .activity-notice-page { background: #082944; }

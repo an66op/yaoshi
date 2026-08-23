@@ -21,3 +21,21 @@ type PaymentChannel struct {
 }
 
 func (PaymentChannel) TableName() string { return "wallet_payment_channels" }
+
+// MemberPaymentAccount is a member-owned receiving account used for debit
+// applications. The account number is intentionally kept separate from the
+// platform-managed deposit channels above.
+type MemberPaymentAccount struct {
+	ID          uint64    `gorm:"primaryKey" json:"id"`
+	UserID      uint64    `gorm:"not null;index" json:"user_id"`
+	AccountType string    `gorm:"size:30;not null;index" json:"account_type"`
+	Label       string    `gorm:"size:80;not null" json:"label"`
+	AccountName string    `gorm:"size:100;not null" json:"account_name"`
+	AccountNo   string    `gorm:"size:180;not null" json:"-"`
+	HolderName  string    `gorm:"size:80" json:"holder_name"`
+	IsDefault   bool      `gorm:"not null;default:false" json:"is_default"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+func (MemberPaymentAccount) TableName() string { return "member_payment_accounts" }

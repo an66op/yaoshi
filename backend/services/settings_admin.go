@@ -69,7 +69,7 @@ func (s *SettingsAdminService) Update(input UpdateSystemSettingsInput) (*SystemS
 	if err != nil {
 		return nil, err
 	}
-	row.RoomName = defaultString(strings.TrimSpace(input.RoomName), "曜图")
+	row.RoomName = defaultString(strings.TrimSpace(input.RoomName), "王者")
 	row.RoomCode = defaultString(strings.TrimSpace(input.RoomCode), "1231")
 	row.ChatNickname = defaultString(strings.TrimSpace(input.ChatNickname), "群主")
 	if input.NicknameDisplayLength < 0 {
@@ -108,16 +108,16 @@ func (s *SettingsAdminService) ensure() (*settings.SystemConfig, error) {
 		return nil, apperrors.NewSystemError("SETTINGS_READ_FAILED", "读取系统设置失败", err)
 	}
 	row = settings.SystemConfig{
-		ID:                1,
-		RoomName:          "曜图",
-		RoomCode:          "1231",
-		ChatNickname:      "群主",
-		RequireJoinReview: true,
-		SoundEnabled:      true,
-		ShowOdds:          true,
-		PredictionEnabled: true,
-		GameSettingsJSON:  `{"seal_seconds":30,"allow_cancel":true,"default_fly_rate":0,"max_open_games":8}`,
-		QuickRepliesJSON:  `[{"title":"欢迎光临","content":"欢迎进入曜图房间，祝您游戏愉快。"},{"title":"封盘提醒","content":"本期即将封盘，请尽快完成下注。"},{"title":"开奖公告","content":"本期已开奖，请留意中奖结果。"}]`,
+		ID:                 1,
+		RoomName:           "王者",
+		RoomCode:           "1231",
+		ChatNickname:       "群主",
+		RequireJoinReview:  true,
+		SoundEnabled:       true,
+		ShowOdds:           true,
+		PredictionEnabled:  true,
+		GameSettingsJSON:   `{"seal_seconds":30,"allow_cancel":true,"default_fly_rate":0,"max_open_games":8,"room_activity_enabled":true,"room_activity_interval_secs":10,"room_activity_bots_per_room":6,"room_activity_bets_per_cycle":2,"room_activity_chat_chance_percent":28}`,
+		QuickRepliesJSON:   `[{"title":"欢迎光临","content":"欢迎进入王者房间，祝您游戏愉快。"},{"title":"封盘提醒","content":"本期即将封盘，请尽快完成下注。"},{"title":"开奖公告","content":"本期已开奖，请留意中奖结果。"}]`,
 		RebateSettingsJSON: `{"enabled":true,"rate_percent":0.5,"min_turnover":0,"settle_mode":"daily","auto_credit":false}`,
 	}
 	if err := s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
@@ -145,7 +145,7 @@ func toSettingsView(row *settings.SystemConfig) *SystemSettingsView {
 		AbnormalLoginAlert:    row.AbnormalLoginAlert,
 		SecurityPasswordCheck: row.SecurityPasswordCheck,
 		RoomNotice:            row.RoomNotice,
-		Game:                  json.RawMessage(defaultJSON(row.GameSettingsJSON, `{"seal_seconds":30,"allow_cancel":true,"default_fly_rate":0,"max_open_games":8}`)),
+		Game:                  json.RawMessage(defaultJSON(row.GameSettingsJSON, `{"seal_seconds":30,"allow_cancel":true,"default_fly_rate":0,"max_open_games":8,"room_activity_enabled":true,"room_activity_interval_secs":10,"room_activity_bots_per_room":6,"room_activity_bets_per_cycle":2,"room_activity_chat_chance_percent":28}`)),
 		QuickReplies:          json.RawMessage(defaultJSON(row.QuickRepliesJSON, `[]`)),
 		Rebate:                json.RawMessage(defaultJSON(row.RebateSettingsJSON, `{"enabled":true,"rate_percent":0.5,"min_turnover":0,"settle_mode":"daily","auto_credit":false}`)),
 	}

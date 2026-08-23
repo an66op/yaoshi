@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { lotteryApi, type LotteryGame } from '../api/lottery'
-import { games as fallbackGames } from '../data/games'
+import { games as fallbackGames, memberLotteryGameIds } from '../data/games'
 import { WS_EVENT, type WsEvent } from './useWebSocket'
 import type { Game } from '../types'
 
@@ -94,7 +94,11 @@ export function useLotteryGames() {
     // `remote !== null` means the request succeeded. Preserve an intentionally
     // empty enabled list instead of silently reviving local demo games.
     if (remote !== null) {
-      return { games: remote.map((item) => mapGame(item, nowMs)), loading, error, live: true }
+      const remoteById = new Map(remote.map((item) => [item.id, item]))
+      const visibleRemote = memberLotteryGameIds
+        .map((id) => remoteById.get(id))
+        .filter((item): item is LotteryGame => item !== undefined)
+      return { games: visibleRemote.map((item) => mapGame(item, nowMs)), loading, error, live: true }
     }
     return {
       games: fallbackGames.map((game, index) => mapFallback(game, tick + index * 3)),

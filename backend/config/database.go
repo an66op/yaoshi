@@ -61,7 +61,14 @@ func ConnectDB() (*gorm.DB, error) {
 }
 
 func autoMigrate(db *gorm.DB) error {
-	if err := prepareLegacySchema(db); err != nil {
+	// A fresh database does not have the legacy user table yet, but the
+	// PublicID column default still needs its sequence before AutoMigrate emits
+	// CREATE TABLE. Existing databases continue through the full backfill path.
+	if db.Migrator().HasTable(&user.User{}) {
+		if err := prepareLegacySchema(db); err != nil {
+			return err
+		}
+	} else if err := db.Exec(`CREATE SEQUENCE IF NOT EXISTS member_public_id_seq START WITH 1000000`).Error; err != nil {
 		return err
 	}
 	if err := db.AutoMigrate(

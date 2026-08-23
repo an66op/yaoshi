@@ -3,6 +3,8 @@ package services
 import (
 	"backend/data/models/user"
 	"backend/utils"
+	"crypto/rand"
+	"encoding/hex"
 
 	"gorm.io/gorm"
 )
@@ -25,13 +27,27 @@ func SeedDemoMember(db *gorm.DB) error {
 	}
 
 	return db.Transaction(func(tx *gorm.DB) error {
-		var parentID *uint64
 		var agent user.User
-		if err := tx.Where("role = ? AND agent_room_code = ?", "agent", demoRoomCode).First(&agent).Error; err == nil {
-			parentID = &agent.UserID
-		} else if err != gorm.ErrRecordNotFound {
+		if err := tx.Where("role = ? AND agent_room_code = ?", "agent", demoRoomCode).First(&agent).Error; err == gorm.ErrRecordNotFound {
+			secret := make([]byte, 32)
+			if _, err := rand.Read(secret); err != nil {
+				return err
+			}
+			agentHash, err := utils.HashPassword(hex.EncodeToString(secret))
+			if err != nil {
+				return err
+			}
+			agent = user.User{
+				Username: "room8801", Password: agentHash, Nickname: "体验房间",
+				Role: "agent", Status: 1, AgentRoomCode: demoRoomCode,
+			}
+			if err := tx.Create(&agent).Error; err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
 		}
+		parentID := &agent.UserID
 
 		var account user.User
 		err := tx.Where("username = ?", demoUsername).First(&account).Error
@@ -53,9 +69,7 @@ func SeedDemoMember(db *gorm.DB) error {
 			"status":        1,
 			"balance_cents": gorm.Expr("GREATEST(balance_cents, ?)", demoBalanceCents),
 		}
-		if parentID != nil {
-			updates["parent_agent_id"] = *parentID
-		}
+		updates["parent_agent_id"] = *parentID
 		return tx.Model(&account).Updates(updates).Error
 	})
 }

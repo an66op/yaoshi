@@ -27,7 +27,7 @@ type User struct {
 	FlyRate float64 `gorm:"not null;default:0" json:"fly_rate"` // 百分比，仅 custom 生效
 
 	// AgentRoomCode is the vanity room number owned by an agent (靓号=房间号).
-	AgentRoomCode string `gorm:"size:40;uniqueIndex" json:"agent_room_code,omitempty"`
+	AgentRoomCode string `gorm:"size:40;uniqueIndex:idx_user_agent_room_code,where:agent_room_code <> '' AND deleted_at IS NULL" json:"agent_room_code,omitempty"`
 	// ParentAgentID links a member to the agent room they entered.
 	ParentAgentID *uint64 `gorm:"index" json:"parent_agent_id,omitempty"`
 

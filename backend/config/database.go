@@ -97,6 +97,19 @@ func autoMigrate(db *gorm.DB) error {
 	); err != nil {
 		return err
 	}
+	// Empty room codes are normal for members and administrators. PostgreSQL
+	// otherwise treats the empty string as a real unique value, which prevents
+	// the second ordinary account from being created.
+	if err := db.Exec(`DROP INDEX IF EXISTS idx_user_agent_room_code`).Error; err != nil {
+		return err
+	}
+	if err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_user_agent_room_code
+		ON "user" (agent_room_code)
+		WHERE agent_room_code <> '' AND deleted_at IS NULL
+	`).Error; err != nil {
+		return err
+	}
 	// Draw and settlement results have their own inbox. Reclassify historic
 	// result messages so they no longer appear among service/system notices.
 	if err := db.Exec(`

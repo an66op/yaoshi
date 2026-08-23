@@ -80,6 +80,7 @@ func autoMigrate(db *gorm.DB) error {
 		&settings.SystemConfig{},
 		&odds.PlayLimit{},
 		&odds.UserPlayOdds{},
+		&odds.RoomPlayOdds{},
 		&wallet.PaymentChannel{},
 		&wallet.MemberPaymentAccount{},
 		&bet.Bet{},

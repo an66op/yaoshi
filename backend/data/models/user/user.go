@@ -26,6 +26,13 @@ type User struct {
 	FlyMode string  `gorm:"size:20;not null;default:inherit" json:"fly_mode"`
 	FlyRate float64 `gorm:"not null;default:0" json:"fly_rate"` // 百分比，仅 custom 生效
 
+	// RoomRebateRate is the room default owned by an agent. Members inherit it
+	// unless their RebateMode explicitly overrides or disables the rebate.
+	RoomRebateRate float64 `gorm:"not null;default:0" json:"room_rebate_rate"`
+	// RebateMode: inherit = room default; custom = RebateRate; off = disabled.
+	RebateMode string  `gorm:"size:20;not null;default:inherit" json:"rebate_mode"`
+	RebateRate float64 `gorm:"not null;default:0" json:"rebate_rate"`
+
 	// AgentRoomCode is the vanity room number owned by an agent (靓号=房间号).
 	AgentRoomCode string `gorm:"size:40;uniqueIndex:idx_user_agent_room_code,where:agent_room_code <> '' AND deleted_at IS NULL" json:"agent_room_code,omitempty"`
 	// ParentAgentID links a member to the agent room they entered.

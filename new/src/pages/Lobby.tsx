@@ -9,7 +9,7 @@ import type { Game, Theme } from '../types'
 import { portalApi } from '../api/portal'
 import { memberApi, type EntertainmentPlatform } from '../api/member'
 
-type Filter = 'lottery' | '168' | 'bingo' | 'pc' | 'mark-six' | '捕鱼' | '体育' | '真人' | '电子' | '电竞'
+type Filter = '168' | 'bingo' | 'pc' | 'mark-six' | '捕鱼' | '体育' | '真人' | '电子' | '电竞'
 type RoomHistoryItem = {
   code: string
   name: string
@@ -29,8 +29,7 @@ type Props = {
 }
 
 const filters: Array<{ id: Filter; label: string }> = [
-  { id: 'lottery', label: '彩票' },
-  { id: '168', label: '168' },
+  { id: '168', label: '彩票' },
   { id: 'bingo', label: '宾果' },
   { id: 'pc', label: 'PC' },
   { id: 'mark-six', label: '六合彩' },
@@ -44,7 +43,7 @@ const filters: Array<{ id: Filter; label: string }> = [
 const markSixIDs = new Set(['hong-kong-mark-six', 'happy8-mark-six', 'new-macau-mark-six', 'old-macau-mark-six'])
 const entertainmentFilters = new Set<Filter>(['捕鱼', '体育', '真人', '电子', '电竞'])
 
-function gameGroup(game: Game): Exclude<Filter, 'lottery' | '捕鱼' | '体育' | '真人' | '电子' | '电竞'> {
+function gameGroup(game: Game): Exclude<Filter, '捕鱼' | '体育' | '真人' | '电子' | '电竞'> {
   if (game.id.startsWith('bingo-')) return 'bingo'
   if (game.id.startsWith('pc-') || game.id.startsWith('canada-') || game.category === 'PC') return 'pc'
   if (markSixIDs.has(game.id)) return 'mark-six'
@@ -54,7 +53,7 @@ function gameGroup(game: Game): Exclude<Filter, 'lottery' | '捕鱼' | '体育' 
 export function Lobby({ room, roomHistory, games, theme, gamesLive, gamesError, onOpenGame, onToggleTheme, onSwitchRoom }: Props) {
   const categoryRailRef = useRef<HTMLDivElement>(null)
   const [announcementOpen, setAnnouncementOpen] = useState(false)
-  const [filter, setFilter] = useState<Filter>('lottery')
+  const [filter, setFilter] = useState<Filter>('168')
   const [roomSwitcherOpen, setRoomSwitcherOpen] = useState(false)
   const [switchingRoom, setSwitchingRoom] = useState('')
   const [roomSwitchError, setRoomSwitchError] = useState('')
@@ -66,7 +65,7 @@ export function Lobby({ room, roomHistory, games, theme, gamesLive, gamesError, 
   const [entertainmentMessage, setEntertainmentMessage] = useState('')
   const [launching, setLaunching] = useState('')
   const showingEntertainment = entertainmentFilters.has(filter)
-  const visibleGames = filter === 'lottery' ? games : showingEntertainment ? [] : games.filter((game) => gameGroup(game) === filter)
+  const visibleGames = showingEntertainment ? [] : games.filter((game) => gameGroup(game) === filter)
   const visibleEntertainment = showingEntertainment ? entertainment.filter((item) => item.category === filter) : []
   const recentRooms = [...roomHistory]
     .sort((left, right) => (right.lastUsedAt ?? 0) - (left.lastUsedAt ?? 0))

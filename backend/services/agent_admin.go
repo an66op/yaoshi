@@ -23,6 +23,7 @@ type AgentView struct {
 	Balance     float64 `json:"balance"`
 	Status      int     `json:"status"`
 	MemberCount int64   `json:"member_count"`
+	RebateRate  float64 `json:"rebate_rate"`
 	Remark      string  `json:"remark"`
 	CreatedAt   string  `json:"created_at"`
 	LastLoginAt string  `json:"last_login_at"`
@@ -45,23 +46,25 @@ type AgentListResult struct {
 }
 
 type CreateAgentInput struct {
-	Username string
-	Password string
-	Email    string
-	Nickname string
-	Phone    string
-	RoomCode string
-	Remark   string
-	Status   int
+	Username   string
+	Password   string
+	Email      string
+	Nickname   string
+	Phone      string
+	RoomCode   string
+	Remark     string
+	Status     int
+	RebateRate float64
 }
 
 type UpdateAgentInput struct {
-	Email    string
-	Nickname string
-	Phone    string
-	RoomCode string
-	Remark   string
-	Status   int
+	Email      string
+	Nickname   string
+	Phone      string
+	RoomCode   string
+	Remark     string
+	Status     int
+	RebateRate float64
 }
 
 func NewAgentAdminService(db *gorm.DB) *AgentAdminService { return &AgentAdminService{db: db} }
@@ -93,7 +96,7 @@ func (s *AgentAdminService) List(query string, page, pageSize int) (*AgentListRe
 		items = append(items, AgentView{
 			ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone,
 			RoomCode: row.AgentRoomCode, Balance: centsToAmount(row.BalanceCents), Status: row.Status,
-			MemberCount: members, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount,
+			MemberCount: members, RebateRate: row.RoomRebateRate, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount,
 		})
 		if row.LastLoginAt != nil {
 			items[len(items)-1].LastLoginAt = row.LastLoginAt.Local().Format("2006-01-02 15:04:05")
@@ -119,11 +122,14 @@ func (s *AgentAdminService) Create(input CreateAgentInput) (*AgentView, error) {
 	if err := validateAgentRoomCode(input.RoomCode); err != nil {
 		return nil, err
 	}
+	if input.RebateRate < 0 || input.RebateRate > 100 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "房间返水比例需在 0-100 之间")
+	}
 	hash, err := utils.HashPassword(input.Password)
 	if err != nil {
 		return nil, err
 	}
-	row := user.User{Username: input.Username, Password: hash, Email: input.Email, Nickname: strings.TrimSpace(input.Nickname), Phone: strings.TrimSpace(input.Phone), Role: "agent", AgentRoomCode: input.RoomCode, Remark: strings.TrimSpace(input.Remark), RiskLevel: "normal", Status: normalizeAgentStatus(input.Status)}
+	row := user.User{Username: input.Username, Password: hash, Email: input.Email, Nickname: strings.TrimSpace(input.Nickname), Phone: strings.TrimSpace(input.Phone), Role: "agent", AgentRoomCode: input.RoomCode, RoomRebateRate: input.RebateRate, Remark: strings.TrimSpace(input.Remark), RiskLevel: "normal", Status: normalizeAgentStatus(input.Status)}
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		var duplicate int64
 		if err := tx.Model(&user.User{}).Where("username = ?", row.Username).Count(&duplicate).Error; err != nil {
@@ -156,6 +162,9 @@ func (s *AgentAdminService) Update(id uint64, input UpdateAgentInput) (*AgentVie
 	if err := validateAgentRoomCode(input.RoomCode); err != nil {
 		return nil, err
 	}
+	if input.RebateRate < 0 || input.RebateRate > 100 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "房间返水比例需在 0-100 之间")
+	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var row user.User
 		if err := tx.First(&row, id).Error; err != nil {
@@ -176,7 +185,7 @@ func (s *AgentAdminService) Update(id uint64, input UpdateAgentInput) (*AgentVie
 		if err := ensureRoomCodeAvailable(tx, input.RoomCode, id); err != nil {
 			return err
 		}
-		return tx.Model(&row).Updates(map[string]any{"email": input.Email, "nickname": strings.TrimSpace(input.Nickname), "phone": strings.TrimSpace(input.Phone), "agent_room_code": input.RoomCode, "remark": strings.TrimSpace(input.Remark), "status": normalizeAgentStatus(input.Status)}).Error
+		return tx.Model(&row).Updates(map[string]any{"email": input.Email, "nickname": strings.TrimSpace(input.Nickname), "phone": strings.TrimSpace(input.Phone), "agent_room_code": input.RoomCode, "room_rebate_rate": input.RebateRate, "remark": strings.TrimSpace(input.Remark), "status": normalizeAgentStatus(input.Status)}).Error
 	})
 	if err != nil {
 		return nil, err
@@ -211,7 +220,7 @@ func (s *AgentAdminService) view(id uint64) (*AgentView, error) {
 	if err := s.db.Model(&user.User{}).Where("parent_agent_id = ?", id).Count(&members).Error; err != nil {
 		return nil, err
 	}
-	view := AgentView{ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone, RoomCode: row.AgentRoomCode, Balance: centsToAmount(row.BalanceCents), Status: row.Status, MemberCount: members, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount}
+	view := AgentView{ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone, RoomCode: row.AgentRoomCode, Balance: centsToAmount(row.BalanceCents), Status: row.Status, MemberCount: members, RebateRate: row.RoomRebateRate, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount}
 	if row.LastLoginAt != nil {
 		view.LastLoginAt = row.LastLoginAt.Local().Format("2006-01-02 15:04:05")
 	}

@@ -224,13 +224,15 @@ export function UsersPage() {
       const next = await adminApi.updateUserTrading(detailUser.id, {
         fly_mode: trading.fly.mode,
         fly_rate: trading.fly.rate,
+        rebate_mode: trading.rebate.mode,
+        rebate_rate: trading.rebate.rate,
         game_id: trading.game_id,
         odds: trading.odds.map(item => ({ play_code: item.play_code, override: item.has_override ? item.override : null })),
       })
       setTrading(next)
       setDetailUser(current => current ? { ...current, fly_mode: next.fly.mode, fly_rate: next.fly.rate } : current)
       setUsers(current => current.map(item => item.id === detailUser.id ? { ...item, fly_mode: next.fly.mode, fly_rate: next.fly.rate } : item))
-      showMessage('飞单与单独赔率已保存')
+      showMessage('飞单、返水与单独赔率已保存')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '保存失败')
     } finally {
@@ -304,14 +306,14 @@ export function UsersPage() {
             </CardContent>
           </Card>
 
-          <Typography fontWeight={800} mt={2.5} mb={1}>飞单与单独赔率</Typography>
+          <Typography fontWeight={800} mt={2.5} mb={1}>用户交易配置</Typography>
           <Card variant="outlined">
             <CardContent>
               {!trading ? (
                 <Typography variant="caption" color="text.secondary">加载交易配置中…</Typography>
               ) : (
                 <Stack gap={1.5}>
-                  <Alert severity="info" sx={{ py: 0.5 }}>赔率优先级：用户单独赔率 → 房间玩法赔率。飞单：不传显式金额时按本策略自动计算。</Alert>
+                  <Alert severity="info" sx={{ py: 0.5 }}>配置优先级：用户单独设置 → 房间设置 → 平台默认。该用户可单独覆盖赔率与返水。</Alert>
                   <TextField
                     select
                     size="small"
@@ -331,6 +333,14 @@ export function UsersPage() {
                     value={trading.fly.rate}
                     onChange={event => setTrading(current => current ? { ...current, fly: { ...current.fly, rate: Number(event.target.value) } } : current)}
                   />
+                  <Stack direction={{ xs: 'column', sm: 'row' }} gap={1}>
+                    <TextField select fullWidth size="small" label="返水模式" value={trading.rebate.mode} onChange={event => setTrading(current => current ? { ...current, rebate: { ...current.rebate, mode: event.target.value } } : current)}>
+                      <MenuItem value="inherit">跟随房间（当前 {trading.room_rebate_rate}%）</MenuItem>
+                      <MenuItem value="custom">用户单独返水</MenuItem>
+                      <MenuItem value="off">关闭返水</MenuItem>
+                    </TextField>
+                    <TextField fullWidth size="small" type="number" label="用户返水比例 %" disabled={trading.rebate.mode !== 'custom'} value={trading.rebate.rate} onChange={event => setTrading(current => current ? { ...current, rebate: { ...current.rebate, rate: Number(event.target.value) } } : current)} inputProps={{ min: 0, max: 100, step: 0.01 }} />
+                  </Stack>
                   <TextField
                     select
                     size="small"
@@ -350,6 +360,7 @@ export function UsersPage() {
                       <TableHead>
                         <TableRow>
                           <TableCell>玩法</TableCell>
+                          <TableCell align="right">平台</TableCell>
                           <TableCell align="right">房间</TableCell>
                           <TableCell align="right">单独</TableCell>
                         </TableRow>
@@ -361,6 +372,7 @@ export function UsersPage() {
                               <Typography fontSize={11} fontWeight={700}>{item.play_name}</Typography>
                               <Typography fontSize={9} color="text.secondary">{item.play_code}</Typography>
                             </TableCell>
+                            <TableCell align="right">{item.base_odds}</TableCell>
                             <TableCell align="right">{item.room_odds}</TableCell>
                             <TableCell align="right">
                               <TextField
@@ -391,7 +403,7 @@ export function UsersPage() {
                       </TableBody>
                     </Table>
                   </TableContainer>
-                  <Button variant="contained" disabled={tradingSaving} onClick={() => void saveTrading()}>{tradingSaving ? '保存中…' : '保存飞单/赔率'}</Button>
+                  <Button variant="contained" disabled={tradingSaving} onClick={() => void saveTrading()}>{tradingSaving ? '保存中…' : '保存用户交易配置'}</Button>
                 </Stack>
               )}
             </CardContent>

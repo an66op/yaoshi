@@ -99,9 +99,13 @@ func (s *MemberPortalService) RebatePreview(userID uint64) (*MemberRebatePreview
 		return nil, err
 	}
 	turnoverAmount := centsToAmount(turnover)
+	rate, _, rateErr := NewTradingAdminService(s.db).ResolveRebateRate(userID)
+	if rateErr != nil {
+		return nil, rateErr
+	}
 	estimated := 0.0
-	if cfg.Enabled && cfg.RatePercent > 0 && turnoverAmount >= cfg.MinTurnover {
-		estimated = roundMoney(turnoverAmount * cfg.RatePercent / 100)
+	if cfg.Enabled && rate > 0 && turnoverAmount >= cfg.MinTurnover {
+		estimated = roundMoney(turnoverAmount * rate / 100)
 	}
 	var credited int64
 	_ = s.db.Model(&rebate.DailyRecord{}).Where("biz_date = ? AND user_id = ?", bizDate, userID).
@@ -111,7 +115,7 @@ func (s *MemberPortalService) RebatePreview(userID uint64) (*MemberRebatePreview
 		pending = 0
 	}
 	return &MemberRebatePreview{
-		BizDate: bizDate, Enabled: cfg.Enabled, RatePercent: cfg.RatePercent,
+		BizDate: bizDate, Enabled: cfg.Enabled, RatePercent: rate,
 		TodayTurnover: turnoverAmount, Estimated: estimated,
 		Credited: centsToAmount(credited), PendingCredit: pending,
 	}, nil

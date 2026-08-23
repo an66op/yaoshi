@@ -14,9 +14,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// ChatAdminService owns all operational chat actions. Group chat and current
-// customer service both use a room scope, so an agent can support every member
-// of their room from one conversation.
+// ChatAdminService owns all operational chat actions. Group chat is room
+// scoped, while customer-service conversations are private per user and show
+// that user's owning room in the console.
 type ChatAdminService struct{ db *gorm.DB }
 
 type AdminConversation struct {
@@ -245,10 +245,14 @@ func (s *ChatAdminService) fillConversationIdentity(view *AdminConversation) {
 			view.Title = defaultString(account.Nickname, account.Username) + "的房间客服"
 			view.Subtitle = "房间号 " + defaultString(account.AgentRoomCode, fmt.Sprintf("代理 #%d", account.UserID))
 		} else {
-			// Historical service conversations were once personal. Keep them
-			// visible to administrators without merging them into room support.
 			view.Title = defaultString(account.Nickname, account.Username)
-			view.Subtitle = "历史专属客服"
+			view.Subtitle = "大厅 · 专属客服"
+			if account.ParentAgentID != nil {
+				var agent user.User
+				if err := s.db.Select("agent_room_code").First(&agent, *account.ParentAgentID).Error; err == nil {
+					view.Subtitle = "房间号 " + defaultString(agent.AgentRoomCode, fmt.Sprintf("代理 #%d", *account.ParentAgentID)) + " · 专属客服"
+				}
+			}
 		}
 		return
 	}

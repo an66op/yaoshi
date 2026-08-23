@@ -219,10 +219,13 @@ func (s *MemberChatService) account(userID uint64) (user.User, error) {
 	return account, nil
 }
 
-// chatScope keeps group chat and customer service inside the same room
-// boundary.  A room's members and its agent therefore share one service
-// history, while historic user:* service conversations remain private.
-func chatScope(account user.User, _ string) string {
+// Group chat belongs to the current agent room. Customer service is always a
+// private user conversation; the user's ParentAgentID still identifies which
+// room's support team owns the conversation in the admin console.
+func chatScope(account user.User, roomType string) string {
+	if roomType == "service" {
+		return "user:" + strconv.FormatUint(account.UserID, 10)
+	}
 	if account.Role == "agent" {
 		return "agent:" + strconv.FormatUint(account.UserID, 10)
 	}

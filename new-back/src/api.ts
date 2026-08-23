@@ -109,6 +109,7 @@ export type AgentItem = {
   balance: number
   status: number
   member_count: number
+  rebate_rate: number
   remark: string
   created_at: string
   last_login_at: string
@@ -135,17 +136,29 @@ export type UserTradingConfig = {
   user_id: number
   username: string
   fly: { mode: 'inherit' | 'custom' | 'off' | string; rate: number }
+  rebate: { mode: 'inherit' | 'custom' | 'off' | string; rate: number; effective: number; source: string }
   game_id: string
   game_name: string
   room_fly_rate: number
+  room_rebate_rate: number
   odds: Array<{
     play_code: string
     play_name: string
+    base_odds: number
     room_odds: number
     override: number | null
     effective: number
     has_override: boolean
   }>
+}
+
+export type RoomTradingConfig = {
+  agent_id: number
+  room_code: string
+  rebate_rate: number
+  game_id: string
+  game_name: string
+  odds: Array<{ play_code: string; play_name: string; base_odds: number; override: number | null; effective: number; has_override: boolean }>
 }
 
 export type UserListResponse = {
@@ -649,6 +662,8 @@ export const adminApi = {
   updateUserTrading: (id: number, payload: {
     fly_mode: string
     fly_rate: number
+    rebate_mode: string
+    rebate_rate: number
     game_id: string
     odds: Array<{ play_code: string; override: number | null }>
   }) => request<UserTradingConfig>(`/admin/users/${id}/trading`, { method: 'PUT', body: JSON.stringify(payload) }),
@@ -754,8 +769,10 @@ export const adminApi = {
     })
     return request<AgentListResponse>(`/admin/agents?${query}`)
   },
-  createAgent: (payload: { username: string; password: string; email?: string; nickname?: string; phone?: string; room_code: string; remark?: string; status: number }) => request<AgentItem>('/admin/agents', { method: 'POST', body: JSON.stringify(payload) }),
-  updateAgent: (id: number, payload: { email?: string; nickname?: string; phone?: string; room_code: string; remark?: string; status: number }) => request<AgentItem>(`/admin/agents/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  createAgent: (payload: { username: string; password: string; email?: string; nickname?: string; phone?: string; room_code: string; rebate_rate?: number; remark?: string; status: number }) => request<AgentItem>('/admin/agents', { method: 'POST', body: JSON.stringify(payload) }),
+  updateAgent: (id: number, payload: { email?: string; nickname?: string; phone?: string; room_code: string; rebate_rate?: number; remark?: string; status: number }) => request<AgentItem>(`/admin/agents/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  roomTrading: (id: number, gameId?: string) => request<RoomTradingConfig>(`/admin/agents/${id}/trading${gameId ? `?game_id=${encodeURIComponent(gameId)}` : ''}`),
+  updateRoomTrading: (id: number, payload: { rebate_rate: number; game_id: string; odds: Array<{ play_code: string; override: number | null }> }) => request<RoomTradingConfig>(`/admin/agents/${id}/trading`, { method: 'PUT', body: JSON.stringify(payload) }),
   resetAgentPassword: (id: number, password: string) => request<{ id: number }>(`/admin/agents/${id}/reset-password`, { method: 'POST', body: JSON.stringify({ password }) }),
   promoteAgent: (id: number, roomCode?: string) => request<AgentItem>(`/admin/agents/${id}/promote`, { method: 'POST', body: JSON.stringify({ room_code: roomCode ?? '' }) }),
   entertainment: () => request<EntertainmentPlatform[]>('/admin/entertainment'),

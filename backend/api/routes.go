@@ -125,6 +125,8 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 				{Method: "GET", Pattern: "/admin/agents", Handler: h.AgentHandler.List},
 				{Method: "POST", Pattern: "/admin/agents", Handler: h.AgentHandler.Create},
 				{Method: "PATCH", Pattern: "/admin/agents/:id", Handler: h.AgentHandler.Update},
+				{Method: "GET", Pattern: "/admin/agents/:id/trading", Handler: h.AgentHandler.GetTrading},
+				{Method: "PUT", Pattern: "/admin/agents/:id/trading", Handler: h.AgentHandler.UpdateTrading},
 				{Method: "POST", Pattern: "/admin/agents/:id/reset-password", Handler: h.AgentHandler.ResetPassword},
 				{Method: "POST", Pattern: "/admin/agents/:id/promote", Handler: h.AgentHandler.Promote},
 				{Method: "POST", Pattern: "/admin/agents/assign-room", Handler: h.AgentHandler.AssignRoom},

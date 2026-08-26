@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-/** 将纯前端演示状态保留在当前浏览器，刷新页面后也保持一致。 */
+/** 将主题、字体和声音等个人偏好保留在当前浏览器。 */
 export function usePersistentState<T>(key: string, fallback: T) {
   const [value, setValue] = useState<T>(() => {
     try {

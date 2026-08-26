@@ -1,6 +1,7 @@
 package services
 
 import (
+	"backend/accesscontrol"
 	"backend/constants"
 	"backend/data/models/user"
 	"backend/data/vo"
@@ -25,6 +26,9 @@ func NewAuthService(db *gorm.DB) AuthService {
 
 // Register 注册
 func (s *authService) Register(req *vo.RegisterRequest) (*user.User, error) {
+	if err := utils.ValidatePassword(req.Password); err != nil {
+		return nil, errors.NewBusinessError("INVALID_PASSWORD", "密码长度需为 8–72 个字符")
+	}
 	// 优化：合并查询检查用户名和邮箱
 	exists, field, err := s.CheckUsernameOrEmailExists(req.Username, req.Email)
 	if err != nil {
@@ -46,11 +50,12 @@ func (s *authService) Register(req *vo.RegisterRequest) (*user.User, error) {
 	}
 
 	newUser := &user.User{
-		Username: req.Username,
-		Password: hashedPassword,
-		Nickname: req.Nickname,
-		Email:    req.Email,
-		Status:   1,
+		Username:   req.Username,
+		LoginScope: platformLoginScope,
+		Password:   hashedPassword,
+		Nickname:   req.Nickname,
+		Email:      req.Email,
+		Status:     1,
 	}
 
 	if err := s.userService.CreateUser(newUser); err != nil {
@@ -70,52 +75,80 @@ func (s *authService) Register(req *vo.RegisterRequest) (*user.User, error) {
 }
 
 // Login 登录
-func (s *authService) Login(username, password string) (*user.User, string, error) {
-	u, err := s.userService.GetUserByUsername(username)
+func (s *authService) Login(username, password, workspace string) (*user.User, string, error) {
+	scope, err := loginScopeForWorkspace(s.db, username, workspace, false)
+	if err != nil {
+		return nil, "", err
+	}
+	var u user.User
+	err = s.db.Where("login_scope = ? AND LOWER(username) = LOWER(?)", scope, strings.TrimSpace(username)).First(&u).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			// 业务错误：用户不存在
-			return nil, "", errors.NewBusinessError("USER_NOT_FOUND", constants.ErrUserNotFound)
+			utils.CheckMissingUserPassword(password)
+			return nil, "", errors.NewBusinessError("INVALID_CREDENTIALS", constants.ErrInvalidCredentials)
 		}
 		// 系统错误：数据库查询错误
 		return nil, "", errors.NewSystemError("DATABASE_ERROR", constants.ErrUserNotFound, err)
-	}
-
-	// 检查用户状态
-	if u.Status == 0 {
-		// 业务错误：用户被禁用
-		return nil, "", errors.NewBusinessError("USER_DISABLED", constants.ErrUserDisabled)
 	}
 
 	if !utils.CheckPasswordHash(password, u.Password) {
 		// 业务错误：密码错误
 		return nil, "", errors.NewBusinessError("INVALID_CREDENTIALS", constants.ErrInvalidCredentials)
 	}
-	if u.Role != "admin" {
-		return nil, "", errors.NewBusinessError("FORBIDDEN", "需要管理员权限")
+	// Only disclose a disabled account after the caller has proved knowledge of
+	// its password. This prevents username enumeration through error messages.
+	if u.Status == 0 {
+		return nil, "", errors.NewBusinessError("USER_DISABLED", constants.ErrUserDisabled)
 	}
-	return s.issueToken(u)
+	if u.Role != "admin" && u.Role != "tenant" && u.Role != "agent" {
+		return nil, "", errors.NewBusinessError("FORBIDDEN", "需要管理员、租户或房间代理权限")
+	}
+	if u.Role == "agent" {
+		active, hierarchyErr := accesscontrol.AgentHierarchyActive(s.db, u)
+		if hierarchyErr != nil {
+			return nil, "", errors.NewSystemError("DATABASE_ERROR", "读取代理权限失败", hierarchyErr)
+		}
+		if !active {
+			return nil, "", errors.NewBusinessError("USER_DISABLED", "所属租户已停用")
+		}
+	}
+	return s.issueToken(&u)
 }
 
 // LoginMember 会员端登录（member / agent，不含 admin）
-func (s *authService) LoginMember(username, password string) (*user.User, string, error) {
-	u, err := s.userService.GetUserByUsername(username)
+func (s *authService) LoginMember(username, password, workspace string) (*user.User, string, error) {
+	scope, err := loginScopeForWorkspace(s.db, username, workspace, true)
+	if err != nil {
+		return nil, "", err
+	}
+	var u user.User
+	err = s.db.Where("login_scope = ? AND LOWER(username) = LOWER(?)", scope, strings.TrimSpace(username)).First(&u).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return nil, "", errors.NewBusinessError("USER_NOT_FOUND", constants.ErrUserNotFound)
+			utils.CheckMissingUserPassword(password)
+			return nil, "", errors.NewBusinessError("INVALID_CREDENTIALS", constants.ErrInvalidCredentials)
 		}
 		return nil, "", errors.NewSystemError("DATABASE_ERROR", constants.ErrUserNotFound, err)
-	}
-	if u.Status == 0 {
-		return nil, "", errors.NewBusinessError("USER_DISABLED", constants.ErrUserDisabled)
 	}
 	if !utils.CheckPasswordHash(password, u.Password) {
 		return nil, "", errors.NewBusinessError("INVALID_CREDENTIALS", constants.ErrInvalidCredentials)
 	}
-	if u.Role == "admin" {
+	if u.Status == 0 {
+		return nil, "", errors.NewBusinessError("USER_DISABLED", constants.ErrUserDisabled)
+	}
+	if u.Role == "admin" || u.Role == "tenant" {
 		return nil, "", errors.NewBusinessError("FORBIDDEN", "请使用管理后台登录")
 	}
-	return s.issueToken(u)
+	if u.Role == "agent" {
+		active, hierarchyErr := accesscontrol.AgentHierarchyActive(s.db, u)
+		if hierarchyErr != nil {
+			return nil, "", errors.NewSystemError("DATABASE_ERROR", "读取代理权限失败", hierarchyErr)
+		}
+		if !active {
+			return nil, "", errors.NewBusinessError("USER_DISABLED", "所属租户已停用")
+		}
+	}
+	return s.issueToken(&u)
 }
 
 func (s *authService) issueToken(u *user.User) (*user.User, string, error) {
@@ -153,7 +186,7 @@ func (s *authService) CheckUsernameOrEmailExists(username, email string) (bool, 
 	var count int64
 
 	// 检查用户名
-	result := s.db.Model(&user.User{}).Where("username = ?", username).Count(&count)
+	result := s.db.Model(&user.User{}).Where("login_scope = ? AND LOWER(username) = LOWER(?)", platformLoginScope, username).Count(&count)
 	if result.Error != nil {
 		return false, "", result.Error
 	}
@@ -186,7 +219,7 @@ func (s *authService) CheckEmailExists(email string) (bool, error) {
 // CheckUsernameExists 检查用户名是否存在（保留用于其他地方）
 func (s *authService) CheckUsernameExists(username string) (bool, error) {
 	var count int64
-	result := s.db.Model(&user.User{}).Where("username = ?", username).Count(&count)
+	result := s.db.Model(&user.User{}).Where("login_scope = ? AND LOWER(username) = LOWER(?)", platformLoginScope, username).Count(&count)
 	if result.Error != nil {
 		return false, result.Error
 	}

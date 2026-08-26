@@ -137,7 +137,7 @@ export function BoardReportPage() {
                       <Stack minHeight={240} alignItems="center" justifyContent="center" color="text.secondary">
                         <InboxRounded />
                         <Typography mt={1} fontSize={13} fontWeight={700}>暂无打盘记录</Typography>
-                        <Typography variant="caption">可在现场监控生成演示注单后再查看</Typography>
+                        <Typography variant="caption">真实注单受理后会自动出现在这里</Typography>
                       </Stack>
                     </TableCell>
                   </TableRow>

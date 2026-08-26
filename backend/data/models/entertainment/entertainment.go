@@ -12,7 +12,7 @@ type Platform struct {
 	MerchantNo string    `gorm:"size:120" json:"merchant_no"`
 	APIBase    string    `gorm:"size:320" json:"api_base"`
 	LaunchPath string    `gorm:"size:320" json:"launch_path"`
-	SecretKey  string    `gorm:"size:120" json:"-"`
+	SecretKey  string    `gorm:"type:text" json:"-"`
 	Status     string    `gorm:"size:20;not null;default:disabled;index" json:"status"` // enabled / maintenance / disabled
 	Remark     string    `gorm:"size:500" json:"remark"`
 	SortOrder  int       `gorm:"not null;default:0" json:"sort_order"`

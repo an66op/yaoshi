@@ -7,6 +7,7 @@ import { AdminShell } from './components/AdminShell'
 import { FeedbackProvider } from './components/FeedbackProvider'
 import { createAdminTheme } from './theme'
 import { LoginPage } from './pages/LoginPage'
+import { useManagementWebSocket } from './hooks/useManagementWebSocket'
 
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(module => ({ default: module.DashboardPage })))
 const ResultsPage = lazy(() => import('./pages/ResultsPage').then(module => ({ default: module.ResultsPage })))
@@ -21,10 +22,15 @@ const MonitorPage = lazy(() => import('./pages/MonitorPage').then(module => ({ d
 const BoardReportPage = lazy(() => import('./pages/BoardReportPage').then(module => ({ default: module.BoardReportPage })))
 const BetsPage = lazy(() => import('./pages/BetsPage').then(module => ({ default: module.BetsPage })))
 const AgentsPage = lazy(() => import('./pages/AgentsPage').then(module => ({ default: module.AgentsPage })))
+const TenantsPage = lazy(() => import('./pages/TenantsPage').then(module => ({ default: module.TenantsPage })))
+const TenantWorkspacePage = lazy(() => import('./pages/TenantWorkspacePage').then(module => ({ default: module.TenantWorkspacePage })))
 const ChatPage = lazy(() => import('./pages/ChatPage').then(module => ({ default: module.ChatPage })))
+const AnnouncementPage = lazy(() => import('./pages/AnnouncementPage').then(module => ({ default: module.AnnouncementPage })))
+const MenuManagementPage = lazy(() => import('./pages/MenuManagementPage').then(module => ({ default: module.MenuManagementPage })))
+const AgentWorkspacePage = lazy(() => import('./pages/AgentWorkspacePage').then(module => ({ default: module.AgentWorkspacePage })))
 const ManagementPage = lazy(() => import('./pages/ManagementPages').then(module => ({ default: module.ManagementPage })))
 
-const routes = new Set(['/', '/users', '/agents', '/applications', '/chat', '/reports', '/wallet', '/activities', '/monitor', '/bets', '/results', '/limits', '/board-report', '/lottery-network', '/entertainment', '/special-numbers', '/system'])
+const routes = new Set(['/', '/users', '/members', '/tenants', '/agents', '/applications', '/room-reviews', '/chat', '/lottery-chat', '/announcements', '/reports', '/wallet', '/activities', '/monitor', '/bets', '/results', '/limits', '/board-report', '/lottery-network', '/entertainment', '/special-numbers', '/menu-management', '/system'])
 const currentPath = () => routes.has(window.location.pathname) ? window.location.pathname : '/'
 
 function App() {
@@ -33,6 +39,7 @@ function App() {
   const [user, setUser] = useState<AuthUser | null>(() => getToken() ? getStoredUser() : null)
   const [authChecking, setAuthChecking] = useState(() => Boolean(getToken()))
   const theme = useMemo(() => createAdminTheme(mode), [mode])
+  useManagementWebSocket(user?.role, Boolean(user))
 
   useEffect(() => {
     const listener = () => setPath(currentPath())
@@ -50,10 +57,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!getToken()) {
-      setAuthChecking(false)
-      return
-    }
+    if (!getToken()) return
     let cancelled = false
     void adminApi.me()
       .then(profile => {
@@ -89,15 +93,42 @@ function App() {
     return <ThemeProvider theme={theme}><CssBaseline /><LoginPage onSuccess={setUser} /></ThemeProvider>
   }
 
-  const page = path === '/' ? <DashboardPage />
+  const agentPage = path === '/members' ? <AgentWorkspacePage key="members" section="users" />
+    : path === '/room-reviews' ? <AgentWorkspacePage key="room-reviews" section="room-reviews" />
+    : path === '/applications' ? <AgentWorkspacePage key="applications" section="applications" />
+    : path === '/bets' ? <AgentWorkspacePage key="bets" section="bets" />
+    : path === '/lottery-chat' ? <AgentWorkspacePage key="lottery-chat" section="lottery-chat" />
+    : path === '/chat' ? <AgentWorkspacePage key="chat" section="chat" />
+    : path === '/reports' ? <AgentWorkspacePage key="reports" section="reports" />
+    : <AgentWorkspacePage key="dashboard" section="dashboard" />
+
+  const tenantPage = path === '/agents' ? <TenantWorkspacePage key="agents" section="agents" />
+    : path === '/members' ? <TenantWorkspacePage key="members" section="users" />
+    : path === '/room-reviews' ? <TenantWorkspacePage key="room-reviews" section="room-reviews" />
+    : path === '/applications' ? <TenantWorkspacePage key="applications" section="applications" />
+    : path === '/bets' ? <TenantWorkspacePage key="bets" section="bets" />
+    : path === '/lottery-chat' ? <TenantWorkspacePage key="lottery-chat" section="lottery-chat" />
+    : path === '/chat' ? <TenantWorkspacePage key="chat" section="chat" />
+    : path === '/reports' ? <TenantWorkspacePage key="reports" section="reports" />
+    : <TenantWorkspacePage key="dashboard" section="dashboard" />
+
+  const page = user.role === 'agent' ? agentPage
+	: user.role === 'tenant' ? tenantPage
+    : path === '/' ? <DashboardPage />
     : path === '/results' ? <ResultsPage />
-    : path === '/users' ? <UsersPage />
+    : path === '/users' ? <UsersPage view="accounts" />
+    : path === '/members' ? <UsersPage view="members" />
     : path === '/agents' ? <AgentsPage />
-    : path === '/chat' ? <ChatPage />
+    : path === '/tenants' ? <TenantsPage />
+    : path === '/lottery-chat' ? <ChatPage key="lottery" view="lottery" />
+    : path === '/chat' ? <ChatPage key="support" />
+    : path === '/announcements' ? <AnnouncementPage />
     : path === '/applications' ? <ApplicationsPage />
+    : path === '/room-reviews' ? <ApplicationsPage initialCategory="join" />
     : path === '/reports' ? <ReportsPage />
     : path === '/wallet' ? <WalletPage />
     : path === '/limits' ? <LimitsPage />
+    : path === '/menu-management' ? <MenuManagementPage />
     : path === '/system' ? <SystemPage />
     : path === '/lottery-network' ? <NetworkPage />
     : path === '/monitor' ? <MonitorPage />

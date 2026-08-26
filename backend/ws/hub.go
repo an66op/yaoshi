@@ -2,13 +2,43 @@ package ws
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // Event is a JSON message pushed to connected clients.
 type Event struct {
-	Type string `json:"type"`
-	Data any    `json:"data"`
+	ID        string    `json:"event_id"`
+	Type      string    `json:"type"`
+	RoomScope string    `json:"room_scope,omitempty"`
+	GameID    string    `json:"game_id,omitempty"`
+	Issue     string    `json:"issue,omitempty"`
+	ServerAt  time.Time `json:"server_at"`
+	Data      any       `json:"data"`
+}
+
+var eventSequence atomic.Uint64
+
+func prepareEvent(event Event) Event {
+	if event.ID == "" {
+		now := time.Now().UTC()
+		event.ID = fmt.Sprintf("%d-%d", now.UnixMilli(), eventSequence.Add(1))
+		event.ServerAt = now
+	}
+	if data, ok := event.Data.(map[string]any); ok {
+		if event.RoomScope == "" {
+			event.RoomScope, _ = data["room_scope"].(string)
+		}
+		if event.GameID == "" {
+			event.GameID, _ = data["game_id"].(string)
+		}
+		if event.Issue == "" {
+			event.Issue, _ = data["issue"].(string)
+		}
+	}
+	return event
 }
 
 type client struct {
@@ -59,6 +89,7 @@ func (h *Hub) broadcast(payload []byte, userID uint64) {
 
 // Publish sends an event to every connected client.
 func Publish(event Event) {
+	event = prepareEvent(event)
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return
@@ -71,6 +102,7 @@ func PublishToUser(userID uint64, event Event) {
 	if userID == 0 {
 		return
 	}
+	event = prepareEvent(event)
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return
@@ -84,6 +116,7 @@ func PublishToUsers(userIDs []uint64, event Event) {
 	if len(userIDs) == 0 {
 		return
 	}
+	event = prepareEvent(event)
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return

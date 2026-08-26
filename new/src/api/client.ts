@@ -1,9 +1,12 @@
 // A phone on the development LAN must call this computer's backend, not its
-// own localhost. Production deployments continue to provide VITE_API_BASE_URL.
+// own localhost. Production is served through Nginx on the same origin, where
+// `/api` is proxied to the Go service. Keep the result absolute because the
+// WebSocket client derives its ws(s) URL from this value.
 const apiBase = (() => {
   const configured = String(import.meta.env.VITE_API_BASE_URL ?? '').trim()
   if (configured) return configured.replace(/\/$/, '')
-  return `${window.location.protocol}//${window.location.hostname}:8080/api`
+  if (import.meta.env.DEV) return `${window.location.protocol}//${window.location.hostname}:8080/api`
+  return `${window.location.origin}/api`
 })()
 
 export type ApiResponse<T> = {

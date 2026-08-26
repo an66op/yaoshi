@@ -293,12 +293,33 @@
 .draw-announcement { margin: 12px 0; }
 .draw-announcement article > strong { display: block; margin-bottom: 9px; color: #263f4c; }
 .draw-announcement-balls { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
-.draw-announcement-balls b { display: grid; place-items: center; min-width: 28px; height: 28px; padding: 0 5px; border-radius: 7px; color: #fff; font-size: 13px; }
+.draw-announcement-balls b { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; color: #fff; font-size: 13px; }
 .draw-announcement-meta { display: block; color: #168a91; font-weight: 700; }
 .draw-announcement p { margin: 8px 0 0; color: #607983; line-height: 1.55; }
 .theme-night.game-room .draw-announcement article > strong { color: #efffff; }
 .theme-night.game-room .draw-announcement-meta { color: #79dedb; }
 .theme-night.game-room .draw-announcement p { color: #afd0d7; }
+.settlement-notice-list { display: grid; gap: 2px; }
+.personal-settlement article { border-left: 3px solid #8da3ab; }
+.personal-settlement.won article { border-left-color: #31b18c; }
+.personal-settlement.lost article { border-left-color: #e48179; }
+.settlement-bet-details { display: grid; gap: 5px; margin-top: 9px; }
+.settlement-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: #f2f8f8;
+}
+.settlement-line > span { min-width: 0; color: #536e78; }
+.settlement-line > em { flex: 0 0 auto; color: #db6b64; font-size: 10px; font-style: normal; font-weight: 800; }
+.settlement-line > em.won { color: #15967a; }
+.personal-settlement article footer { margin-top: 9px; padding-top: 7px; border-top: 1px solid #e4ecef; color: #168c82; font-weight: 800; }
+.theme-night.game-room .settlement-line { background: #12384b; }
+.theme-night.game-room .settlement-line > span { color: #c3e0e5; }
+.theme-night.game-room .personal-settlement article footer { border-top-color: #4bc3cb30; color: #7fe4cb; }
 .persisted-ticket { margin-top: 12px; }
 .persisted-badge { display: inline-flex; margin: 0 0 7px 7px; padding: 2px 6px; border-radius: 999px; background: #e8f6f3; color: #168b80; font-size: 9px; font-style: normal; font-weight: 700; }
 .persisted-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -310,9 +331,83 @@
 .persisted-more { width: 100%; margin-top: 7px; padding: 6px; border: 0; border-radius: 7px; background: #eaf6f5; color: #18867e; font-size: 10px; }
 .theme-night.game-room .persisted-badge,.theme-night.game-room .persisted-more { background: #164657; color: #8ce8df; }
 
+/* 游戏消息统一时间轴。首次数据尚未齐全时不渲染半份历史，避免先看到
+   顶部旧消息再闪到末尾；定位完成前保留真实高度但隐藏内容。 */
+.game-timeline { min-height: 92px; }
+.game-timeline.positioning { visibility: hidden; }
+.game-timeline-items { display: grid; align-content: start; }
+.game-timeline-loading {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  min-height: 118px;
+  color: #78909a;
+  font-size: 12px;
+}
+.game-timeline-loading i {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #4ebbbd42;
+  border-top-color: #1798a2;
+  border-radius: 50%;
+  animation: game-timeline-spin .7s linear infinite;
+}
+.theme-night.game-room .game-timeline-loading { color: #9ac5ce; }
+@keyframes game-timeline-spin { to { transform: rotate(360deg); } }
+
+/* 用户离开最新消息后提供明确的回到底部入口；发送自己的消息时也复用
+   同一定位逻辑，避免历史阅读状态阻止发送后的自动跟随。 */
+.scroll-latest-button {
+  position: absolute;
+  z-index: 18;
+  right: 15px;
+  bottom: calc(66px + env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: 18px auto;
+  place-items: center;
+  gap: 3px;
+  min-width: 57px;
+  height: 34px;
+  padding: 0 9px 0 7px;
+  border: 1px solid #a9dadd;
+  border-radius: 18px;
+  background: #ffffffed;
+  color: #0f8290;
+  box-shadow: 0 7px 20px #123d5352;
+  backdrop-filter: blur(8px);
+}
+.scroll-latest-button.keyboard-open {
+  bottom: calc(248px + env(safe-area-inset-bottom));
+}
+.scroll-latest-button span {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #1597a1;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1;
+}
+.scroll-latest-button small {
+  color: inherit;
+  font-size: 10px;
+  font-weight: 800;
+}
+.theme-night.game-room .scroll-latest-button {
+  border-color: #4aaeb65e;
+  background: #113a50ed;
+  color: #baf6f3;
+  box-shadow: 0 8px 22px #0008;
+}
+
 /* 提升下注页阅读性：保留原有布局，仅放大主要文字层级。 */
 .game-room .game-header > b { font-size: 18px; }
-.game-room .game-header small { font-size: 12px; }
+.game-room .game-header-meta em { font-size: 9px; }
+.game-room .game-header-meta strong { font-size: 10px; }
 .game-room .game-info span,
 .game-room .game-info button,
 .game-room .last-draw > span,
@@ -583,6 +678,20 @@
   border-radius: 12px;
   color: #fff;
   font: 700 10px "DM Mono";
+}
+.game-switch-sheet > button > span.has-image {
+  overflow: hidden;
+  border-radius: 50%;
+  box-shadow: 0 3px 8px #16364f26;
+}
+.game-switch-sheet > button > span img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.game-switch-sheet > button > span.compact-source-logo img {
+  transform: scale(2.8);
 }
 .game-switch-sheet > button > div {
   display: grid;
@@ -933,6 +1042,15 @@
   width: 18px;
   height: 18px;
   filter: brightness(0) invert(1);
+}
+.ticket-strip .ticket-native-input {
+  box-sizing: border-box;
+  outline: 0;
+  font-family: inherit;
+  font-size: 16px;
+}
+.ticket-strip .ticket-native-input::placeholder {
+  color: #6f8791;
 }
 .input-bet-keyboard {
   padding-top: 8px;
@@ -1310,7 +1428,6 @@
   flex: none;
   width: 23px;
   height: 23px;
-  border-radius: 50%;
   color: #fff;
   font: 700 12px "Rajdhani";
 }
@@ -1743,10 +1860,14 @@
 }
 .draw-results-page {
   width: min(100%, 760px);
+  max-width: 100%;
   min-height: 100%;
+  overflow-x: clip;
   background: #f4f9fa;
   color: #173c51;
 }
+.draw-results-page,
+.draw-results-page * { box-sizing: border-box; }
 .draw-results-header {
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr) 42px;
@@ -1782,15 +1903,18 @@
 .draw-results-intro b { font-size: 15px; }
 .draw-results-intro span { color: #78909c; font-size: 11px; }
 .draw-results-filters {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) auto;
   align-items: end;
   gap: 8px;
+  width: 100%;
+  max-width: 100%;
   padding: 11px 14px;
   border-bottom: 1px solid #d9e8eb;
   background: #fff;
 }
-.draw-results-filters label { display: grid; flex: 1; gap: 4px; min-width: 0; }
-.draw-results-filters label:first-child { flex: 1.35; }
+.draw-results-filters > * { min-width: 0; }
+.draw-results-filters label { display: grid; gap: 4px; min-width: 0; }
 .draw-results-filters label > span { color: #7c929c; font-size: 9px; }
 .draw-date-picker { position: relative; }
 .draw-date-picker input { position: relative; z-index: 1; padding-right: 35px; color-scheme: light; font-family: "DM Mono", system-ui, sans-serif; }
@@ -1799,8 +1923,8 @@
 .draw-date-picker > em { position: absolute; z-index: 2; right: 11px; bottom: 9px; width: 13px; height: 12px; border: 1.5px solid #1d3948; border-radius: 2px; pointer-events: none; }
 .draw-date-picker > em::before { position: absolute; top: 2px; right: -1.5px; left: -1.5px; height: 3px; border-top: 1.5px solid #1d3948; border-bottom: 1.5px solid #1d3948; content: ""; }
 .draw-date-picker > em::after { position: absolute; top: -3px; left: 2px; width: 2px; height: 4px; border-radius: 2px; background: #1d3948; box-shadow: 6px 0 #1d3948; content: ""; }
-.draw-game-picker { position: relative; display: grid; flex: 1.35; min-width: 0; }
-.draw-game-picker-trigger { display: grid; grid-template-columns: minmax(0, 1fr) 15px; grid-template-rows: 11px 17px; grid-template-areas: "label label" "name name"; align-items: center; column-gap: 5px; min-width: 0; height: 45px; padding: 6px 9px 5px; border: 1px solid #cfe0e5; border-radius: 8px; background: linear-gradient(135deg, #f8fdfd, #edf8f8); color: #285366; text-align: left; }
+.draw-game-picker { position: relative; display: grid; min-width: 0; max-width: 100%; }
+.draw-game-picker-trigger { display: grid; grid-template-columns: minmax(0, 1fr) 15px; grid-template-rows: 11px 17px; grid-template-areas: "label label" "name name"; align-items: center; column-gap: 5px; width: 100%; max-width: 100%; min-width: 0; height: 45px; padding: 6px 9px 5px; overflow: hidden; border: 1px solid #cfe0e5; border-radius: 8px; background: linear-gradient(135deg, #f8fdfd, #edf8f8); color: #285366; text-align: left; }
 .draw-game-picker-trigger span { grid-area: label; color: #7c929c; font-size: 9px; }
 .draw-game-picker-trigger b { grid-area: name; overflow: hidden; padding-right: 16px; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
 .draw-game-picker-trigger i { position: relative; grid-column: 2; grid-row: 1 / 3; align-self: center; width: 15px; height: 15px; color: #168f99; font-size: 0; font-style: normal; }
@@ -1871,7 +1995,6 @@
   flex: none;
   width: clamp(23px, 6vw, 29px);
   height: clamp(23px, 6vw, 29px);
-  border-radius: 50%;
   color: #fff;
   font: 700 13px "Rajdhani";
 }
@@ -1928,4 +2051,1265 @@
   grid-auto-columns: clamp(23px, 6vw, 29px);
   justify-content: start;
   gap: clamp(8px, 2vw, 14px);
+}
+
+/* 赛车、飞艇按参考样式：十个固定色方块紧凑横排，表头与开奖号垂直对齐。 */
+.racing-draw-ui .last-draw div,
+.racing-draw-ui .recent-draws header b,
+.racing-draw-ui .recent-draws article > div {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: clamp(16px, 4.65vw, 21px);
+  justify-content: start;
+  gap: clamp(3px, .9vw, 6px);
+}
+.racing-draw-ui .recent-draws header,
+.racing-draw-ui .recent-draws article {
+  grid-template-columns: minmax(58px, 19%) minmax(0, 1fr);
+  row-gap: 3px;
+}
+.racing-draw-ui .recent-draws header > small { display: none; }
+.racing-draw-ui .recent-draws article > span { align-self: center; }
+.racing-draw-ui .recent-draws article > small {
+  grid-column: 2;
+  justify-content: flex-start;
+  min-width: 0;
+  overflow: hidden;
+}
+.racing-draw-ui .last-draw div > b,
+.racing-draw-ui .recent-draws article > div b {
+  width: clamp(16px, 4.65vw, 21px);
+  height: clamp(16px, 4.65vw, 21px);
+}
+.racing-draw-ui .recent-draws header b i {
+  width: clamp(16px, 4.65vw, 21px);
+  text-align: center;
+}
+.racing-results-table > header,
+.racing-results-table > article {
+  grid-template-columns: minmax(60px, 18%) minmax(0, 1fr);
+  column-gap: 5px;
+}
+.racing-results-table > article {
+  min-height: 54px;
+  background: #fff;
+}
+.racing-results-table > header b,
+.racing-results-table > article > div {
+  grid-auto-columns: clamp(18px, 4.65vw, 25px);
+  gap: clamp(3px, .85vw, 6px);
+}
+.racing-results-table > article > div b {
+  width: clamp(18px, 4.65vw, 25px);
+  height: clamp(18px, 4.65vw, 25px);
+  font-size: clamp(11px, 3.2vw, 15px);
+}
+.racing-results-table > header > em { display: none; }
+.racing-results-table > article > span {
+  align-self: end;
+  padding-bottom: 1px;
+}
+.racing-results-table > article > div {
+  grid-column: 2;
+  grid-row: 1 / 3;
+}
+.racing-results-table > article > em {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: start;
+  color: #75909b;
+  font-size: 8px;
+  text-align: left;
+}
+
+/* 完整开奖记录：按号码 / 大小 / 单双 / 冠亚龙虎切换，避免同一行堆叠多种结果。 */
+.draw-result-modes {
+  display: grid;
+  grid-template-columns: clamp(72px, 17vw, 108px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 11px 14px;
+  border-bottom: 1px solid #d8e7ea;
+  background: #fff;
+}
+.draw-result-modes > span {
+  color: #3e5c69;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.draw-result-modes > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(58px, 1.25fr);
+  gap: 7px;
+  min-width: 0;
+}
+.draw-result-modes button {
+  overflow: hidden;
+  min-width: 0;
+  height: 36px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: #d9dee1;
+  color: #fff;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+.draw-result-modes button:active { transform: scale(.97); }
+.draw-result-modes button.active {
+  background: linear-gradient(135deg, #168eaf, #10a9a5);
+  box-shadow: 0 4px 10px rgba(19, 146, 164, .22);
+}
+.draw-result-modes > small {
+  color: #81959e;
+  font-size: 9px;
+  white-space: nowrap;
+}
+.draw-results-table,
+.racing-results-table {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0 12px 24px;
+  background: #fff;
+}
+.draw-results-table > article,
+.racing-results-table > article {
+  display: grid;
+  grid-template-columns: clamp(62px, 17vw, 102px) minmax(0, 1fr);
+  min-height: 62px;
+  padding: 8px 7px;
+  column-gap: 10px;
+  border-top: 0;
+  border-bottom: 1px solid #d9e2e5;
+  background: #fff;
+}
+.draw-results-table > article > span,
+.racing-results-table > article > span {
+  display: grid;
+  align-self: center;
+  gap: 2px;
+  padding: 0;
+  color: #314e5b;
+  font-family: "DM Mono", system-ui, sans-serif;
+}
+.draw-results-table > article > span b {
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.draw-results-table > article > span time {
+  color: #91a0a7;
+  font-size: 10px;
+  font-weight: 500;
+}
+.draw-results-table > article > .draw-result-cells,
+.racing-results-table > article > .draw-result-cells {
+  grid-column: 2;
+  grid-row: auto;
+  align-self: center;
+  display: grid;
+  grid-template-columns: repeat(var(--result-count, 5), minmax(0, 1fr));
+  width: 100%;
+  max-width: 100%;
+  justify-items: start;
+  gap: clamp(2px, .7vw, 5px);
+  min-width: 0;
+}
+.draw-results-table > article > .draw-result-cells > b,
+.racing-results-table > article > .draw-result-cells > b {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  max-width: 32px;
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: 4px;
+  color: #fff;
+  font-family: "Rajdhani", system-ui, sans-serif;
+  font-size: clamp(12px, 3.5vw, 17px);
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, .32);
+}
+.draw-result-cells .result-blue { background: #0a94eb; }
+.draw-result-cells .result-orange { background: #ff970e; }
+.draw-results-table > article > .draw-result-cells.trend-cells {
+  grid-template-columns: 24px repeat(2, minmax(24px, 32px)) minmax(8px, 18px) repeat(5, minmax(24px, 32px));
+  align-items: center;
+  gap: clamp(5px, 1.4vw, 11px);
+}
+.trend-cells > strong {
+  min-width: 24px;
+  color: #e33c2f;
+  font: 800 14px "DM Mono", system-ui, sans-serif;
+  text-align: center;
+}
+.trend-cells > i {
+  width: clamp(8px, 2.5vw, 18px);
+  height: 1px;
+  background: #d8e2e4;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.theme-night .draw-result-modes,
+.theme-night .draw-results-table,
+.theme-night .racing-results-table,
+.theme-night .draw-results-table > article,
+.theme-night .racing-results-table > article {
+  border-color: #3cb7c233;
+  background: #0d304b;
+}
+.theme-night .draw-result-modes > span,
+.theme-night .draw-results-table > article > span { color: #d7eef2; }
+.theme-night .draw-results-table > article > span time,
+.theme-night .draw-result-modes > small { color: #8fb6c0; }
+.theme-night .draw-result-modes button { background: #375366; color: #c8d9df; }
+.theme-night .draw-result-modes button.active { background: linear-gradient(135deg, #168eaf, #10a9a5); color: #fff; }
+
+@media (max-width: 620px) {
+  .draw-results-header { min-height: 56px; }
+  .draw-results-filters { padding: 9px 10px; }
+  .draw-result-modes {
+    grid-template-columns: 70px minmax(0, 1fr);
+    gap: 7px;
+    padding: 9px 9px;
+  }
+  .draw-result-modes > div { gap: 5px; }
+  .draw-result-modes button { height: 34px; padding: 0 5px; font-size: 10px; }
+  .draw-result-modes > small { display: none; }
+  .draw-results-table,
+  .racing-results-table { padding: 0 7px 20px; }
+  .draw-results-table > article,
+  .racing-results-table > article {
+    grid-template-columns: clamp(58px, 17vw, 70px) minmax(0, 1fr);
+    min-height: 57px;
+    padding: 7px 3px;
+    column-gap: 6px;
+  }
+  .draw-results-table > article > .draw-result-cells,
+  .racing-results-table > article > .draw-result-cells {
+    gap: clamp(2px, .55vw, 3px);
+  }
+  .draw-results-table > article > .draw-result-cells > b,
+  .racing-results-table > article > .draw-result-cells > b {
+    width: 100%;
+    max-width: 29px;
+    height: auto;
+    font-size: clamp(11px, 3.4vw, 15px);
+  }
+  .draw-results-table > article > span b { font-size: 10px; }
+  .draw-results-table > article > span time { font-size: 9px; }
+  .draw-results-table > article > .draw-result-cells.trend-cells {
+    grid-template-columns: 20px repeat(2, minmax(20px, 29px)) minmax(5px, 10px) repeat(5, minmax(20px, 29px));
+    gap: clamp(2px, .7vw, 4px);
+  }
+}
+
+/* 游戏页开奖记录统一布局。
+   旧版在同一行塞入期号、十个号码、冠亚/龙虎和悬浮工具，字体放大后必然互相覆盖。
+   顶部仅保留上期号码；展开后将结果独立成第二信息行。 */
+.game-room .last-draw {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: center;
+  min-height: 42px;
+  column-gap: 10px;
+  padding: 7px 38px 7px 12px;
+  overflow: hidden;
+}
+.game-room .last-draw > span {
+  min-width: 0;
+  overflow: hidden;
+  color: #72838e;
+  font-size: 12px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.game-room .last-draw > div {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 22px;
+  justify-content: start;
+  gap: 7px;
+  min-width: 0;
+}
+.game-room .last-draw > div > b,
+.game-room .recent-draws article > div > b {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: 4px;
+  font-size: 12px !important;
+  line-height: 1;
+}
+.game-room .last-draw > small {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  color: #72838e;
+  font-size: 11px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.game-room .draw-history.open .recent-draws {
+  max-height: 360px;
+  gap: 0;
+  padding: 0 10px 9px;
+  scrollbar-width: thin;
+}
+.game-room .recent-draws header,
+.game-room .recent-draws article {
+  display: grid;
+  grid-template-columns: minmax(78px, 22%) minmax(0, 1fr) minmax(90px, 24%);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 5px 2px;
+}
+.game-room .recent-draws header {
+  min-height: 30px;
+  border-bottom: 1px solid #cfe8eb;
+}
+.game-room .recent-draws article {
+  min-height: 34px;
+  border-bottom: 1px solid #d9ecee;
+}
+.game-room .recent-draws article:last-of-type { border-bottom: 0; }
+.game-room .recent-draws header > span,
+.game-room .recent-draws article > span {
+  min-width: 0;
+  overflow: hidden;
+  font-family: "DM Mono";
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.game-room .recent-draws header > b,
+.game-room .recent-draws article > div {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 22px;
+  justify-content: start;
+  gap: 7px;
+  min-width: 0;
+}
+.game-room .recent-draws header > b > i {
+  width: 22px;
+  color: #77909a;
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1;
+  text-align: center;
+}
+.game-room .recent-draws header > small {
+  display: grid;
+  grid-template-columns: 38px 6px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 2px;
+  overflow: hidden;
+  color: #78909a;
+  font-size: 10px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.game-room .recent-draws header > small > b { grid-column: 1; }
+.game-room .recent-draws header > small > i {
+  grid-column: 2;
+  font-style: normal;
+  text-align: center;
+}
+.game-room .recent-draws header > small > em {
+  grid-column: 3;
+  font-style: normal;
+}
+.game-room .recent-draws article > small {
+  display: grid;
+  grid-template-columns: 38px 6px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.game-room .recent-draws article > small > b { grid-column: 1; }
+.game-room .recent-draws article > small > em { grid-column: 3; }
+
+/* 赛车/飞艇十球：期号、号码、冠亚/龙虎单行密排。 */
+.game-room .racing-draw-ui .last-draw {
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  column-gap: 7px;
+}
+.game-room .racing-draw-ui .last-draw > small {
+  display: flex;
+  font-size: 10px;
+}
+.game-room .racing-draw-ui .last-draw > div,
+.game-room .racing-draw-ui .recent-draws header > b,
+.game-room .racing-draw-ui .recent-draws article > div {
+  grid-auto-columns: 16px;
+  gap: 2px;
+}
+.game-room .racing-draw-ui .last-draw > div > b,
+.game-room .racing-draw-ui .recent-draws article > div > b {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  font-size: 10px !important;
+}
+.game-room .racing-draw-ui .recent-draws header > b > i {
+  width: 16px;
+  font-size: 8px;
+}
+.game-room .racing-draw-ui .recent-draws header,
+.game-room .racing-draw-ui .recent-draws article {
+  grid-template-columns: clamp(58px, 17%, 70px) minmax(0, 1fr) clamp(96px, 28%, 112px);
+  column-gap: 3px;
+}
+.game-room .racing-draw-ui .recent-draws header > small {
+  display: grid;
+  font-size: 9px;
+}
+.game-room .racing-draw-ui .recent-draws article {
+  min-height: 34px;
+  row-gap: 0;
+}
+.game-room .racing-draw-ui .recent-draws article > span {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+}
+.game-room .racing-draw-ui .recent-draws article > div {
+  grid-column: 2;
+  grid-row: 1;
+}
+.game-room .racing-draw-ui .recent-draws article > small {
+  grid-column: 3;
+  grid-row: 1;
+  grid-template-columns: 38px 4px minmax(50px, 1fr);
+  column-gap: 1px;
+  padding: 0;
+  overflow: visible;
+  font-size: 10px;
+  letter-spacing: -.15px;
+}
+.game-room .racing-draw-ui .recent-draws article > small > em { overflow: visible; }
+
+/* 展开开奖记录时把快捷工具移到表格下方，避免遮住结果列。 */
+.game-room .quick-actions {
+  transition: top .24s ease;
+}
+.game-room.history-expanded .quick-actions {
+  top: 414px;
+  gap: 6px;
+}
+.game-room.history-expanded .quick-actions button {
+  width: 30px;
+  height: 30px;
+}
+
+.theme-night.game-room .recent-draws header,
+.theme-night.game-room .recent-draws article {
+  border-bottom-color: #376074;
+}
+
+@media (max-width: 390px) {
+  .game-room .last-draw {
+    column-gap: 7px;
+    padding-left: 9px;
+  }
+  .game-room .last-draw > span { font-size: 11px; }
+  .game-room .last-draw > div,
+  .game-room .recent-draws header > b,
+  .game-room .recent-draws article > div {
+    grid-auto-columns: 20px;
+    gap: 5px;
+  }
+  .game-room .last-draw > div > b,
+  .game-room .recent-draws article > div > b {
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+  }
+  .game-room .recent-draws header > b > i { width: 20px; }
+  .game-room .racing-draw-ui .last-draw > div,
+  .game-room .racing-draw-ui .recent-draws header > b,
+  .game-room .racing-draw-ui .recent-draws article > div {
+    grid-auto-columns: 16px;
+    gap: 2px;
+  }
+  .game-room .racing-draw-ui .last-draw > div > b,
+  .game-room .racing-draw-ui .recent-draws article > div > b {
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    font-size: 10px !important;
+  }
+  .game-room .racing-draw-ui .recent-draws header > b > i { width: 16px; }
+}
+
+@media (max-height: 680px) {
+  .game-room.history-expanded .quick-actions {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+/* 手机游戏页文字再提升一级，但开奖数字块沿用既有宽高与字号。
+   这里刻意不匹配 last-draw/recent-draws 内的号码 b 元素。 */
+.game-room .game-header > b { font-size: 20px; }
+.game-room .game-header-meta em { font-size: 10px; }
+.game-room .game-header-meta strong { font-size: 11px; }
+.game-room .game-info > div > span,
+.game-room .game-info > button,
+.game-room .game-info > div > small { font-size: 13px; }
+.game-room .last-draw > span { font-size: 13px; }
+.game-room .last-draw > small,
+.game-room .racing-draw-ui .last-draw > small { font-size: 12px; }
+.game-room .recent-draws header,
+.game-room .recent-draws header > b,
+.game-room .recent-draws header > small { font-size: 11px; }
+.game-room .recent-draws article,
+.game-room .recent-draws article > span { font-size: 12px; }
+.game-room .recent-draws article > small,
+.game-room .racing-draw-ui .recent-draws article > small { font-size: 11px; }
+.game-room .racing-draw-ui .recent-draws article > small { font-size: 10px; }
+.game-room .bet-chat > p,
+.game-room .admin-message small,
+.game-room .market-bet small,
+.game-room .player-bet small { font-size: 12px; }
+.game-room .admin-message article,
+.game-room .market-bet p,
+.game-room .player-bet article { font-size: 15px; }
+.game-room .parsed-ticket article { font-size: 14px; }
+.game-room .ticket-selection { font-size: 14px; }
+
+/* 顶部四项工具合并为一条轻量分段栏，避免挤压期号与倒计时。 */
+.game-room .game-info {
+  gap: 6px;
+}
+.game-room .game-info > div {
+  min-width: 0;
+}
+.game-room .game-info > div > span {
+  flex: none;
+  white-space: nowrap;
+  font-family: "DM Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+.game-tool-tabs {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid #d8ecee;
+  border-radius: 7px;
+  background: #edf7f7;
+}
+.game-room .game-info .game-tool-tabs > button {
+  min-width: 29px;
+  height: 24px;
+  padding: 0 4px;
+  border: 0;
+  border-left: 1px solid #d8ecee;
+  border-radius: 0;
+  background: transparent;
+  color: #117f91;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: none;
+}
+.game-room .game-info .game-tool-tabs > button:first-child {
+  border-left: 0;
+}
+.game-room .game-info .game-tool-tabs > button:active {
+  background: #d7f1f0;
+  transform: none;
+}
+.theme-night.game-room .game-tool-tabs {
+  border-color: #4dc2ca35;
+  background: #123a54;
+}
+.theme-night.game-room .game-info .game-tool-tabs > button {
+  border-left-color: #4dc2ca35;
+  background: transparent;
+  color: #b9f3f2;
+}
+
+/* Telegram 式游戏消息：统一消息轨道、气泡和气泡内时间。
+   右侧预留快捷按钮轨道，避免复杂回执被悬浮按钮遮挡。 */
+.game-room .assistant-notice {
+  margin: 0 46px 10px 0;
+}
+.game-room .game-timeline-items {
+  --timeline-action-gutter: 46px;
+  gap: 10px;
+  padding: 0 var(--timeline-action-gutter) 18px 0;
+}
+.game-room .game-timeline-items .player-bet {
+  margin-right: calc(8px - var(--timeline-action-gutter));
+  margin-left: calc(var(--timeline-action-gutter) - 8px);
+}
+.game-room .game-timeline-items > *,
+.game-room .submitted-ticket,
+.game-room .settlement-notice-list {
+  min-width: 0;
+}
+.game-room .submitted-ticket,
+.game-room .settlement-notice-list {
+  display: grid;
+  gap: 10px;
+}
+.game-room .admin-message,
+.game-room .market-bet,
+.game-room .player-bet {
+  align-items: flex-end;
+  gap: 8px;
+  margin: 0;
+}
+.game-room .admin-message > div {
+  width: min(100%, 332px);
+  min-width: 0;
+  gap: 4px;
+}
+.game-room .market-bet > div,
+.game-room .player-bet > div {
+  width: fit-content;
+  max-width: min(80%, 300px);
+  min-width: 0;
+  gap: 4px;
+}
+.game-room .admin-message small,
+.game-room .market-bet small,
+.game-room .player-bet small {
+  padding: 0 3px;
+  color: #718894;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.game-room .admin-message article,
+.game-room .market-bet p,
+.game-room .player-bet article {
+  position: relative;
+  box-sizing: border-box;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px 25px;
+  border: 1px solid rgba(63, 134, 149, .09);
+  border-radius: 5px 15px 15px;
+  background: #fff;
+  color: #2c4653;
+  font-size: 14px;
+  line-height: 1.62;
+  box-shadow: 0 3px 12px rgba(35, 64, 91, .1);
+}
+.game-room .admin-message article {
+  width: 100%;
+}
+.game-room .player-bet article {
+  border-color: rgba(18, 140, 167, .14);
+  border-radius: 15px 5px 15px 15px;
+  background: linear-gradient(135deg, #1196bc, #087fa9);
+  color: #fff;
+}
+.game-room .game-message-time {
+  position: absolute;
+  right: 10px;
+  bottom: 7px;
+  display: block;
+  margin: 0;
+  color: #8da0a8;
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1;
+  text-align: right;
+  white-space: nowrap;
+}
+.game-room .player-bet .game-message-time.mine {
+  right: auto;
+  left: 10px;
+  color: #d7f7fb;
+  text-align: left;
+}
+.game-room .market-bet > .app-avatar,
+.game-room .player-bet > .app-avatar.player-avatar,
+.game-room .draw-assistant-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+.game-room .parsed-ticket,
+.game-room .persisted-ticket,
+.game-room .draw-announcement {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.game-room .assistant-notice article {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 12px;
+}
+.game-room .assistant-notice article > b {
+  font-size: 14px;
+}
+.game-room .assistant-notice article hr {
+  width: 100%;
+  margin: 1px 0 3px;
+}
+.game-room .assistant-help-example {
+  margin-top: 3px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: #edf7f8;
+  color: #177f8b;
+  font-family: "DM Mono", system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+}
+.theme-night.game-room .admin-message small,
+.theme-night.game-room .market-bet small,
+.theme-night.game-room .player-bet small {
+  color: #9ac5ce;
+}
+.theme-night.game-room .admin-message article,
+.theme-night.game-room .market-bet p {
+  border-color: rgba(77, 194, 202, .14);
+  background: #143753;
+  color: #e2f7fb;
+}
+.theme-night.game-room .assistant-help-example {
+  background: #103f55;
+  color: #82e5e3;
+}
+
+@media (max-width: 390px) {
+  .game-room .assistant-notice { margin-right: 42px; }
+  .game-room .game-timeline-items { --timeline-action-gutter: 42px; }
+  .game-room .admin-message > div { width: min(100%, 306px); }
+  .game-room .market-bet > div,
+  .game-room .player-bet > div { max-width: min(82%, 274px); }
+}
+
+/* 咪牌、长龙、预测共用的轻量工具弹层。 */
+.mipai-board,
+.trend-board,
+.forecast-board {
+  margin-top: 10px;
+}
+.mipai-board {
+  display: grid;
+  gap: 13px;
+  padding: 14px;
+  border: 1px solid #cfe7e9;
+  border-radius: 15px;
+  background: linear-gradient(145deg, #f2fbfb, #e5f5f6);
+}
+.mipai-board > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0;
+  border: 0;
+  color: #66818b;
+  font-size: 11px;
+}
+.mipai-board > header b { color: #138897; font: 800 15px "Rajdhani"; }
+.mipai-balls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px;
+}
+.mipai-balls i {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  border: 1px dashed #94c8cd;
+  border-radius: 7px;
+  background: #dcecee;
+  color: #77929a;
+  font: 800 16px "Rajdhani";
+  font-style: normal;
+  transform: rotateY(180deg);
+  transition: transform .24s ease, background .24s ease;
+}
+.mipai-balls i.revealed { border-style: solid; color: #fff; transform: rotateY(0); }
+.mipai-total { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 0 !important; color: #496874 !important; }
+.mipai-total b { color: #e35f49; font-size: 17px; }
+.mipai-total span { padding: 3px 7px; border-radius: 8px; background: #fff; color: #15838e; font-size: 10px; font-weight: 700; }
+.mipai-replay {
+  justify-self: center;
+  padding: 7px 16px;
+  border: 0;
+  border-radius: 15px;
+  background: #188f9c;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+.trend-board { display: grid; gap: 6px; max-height: 300px; overflow-y: auto; }
+.trend-board article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px 72px;
+  align-items: center;
+  gap: 8px;
+  min-height: 39px;
+  padding: 7px 9px;
+  border: 1px solid #e0edef;
+  border-radius: 10px;
+  background: #f7fbfc;
+}
+.trend-board article span { color: #496a77; font-size: 12px; font-weight: 700; }
+.trend-board article b { display: grid; place-items: center; width: 31px; height: 27px; border-radius: 7px; color: #fff; font-size: 12px; }
+.trend-board article b.blue { background: #1594d3; }
+.trend-board article b.orange { background: #f59a21; }
+.trend-board article em { color: #16889a; font-size: 11px; font-style: normal; font-weight: 700; text-align: right; }
+.forecast-board { display: grid; gap: 9px; }
+.forecast-board article {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #dbeaec;
+  border-radius: 11px;
+  background: #f7fbfc;
+}
+.forecast-board article > small { color: #53717d; font-size: 11px; font-weight: 700; }
+.forecast-board article > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.forecast-board article > div b { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 6px; color: #fff; font: 800 14px "Rajdhani"; }
+.forecast-board .forecast-summary { grid-template-columns: 68px 1fr; }
+.forecast-summary strong { color: #e3664d; font-size: 14px; }
+.forecast-summary span { grid-column: 2; color: #799099; font-size: 10px; }
+.forecast-board > p { margin: 2px 0 0 !important; color: #8a999f !important; font-size: 9px !important; text-align: center; }
+.game-tool-empty { padding: 18px 0; color: #8799a0 !important; text-align: center; }
+.theme-night .mipai-board,
+.theme-night .trend-board article,
+.theme-night .forecast-board article { border-color: #4bc3ca36; background: #103a53; }
+.theme-night .mipai-board > header,
+.theme-night .trend-board article span,
+.theme-night .forecast-board article > small { color: #b8dce2; }
+.theme-night .mipai-total { color: #b8dce2 !important; }
+.theme-night .mipai-total span { background: #17445b; color: #8ce4e0; }
+
+@media (max-width: 390px) {
+  .game-room .game-info { gap: 5px; padding-inline: 8px; }
+  .game-room .game-info > div { gap: 4px; }
+  .game-room .game-info > div > span { font-size: 11px; }
+  .game-room .game-info .game-tool-tabs { gap: 0; }
+  .game-room .game-info .game-tool-tabs > button { min-width: 27px; height: 23px; padding: 0 3px; font-size: 9px; }
+  .game-room .game-acceptance { display: none; }
+}
+
+/* 输入法快捷操作：梭哈和重复只填入草稿；取消会确认撤回本期注单。 */
+.input-bet-keyboard .keyboard-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid #d4e2e5;
+  border-radius: 10px;
+  background: #fff;
+}
+.input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut {
+  width: 100%;
+  height: 35px;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid #e3ebed;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+  color: #294753;
+  font-size: 13px;
+  font-weight: 700;
+}
+.input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut:last-child { border-right: 0; }
+.input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut:active { background: #e7f6f6; color: #087f88; }
+.input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut.all-in { color: #d26742; }
+.input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut.cancel { color: #c34f5e; }
+.input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut.check { color: #118e91; }
+.input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut.repeat { color: #426bb2; }
+.keyboard-shortcut-notice {
+  display: block;
+  min-height: 24px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: #dff3f2;
+  color: #23606a;
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+}
+.theme-night.game-room .input-bet-keyboard .keyboard-shortcuts {
+  border-color: #3a6074;
+  background: #153a54;
+}
+.theme-night.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut {
+  border-right-color: #2b5066;
+  background: #153a54;
+  color: #d9eef2;
+}
+.theme-night.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut.all-in { color: #ffad89; }
+.theme-night.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut.cancel { color: #ff9cac; }
+.theme-night.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut.check { color: #6fe4dd; }
+.theme-night.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut.repeat { color: #9fbfff; }
+.theme-night.game-room .keyboard-shortcut-notice { background: #164f59; color: #c9f4f1; }
+
+/* 简洁输入键盘：轻边框、紧凑间距、统一字重，减少大块色彩干扰。 */
+.game-room .input-bet-keyboard {
+  gap: 6px;
+  padding: 7px 9px max(8px, env(safe-area-inset-bottom));
+  border-top: 1px solid #e3ecee;
+  background: #f4f8f9;
+}
+.game-room .input-bet-keyboard .keyboard-shortcuts {
+  gap: 5px;
+  padding: 2px 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut {
+  height: 35px;
+  border: 1px solid #cfdee2;
+  border-radius: 9px;
+  background: #fff;
+  color: #3f5964;
+  font-size: 13px;
+  font-weight: 700;
+}
+.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut:active {
+  border-color: #76c8c7;
+  background: #e8f7f6;
+  color: #118b90;
+  transform: translateY(1px);
+}
+.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut.all-in { color: #bf6648; }
+.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut.cancel { color: #bd5661; }
+.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut.check { color: #13888a; }
+.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut.repeat { color: #4b6da8; }
+.game-room .input-bet-keyboard > div {
+  gap: 4px;
+}
+.game-room .input-bet-keyboard .bet-key {
+  height: 40px;
+  border-color: #dbe6e8;
+  border-radius: 10px;
+  background: #fff;
+  color: #173b49;
+  font-size: 17px;
+  font-weight: 700;
+}
+.game-room .input-bet-keyboard .bet-key.number {
+  font-family: Arial, "Noto Sans SC", system-ui, sans-serif !important;
+  font-feature-settings: "zero" 0;
+  font-variant-numeric: proportional-nums;
+}
+.game-room .input-bet-keyboard .bet-key.option {
+  border-color: #c8e7e6;
+  background: #edf8f7;
+  color: #12616a;
+}
+.game-room .input-bet-keyboard .bet-key.command {
+  border-color: #dde6e8;
+  background: #eef3f4;
+  color: #617982;
+}
+.game-room .input-bet-keyboard .bet-key:active {
+  border-color: #9fd7d6;
+  background: #e5f5f4;
+  transform: translateY(1px);
+}
+.theme-night.game-room .input-bet-keyboard {
+  border-top-color: #24495f;
+  background: #0d2d47;
+}
+.theme-night.game-room .input-bet-keyboard .keyboard-shortcuts {
+  border: 0;
+  background: transparent;
+}
+.theme-night.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut {
+  border-color: #31566c;
+  background: #153850;
+  color: #c9e2e6;
+}
+.theme-night.game-room .input-bet-keyboard .keyboard-shortcuts .keyboard-shortcut:active {
+  border-color: #3a9699;
+  background: #1a4859;
+}
+.theme-night.game-room .input-bet-keyboard .bet-key {
+  border-color: #294b61;
+  background: #14364f;
+  color: #e5f4f6;
+}
+.theme-night.game-room .input-bet-keyboard .bet-key.option {
+  border-color: #27606a;
+  background: #164a53;
+  color: #d7f8f5;
+}
+.theme-night.game-room .input-bet-keyboard .bet-key.command {
+  border-color: #304e62;
+  background: #18384f;
+  color: #afcbd1;
+}
+
+.application-assistant-message article {
+  display: grid;
+  gap: 5px;
+  border-left: 3px solid #1aa7ae;
+}
+.application-assistant-message article strong {
+  color: #294e5c;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.theme-night.game-room .application-assistant-message article strong { color: #e4f7f8; }
+
+.game-room .application-assistant-message .assistant-response-line {
+  display: block;
+  margin-top: 3px;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.game-room .application-assistant-message .assistant-response-gap {
+  display: block;
+  height: 5px;
+}
+
+.game-room .room-settlement-message article,
+.game-room .room-scoreboard-message article {
+  border-left: 3px solid #19a6aa;
+  background: linear-gradient(145deg, #fff 0%, #f3fbfb 100%);
+}
+.game-room .room-scoreboard-message article { border-left-color: #d8a52b; }
+.game-room .application-assistant-message .assistant-response-line.player-row {
+  margin-top: 8px;
+  color: #1c6570;
+  font-weight: 800;
+}
+.game-room .application-assistant-message .assistant-response-line.positive { color: #14956f; font-weight: 800; }
+.game-room .application-assistant-message .assistant-response-line.negative { color: #d45458; font-weight: 800; }
+.theme-night.game-room .room-settlement-message article,
+.theme-night.game-room .room-scoreboard-message article { background: linear-gradient(145deg, #10334c, #0e2b43); }
+.theme-night.game-room .application-assistant-message .assistant-response-line.player-row { color: #7ee8e1; }
+
+.draw-result-image-cards {
+  display: grid;
+  gap: 8px;
+  margin: 9px -2px 3px;
+}
+.draw-result-image-card {
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid #cfe3e7;
+  border-radius: 10px;
+  background: #f8fbfc;
+  box-shadow: 0 5px 14px #153d5018;
+}
+.draw-result-image-card figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 5px 7px 5px 10px;
+  color: #385966;
+}
+.draw-result-image-card figcaption > b {
+  overflow: hidden;
+  min-width: 0;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 10px !important;
+}
+.draw-result-image-card figcaption > span {
+  display: flex;
+  flex: none;
+  gap: 5px;
+}
+.draw-result-image-card figcaption button {
+  min-width: 38px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid #b8dfe1;
+  border-radius: 7px;
+  background: #fff;
+  color: #167f89;
+  font-size: 10px;
+  font-weight: 800;
+}
+.draw-image-trigger {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+.draw-result-image-cards canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.theme-night.game-room .draw-result-image-card { border-color: #55cbd43d; background: #102f46; box-shadow: 0 7px 18px #0006; }
+.theme-night.game-room .draw-result-image-card figcaption { color: #c6e5e8; }
+.theme-night.game-room .draw-result-image-card figcaption button { border-color: #3a6878; background: #163e54; color: #a9eeeb; }
+
+.draw-image-preview-layer {
+  position: fixed;
+  z-index: 5200;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: #04111cd9;
+  backdrop-filter: blur(8px);
+}
+.draw-image-preview-layer > section {
+  overflow: hidden;
+  width: min(94vw, 760px);
+  max-height: 92dvh;
+  border: 1px solid #5dcbd25e;
+  border-radius: 18px;
+  background: #102b3d;
+  box-shadow: 0 28px 80px #000a;
+}
+.draw-image-preview-layer header,
+.draw-image-preview-layer footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  color: #e6f6f7;
+}
+.draw-image-preview-layer header b {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+}
+.draw-image-preview-layer header button {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  background: #ffffff18;
+  color: #fff;
+  font-size: 22px;
+}
+.draw-image-preview-layer img {
+  display: block;
+  width: 100%;
+  max-height: calc(92dvh - 104px);
+  object-fit: contain;
+  background: #061a29;
+}
+.draw-image-preview-layer footer small { color: #9bbdc4; font-size: 10px; }
+.draw-image-preview-layer footer a {
+  flex: none;
+  padding: 8px 14px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #168da4, #20b8aa);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.winning-popup-layer {
+  position: fixed;
+  z-index: 5000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: #071827a8;
+  backdrop-filter: blur(7px);
+}
+.winning-popup {
+  position: relative;
+  overflow: hidden;
+  width: min(326px, 92vw);
+  padding: 34px 24px 24px;
+  border: 1px solid #ffe593;
+  border-radius: 27px;
+  background: radial-gradient(circle at 50% 6%, #fff7c7 0, #ffd94f 24%, transparent 25%), linear-gradient(160deg, #ffbf24, #f66d23 72%, #d63d2d);
+  box-shadow: 0 24px 70px #0008, inset 0 1px #fff9;
+  color: #fff;
+  text-align: center;
+  animation: winning-popup-in .42s cubic-bezier(.2,1.3,.45,1) both;
+}
+.winning-popup::before {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 42%, #fff7 0 1px, transparent 2px) 0 0 / 22px 22px;
+  content: '';
+  opacity: .55;
+}
+.winning-popup > * { position: relative; z-index: 2; }
+.winning-crown { display: block; color: #fff4aa; font-size: 49px; filter: drop-shadow(0 5px 4px #9b321f80); }
+.winning-popup small { display: block; margin-top: 4px; color: #fff4cb; font-size: 11px; font-weight: 700; }
+.winning-popup h2 { margin: 9px 0 0; font-size: 31px; letter-spacing: .08em; text-shadow: 0 3px 3px #a4372580; }
+.winning-popup strong { display: block; margin-top: 7px; color: #fff5a4; font-size: 42px; line-height: 1.1; text-shadow: 0 4px 4px #8e2f2180; }
+.winning-popup p { margin: 13px 0 17px; color: #fff8e2; font-size: 12px; }
+.winning-popup button { width: 100%; min-height: 43px; border: 0; border-radius: 22px; background: #fff8d9; box-shadow: 0 7px 14px #96312255; color: #d84b27; font-size: 14px; font-weight: 900; }
+.winning-coins { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
+.winning-coins i {
+  position: absolute;
+  top: -28px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 2px solid #fff2a2;
+  border-radius: 50%;
+  background: #f3aa10;
+  color: #fff4b7;
+  font-size: 9px;
+  font-style: normal;
+  animation: winning-coin-fall 2s ease-in infinite;
+}
+@keyframes winning-popup-in { from { opacity: 0; transform: scale(.7) translateY(25px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+@keyframes winning-coin-fall { 0% { opacity: 0; transform: translateY(-20px) rotate(0); } 12% { opacity: 1; } 100% { opacity: 0; transform: translateY(390px) rotate(640deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .winning-popup,.winning-coins i { animation: none; }
 }

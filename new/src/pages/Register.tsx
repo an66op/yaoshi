@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { memberApi } from '../api/member'
 import { setToken } from '../api/client'
-import { BRAND_NAME } from '../data/brand'
+import { BRAND_NAME, DEMO_ROOM } from '../data/brand'
 import type { Theme } from '../types'
 
 type Props = {
@@ -11,12 +11,13 @@ type Props = {
   theme?: Theme
 }
 
-/** 会员注册：邀请码可选；房间号由上级为代理配置，注册时不填写。 */
+/** 会员注册：帐号在所属房间内唯一，邀请码可选。 */
 export function Register({ onContinue, onBack, theme = 'day' }: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [nickname, setNickname] = useState('')
   const [inviteCode, setInviteCode] = useState('')
+  const [roomCode, setRoomCode] = useState(DEMO_ROOM)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [loading, setLoading] = useState(false)
@@ -30,7 +31,7 @@ export function Register({ onContinue, onBack, theme = 'day' }: Props) {
   const submit = async () => {
     const value = username.trim()
     if (value.length < 3) return setError('帐号至少 3 位')
-    if (password.length < 6) return setError('密码至少 6 位')
+    if (new TextEncoder().encode(password).length < 8) return setError('密码至少 8 位')
     const invite = inviteCode.trim().replace(/^u/i, '')
     if (invite && invite.length < 4) return setError('邀请码至少 4 位')
     setLoading(true)
@@ -42,6 +43,7 @@ export function Register({ onContinue, onBack, theme = 'day' }: Props) {
         password,
         nickname: nickname.trim() || value,
         invite_code: inviteCode.trim(),
+        room_code: roomCode.trim(),
       })
       setToken(result.token)
       if (result.message) setSuccess(result.message)
@@ -63,11 +65,12 @@ export function Register({ onContinue, onBack, theme = 'day' }: Props) {
         <div className="login-copy">
           <small>新用户注册</small>
           <h1>创建帐号</h1>
-          <p>填写帐号与密码；如有代理邀请码可一并填写。登录后再输入房间号进入。</p>
+          <p>选择所属房间并创建帐号；同一帐号可在不同房间独立使用。</p>
         </div>
         <label className="login-field"><span>帐号</span><div><i>◉</i><input autoComplete="username" value={username} onChange={(e) => { setUsername(e.target.value.replace(/\s/g, '')); setError('') }} placeholder="至少 3 位" /></div></label>
-        <label className="login-field"><span>密码</span><div><i>●</i><input type="password" autoComplete="new-password" value={password} onChange={(e) => { setPassword(e.target.value); setError('') }} placeholder="至少 6 位" /></div></label>
+        <label className="login-field"><span>密码</span><div><i>●</i><input type="password" autoComplete="new-password" value={password} onChange={(e) => { setPassword(e.target.value); setError('') }} placeholder="8–72 位" /></div></label>
         <label className="login-field"><span>昵称</span><div><i>◎</i><input value={nickname} onChange={(e) => setNickname(e.target.value)} placeholder="可选" /></div></label>
+        <label className="login-field"><span>房间号</span><div><i>◈</i><input value={roomCode} onChange={(e) => { setRoomCode(e.target.value.replace(/\s/g, '')); setError('') }} placeholder="输入所属房间号" /></div></label>
         <label className="login-field"><span>邀请码</span><div><i>礼</i><input value={inviteCode} onChange={(e) => setInviteCode(e.target.value)} placeholder="例如 U1001（至少 4 位，可选）" /></div></label>
         {success && <p className="login-error login-success" role="status">{success}</p>}
         {error && <p className="login-error" role="alert">{error}</p>}

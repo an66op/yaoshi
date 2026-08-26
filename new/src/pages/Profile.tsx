@@ -11,7 +11,7 @@ import { memberApi } from '../api/member'
 import { lotteryApi } from '../api/lottery'
 import { useMemberPreferences, type BetModePreference, type FontScalePreference } from '../hooks/useMemberPreferences'
 import { usePersistentState } from '../hooks/usePersistentState'
-import { generateNickname, nicknameSuggestions } from '../data/nicknames'
+import { generateNickname } from '../data/nicknames'
 import type { Theme } from '../types'
 
 type Panel = 'avatar' | 'nickname' | 'security' | 'history' | 'betMode' | 'fontSize' | 'sounds' | 'line' | 'theme' | 'help' | null
@@ -79,7 +79,6 @@ function AvatarSettings({ selected, onSelect }: { selected: number; onSelect: (i
 
 function NicknameSettings({ current, onSave }: { current: string; onSave: (nickname: string) => Promise<void> }) {
   const [value, setValue] = useState(current)
-  const [suggestions, setSuggestions] = useState(() => nicknameSuggestions())
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const cleanValue = value.trim().replace(/\s+/g, ' ')
@@ -96,16 +95,15 @@ function NicknameSettings({ current, onSave }: { current: string; onSave: (nickn
       setSaving(false)
     }
   }
-  const refresh = () => {
-    const next = generateNickname()
-    setSuggestions(nicknameSuggestions())
-    setValue(next)
+  const randomize = () => {
+    setValue(generateNickname())
+    setMessage('')
   }
-  return <div className="nickname-settings"><p>这是游戏内显示名称，不使用真实姓名、性别信息或遮挡式昵称。</p><label><span>当前显示昵称</span><div><input maxLength={16} value={value} onChange={(event) => setValue(event.target.value)} placeholder="请输入 2–16 个字符" /><button aria-label="换一个随机昵称" onClick={refresh}>↻</button></div><small>{cleanValue.length}/16</small></label><button className="nickname-save" disabled={saving || cleanValue.length < 2 || cleanValue.length > 16} onClick={() => void save()}>{saving ? '保存中…' : '保存显示昵称'}</button>{message && <small className="nickname-feedback">{message}</small>}<header><b>随机昵称</b><button onClick={() => setSuggestions(nicknameSuggestions())}>换一批</button></header><div className="nickname-suggestions">{suggestions.map((name) => <button className={name === cleanValue ? 'selected' : ''} key={name} onClick={() => setValue(name)}>{name}</button>)}</div></div>
+  return <div className="nickname-settings"><p>输入你想使用的显示昵称，保存后会同步更新个人资料与会话名称。</p><label><span>当前显示昵称</span><div><input maxLength={16} value={value} onChange={(event) => setValue(event.target.value)} placeholder="请输入 2–16 个字符" /><button type="button" aria-label="换一个随机昵称" title="随机昵称" onClick={randomize}>↻</button></div><small>{cleanValue.length}/16</small></label><button className="nickname-save" disabled={saving || cleanValue.length < 2 || cleanValue.length > 16} onClick={() => void save()}>{saving ? '保存中…' : '保存显示昵称'}</button>{message && <small className="nickname-feedback">{message}</small>}</div>
 }
 
 function ThemeSettings({ theme, onResetDemo, onToggleTheme }: { theme: Theme; onResetDemo: () => void; onToggleTheme: () => void }) {
-  return <div className="theme-setting"><section><span className="theme-preview day-preview">☀</span><div><b>白天模式</b><small>晴空背景与清晰卡片</small></div><button className={theme === 'day' ? 'selected' : ''} onClick={() => theme === 'night' && onToggleTheme()}>{theme === 'day' ? '使用中' : '使用'}</button></section><section><span className="theme-preview night-preview">☾</span><div><b>夜间模式</b><small>深海背景与沉浸界面</small></div><button className={theme === 'night' ? 'selected' : ''} onClick={() => theme === 'day' && onToggleTheme()}>{theme === 'night' ? '使用中' : '使用'}</button></section><button className="demo-reset" onClick={onResetDemo}>重置前端演示数据</button></div>
+  return <div className="theme-setting"><section><span className="theme-preview day-preview">☀</span><div><b>白天模式</b><small>晴空背景与清晰卡片</small></div><button className={theme === 'day' ? 'selected' : ''} onClick={() => theme === 'night' && onToggleTheme()}>{theme === 'day' ? '使用中' : '使用'}</button></section><section><span className="theme-preview night-preview">☾</span><div><b>夜间模式</b><small>深海背景与沉浸界面</small></div><button className={theme === 'night' ? 'selected' : ''} onClick={() => theme === 'day' && onToggleTheme()}>{theme === 'night' ? '使用中' : '使用'}</button></section><button className="demo-reset" onClick={onResetDemo}>恢复默认偏好</button></div>
 }
 
 function FontSizeSettings() {
@@ -226,7 +224,7 @@ function LineSettings() {
   const label = latency == null ? '不可用' : latency <= 80 ? '良好' : latency <= 200 ? '可用' : '较慢'
   return (
     <div className="theme-setting">
-      <p className="sheet-subtitle">检测当前设备到后端的连接延迟。</p>
+      <p className="sheet-subtitle">检测当前设备的网络连接质量。</p>
       <section><span className="theme-preview day-preview">✓</span><div><b>主线路</b><small>{checking ? '检测中…' : latency != null ? `延迟 ${latency} ms` : '连接失败'}</small></div><em>{label}</em></section>
       <button className="demo-reset" disabled={checking} onClick={() => void check()}>{checking ? '检测中…' : '重新检测'}</button>
     </div>
@@ -236,7 +234,13 @@ function LineSettings() {
 function SoundSettings() {
   const [activeKind, setActiveKind] = useState<NotificationKind>('lottery')
   const [selectedSounds, setSelectedSounds] = useState<Record<NotificationKind, string>>(() => {
-    try { return { ...defaultNotificationSounds, ...JSON.parse(window.localStorage.getItem('seven-star-notification-sounds') ?? '{}') } } catch { return defaultNotificationSounds }
+    try {
+      const stored = { ...defaultNotificationSounds, ...JSON.parse(window.localStorage.getItem('seven-star-notification-sounds') ?? '{}') } as Record<NotificationKind, string>
+      for (const kind of notificationKinds) {
+        if (!notificationSounds.some((sound) => sound.id === stored[kind.id])) stored[kind.id] = defaultNotificationSounds[kind.id]
+      }
+      return stored
+    } catch { return defaultNotificationSounds }
   })
   const [muted, setMuted] = useState(() => isNotificationMuted())
   const [playing, setPlaying] = useState<string | null>(null)
@@ -261,5 +265,5 @@ function SoundSettings() {
     window.localStorage.setItem('seven-star-notification-sounds', JSON.stringify(next))
   }
   const toggleMuted = () => { const next = !muted; setMuted(next); setNotificationMuted(next); if (next) { stopPreviewRef.current?.(); setPlaying(null) } }
-  return <div className="sound-settings sound-settings-v2"><header className="sound-master"><div><b>通知声音</b><small>{muted ? '已静音，不会播放任何提醒音' : '已开启，开奖会即时播放提醒'}</small></div><button className={muted ? 'muted' : 'enabled'} aria-pressed={!muted} onClick={toggleMuted}>{muted ? '静音中' : '声音已开'}</button></header><div className="sound-browser"><aside className="sound-category-list">{notificationKinds.map((kind) => { const current = notificationSounds.find((sound) => sound.id === selectedSounds[kind.id]); return <button className={`sound-category ${activeKind === kind.id ? 'active' : ''}`} key={kind.id} onClick={() => setActiveKind(kind.id)}><span>{kind.id === 'lottery' ? '开' : kind.id === 'message' ? '消' : kind.id === 'reward' ? '奖' : '告'}</span><div><b>{kind.label.replace('通知', '')}</b><small>{current?.name ?? '未选择'}</small></div></button> })}</aside><section className="sound-library-panel"><div className="sound-library-title"><b>{notificationKinds.find((kind) => kind.id === activeKind)?.label}</b><small>15 首 · 点右侧试听</small></div><div className="sound-library">{notificationSounds.map((sound) => <div className="sound-row" key={sound.id}><button className={`sound-select ${selectedSounds[activeKind] === sound.id ? 'selected' : ''}`} onClick={() => choose(sound.id)}><span>♪</span><div><b>{sound.name}</b><small>{sound.description}</small></div></button><button className="sound-preview" aria-label={`试听${sound.name}`} onClick={() => preview(sound.id)}>{playing === sound.id ? '■' : '▶'}</button></div>)}</div></section></div><p className="sound-note">声音仅保存在本设备。浏览器需先完成一次点击，才允许自动播放开奖提醒。</p></div>
+  return <div className="sound-settings sound-settings-v2"><header className="sound-master"><div><b>通知声音</b><small>{muted ? '已静音，不会播放任何提醒音' : '已开启，开奖会即时播放提醒'}</small></div><button className={muted ? 'muted' : 'enabled'} aria-pressed={!muted} onClick={toggleMuted}>{muted ? '静音中' : '声音已开'}</button></header><div className="sound-browser"><aside className="sound-category-list">{notificationKinds.map((kind) => { const current = notificationSounds.find((sound) => sound.id === selectedSounds[kind.id]); return <button className={`sound-category ${activeKind === kind.id ? 'active' : ''}`} key={kind.id} onClick={() => setActiveKind(kind.id)}><span>{kind.id === 'lottery' ? '开' : kind.id === 'message' ? '消' : kind.id === 'reward' ? '奖' : '告'}</span><div><b>{kind.label.replace('通知', '')}</b><small>{current?.name ?? '未选择'}</small></div></button> })}</aside><section className="sound-library-panel"><div className="sound-library-title"><b>{notificationKinds.find((kind) => kind.id === activeKind)?.label}</b><small>{notificationSounds.length} 首 · 点右侧试听</small></div><div className="sound-library">{notificationSounds.map((sound) => <div className="sound-row" key={sound.id}><button className={`sound-select ${selectedSounds[activeKind] === sound.id ? 'selected' : ''}`} onClick={() => choose(sound.id)}><span>♪</span><div><b>{sound.name}</b><small>{sound.description}</small></div></button><button className="sound-preview" aria-label={`试听${sound.name}`} onClick={() => preview(sound.id)}>{playing === sound.id ? '■' : '▶'}</button></div>)}</div></section></div><p className="sound-note">声音仅保存在本设备。浏览器需先完成一次点击，才允许自动播放开奖提醒。</p></div>
 }

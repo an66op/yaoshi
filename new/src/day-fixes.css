@@ -7,6 +7,12 @@
 .mobile-app{grid-template-rows:minmax(0,1fr) 0}.mobile-app .bottom-nav{z-index:4;align-self:end}
 .mobile-app.has-bottom-nav .app-content{padding-bottom:98px}
 
+/* 消息首页的标题与最后一条会话都必须避开悬浮底栏。标题保持可见，
+   列表底部预留完整卡片高度，避免“计划群”等文字被底栏覆盖。 */
+.mobile-app.has-bottom-nav .app-content:has(.chat-list){padding-bottom:0}
+.mobile-app.has-bottom-nav .chat-list{padding-bottom:calc(104px + env(safe-area-inset-bottom))}
+.chat-list>.blue-header{position:sticky;z-index:5;top:0}
+
 /* 标题栏的操作位必须以手机容器为基准；双操作按钮使用固定三列，避免桌面端脱离标题栏。 */
 .blue-header,.profile-header{display:grid;grid-template-columns:34px minmax(0,1fr) 34px;column-gap:6px;padding:0 14px}.blue-header>b,.profile-header>b{grid-column:2;grid-row:1;text-align:center}.blue-header button,.profile-header button{position:static!important;grid-row:1;width:34px;height:34px;right:auto!important;left:auto!important}.blue-header button:first-child:not(:last-child),.profile-header button:first-child:not(:last-child){grid-column:1}.blue-header button:last-child:not(:first-child),.profile-header button:last-child:not(:first-child){grid-column:3}.blue-header>b:first-child{grid-column:1/4}.blue-header>b:first-child+button{grid-column:3}
 
@@ -24,3 +30,6 @@
 .theme-day .app-content:has(.chat-room)::before { display: none; }
 .theme-day .chat-room { height: 100%; background: #f7ffff; }
 .theme-day .chat-history { background: #e8f8f9; }
+
+/* Multi-announcement center */
+.lobby-announcement{min-height:44px;padding:7px 10px;gap:9px}.lobby-announcement .announcement-badge{display:grid;place-items:center;flex:none;width:38px;height:25px;border-radius:7px;background:linear-gradient(135deg,#f1a13a,#ee754f);color:#fff!important;font-size:10px;font-weight:850;box-shadow:0 3px 8px #d46e3938}.lobby-announcement p{display:flex;min-width:0;flex-direction:column;gap:1px;margin:0}.lobby-announcement p b,.lobby-announcement p small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.lobby-announcement p b{font-size:11px;line-height:1.25}.lobby-announcement p small{color:inherit;font-size:10px;opacity:.75}.announcement-count{display:grid;place-items:center;flex:none;min-width:20px;height:20px;padding:0 5px;border-radius:10px;background:#ffffffb5;color:#238198;font-size:9px;font-style:normal;font-weight:850}.multi-notice-modal header{gap:9px}.multi-notice-modal header span{flex:1}.multi-notice-modal header em{padding:3px 8px;border-radius:10px;background:#edf6f8;color:#50808e;font-size:9px;font-style:normal}.multi-notice-modal article{min-height:170px;background:radial-gradient(circle at 90% 0,#d7f7f4 0,transparent 42%)}.multi-notice-modal article p{white-space:pre-wrap}.notice-modal .notice-footer-multiple{display:grid;grid-template-columns:.72fr 1.28fr;gap:8px}.notice-modal footer .notice-secondary{border:1px solid #acd1da;background:transparent;color:#477988}.notice-modal footer button:disabled{opacity:.38}.theme-night .multi-notice-modal article{background:radial-gradient(circle at 90% 0,#156b704f 0,transparent 42%)}.theme-night .multi-notice-modal header em{background:#173f58;color:#a7e2e5}.theme-night .notice-modal footer .notice-secondary{border-color:#39708a;color:#a7d7df}

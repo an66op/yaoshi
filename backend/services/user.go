@@ -21,7 +21,7 @@ func (s *userService) CreateUser(u *user.User) error {
 // GetUserByUsername 根据用户名获取用户
 func (s *userService) GetUserByUsername(username string) (*user.User, error) {
 	var u user.User
-	if err := s.db.Where("username = ?", username).First(&u).Error; err != nil {
+	if err := s.db.Where("login_scope = ? AND LOWER(username) = LOWER(?)", platformLoginScope, username).First(&u).Error; err != nil {
 		return nil, err
 	}
 	return &u, nil

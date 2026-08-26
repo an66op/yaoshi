@@ -1,10 +1,22 @@
 import { request } from './client'
 
+export type AnnouncementItem = {
+  id: string
+  title: string
+  content: string
+  enabled: boolean
+  popup_on_login: boolean
+  sort_order: number
+}
+
 export type RoomSettings = {
   room_name: string
+  room_logo: string
   room_notice: string
+  announcements: AnnouncementItem[]
   show_odds: boolean
   sound_enabled: boolean
+  prediction_enabled: boolean
   min_credit_amount: number
   min_debit_amount: number
   min_chat_score: number
@@ -62,12 +74,31 @@ export type ActivityActionResult = {
 
 export type MemberNotification = {
   id: number
+  game_id?: string
+  room_scope?: string
   title: string
   content: string
   level: string
   category: string
   link: string
   read: boolean
+  game_name?: string
+  issue?: string
+  draw_numbers?: number[]
+  draw_at?: string
+  bet_count?: number
+  won_count?: number
+  stake_amount?: number
+  payout_amount?: number
+  bet_details?: Array<{
+    play_name: string
+    position?: number
+    selection: string
+    amount: number
+    odds: number
+    result: 'won' | 'lost' | string
+    payout: number
+  }>
   created_at: string
 }
 
@@ -96,9 +127,11 @@ export const portalApi = {
   activityStatus: (id: number) => request<ActivityStatus>(`/member/activities/${id}/status`),
   checkIn: (id: number) => request<ActivityActionResult>(`/member/activities/${id}/checkin`, { method: 'POST' }),
   claimRedPacket: (id: number) => request<ActivityActionResult>(`/member/activities/${id}/redpacket`, { method: 'POST' }),
-  notifications: (limit = 20, cursor?: { before_id?: number; category?: 'system' | 'activity' | 'winning' | 'all' }) => {
+  notifications: (limit = 20, cursor?: { before_id?: number; category?: 'system' | 'account' | 'activity' | 'winning' | 'all'; game_id?: string; issue?: string }) => {
     const query = new URLSearchParams({ limit: String(limit), category: cursor?.category ?? 'all' })
     if (cursor?.before_id) query.set('before_id', String(cursor.before_id))
+    if (cursor?.game_id) query.set('game_id', cursor.game_id)
+    if (cursor?.issue) query.set('issue', cursor.issue)
     return request<MemberNotificationPage>(`/member/notifications?${query}`)
   },
   unreadCount: () => request<{ unread: number }>('/member/notifications/unread'),

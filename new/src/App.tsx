@@ -27,8 +27,9 @@ import { Profile } from './pages/Profile'
 import { Login } from './pages/Login'
 import { Register } from './pages/Register'
 import { RoomEntry } from './pages/RoomEntry'
+import { stopNotificationSounds } from './utils/notificationAudio'
 import type { Tab, Theme } from './types'
-import { pathForChat, pathForGame, pathForLogin, pathForRegister, pathForResults, pathForRoom, pathForTab, pathForWallet, useAppRouter } from './router'
+import { pathForChat, pathForGame, pathForLogin, pathForPlanGame, pathForRegister, pathForResults, pathForRoom, pathForTab, pathForWallet, useAppRouter } from './router'
 import { useLotteryGames } from './hooks/useLotteryGames'
 import { usePersistentState } from './hooks/usePersistentState'
 import { useMemberPreferences } from './hooks/useMemberPreferences'
@@ -48,7 +49,6 @@ type Session = {
   account: string
   nickname: string
   publicId?: number
-  displayName?: string
   room: string
   roomName: string
   balance: number
@@ -82,7 +82,7 @@ function App() {
   const appContentRef = useRef<HTMLDivElement>(null)
 
   const activeSession = session && session.account && session.room ? session : null
-  const displayName = activeSession?.displayName || activeSession?.nickname || ''
+  const displayName = activeSession?.nickname || activeSession?.account || ''
   const rememberRoom = useCallback((account: string, code: string, name: string) => {
     if (!account || !code) return
     setRoomHistoryByAccount((current) => {
@@ -113,7 +113,6 @@ function App() {
           account: profile.username,
           nickname: profile.nickname || profile.username,
           publicId: profile.public_id,
-          displayName: session?.displayName,
           room: profile.room_code,
           roomName: profile.room_name || profile.room_code,
           balance: profile.balance,
@@ -145,16 +144,17 @@ function App() {
     }
     window.addEventListener('yaotu-member-auth-expired', onExpired)
     return () => window.removeEventListener('yaotu-member-auth-expired', onExpired)
-  }, [navigate])
+  }, [navigate, setSession])
 
   // All route changes represent a fresh page in this single-page app. Reset
   // the actual scrolling container, not only window, before the new view paints.
   useLayoutEffect(() => {
+    stopNotificationSounds()
     appContentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' })
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
   }, [pathname])
 
-  const refreshUnread = async () => {
+  const refreshUnread = useCallback(async () => {
     if (!getToken()) return
     try {
       const { unread } = await portalApi.unreadCount()
@@ -162,14 +162,14 @@ function App() {
     } catch {
       /* ignore */
     }
-  }
+  }, [setDemo])
 
   useEffect(() => {
     if (!getToken()) return
     void refreshUnread()
     const timer = window.setInterval(() => void refreshUnread(), 30_000)
     return () => window.clearInterval(timer)
-  }, [activeSession?.account])
+  }, [activeSession?.account, refreshUnread])
 
   const activeGameId = route.kind === 'game' ? route.gameId : null
   const activeGame = useMemo(() => liveGames.find((game) => game.id === activeGameId), [activeGameId, liveGames])
@@ -188,7 +188,13 @@ function App() {
   const refreshBalance = async () => {
     try {
       const profile = await memberApi.me()
-      setSession((current) => current ? { ...current, publicId: profile.public_id, balance: profile.balance } : null)
+      setSession((current) => current ? {
+        ...current,
+        account: profile.username,
+        nickname: profile.nickname || profile.username,
+        publicId: profile.public_id,
+        balance: profile.balance,
+      } : null)
     } catch {
       /* ignore */
     }
@@ -196,6 +202,9 @@ function App() {
 
   const switchRoom = async (roomCode: string) => {
     const result = await memberApi.joinRoom(roomCode)
+    if (result.status === 'pending') {
+      throw new Error(`入房申请已提交（编号 ${result.application_id ?? '—'}），请等待审核`)
+    }
     const roomName = result.room_name || result.room_code
     setSession((current) => current ? { ...current, room: result.room_code, roomName } : current)
     if (activeSession) rememberRoom(activeSession.account, result.room_code, roomName)
@@ -210,6 +219,7 @@ function App() {
   // A manual login always asks for a room code. Existing room bindings are
   // retained as history, but must not silently decide which room to enter.
   const continueLogin = async (account: string, nickname: string) => {
+    sessionStorage.removeItem('wangzhe-login-announcements-shown')
     setPendingAccount({ account, nickname })
     navigate(pathForRoom())
   }
@@ -304,14 +314,14 @@ function App() {
   const walletReturnGameId = route.kind === 'tab' && route.tab === 'shop' ? route.returnGameId : undefined
   const showBottomNav = (route.kind !== 'chat' || route.view === 'list') && !walletAction
   const content = route.kind === 'chat'
-    ? <Chats key={`${activeSession.room}:${route.view}`} view={route.view} unreadCount={demo.chatUnread} onMarkAllRead={async () => { await portalApi.markAllRead(); await refreshUnread() }} onNavigate={(view) => navigate(pathForChat(view))} onServiceBack={route.returnGameId ? () => navigate(pathForGame(route.returnGameId!)) : undefined} onRefreshUnread={() => void refreshUnread()} />
+    ? <Chats key={`${activeSession.room}:${route.view}:${route.planGameId ?? ''}`} view={route.view} unreadCount={demo.chatUnread} onMarkAllRead={async () => { await portalApi.markAllRead(); await refreshUnread() }} onNavigate={(view) => navigate(pathForChat(view))} onServiceBack={route.returnGameId ? () => navigate(pathForGame(route.returnGameId!)) : undefined} onRefreshUnread={() => void refreshUnread()} games={liveGames} planGameId={route.planGameId} onOpenPlanGame={(gameId) => navigate(pathForPlanGame(gameId))} />
     : activeTab === 'lobby'
       ? <Lobby room={activeSession.room} roomHistory={roomHistoryByAccount[activeSession.account] ?? []} games={liveGames} theme={demo.theme} gamesLive={gamesLive} gamesError={gamesError} onToggleTheme={toggleTheme} onOpenGame={(gameId) => navigate(pathForGame(gameId))} onSwitchRoom={switchRoom} />
       : activeTab === 'shop'
         ? <Wallet balance={activeSession.balance} walletAction={walletAction} returnGameId={walletReturnGameId} onBackToGame={walletReturnGameId ? () => navigate(pathForGame(walletReturnGameId, true)) : undefined} onRefresh={() => void refreshBalance()} onNavigate={navigate} />
         : <Profile account={displayName} publicId={activeSession.publicId} balance={activeSession.balance} theme={demo.theme} onLogout={logout} onResetDemo={resetDemo} onToggleTheme={toggleTheme} onChangeNickname={async (nickname) => {
           const profile = await memberApi.updateNickname(nickname)
-          setSession((current) => current ? { ...current, nickname: profile.nickname || nickname, displayName: profile.nickname || nickname, publicId: profile.public_id, balance: profile.balance } : current)
+          setSession((current) => current ? { ...current, nickname: profile.nickname || nickname, publicId: profile.public_id, balance: profile.balance } : current)
         }} />
 
   return (

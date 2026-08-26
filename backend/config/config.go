@@ -4,6 +4,7 @@ import (
 	"backend/constants"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ type Configuration struct {
 	Database DatabaseConfig `mapstructure:"database"`
 	Redis    RedisConfig    `mapstructure:"redis"`
 	JWT      JWTConfig      `mapstructure:"jwt"`
+	Security SecurityConfig `mapstructure:"security"`
 }
 
 // ServerConfig 服务器配置
@@ -53,6 +55,10 @@ type RedisConfig struct {
 type JWTConfig struct {
 	Secret string `mapstructure:"secret"`
 	Expire int    `mapstructure:"expire"`
+}
+
+type SecurityConfig struct {
+	DataEncryptionKey string `mapstructure:"data_encryption_key"`
 }
 
 // LoadConfig 加载配置文件
@@ -163,6 +169,9 @@ func loadFromEnv() {
 			Config.JWT.Expire = e
 		}
 	}
+	if key := os.Getenv("BACKEND_SECURITY_DATA_ENCRYPTION_KEY"); key != "" {
+		Config.Security.DataEncryptionKey = key
+	}
 }
 
 func splitCSV(value string) []string {
@@ -193,6 +202,18 @@ func OriginAllowed(origin string, allowed []string, mode string) bool {
 	for _, candidate := range allowed {
 		if origin == normalizeOrigin(candidate) {
 			return true
+		}
+	}
+	// 本地调试时允许同一局域网内的手机访问两个固定前端端口。
+	// release 模式仍只接受配置文件中明确列出的来源。
+	if mode != "release" {
+		u, err := url.Parse(origin)
+		if err == nil && (u.Port() == "5173" || u.Port() == "5174") {
+			host := u.Hostname()
+			ip := net.ParseIP(host)
+			if host == "localhost" || ip != nil && (ip.IsLoopback() || ip.IsPrivate()) {
+				return true
+			}
 		}
 	}
 	// A fresh local checkout remains usable before a config file is customized.
@@ -247,6 +268,11 @@ func validateConfig(cfg *Configuration) error {
 	if cfg.Database.DBName == "" {
 		return fmt.Errorf("数据库名称不能为空")
 	}
+	for _, origin := range cfg.Server.AllowedOrigins {
+		if normalizeOrigin(origin) == "" {
+			return fmt.Errorf("无效的 CORS 来源: %q", origin)
+		}
+	}
 
 	// 验证JWT配置
 	if len(cfg.JWT.Secret) < 16 {
@@ -255,8 +281,43 @@ func validateConfig(cfg *Configuration) error {
 	if cfg.JWT.Expire <= 0 {
 		return fmt.Errorf("JWT过期时间必须大于0，当前值: %d", cfg.JWT.Expire)
 	}
+	if len(cfg.Security.DataEncryptionKey) < 16 {
+		return fmt.Errorf("数据加密密钥长度至少16个字符，当前长度: %d", len(cfg.Security.DataEncryptionKey))
+	}
+	if cfg.Server.Mode == "release" {
+		if len(cfg.Server.AllowedOrigins) == 0 {
+			return fmt.Errorf("release 模式必须显式配置 allowed_origins")
+		}
+		if len(cfg.JWT.Secret) < 32 || isPlaceholderSecret(cfg.JWT.Secret) {
+			return fmt.Errorf("release 模式必须配置至少32位的随机 JWT 密钥，不能使用示例或默认值")
+		}
+		if strings.TrimSpace(cfg.Database.Password) == "" || isPlaceholderSecret(cfg.Database.Password) {
+			return fmt.Errorf("release 模式必须配置非默认数据库密码")
+		}
+		if len(cfg.Security.DataEncryptionKey) < 32 || isPlaceholderSecret(cfg.Security.DataEncryptionKey) {
+			return fmt.Errorf("release 模式必须配置至少32位的随机数据加密密钥")
+		}
+	}
 
 	return nil
+}
+
+func isPlaceholderSecret(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return true
+	}
+	for _, fragment := range []string{"change_me", "changeme", "replace_with", "example", "backend_jwt_secret_key_2024"} {
+		if strings.Contains(normalized, fragment) {
+			return true
+		}
+	}
+	for _, exact := range []string{"123456", "password", "postgres", "secret"} {
+		if normalized == exact {
+			return true
+		}
+	}
+	return false
 }
 
 // GetConfig 获取配置实例

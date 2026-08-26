@@ -47,7 +47,7 @@ func (h *authHandler) Login(c *gin.Context) {
 		constants.SendError(c, http.StatusBadRequest, constants.ErrInvalidRequestFormat, err)
 		return
 	}
-	account, token, err := h.authService.Login(req.Username, req.Password)
+	account, token, err := h.authService.Login(req.Username, req.Password, req.Workspace)
 	if err != nil {
 		constants.SendError(c, http.StatusUnauthorized, constants.ErrInvalidCredentials, err)
 		return
@@ -77,8 +77,8 @@ func (h *authHandler) Me(c *gin.Context) {
 		constants.SendError(c, http.StatusUnauthorized, "账号不存在或已失效", err)
 		return
 	}
-	if account.Role != "admin" || account.Status != 1 {
-		constants.SendError(c, http.StatusForbidden, "需要管理员权限", nil)
+	if (account.Role != "admin" && account.Role != "tenant" && account.Role != "agent") || account.Status != 1 {
+		constants.SendError(c, http.StatusForbidden, "需要管理员、租户或房间代理权限", nil)
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "ok", vo.UserResponse{

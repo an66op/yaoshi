@@ -8,14 +8,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// StartSimulatedDrawLoop advances local/demo games on their configured clock.
-// Official games remain exclusively controlled by their upstream source sync.
+// StartSimulatedDrawLoop advances platform-operated games on their configured
+// clock. External games remain exclusively controlled by upstream source sync.
 func StartSimulatedDrawLoop(ctx context.Context, db *gorm.DB) {
 	go func() {
 		publishDue := func() {
 			var games []lottery.Game
 			now := time.Now().UTC()
-			if err := db.Where("source_kind = ? AND enabled = ? AND next_draw_at <= ?", "simulated", true, now).
+			if err := db.Where("source_kind IN ? AND enabled = ? AND next_draw_at <= ?", []string{"platform", "simulated"}, true, now).
 				Order("next_draw_at asc").Find(&games).Error; err != nil {
 				return
 			}
@@ -25,7 +25,7 @@ func StartSimulatedDrawLoop(ctx context.Context, db *gorm.DB) {
 				if err != nil {
 					continue
 				}
-				_, _ = service.PublishDraw(game.ID, issue, nil, "本地演示自动开奖")
+				_, _ = service.PublishDraw(game.ID, issue, nil, "王者自动开奖")
 			}
 		}
 

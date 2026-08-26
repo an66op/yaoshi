@@ -9,7 +9,9 @@ import (
 	"gorm.io/gorm"
 )
 
-type SettingsHandler struct{ settings *services.SettingsAdminService }
+type SettingsHandler struct {
+	settings *services.SettingsAdminService
+}
 
 func NewSettingsHandler(db *gorm.DB) *SettingsHandler {
 	return &SettingsHandler{settings: services.NewSettingsAdminService(db)}
@@ -36,4 +38,17 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "系统设置已保存", result)
+}
+
+func (h *SettingsHandler) RoomActivityStatus(c *gin.Context) {
+	constants.SendSuccess(c, http.StatusOK, "ok", services.RoomActivityStatusSnapshot())
+}
+
+func (h *SettingsHandler) RunRoomActivityOnce(c *gin.Context) {
+	result, err := services.RunRoomActivityOnce()
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "执行房间自动活跃失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "房间自动活跃已执行一轮", result)
 }

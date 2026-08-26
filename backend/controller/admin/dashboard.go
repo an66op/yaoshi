@@ -2,6 +2,10 @@ package admin
 
 import (
 	"backend/constants"
+	"backend/data/models/application"
+	"backend/data/models/chat"
+	"backend/data/models/lottery"
+	"backend/data/models/user"
 	"backend/services"
 	"context"
 	"fmt"
@@ -14,15 +18,51 @@ import (
 )
 
 type DashboardHandler struct {
+	db      *gorm.DB
 	lottery *services.LotteryService
 	bets    *services.BetAdminService
 }
 
 func NewDashboardHandler(db *gorm.DB) *DashboardHandler {
 	return &DashboardHandler{
+		db:      db,
 		lottery: services.NewLotteryService(db),
 		bets:    services.NewBetAdminService(db),
 	}
+}
+
+func (h *DashboardHandler) overview() (gin.H, error) {
+	counts := gin.H{}
+	queries := []struct {
+		key   string
+		query *gorm.DB
+	}{
+		{"member_count", h.db.Model(&user.User{}).Where("role = ?", "member")},
+		{"active_member_count", h.db.Model(&user.User{}).Where("role = ? AND status = ?", "member", 1)},
+		{"agent_count", h.db.Model(&user.User{}).Where("role = ?", "agent")},
+		{"active_agent_count", h.db.Model(&user.User{}).Where("role = ? AND status = ?", "agent", 1)},
+		{"tenant_count", h.db.Model(&user.User{}).Where("role = ?", "tenant")},
+		{"pending_application_count", h.db.Model(&application.Application{}).Where("status = ?", "pending")},
+		{"service_conversation_count", h.db.Model(&chat.Message{}).Where("room_type = ? AND deleted_at IS NULL", "service").Distinct("scope")},
+		{"source_error_count", h.db.Model(&lottery.Game{}).Where("enabled = ? AND sync_status = ?", true, "error")},
+	}
+	for _, item := range queries {
+		var count int64
+		if err := item.query.Count(&count).Error; err != nil {
+			return nil, err
+		}
+		counts[item.key] = count
+	}
+	grouped := h.db.Model(&chat.Message{}).
+		Select("room_scope, game_id").
+		Where("room_type = ? AND deleted_at IS NULL", "group").
+		Group("room_scope, game_id")
+	var groupCount int64
+	if err := h.db.Table("(?) AS grouped_chat", grouped).Count(&groupCount).Error; err != nil {
+		return nil, err
+	}
+	counts["group_conversation_count"] = groupCount
+	return counts, nil
 }
 
 func (h *DashboardHandler) SyncOfficialSources(c *gin.Context) {
@@ -64,19 +104,30 @@ func (h *DashboardHandler) Dashboard(c *gin.Context) {
 		constants.SendError(c, http.StatusInternalServerError, "读取经营统计失败", err)
 		return
 	}
+	overview, err := h.overview()
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取综合统计失败", err)
+		return
+	}
 	constants.SendSuccess(c, http.StatusOK, "ok", gin.H{
+		"overview": overview,
 		"stats": gin.H{
-			"user_balance":        stats.UserBalance,
-			"today_turnover":      stats.TodayTurnover,
-			"today_gross_profit":  stats.TodayGrossProfit,
-			"today_net_profit":    stats.TodayNetProfit,
-			"today_rebate":        stats.TodayRebate,
-			"today_welfare":       stats.TodayWelfare,
-			"total_gross_profit":  stats.TotalGrossProfit,
-			"total_net_profit":    stats.TotalNetProfit,
-			"today_profit":        stats.TodayProfit,
-			"total_profit":        stats.TotalProfit,
-			"pending_settlement":  stats.PendingSettlement,
+			"user_balance":           stats.UserBalance,
+			"today_turnover":         stats.TodayTurnover,
+			"today_settled_turnover": stats.TodaySettledTurnover,
+			"today_gross_profit":     stats.TodayGrossProfit,
+			"today_net_profit":       stats.TodayNetProfit,
+			"today_rebate":           stats.TodayRebate,
+			"today_welfare":          stats.TodayWelfare,
+			"today_agent_share":      stats.TodayAgentShare,
+			"total_gross_profit":     stats.TotalGrossProfit,
+			"total_net_profit":       stats.TotalNetProfit,
+			"total_rebate":           stats.TotalRebate,
+			"total_welfare":          stats.TotalWelfare,
+			"total_agent_share":      stats.TotalAgentShare,
+			"today_profit":           stats.TodayProfit,
+			"total_profit":           stats.TotalProfit,
+			"pending_settlement":     stats.PendingSettlement,
 		},
 		"games": games,
 	})

@@ -15,7 +15,9 @@ import (
 	"gorm.io/gorm"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -28,6 +30,9 @@ func main() {
 
 	// 初始化JWT
 	utils.InitJWT(cfg.JWT.Secret)
+	if err := utils.InitFieldEncryption(cfg.Security.DataEncryptionKey); err != nil {
+		log.Fatalf("初始化敏感字段加密失败: %v", err)
+	}
 
 	// 连接数据库
 	db, err := config.ConnectDB()
@@ -59,6 +64,14 @@ func main() {
 		log.Fatalf("受信任代理配置错误: %v", err)
 	}
 	r.Use(api.Cors())
+	uploadRoot := strings.TrimSpace(os.Getenv("BACKEND_UPLOAD_DIR"))
+	if uploadRoot == "" {
+		uploadRoot = "uploads"
+	}
+	if err := os.MkdirAll(filepath.Join(uploadRoot, "activities"), 0o755); err != nil {
+		log.Fatalf("创建上传目录失败: %v", err)
+	}
+	r.Static("/api/public/uploads", uploadRoot)
 	// 加载路由
 	api.LoadRoutes(r, db, scheduler)
 	log.Printf(constants.ServerStartMessage, cfg.Server.Port)
@@ -78,15 +91,22 @@ func main() {
 
 // InitDependencies 初始化依赖
 func InitDependencies(db *gorm.DB) error {
+	isRelease := config.GetConfig().Server.Mode == "release"
 	// 初始化管理员用户
 	userService := services.NewUserService(db)
-	_, err := userService.GetUserByUsername(constants.DefaultAdminUsername)
+	adminAccount, err := userService.GetUserByUsername(constants.DefaultAdminUsername)
 	if err != nil {
 		// 不是"用户未找到"的情况，直接返回错误
 		if !errors.Is(err, gorm.ErrRecordNotFound) && !strings.Contains(err.Error(), constants.ErrUserNotFound) {
 			return err
 		}
 
+		// The well-known local bootstrap password must never create a production
+		// administrator. Production operators have to provision the first admin
+		// explicitly, so a fresh deployment cannot be taken over with 123456.
+		if isRelease {
+			return fmt.Errorf("release 模式未配置管理员账户，拒绝创建默认管理员")
+		}
 		// 用户不存在时，创建一个默认管理员
 		hashedPwd, err := utils.HashPassword(constants.DefaultAdminPassword)
 		if err != nil {
@@ -94,17 +114,21 @@ func InitDependencies(db *gorm.DB) error {
 		}
 
 		admin := &user.User{
-			Username: constants.DefaultAdminUsername,
-			Password: hashedPwd,
-			Nickname: constants.DefaultAdminNickname,
-			Email:    constants.DefaultAdminEmail,
-			Role:     "admin",
-			Status:   1,
+			Username:   constants.DefaultAdminUsername,
+			LoginScope: "platform",
+			Password:   hashedPwd,
+			Nickname:   constants.DefaultAdminNickname,
+			Email:      constants.DefaultAdminEmail,
+			Role:       "admin",
+			Status:     1,
 		}
 		if err := userService.CreateUser(admin); err != nil {
 			return fmt.Errorf("%s: %w", constants.ErrCreateAdminUserFailed, err)
 		}
 	} else {
+		if isRelease && utils.CheckPasswordHash(constants.DefaultAdminPassword, adminAccount.Password) {
+			return fmt.Errorf("release 模式检测到默认管理员密码，请先修改后再启动")
+		}
 		// Keep the bootstrap account marked as admin so the new auth gate works
 		// on databases that were seeded before Role was introduced.
 		_ = db.Model(&user.User{}).Where("username = ? AND (role IS NULL OR role = '' OR role <> ?)", constants.DefaultAdminUsername, "admin").Update("role", "admin").Error
@@ -113,8 +137,12 @@ func InitDependencies(db *gorm.DB) error {
 	if err := services.SeedLotteryData(db); err != nil {
 		return fmt.Errorf("初始化开奖数据失败: %w", err)
 	}
-	if err := services.SeedDemoMember(db); err != nil {
-		return fmt.Errorf("初始化演示会员失败: %w", err)
+	// Fixed demo credentials and automatic top-ups are local acceptance aids,
+	// not production bootstrap data.
+	if !isRelease {
+		if err := services.SeedExperienceMember(db); err != nil {
+			return fmt.Errorf("初始化默认会员失败: %w", err)
+		}
 	}
 
 	return nil

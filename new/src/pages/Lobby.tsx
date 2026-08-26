@@ -7,7 +7,7 @@ import { Icon } from '../components/Icon'
 import { AnnouncementDialog } from '../components/Dialogs'
 import type { Game, Theme } from '../types'
 import { portalApi } from '../api/portal'
-import { memberApi, type EntertainmentPlatform } from '../api/member'
+import type { AnnouncementItem } from '../api/portal'
 
 type Filter = '168' | 'bingo' | 'pc' | 'mark-six' | '捕鱼' | '体育' | '真人' | '电子' | '电竞'
 type RoomHistoryItem = {
@@ -42,6 +42,13 @@ const filters: Array<{ id: Filter; label: string }> = [
 
 const markSixIDs = new Set(['hong-kong-mark-six', 'happy8-mark-six', 'new-macau-mark-six', 'old-macau-mark-six'])
 const entertainmentFilters = new Set<Filter>(['捕鱼', '体育', '真人', '电子', '电竞'])
+const upcomingEntertainment: Record<'捕鱼' | '体育' | '真人' | '电子' | '电竞', string[]> = {
+  捕鱼: ['捕鱼大厅', '捕鱼王3D'],
+  体育: ['FB体育', 'IM体育'],
+  真人: ['百家乐', '龙虎', '炸金花', '德州扑克'],
+  电子: ['赏金船长', '麻将胡了'],
+  电竞: ['王者荣耀', '炉石传说', '英雄联盟'],
+}
 
 function gameGroup(game: Game): Exclude<Filter, '捕鱼' | '体育' | '真人' | '电子' | '电竞'> {
   if (game.id.startsWith('bingo-')) return 'bingo'
@@ -59,14 +66,12 @@ export function Lobby({ room, roomHistory, games, theme, gamesLive, gamesError, 
   const [roomSwitchError, setRoomSwitchError] = useState('')
   const [roomCodeInput, setRoomCodeInput] = useState('')
   const [roomNotice, setRoomNotice] = useState('【公告】加载中…')
-  const [announcementTitle, setAnnouncementTitle] = useState('平台公告')
-  const [announcementBody, setAnnouncementBody] = useState('')
-  const [entertainment, setEntertainment] = useState<EntertainmentPlatform[]>([])
+  const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([])
+  const [dialogAnnouncements, setDialogAnnouncements] = useState<AnnouncementItem[]>([])
   const [entertainmentMessage, setEntertainmentMessage] = useState('')
-  const [launching, setLaunching] = useState('')
   const showingEntertainment = entertainmentFilters.has(filter)
   const visibleGames = showingEntertainment ? [] : games.filter((game) => gameGroup(game) === filter)
-  const visibleEntertainment = showingEntertainment ? entertainment.filter((item) => item.category === filter) : []
+  const visibleEntertainment = showingEntertainment ? upcomingEntertainment[filter as keyof typeof upcomingEntertainment] : []
   const recentRooms = [...roomHistory]
     .sort((left, right) => (right.lastUsedAt ?? 0) - (left.lastUsedAt ?? 0))
     .filter((item) => item.code !== room)
@@ -98,37 +103,27 @@ export function Lobby({ room, roomHistory, games, theme, gamesLive, gamesError, 
     void chooseRoom(roomCode)
   }
 
-  const launchEntertainment = async (item: EntertainmentPlatform) => {
-    setLaunching(item.code)
-    setEntertainmentMessage('')
-    try {
-      const result = await memberApi.launchEntertainment(item.code)
-      if (result.ready && result.launch_url) {
-        window.location.assign(result.launch_url)
-        return
-      }
-      setEntertainmentMessage(result.message || `${item.name}正在接入中`)
-    } catch (reason) {
-      setEntertainmentMessage(reason instanceof Error ? reason.message : `${item.name}暂时不可用`)
-    } finally {
-      setLaunching('')
-    }
-  }
-
   useEffect(() => {
     void portalApi.roomSettings().then((settings) => {
-      const notice = settings.room_notice || `欢迎来到${BRAND_NAME}`
-      setRoomNotice(`【公告】${notice}`)
-      setAnnouncementBody(notice)
-    }).catch(() => setRoomNotice(`【公告】欢迎来到${BRAND_NAME}`))
-    void portalApi.activities('banner').then((items) => {
-      const active = items.find((item) => item.status === 'active')
-      if (active) {
-        setAnnouncementTitle(active.title)
-        setAnnouncementBody(active.subtitle || active.title)
+      const source = Array.isArray(settings.announcements) ? settings.announcements : []
+      const active = source
+        .filter(item => item.enabled)
+        .sort((left, right) => left.sort_order - right.sort_order)
+      const fallback: AnnouncementItem = { id: 'welcome', title: '欢迎公告', content: settings.room_notice || `欢迎来到${BRAND_NAME}`, enabled: true, popup_on_login: true, sort_order: 10 }
+      const next = active.length ? active : source.length === 0 && settings.room_notice ? [fallback] : []
+      setAnnouncements(next)
+      setRoomNotice(next[0]?.content || '')
+      const loginNotices = next.filter(item => item.popup_on_login)
+      if (loginNotices.length && sessionStorage.getItem('wangzhe-login-announcements-shown') !== '1') {
+        sessionStorage.setItem('wangzhe-login-announcements-shown', '1')
+        setDialogAnnouncements(loginNotices)
+        setAnnouncementOpen(true)
       }
-    }).catch(() => undefined)
-    void memberApi.entertainment().then(setEntertainment).catch(() => setEntertainment([]))
+    }).catch(() => {
+      const fallback: AnnouncementItem = { id: 'welcome', title: '欢迎公告', content: `欢迎来到${BRAND_NAME}`, enabled: true, popup_on_login: false, sort_order: 10 }
+      setAnnouncements([fallback])
+      setRoomNotice(fallback.content)
+    })
   }, [])
 
   useEffect(() => {
@@ -143,14 +138,14 @@ export function Lobby({ room, roomHistory, games, theme, gamesLive, gamesError, 
   return <>
     <header className="lobby-hero">
       <div className="hero-top"><span className="brand-word brand-logo"><img alt={BRAND_NAME} src="/images/wangzhe-header-logo.png" /></span><button className="room-cluster" aria-expanded={roomSwitcherOpen} aria-label={`切换房间，当前房间 ${room}`} onClick={() => { setRoomSwitchError(''); setRoomSwitcherOpen((open) => !open) }}><Icon name="room" /><b>{room}</b><Icon name="arrow" /></button><div className="hero-tools"><button className="theme-switch" onClick={onToggleTheme} aria-label="切换昼夜模式">{theme === 'day' ? '☾' : '☀'}</button></div></div>
-      <button className="announcement" onClick={() => setAnnouncementOpen(true)}><span>●</span><p>{roomNotice}</p><Icon name="arrow" /></button>
+      {announcements.length > 0 && <button className="announcement lobby-announcement" onClick={() => { setDialogAnnouncements(announcements); setAnnouncementOpen(true) }}><span className="announcement-badge">公告</span><p><b>{announcements[0]?.title || '大厅公告'}</b><small>{roomNotice}</small></p>{announcements.length > 1 && <em className="announcement-count">{announcements.length}</em>}<Icon name="arrow" /></button>}
     </header>
     <section className="lobby-body">
       <div className="lobby-category-shell"><div className="lobby-toolbar" aria-label="大厅分类" ref={categoryRailRef}>{filters.map((item) => <button aria-pressed={filter === item.id} className={filter === item.id ? 'toolbar-active' : ''} key={item.id} onClick={() => { setFilter(item.id); setEntertainmentMessage('') }}>{item.label}</button>)}</div><button className="lobby-category-next" aria-label="向右查看更多分类" onClick={() => categoryRailRef.current?.scrollBy({ left: 150, behavior: 'smooth' })}><Icon name="arrow" /></button></div>
-      {!showingEntertainment && <div className="game-list">{visibleGames.map((game) => <button className="game-card" key={game.id} onClick={() => onOpenGame(game.id)}><div className="game-top" style={{ '--game': game.color } as CSSProperties}><div className="game-lead"><span className="game-logo">{game.tag.split(' ')[0].slice(0, 2)}</span><div><strong>{game.title}</strong><small>在线 {game.online} 人 · 实时开奖</small></div></div><div className="game-clock"><small>第 {game.period} 期</small><b>{game.due.split('').map((number, index) => <i key={index}>{number}</i>)}</b></div></div><footer><span>上期 {game.period.slice(-8)}</span><div>{game.balls.map((number, index) => <b className={ballTone(number)} key={index}>{number}</b>)}</div><Icon name="arrow" /></footer></button>)}</div>}
-      {showingEntertainment && <div className="entertainment-list">{visibleEntertainment.map((item, index) => <button disabled={launching === item.code} key={item.code} onClick={() => void launchEntertainment(item)}><span style={{ '--entertainment-hue': `${(index * 47 + filter.length * 19) % 360}deg` } as CSSProperties}>{item.name.slice(0, 2)}</span><div><b>{item.name}</b><small>{item.status === 'enabled' ? '已接入 · 点击进入' : item.remark || '第三方线路接入中'}</small></div><em className={item.status}>{launching === item.code ? '连接中' : item.status === 'enabled' ? '进入' : '接入中'}</em><Icon name="arrow" /></button>)}{visibleEntertainment.length === 0 && <div className="entertainment-empty"><b>{filter}专区</b><small>项目正在配置，稍后会从后台自动显示。</small></div>}</div>}
+      {!showingEntertainment && <div className="game-list">{visibleGames.map((game) => <button className="game-card" key={game.id} onClick={() => onOpenGame(game.id)}><div className="game-top" style={{ '--game': game.color } as CSSProperties}><div className="game-lead"><span className={`game-logo${game.logo ? ' has-image' : ''}${game.id === 'fly-racing' ? ' compact-source-logo' : ''}`}>{game.logo ? <img alt={`${game.title} Logo`} src={game.logo} /> : game.tag.split(' ')[0].slice(0, 2)}</span><div><strong>{game.title}</strong><small>{game.online === '—' ? '实时开奖' : `在线 ${game.online} 人 · 实时开奖`}</small></div></div><div className="game-clock"><small>第 {game.period} 期</small><b>{game.due.split('').map((number, index) => <i key={index}>{number}</i>)}</b></div></div><footer><span>上期 {game.period.slice(-8)}</span><div>{game.balls.map((number, index) => <b className={ballTone(number)} key={index}>{number}</b>)}</div><Icon name="arrow" /></footer></button>)}</div>}
+      {showingEntertainment && <div className="entertainment-list">{visibleEntertainment.map((name, index) => <button key={name} onClick={() => setEntertainmentMessage(`${name}暂未开放`)}><span style={{ '--entertainment-hue': `${(index * 47 + filter.length * 19) % 360}deg` } as CSSProperties}>{name.slice(0, 2)}</span><div><b>{name}</b><small>功能准备中</small></div><em className="maintenance">未开放</em><Icon name="arrow" /></button>)}</div>}
       {entertainmentMessage && <p className="entertainment-message">{entertainmentMessage}</p>}
-      {!showingEntertainment && <p className="lobby-tip">{gamesLive ? '彩种与倒计时来自后端' : gamesError ? `后端离线，使用演示数据（${gamesError}）` : '加载彩种中…'}</p>}
+      {!showingEntertainment && !gamesLive && <p className="lobby-tip">{gamesError ? '连接失败，正在自动重试' : '正在加载彩种…'}</p>}
     </section>
     {roomSwitcherOpen && createPortal(
       <div className="room-switcher-layer" role="presentation" onClick={() => setRoomSwitcherOpen(false)}>
@@ -170,6 +165,6 @@ export function Lobby({ room, roomHistory, games, theme, gamesLive, gamesError, 
       </div>,
       document.body,
     )}
-    {announcementOpen && <AnnouncementDialog title={announcementTitle} body={announcementBody} onClose={() => setAnnouncementOpen(false)} />}
+    {announcementOpen && <AnnouncementDialog items={dialogAnnouncements.length ? dialogAnnouncements : announcements} onClose={() => setAnnouncementOpen(false)} />}
   </>
 }

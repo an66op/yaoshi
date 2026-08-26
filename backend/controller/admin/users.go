@@ -11,8 +11,8 @@ import (
 )
 
 type UserAdminHandler struct {
-	users    *services.UserAdminService
-	trading  *services.TradingAdminService
+	users   *services.UserAdminService
+	trading *services.TradingAdminService
 }
 
 func NewUserAdminHandler(db *gorm.DB) *UserAdminHandler {
@@ -25,7 +25,7 @@ func NewUserAdminHandler(db *gorm.DB) *UserAdminHandler {
 func (h *UserAdminHandler) List(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	result, err := h.users.List(services.UserListFilter{Query: c.Query("query"), Status: c.DefaultQuery("status", "all"), Role: c.DefaultQuery("role", "all"), Page: page, PageSize: pageSize})
+	result, err := h.users.List(services.UserListFilter{Query: c.Query("query"), Status: c.DefaultQuery("status", "all"), Role: c.DefaultQuery("role", "all"), Kind: c.Query("kind"), Page: page, PageSize: pageSize})
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取用户列表失败", err)
 		return
@@ -34,7 +34,7 @@ func (h *UserAdminHandler) List(c *gin.Context) {
 }
 
 func (h *UserAdminHandler) Stats(c *gin.Context) {
-	result, err := h.users.Stats()
+	result, err := h.users.Stats(c.Query("kind"))
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取用户统计失败", err)
 		return
@@ -58,21 +58,22 @@ func (h *UserAdminHandler) Get(c *gin.Context) {
 
 func (h *UserAdminHandler) Create(c *gin.Context) {
 	var request struct {
-		Username  string `json:"username" binding:"required,min=3,max=50"`
-		Password  string `json:"password" binding:"required,min=6,max=72"`
-		Email     string `json:"email" binding:"omitempty,email"`
-		Nickname  string `json:"nickname" binding:"max=50"`
-		Phone     string `json:"phone" binding:"max=30"`
-		Role      string `json:"role"`
-		Remark    string `json:"remark" binding:"max=500"`
-		RiskLevel string `json:"risk_level"`
-		Status    int    `json:"status"`
+		Username      string `json:"username" binding:"required,min=3,max=50"`
+		Password      string `json:"password" binding:"required,min=8,max=72"`
+		Email         string `json:"email" binding:"omitempty,email"`
+		Nickname      string `json:"nickname" binding:"max=50"`
+		Phone         string `json:"phone" binding:"max=30"`
+		Role          string `json:"role"`
+		Remark        string `json:"remark" binding:"max=500"`
+		RiskLevel     string `json:"risk_level"`
+		Status        int    `json:"status"`
+		ParentAgentID uint64 `json:"parent_agent_id"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		constants.SendError(c, http.StatusBadRequest, "用户资料不正确", err)
 		return
 	}
-	result, err := h.users.Create(services.CreateAdminUserInput{Username: request.Username, Password: request.Password, Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, Role: request.Role, Remark: request.Remark, RiskLevel: request.RiskLevel, Status: request.Status})
+	result, err := h.users.Create(services.CreateAdminUserInput{Username: request.Username, Password: request.Password, Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, Role: request.Role, Remark: request.Remark, RiskLevel: request.RiskLevel, Status: request.Status, ParentAgentID: request.ParentAgentID})
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "创建用户失败", err)
 		return
@@ -135,10 +136,10 @@ func (h *UserAdminHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 	var request struct {
-		Password string `json:"password" binding:"required,min=6,max=72"`
+		Password string `json:"password" binding:"required,min=8,max=72"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		constants.SendError(c, http.StatusBadRequest, "新密码至少需要 6 个字符", err)
+		constants.SendError(c, http.StatusBadRequest, "新密码长度需为 8–72 个字符", err)
 		return
 	}
 	if err := h.users.ResetPassword(id, request.Password); err != nil {

@@ -13,6 +13,7 @@ var ledgerCategories = map[string]string{
 	"checkin":            "welfare",
 	"redpacket":          "welfare",
 	"invite":             "welfare",
+	"agent_share":        "share",
 }
 
 func ledgerCategory(ledgerType string) string {
@@ -30,6 +31,8 @@ func ledgerCategoryLabel(category string) string {
 		return "投注结算"
 	case "welfare":
 		return "福利活动"
+	case "share":
+		return "代理分账"
 	default:
 		return "其他"
 	}

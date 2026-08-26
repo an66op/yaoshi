@@ -4,9 +4,7 @@ import (
 	"backend/constants"
 	"backend/services"
 	"net/http"
-	"os"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -14,45 +12,10 @@ import (
 
 type BetHandler struct {
 	bets *services.BetAdminService
-	bots *services.TestBotService
 }
 
 func NewBetHandler(db *gorm.DB) *BetHandler {
-	handler := &BetHandler{bets: services.NewBetAdminService(db), bots: services.NewTestBotService(db)}
-	if os.Getenv("BACKEND_TEST_BOTS") == "1" {
-		services.StartTestBotsFromEnvironment(handler.bots)
-	}
-	return handler
-}
-
-func (h *BetHandler) TestBotStatus(c *gin.Context) {
-	constants.SendSuccess(c, http.StatusOK, "ok", h.bots.Status())
-}
-
-func (h *BetHandler) StartTestBots(c *gin.Context) {
-	var request struct {
-		IntervalSecs int `json:"interval_secs"`
-	}
-	_ = c.ShouldBindJSON(&request)
-	status, err := h.bots.Start(time.Duration(request.IntervalSecs) * time.Second)
-	if err != nil {
-		constants.SendError(c, http.StatusInternalServerError, "启动测试机器人失败", err)
-		return
-	}
-	constants.SendSuccess(c, http.StatusOK, "测试机器人已启动", status)
-}
-
-func (h *BetHandler) StopTestBots(c *gin.Context) {
-	constants.SendSuccess(c, http.StatusOK, "测试机器人已停止", h.bots.Stop())
-}
-
-func (h *BetHandler) RunTestBotsOnce(c *gin.Context) {
-	status, err := h.bots.RunOnce()
-	if err != nil {
-		constants.SendError(c, http.StatusInternalServerError, "执行测试机器人失败", err)
-		return
-	}
-	constants.SendSuccess(c, http.StatusOK, "测试机器人已完成一轮投注", status)
+	return &BetHandler{bets: services.NewBetAdminService(db)}
 }
 
 func (h *BetHandler) Monitor(c *gin.Context) {
@@ -62,22 +25,6 @@ func (h *BetHandler) Monitor(c *gin.Context) {
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "ok", result)
-}
-
-func (h *BetHandler) SeedMonitor(c *gin.Context) {
-	var request struct {
-		GameID string `json:"game_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&request); err != nil {
-		constants.SendError(c, http.StatusBadRequest, "请选择游戏", err)
-		return
-	}
-	result, err := h.bets.SeedDemo(request.GameID)
-	if err != nil {
-		constants.SendError(c, http.StatusInternalServerError, "生成演示注单失败", err)
-		return
-	}
-	constants.SendSuccess(c, http.StatusOK, "演示注单已生成", result)
 }
 
 func (h *BetHandler) Place(c *gin.Context) {

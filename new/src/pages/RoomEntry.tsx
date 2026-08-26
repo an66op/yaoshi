@@ -16,6 +16,7 @@ type Props = {
 export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }: Props) {
   const [room, setRoom] = useState(DEMO_ROOM)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
 
   const submit = async () => {
@@ -23,8 +24,13 @@ export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }:
     if (value.length < 4) return setError('请输入至少 4 位房间号')
     setLoading(true)
     setError('')
+    setNotice('')
     try {
       const result = await memberApi.joinRoom(value)
+      if (result.status === 'pending') {
+        setNotice(`入房申请已提交（编号 ${result.application_id ?? '—'}），审核通过后即可进入 ${result.room_code}`)
+        return
+      }
       onEnter(result.room_code, result.room_name)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '无法验证房间号')
@@ -57,7 +63,7 @@ export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }:
                 autoFocus
                 inputMode="numeric"
                 maxLength={12}
-                onChange={(event) => { setRoom(event.target.value.replace(/\D/g, '')); setError('') }}
+                onChange={(event) => { setRoom(event.target.value.replace(/\D/g, '')); setError(''); setNotice('') }}
                 onKeyDown={(event) => event.key === 'Enter' && void submit()}
                 placeholder="例如 1024 8801"
                 value={room}
@@ -66,6 +72,7 @@ export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }:
             </div>
           </label>
           {error && <p className="room-entry-error" role="alert">{error}</p>}
+          {notice && <p className="room-entry-success" role="status">{notice}</p>}
           <button className="room-entry-submit" disabled={loading} onClick={() => void submit()}>
             <span>{loading ? '验证中…' : '进入房间'}</span>
             <Icon name="arrow" />

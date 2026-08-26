@@ -3,7 +3,6 @@ package api
 import (
 	"backend/constants"
 	"backend/controller/drawfeed"
-	publicctrl "backend/controller/public"
 	"backend/lotteryfeed"
 	"backend/middleware"
 	"backend/services"
@@ -66,6 +65,7 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 				{Method: "POST", Pattern: "/room/join", Handler: h.MemberHandler.JoinRoom},
 				{Method: "GET", Pattern: "/bets", Handler: h.MemberHandler.ListBets},
 				{Method: "POST", Pattern: "/bets", Handler: h.MemberHandler.PlaceBet, Middlewares: []gin.HandlerFunc{middleware.MemberBetRateLimit()}},
+				{Method: "POST", Pattern: "/bets/cancel-current", Handler: h.MemberHandler.CancelCurrentIssueBets},
 				{Method: "POST", Pattern: "/bets/:id/cancel", Handler: h.MemberHandler.CancelBet},
 				{Method: "GET", Pattern: "/applications", Handler: h.MemberHandler.ListApplications},
 				{Method: "POST", Pattern: "/applications", Handler: h.MemberHandler.CreateApplication},
@@ -84,6 +84,7 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 				{Method: "GET", Pattern: "/chat/preview", Handler: h.MemberHandler.ChatPreview},
 				{Method: "GET", Pattern: "/chat/messages", Handler: h.MemberHandler.ListChatMessages},
 				{Method: "POST", Pattern: "/chat/messages", Handler: h.MemberHandler.PostChatMessage},
+				{Method: "POST", Pattern: "/chat/redpackets/:id/claim", Handler: h.MemberHandler.ClaimChatRedPacket},
 				{Method: "GET", Pattern: "/room/settings", Handler: h.MemberHandler.RoomSettings},
 				{Method: "GET", Pattern: "/games/:id/assistant", Handler: h.MemberHandler.AssistantStatus},
 				{Method: "GET", Pattern: "/games/:id/assistant/history", Handler: h.MemberHandler.AssistantBetHistory},
@@ -101,11 +102,70 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 			},
 		},
 		{
-			Prefix:      "/api",
-			Middlewares: []gin.HandlerFunc{middleware.AuthMiddleware(), middleware.AdminMiddleware(db)},
+			Prefix:      "/api/tenant",
+			Middlewares: []gin.HandlerFunc{middleware.AuthMiddleware(), middleware.TenantMiddleware(db), middleware.PrivilegedAudit(db, "tenant")},
 			Routes: []Route{
+				{Method: "POST", Pattern: "/ws-ticket", Handler: ws.HandleTicket, Middlewares: []gin.HandlerFunc{middleware.WSTicketRateLimit()}},
+				{Method: "GET", Pattern: "/me", Handler: h.TenantWorkspaceHandler.Me},
+				{Method: "GET", Pattern: "/dashboard", Handler: h.TenantWorkspaceHandler.Dashboard},
+				{Method: "GET", Pattern: "/agents", Handler: h.TenantWorkspaceHandler.Agents},
+				{Method: "POST", Pattern: "/agents", Handler: h.TenantWorkspaceHandler.CreateAgent},
+				{Method: "PATCH", Pattern: "/agents/:id", Handler: h.TenantWorkspaceHandler.UpdateAgent},
+				{Method: "POST", Pattern: "/agents/:id/reset-password", Handler: h.TenantWorkspaceHandler.ResetAgentPassword},
+				{Method: "GET", Pattern: "/rooms/:agentID/dashboard", Handler: h.TenantWorkspaceHandler.RoomDashboard},
+				{Method: "PATCH", Pattern: "/rooms/:agentID/settings", Handler: h.TenantWorkspaceHandler.UpdateRoomSettings},
+				{Method: "GET", Pattern: "/rooms/:agentID/users", Handler: h.TenantWorkspaceHandler.RoomUsers},
+				{Method: "PATCH", Pattern: "/rooms/:agentID/users/:userID/status", Handler: h.TenantWorkspaceHandler.SetRoomUserStatus},
+				{Method: "POST", Pattern: "/rooms/:agentID/users/:userID/balance", Handler: h.TenantWorkspaceHandler.AdjustRoomUserBalance},
+				{Method: "GET", Pattern: "/rooms/:agentID/bets", Handler: h.TenantWorkspaceHandler.RoomBets},
+				{Method: "GET", Pattern: "/rooms/:agentID/applications", Handler: h.TenantWorkspaceHandler.RoomApplications},
+				{Method: "POST", Pattern: "/rooms/:agentID/applications/:applicationID/review", Handler: h.TenantWorkspaceHandler.ReviewRoomApplication},
+				{Method: "GET", Pattern: "/rooms/:agentID/reports/operating", Handler: h.TenantWorkspaceHandler.RoomOperatingReport},
+				{Method: "GET", Pattern: "/rooms/:agentID/chat/conversations", Handler: h.TenantWorkspaceHandler.RoomConversations},
+				{Method: "GET", Pattern: "/rooms/:agentID/chat/messages", Handler: h.TenantWorkspaceHandler.RoomMessages},
+				{Method: "POST", Pattern: "/rooms/:agentID/chat/messages", Handler: h.TenantWorkspaceHandler.ReplyRoomChat},
+				{Method: "POST", Pattern: "/rooms/:agentID/chat/redpackets", Handler: h.TenantWorkspaceHandler.SendRoomRedPacket},
+				{Method: "PATCH", Pattern: "/rooms/:agentID/chat/lottery-rooms/:gameID/status", Handler: h.TenantWorkspaceHandler.SetLotteryRoomStatus},
+				{Method: "GET", Pattern: "/rooms/:agentID/robots/status", Handler: h.TenantWorkspaceHandler.RoomRobotStatus},
+				{Method: "POST", Pattern: "/rooms/:agentID/robots/run-once", Handler: h.TenantWorkspaceHandler.RunRoomRobot},
+			},
+		},
+		{
+			Prefix:      "/api/agent",
+			Middlewares: []gin.HandlerFunc{middleware.AuthMiddleware(), middleware.AgentMiddleware(db), middleware.PrivilegedAudit(db, "agent")},
+			Routes: []Route{
+				{Method: "POST", Pattern: "/ws-ticket", Handler: ws.HandleTicket, Middlewares: []gin.HandlerFunc{middleware.WSTicketRateLimit()}},
+				{Method: "GET", Pattern: "/me", Handler: h.AgentWorkspaceHandler.Me},
+				{Method: "GET", Pattern: "/dashboard", Handler: h.AgentWorkspaceHandler.Dashboard},
+				{Method: "PATCH", Pattern: "/room/settings", Handler: h.AgentWorkspaceHandler.UpdateRoomSettings},
+				{Method: "GET", Pattern: "/reports/operating", Handler: h.AgentWorkspaceHandler.OperatingReport},
+				{Method: "GET", Pattern: "/reports/profit-shares", Handler: h.AgentWorkspaceHandler.ProfitShares},
+				{Method: "GET", Pattern: "/users", Handler: h.AgentWorkspaceHandler.Users},
+				{Method: "PATCH", Pattern: "/users/:id/status", Handler: h.AgentWorkspaceHandler.SetUserStatus},
+				{Method: "POST", Pattern: "/users/:id/balance", Handler: h.AgentWorkspaceHandler.AdjustBalance},
+				{Method: "GET", Pattern: "/bets", Handler: h.AgentWorkspaceHandler.Bets},
+				{Method: "GET", Pattern: "/applications", Handler: h.AgentWorkspaceHandler.Applications},
+				{Method: "POST", Pattern: "/applications/:id/review", Handler: h.AgentWorkspaceHandler.ReviewApplication},
+				{Method: "GET", Pattern: "/trading", Handler: h.AgentWorkspaceHandler.Trading},
+				{Method: "PUT", Pattern: "/trading", Handler: h.AgentWorkspaceHandler.UpdateTrading},
+				{Method: "GET", Pattern: "/chat/conversations", Handler: h.AgentWorkspaceHandler.Conversations},
+				{Method: "GET", Pattern: "/chat/messages", Handler: h.AgentWorkspaceHandler.Messages},
+				{Method: "POST", Pattern: "/chat/messages", Handler: h.AgentWorkspaceHandler.Reply},
+				{Method: "POST", Pattern: "/chat/redpackets", Handler: h.AgentWorkspaceHandler.SendRedPacket},
+				{Method: "PATCH", Pattern: "/chat/lottery-rooms/:gameID/status", Handler: h.AgentWorkspaceHandler.SetLotteryRoomStatus},
+				{Method: "GET", Pattern: "/robots/status", Handler: h.AgentWorkspaceHandler.RobotStatus},
+				{Method: "POST", Pattern: "/robots/run-once", Handler: h.AgentWorkspaceHandler.RunRobot},
+			},
+		},
+		{
+			Prefix:      "/api",
+			Middlewares: []gin.HandlerFunc{middleware.AuthMiddleware(), middleware.AdminMiddleware(db), middleware.PrivilegedAudit(db, "admin")},
+			Routes: []Route{
+				{Method: "POST", Pattern: "/admin/ws-ticket", Handler: ws.HandleTicket, Middlewares: []gin.HandlerFunc{middleware.WSTicketRateLimit()}},
 				{Method: "GET", Pattern: "/admin/me", Handler: h.AuthHandler.Me},
 				{Method: "GET", Pattern: "/admin/dashboard", Handler: h.DashboardHandler.Dashboard},
+				{Method: "GET", Pattern: "/admin/audit-logs", Handler: h.SystemAuditHandler.Logs},
+				{Method: "GET", Pattern: "/admin/reconciliation", Handler: h.SystemAuditHandler.Reconciliation},
 				{Method: "GET", Pattern: "/admin/games", Handler: h.DashboardHandler.Games},
 				{Method: "POST", Pattern: "/admin/games/sync-target", Handler: h.DashboardHandler.SyncTargetGames},
 				{Method: "GET", Pattern: "/admin/games/:id/draws", Handler: h.DashboardHandler.Draws},
@@ -123,6 +183,10 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 				{Method: "GET", Pattern: "/admin/users/:id/trading", Handler: h.UserAdminHandler.GetTrading},
 				{Method: "PUT", Pattern: "/admin/users/:id/trading", Handler: h.UserAdminHandler.UpdateTrading},
 				{Method: "GET", Pattern: "/admin/agents", Handler: h.AgentHandler.List},
+				{Method: "GET", Pattern: "/admin/tenants", Handler: h.TenantHandler.List},
+				{Method: "POST", Pattern: "/admin/tenants", Handler: h.TenantHandler.Create},
+				{Method: "PATCH", Pattern: "/admin/tenants/:id", Handler: h.TenantHandler.Update},
+				{Method: "POST", Pattern: "/admin/tenants/:id/reset-password", Handler: h.TenantHandler.ResetPassword},
 				{Method: "POST", Pattern: "/admin/agents", Handler: h.AgentHandler.Create},
 				{Method: "PATCH", Pattern: "/admin/agents/:id", Handler: h.AgentHandler.Update},
 				{Method: "GET", Pattern: "/admin/agents/:id/trading", Handler: h.AgentHandler.GetTrading},
@@ -136,8 +200,13 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 				{Method: "POST", Pattern: "/admin/applications", Handler: h.ApplicationAdminHandler.Create},
 				{Method: "POST", Pattern: "/admin/applications/:id/review", Handler: h.ApplicationAdminHandler.Review},
 				{Method: "GET", Pattern: "/admin/reports/financial", Handler: h.ReportHandler.Financial},
+				{Method: "GET", Pattern: "/admin/reports/operating", Handler: h.ReportHandler.Operating},
+				{Method: "GET", Pattern: "/admin/reports/profit-shares", Handler: h.ReportHandler.ProfitShares},
+				{Method: "POST", Pattern: "/admin/reports/profit-shares/run", Handler: h.ReportHandler.RunProfitShares},
 				{Method: "GET", Pattern: "/admin/settings", Handler: h.SettingsHandler.Get},
 				{Method: "PUT", Pattern: "/admin/settings", Handler: h.SettingsHandler.Update},
+				{Method: "GET", Pattern: "/admin/room-activity/status", Handler: h.SettingsHandler.RoomActivityStatus},
+				{Method: "POST", Pattern: "/admin/room-activity/run-once", Handler: h.SettingsHandler.RunRoomActivityOnce},
 				{Method: "GET", Pattern: "/admin/plays/catalog", Handler: h.OddsHandler.Catalog},
 				{Method: "GET", Pattern: "/admin/games/:id/odds-limits", Handler: h.OddsHandler.Get},
 				{Method: "PUT", Pattern: "/admin/games/:id/odds-limits", Handler: h.OddsHandler.Update},
@@ -149,11 +218,6 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 				{Method: "PATCH", Pattern: "/admin/wallet/channels/:id/status", Handler: h.WalletHandler.SetStatus},
 				{Method: "DELETE", Pattern: "/admin/wallet/channels/:id", Handler: h.WalletHandler.Delete},
 				{Method: "GET", Pattern: "/admin/monitor", Handler: h.BetHandler.Monitor},
-				{Method: "POST", Pattern: "/admin/monitor/seed", Handler: h.BetHandler.SeedMonitor},
-				{Method: "GET", Pattern: "/admin/test-bots", Handler: h.BetHandler.TestBotStatus},
-				{Method: "POST", Pattern: "/admin/test-bots/start", Handler: h.BetHandler.StartTestBots},
-				{Method: "POST", Pattern: "/admin/test-bots/stop", Handler: h.BetHandler.StopTestBots},
-				{Method: "POST", Pattern: "/admin/test-bots/run-once", Handler: h.BetHandler.RunTestBotsOnce},
 				{Method: "GET", Pattern: "/admin/bets", Handler: h.BetHandler.List},
 				{Method: "POST", Pattern: "/admin/bets", Handler: h.BetHandler.Place},
 				{Method: "POST", Pattern: "/admin/bets/:id/cancel", Handler: h.BetHandler.Cancel},
@@ -162,6 +226,7 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 				{Method: "GET", Pattern: "/admin/games/:id/issues/:issue/settlement", Handler: h.BetHandler.SettlementStatus},
 				{Method: "GET", Pattern: "/admin/reports/board", Handler: h.BetHandler.BoardReport},
 				{Method: "GET", Pattern: "/admin/activities", Handler: h.OpsHandler.ListActivities},
+				{Method: "POST", Pattern: "/admin/activities/upload", Handler: h.OpsHandler.UploadActivityImage},
 				{Method: "POST", Pattern: "/admin/activities", Handler: h.OpsHandler.CreateActivity},
 				{Method: "PUT", Pattern: "/admin/activities/:id", Handler: h.OpsHandler.UpdateActivity},
 				{Method: "PATCH", Pattern: "/admin/activities/:id/status", Handler: h.OpsHandler.SetActivityStatus},
@@ -177,6 +242,8 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 				{Method: "GET", Pattern: "/admin/chat/conversations", Handler: h.OpsHandler.ListChatConversations},
 				{Method: "GET", Pattern: "/admin/chat/messages", Handler: h.OpsHandler.ListChatMessages},
 				{Method: "POST", Pattern: "/admin/chat/messages", Handler: h.OpsHandler.ReplyChat},
+				{Method: "POST", Pattern: "/admin/chat/redpackets", Handler: h.OpsHandler.SendChatRedPacket},
+				{Method: "PATCH", Pattern: "/admin/chat/lottery-rooms/status", Handler: h.OpsHandler.SetLotteryRoomStatus},
 				{Method: "DELETE", Pattern: "/admin/chat/messages/:id", Handler: h.OpsHandler.DeleteChatMessage},
 				{Method: "PATCH", Pattern: "/admin/chat/users/:userID/mute", Handler: h.OpsHandler.SetChatMute},
 				{Method: "PUT", Pattern: "/admin/chat/announcement", Handler: h.OpsHandler.SetChatAnnouncement},
@@ -193,7 +260,6 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 
 func LoadDrawFeedRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 	h := drawfeed.NewHandler(db, scheduler)
-	ent := publicctrl.NewEntertainmentHandler(db)
 	g := r.Group("/api/public")
 	g.GET("/clock", h.Clock)
 	g.GET("/lottery/status", h.Status)
@@ -201,13 +267,19 @@ func LoadDrawFeedRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Sched
 	g.GET("/lottery/games/enabled", h.EnabledGames)
 	g.GET("/lottery/games/:id/draws", h.Draws)
 	g.GET("/lottery/latest", h.Latest)
-	g.GET("/entertainment/portal", ent.Portal)
 	g.GET("/rooms/:code", func(c *gin.Context) {
 		result, err := services.NewSpecialAdminService(db).ResolveRoom(c.Param("code"))
 		if err != nil {
 			constants.SendError(c, http.StatusNotFound, "房间号无效或未开通", err)
 			return
 		}
-		constants.SendSuccess(c, http.StatusOK, "ok", result)
+		// Room ownership is an internal authorization detail.  The public
+		// resolver is used only to confirm that a room exists, so never expose
+		// the owning agent's database id or login name to anonymous callers.
+		constants.SendSuccess(c, http.StatusOK, "ok", gin.H{
+			"room_code": result.RoomCode,
+			"room_name": result.RoomName,
+			"room_logo": result.RoomLogo,
+		})
 	})
 }

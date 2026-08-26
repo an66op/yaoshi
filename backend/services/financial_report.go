@@ -34,6 +34,7 @@ type FinancialReportSummary struct {
 	BettingCredit       float64 `json:"betting_credit"`
 	BettingDebit        float64 `json:"betting_debit"`
 	WelfareCredit       float64 `json:"welfare_credit"`
+	AgentShareCredit    float64 `json:"agent_share_credit"`
 	RecordCount         int64   `json:"record_count"`
 	ActiveUsers         int64   `json:"active_users"`
 	PendingApplications int64   `json:"pending_applications"`
@@ -96,6 +97,7 @@ func categoryCaseSQL() string {
 		WHEN t.type IN ('manual','application_credit','application_debit') THEN 'finance'
 		WHEN t.type IN ('bet','bet_cancel','settlement') THEN 'betting'
 		WHEN t.type IN ('rebate','checkin','redpacket','invite') THEN 'welfare'
+		WHEN t.type = 'agent_share' THEN 'share'
 		ELSE 'other' END`
 }
 
@@ -208,6 +210,8 @@ func (s *FinancialReportService) Financial(filter FinancialReportFilter) (*Finan
 			summary.BettingDebit = centsToAmount(row.DebitCents)
 		case "welfare":
 			summary.WelfareCredit = centsToAmount(row.CreditCents)
+		case "share":
+			summary.AgentShareCredit = centsToAmount(row.CreditCents)
 		}
 	}
 
@@ -225,10 +229,10 @@ func (s *FinancialReportService) filteredLedger(filter FinancialReportFilter, pe
 		query = query.Where("t.amount_cents > 0")
 	case "debit":
 		query = query.Where("t.amount_cents < 0")
-	case "finance", "betting", "welfare":
+	case "finance", "betting", "welfare", "share":
 		types := ledgerTypesByCategory(filter.Type)
 		query = query.Where("t.type IN ?", types)
-	case "manual", "application_credit", "application_debit", "bet", "bet_cancel", "settlement", "rebate", "checkin", "redpacket", "invite":
+	case "manual", "application_credit", "application_debit", "bet", "bet_cancel", "settlement", "rebate", "checkin", "redpacket", "invite", "agent_share":
 		query = query.Where("t.type = ?", filter.Type)
 	}
 	if keyword := strings.TrimSpace(filter.Query); keyword != "" {
@@ -249,6 +253,8 @@ func ledgerTypesByCategory(category string) []string {
 		return []string{"bet", "bet_cancel", "settlement"}
 	case "welfare":
 		return []string{"rebate", "checkin", "redpacket", "invite"}
+	case "share":
+		return []string{"agent_share"}
 	default:
 		return []string{}
 	}
@@ -325,10 +331,10 @@ func parseReportPeriod(startText, endText string) (reportPeriod, error) {
 
 func validateLedgerType(value string) error {
 	switch strings.TrimSpace(value) {
-	case "", "all", "credit", "debit", "finance", "betting", "welfare",
+	case "", "all", "credit", "debit", "finance", "betting", "welfare", "share",
 		"manual", "application_credit", "application_debit",
 		"bet", "bet_cancel", "settlement",
-		"rebate", "checkin", "redpacket", "invite":
+		"rebate", "checkin", "redpacket", "invite", "agent_share":
 		return nil
 	default:
 		return apperrors.NewBusinessError("INVALID_REPORT_TYPE", fmt.Sprintf("不支持的流水类型：%s", value))

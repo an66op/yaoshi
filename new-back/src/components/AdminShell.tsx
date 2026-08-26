@@ -3,6 +3,7 @@ import { useTheme } from '@mui/material/styles'
 import DashboardRounded from '@mui/icons-material/DashboardRounded'
 import PeopleAltRounded from '@mui/icons-material/PeopleAltRounded'
 import SupportAgentRounded from '@mui/icons-material/SupportAgentRounded'
+import ForumRounded from '@mui/icons-material/ForumRounded'
 import FactCheckRounded from '@mui/icons-material/FactCheckRounded'
 import AssessmentRounded from '@mui/icons-material/AssessmentRounded'
 import AccountBalanceWalletRounded from '@mui/icons-material/AccountBalanceWalletRounded'
@@ -24,24 +25,64 @@ import SearchRounded from '@mui/icons-material/SearchRounded'
 import KeyboardCommandKeyRounded from '@mui/icons-material/KeyboardCommandKeyRounded'
 import LogoutRounded from '@mui/icons-material/LogoutRounded'
 import PersonRounded from '@mui/icons-material/PersonRounded'
+import ApartmentRounded from '@mui/icons-material/ApartmentRounded'
 import CheckCircleRounded from '@mui/icons-material/CheckCircleRounded'
+import ViewListRounded from '@mui/icons-material/ViewListRounded'
 import type { ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { adminApi, type AdminNotification } from '../api'
+import { adminApi, agentApi, type AdminNotification } from '../api'
+import { DEFAULT_ADMIN_MENU, normalizeAdminMenu, type AdminMenuItemConfig } from '../adminMenu'
 import { useServerClock } from '../hooks/useServerClock'
 import { useFeedback } from './feedback'
 import type { AuthUser } from '../auth'
 
-const drawerWidth = 244
-const groups = [
-  { label: '总览', items: [{ path: '/', label: '运营首页', icon: <DashboardRounded /> }] },
-  { label: '业务管理', items: [{ path: '/users', label: '用户管理', icon: <PeopleAltRounded /> }, { path: '/agents', label: '代理管理', icon: <SupportAgentRounded /> }, { path: '/applications', label: '申请管理', icon: <FactCheckRounded /> }, { path: '/chat', label: '客服与聊天室', icon: <SupportAgentRounded /> }, { path: '/reports', label: '数据报表', icon: <AssessmentRounded /> }, { path: '/wallet', label: '钱包配置', icon: <AccountBalanceWalletRounded /> }] },
-  { label: '游戏运营', items: [{ path: '/activities', label: '活动管理', icon: <CampaignRounded /> }, { path: '/monitor', label: '现场监控', icon: <MonitorHeartRounded /> }, { path: '/bets', label: '注单管理', icon: <ListAltRounded /> }, { path: '/results', label: '开奖结果查询', icon: <ReceiptLongRounded /> }, { path: '/limits', label: '赔率限额', icon: <TuneRounded /> }, { path: '/board-report', label: '打盘报表', icon: <FlightTakeoffRounded /> }] },
-  { label: '扩展服务', items: [{ path: '/lottery-network', label: '开奖线路', icon: <PublicRounded /> }, { path: '/entertainment', label: '彩票娱乐', icon: <SportsEsportsRounded /> }, { path: '/special-numbers', label: '房间靓号', icon: <StarsRounded /> }] },
-  { label: '系统', items: [{ path: '/system', label: '系统设置', icon: <SettingsRounded /> }] },
+const drawerWidth = 220
+type ShellMenuItem = { path: string; label: string; icon: ReactNode }
+type ShellMenuGroup = { label: string; items: ShellMenuItem[] }
+const adminIcons: Record<string, ReactNode> = {
+  '/': <DashboardRounded />, '/tenants': <ApartmentRounded />, '/users': <PeopleAltRounded />, '/members': <PeopleAltRounded />, '/agents': <SupportAgentRounded />,
+  '/applications': <FactCheckRounded />, '/room-reviews': <CheckCircleRounded />, '/chat': <SupportAgentRounded />, '/lottery-chat': <ForumRounded />, '/reports': <AssessmentRounded />, '/wallet': <AccountBalanceWalletRounded />,
+  '/announcements': <CampaignRounded />, '/activities': <CampaignRounded />, '/monitor': <MonitorHeartRounded />, '/bets': <ListAltRounded />, '/results': <ReceiptLongRounded />,
+  '/limits': <TuneRounded />, '/board-report': <FlightTakeoffRounded />, '/lottery-network': <PublicRounded />, '/entertainment': <SportsEsportsRounded />,
+  '/special-numbers': <StarsRounded />, '/menu-management': <ViewListRounded />, '/system': <SettingsRounded />,
+}
+
+const createAdminGroups = (menu: AdminMenuItemConfig[]) => {
+  const result: ShellMenuGroup[] = []
+  const indexes = new Map<string, number>()
+  menu.filter(item => item.visible).sort((a, b) => a.order - b.order).forEach(item => {
+    let index = indexes.get(item.group)
+    if (index === undefined) {
+      index = result.length
+      indexes.set(item.group, index)
+      result.push({ label: item.group, items: [] })
+    }
+    result[index].items.push({ path: item.path, label: item.label, icon: adminIcons[item.path] ?? <ViewListRounded /> })
+  })
+  return result
+}
+
+const agentGroups: ShellMenuGroup[] = [
+  { label: '房间工作台', items: [{ path: '/', label: '房间总览', icon: <DashboardRounded /> }] },
+  { label: '房间运营', items: [{ path: '/reports', label: '利润与分账', icon: <AssessmentRounded /> }, { path: '/members', label: '会员管理', icon: <PeopleAltRounded /> }, { path: '/applications', label: '申请管理', icon: <FactCheckRounded /> }, { path: '/lottery-chat', label: '彩票室', icon: <ForumRounded /> }, { path: '/chat', label: '客服与群聊', icon: <SupportAgentRounded /> }, { path: '/bets', label: '房间注单', icon: <ListAltRounded /> }] },
 ]
 
-const routeNames = Object.fromEntries(groups.flatMap(group => group.items.map(item => [item.path, item.label])))
+const tenantGroups: ShellMenuGroup[] = [
+  { label: '租户工作台', items: [{ path: '/', label: '租户总览', icon: <DashboardRounded /> }] },
+  { label: '房间与会员', items: [
+    { path: '/agents', label: '房间管理', icon: <SupportAgentRounded /> },
+    { path: '/members', label: '会员管理', icon: <PeopleAltRounded /> },
+  ] },
+  { label: '财务与运营', items: [
+    { path: '/applications', label: '申请管理', icon: <FactCheckRounded /> },
+    { path: '/bets', label: '房间注单', icon: <ListAltRounded /> },
+    { path: '/reports', label: '经营报表', icon: <AssessmentRounded /> },
+  ] },
+  { label: '内容与服务', items: [
+    { path: '/lottery-chat', label: '彩票室', icon: <ForumRounded /> },
+    { path: '/chat', label: '客服与群聊', icon: <SupportAgentRounded /> },
+  ] },
+]
 
 export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogout, children }: { path: string; onNavigate: (path: string) => void; mode: 'light' | 'dark'; onToggleMode: () => void; user: AuthUser; onLogout: () => void; children: ReactNode }) {
   const theme = useTheme()
@@ -52,28 +93,41 @@ export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogou
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null)
   const [notificationAnchor, setNotificationAnchor] = useState<HTMLElement | null>(null)
   const [profileAnchor, setProfileAnchor] = useState<HTMLElement | null>(null)
-  const [roomCode, setRoomCode] = useState('1231')
+  const [roomCode, setRoomCode] = useState('')
   const [notifications, setNotifications] = useState<AdminNotification[]>([])
+  const [adminMenu, setAdminMenu] = useState<AdminMenuItemConfig[]>(() => normalizeAdminMenu(DEFAULT_ADMIN_MENU))
   const { now: serverNow, synced: clockSynced, latency } = useServerClock()
   const { showMessage } = useFeedback()
+  const visibleGroups = useMemo<ShellMenuGroup[]>(() => user.role === 'agent' ? agentGroups : user.role === 'tenant' ? tenantGroups : createAdminGroups(adminMenu), [adminMenu, user.role])
   const navigate = (next: string) => { onNavigate(next); setMobileOpen(false) }
-  const pages = useMemo(() => groups.flatMap(group => group.items).filter(item => item.label.includes(query.trim())), [query])
+  const pages = useMemo(() => visibleGroups.flatMap(group => group.items).filter(item => item.label.includes(query.trim())), [query, visibleGroups])
   const unreadCount = useMemo(() => notifications.filter(item => !item.read).length, [notifications])
 
   const loadShellMeta = useCallback(() => {
+    if (user.role === 'agent') {
+      void agentApi.dashboard().then(data => setRoomCode(data.room_code)).catch(() => undefined)
+      return
+    }
+	if (user.role === 'tenant') { setRoomCode('租户'); return }
     void Promise.all([
-      adminApi.settings().then(settings => setRoomCode(settings.room_code || settings.room_name || '1231')).catch(() => undefined),
+      adminApi.settings().then(settings => {
+        setAdminMenu(normalizeAdminMenu(settings.game?.admin_menu))
+      }).catch(() => undefined),
       adminApi.notifications(12).then(setNotifications).catch(() => setNotifications([])),
     ])
-  }, [])
+  }, [user.role])
 
   useEffect(() => {
     const check = () => adminApi.health().then(() => setBackendOnline(true)).catch(() => setBackendOnline(false))
-    check()
-    loadShellMeta()
+    const initial = window.setTimeout(() => { void check(); loadShellMeta() }, 0)
     const timer = window.setInterval(check, 30000)
     const metaTimer = window.setInterval(loadShellMeta, 60000)
-    return () => { window.clearInterval(timer); window.clearInterval(metaTimer) }
+    return () => { window.clearTimeout(initial); window.clearInterval(timer); window.clearInterval(metaTimer) }
+  }, [loadShellMeta])
+  useEffect(() => {
+    const refreshMenu = () => loadShellMeta()
+    window.addEventListener('yaotu-admin-menu-updated', refreshMenu)
+    return () => window.removeEventListener('yaotu-admin-menu-updated', refreshMenu)
   }, [loadShellMeta])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -84,7 +138,7 @@ export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogou
   }, [])
   const drawer = <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: '#071f38', color: '#b9d1db' }}>
     <Toolbar sx={{ minHeight: '72px !important', px: 2.2, gap: 1.3 }}><Box sx={{ width: 40, height: 40, borderRadius: 2.5, display: 'grid', placeItems: 'center', color: 'white', fontWeight: 900, fontSize: 19, background: 'linear-gradient(145deg,#1684ad,#29bdb0)', boxShadow: '0 8px 18px rgba(25,159,168,.35)' }}>王</Box><Box><Typography fontWeight={850} color="white" letterSpacing={2}>王者</Typography><Typography fontSize={10} color="#6f94a5" letterSpacing={1.4}>管理中心</Typography></Box></Toolbar>
-    <Box sx={{ flex: 1, overflowY: 'auto', px: 1.2, pb: 1 }}>{groups.map(group => <Box key={group.label} mb={1}><Typography variant="overline" sx={{ display: 'block', px: 1.5, py: .6, color: '#64879a', fontSize: 9, fontWeight: 800, letterSpacing: 1.4 }}>{group.label}</Typography><List dense disablePadding>{group.items.map(item => <ListItemButton key={item.path} selected={path === item.path} onClick={() => navigate(item.path)} sx={{ minHeight: 42, mb: .4, px: 1.4, borderRadius: 2.2, color: '#a9c3ce', '& .MuiListItemIcon-root': { color: 'inherit' }, '&.Mui-selected': { color: 'white', background: 'linear-gradient(105deg,#1682aa,#24afa9)', boxShadow: '0 6px 16px rgba(5,55,75,.45)' }, '&.Mui-selected:hover': { background: 'linear-gradient(105deg,#1682aa,#24afa9)' }, '&:hover': { color: 'white', bgcolor: 'rgba(255,255,255,.06)' } }}><ListItemIcon sx={{ minWidth: 34 }}>{item.icon}</ListItemIcon><ListItemText primary={item.label} primaryTypographyProps={{ fontSize: 12, fontWeight: 650 }} /></ListItemButton>)}</List></Box>)}</Box>
+    <Box sx={{ flex: 1, overflowY: 'auto', px: 1.2, pb: 1 }}>{visibleGroups.map(group => <Box key={group.label} mb={1}><Typography variant="overline" sx={{ display: 'block', px: 1.5, py: .6, color: '#64879a', fontSize: 9, fontWeight: 800, letterSpacing: 1.4 }}>{group.label}</Typography><List dense disablePadding>{group.items.map(item => <ListItemButton key={item.path} selected={path === item.path} onClick={() => navigate(item.path)} sx={{ minHeight: 42, mb: .4, px: 1.4, borderRadius: 2.2, color: '#a9c3ce', '& .MuiListItemIcon-root': { color: 'inherit' }, '&.Mui-selected': { color: 'white', background: 'linear-gradient(105deg,#1682aa,#24afa9)', boxShadow: '0 6px 16px rgba(5,55,75,.45)' }, '&.Mui-selected:hover': { background: 'linear-gradient(105deg,#1682aa,#24afa9)' }, '&:hover': { color: 'white', bgcolor: 'rgba(255,255,255,.06)' } }}><ListItemIcon sx={{ minWidth: 34 }}>{item.icon}</ListItemIcon><ListItemText primary={item.label} primaryTypographyProps={{ fontSize: 12, fontWeight: 650 }} /></ListItemButton>)}</List></Box>)}</Box>
     <Box sx={{ m: 1.5, p: 1.3, borderRadius: 2.5, border: '1px solid rgba(255,255,255,.08)', bgcolor: 'rgba(255,255,255,.035)' }}><Stack direction="row" alignItems="center" gap={1}><Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: backendOnline === false ? '#ee7272' : backendOnline === null ? '#dca94c' : '#42d996', boxShadow: `0 0 0 4px ${backendOnline === false ? 'rgba(238,114,114,.12)' : 'rgba(66,217,150,.12)'}` }} /><Typography fontSize={10}>{backendOnline === null ? 'backend 检测中' : backendOnline ? 'backend 已连接' : 'backend 未连接'}</Typography></Stack><Typography fontSize={9} color="#668899" mt={.7}>王者后台 · Vite + MUI</Typography></Box>
   </Box>
 
@@ -110,9 +164,9 @@ export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogou
             <MenuRounded />
           </IconButton>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography fontSize={10} color="text.secondary">王者管理中心 / 房间 {roomCode}</Typography>
+            <Typography fontSize={10} color="text.secondary">王者管理中心 / {user.role === 'agent' ? `房间 ${roomCode || '—'}` : user.role === 'tenant' ? '租户工作台' : '平台'}</Typography>
             <Stack direction="row" alignItems="center" gap={1}>
-              <Typography fontWeight={800} noWrap>{routeNames[path] ?? '运营首页'}</Typography>
+              <Typography fontWeight={800} noWrap>{visibleGroups.flatMap(group => group.items).find(item => item.path === path)?.label ?? '运营首页'}</Typography>
               <Chip size="small" color={backendOnline === false ? 'error' : 'success'} label={backendOnline === false ? '服务离线' : '运营正常'} sx={{ height: 20, fontSize: 9, display: { xs: 'none', sm: 'inline-flex' } }} />
             </Stack>
           </Box>
@@ -159,13 +213,12 @@ export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogou
       <Menu anchorEl={notificationAnchor} open={Boolean(notificationAnchor)} onClose={() => setNotificationAnchor(null)} slotProps={{ paper: { sx: { width: 330, maxWidth: 'calc(100vw - 24px)', mt: 1 } } }}>
         <Box px={2} py={1}>
           <Stack direction="row" justifyContent="space-between" alignItems="center">
-            <Typography fontWeight={800}>系统通知</Typography>
+            <Typography fontWeight={800}>待办与风险</Typography>
             <Stack direction="row" gap={1} alignItems="center">
               {unreadCount > 0 ? <Chip size="small" label={`${unreadCount} 条未读`} color="error" /> : null}
               <Button size="small" onClick={() => void adminApi.markAllNotificationsRead().then(loadShellMeta).then(() => showMessage('已全部标记已读'))}>全部已读</Button>
             </Stack>
           </Stack>
-          <Typography variant="caption" color="text.secondary">及时关注运行状态和风险提醒</Typography>
         </Box>
         <Divider />
         {notifications.length === 0 ? (
@@ -177,7 +230,7 @@ export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogou
             onClick={() => {
               void adminApi.markNotificationRead(item.id).then(loadShellMeta)
               setNotificationAnchor(null)
-              if (item.link) navigate(item.link)
+              if (item.link && user.role !== 'agent') navigate(item.link)
             }}
           >
             <ListItemIcon>
@@ -205,7 +258,7 @@ export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogou
             {pages.map(item => (
               <ListItemButton key={item.path} selected={item.path === path} onClick={() => { navigate(item.path); setSearchOpen(false); setQuery('') }} sx={{ borderRadius: 2, mb: .5 }}>
                 <ListItemIcon>{item.icon}</ListItemIcon>
-                <ListItemText primary={item.label} secondary={groups.find(group => group.items.some(entry => entry.path === item.path))?.label} />
+                <ListItemText primary={item.label} secondary={visibleGroups.find(group => group.items.some(entry => entry.path === item.path))?.label} />
               </ListItemButton>
             ))}
             {pages.length === 0 && <Typography color="text.secondary" textAlign="center" py={4}>没有找到对应页面</Typography>}

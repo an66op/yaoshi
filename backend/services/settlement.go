@@ -2,14 +2,17 @@ package services
 
 import (
 	"backend/data/models/bet"
+	"backend/data/models/chat"
 	"backend/data/models/lottery"
 	membernotify "backend/data/models/notify"
 	"backend/data/models/user"
 	apperrors "backend/errors"
 	"backend/ws"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,6 +69,20 @@ func (s *BetAdminService) SettleIssue(gameID, issue, operator string) (*Settleme
 	if len(numbers) == 0 {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "开奖号码无效")
 	}
+	mode := "platform"
+	if game.SourceKind == "external" || game.SourceKind == "official" {
+		mode = "external"
+	}
+	interval := time.Duration(maxInt(game.DrawInterval, 60)) * time.Second
+	issueRow := lottery.Issue{
+		GameID: game.ID, Issue: issue, Status: lottery.IssueStatusSettling, SourceMode: mode,
+		AcceptAt: draw.DrawAt.UTC().Add(-interval), SealAt: draw.DrawAt.UTC().Add(-3 * time.Second),
+	}
+	if err := s.db.Where("game_id = ? AND issue = ?", game.ID, issue).FirstOrCreate(&issueRow).Error; err != nil {
+		return nil, apperrors.NewSystemError("ISSUE_SAVE_FAILED", "保存期号状态失败", err)
+	}
+	drawAt := draw.DrawAt.UTC()
+	s.setIssueStatus(game.ID, issue, lottery.IssueStatusSettling, "", &drawAt, nil)
 
 	var pending []bet.Bet
 	if err := s.db.Where("game_id = ? AND issue = ? AND status = ?", game.ID, issue, "pending").Order("id asc").Find(&pending).Error; err != nil {
@@ -79,11 +96,15 @@ func (s *BetAdminService) SettleIssue(gameID, issue, operator string) (*Settleme
 		// A draw is still a room event even when nobody placed a bet. Clients use
 		// it to refresh the clock and let the draw assistant announce the result.
 		ws.NotifyDraw(gameID, issue, numbers)
+		settledAt := time.Now().UTC()
+		s.setIssueStatus(game.ID, issue, lottery.IssueStatusSettled, "", &drawAt, &settledAt)
 		return result, nil
 	}
 
 	operator = defaultString(strings.TrimSpace(operator), "系统结算")
-	summaries := map[uint64]*settleUserSummary{}
+	summaries := map[settlementRecipient]*settleUserSummary{}
+	deliveries := make([]settlementNotificationDelivery, 0)
+	roomMessages := make([]chat.Message, 0)
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		for _, item := range pending {
 			won, reason := evaluateBet(numbers, item.PlayCode, item.Position, item.Selection)
@@ -93,34 +114,55 @@ func (s *BetAdminService) SettleIssue(gameID, issue, operator string) (*Settleme
 				status = "won"
 				payout = int64(math.Round(float64(item.AmountCents) * item.Odds))
 			}
-			summary := summaries[item.UserID]
+			settledAt := time.Now().UTC()
+			rebateCents := int64(math.Round(float64(item.AmountCents) * clampPercent(item.RebateRateSnapshot) / 100))
+			grossProfitCents := item.AmountCents - payout
+			agentShareCents := agentProfitShareCents(grossProfitCents, item.AgentShareRateSnapshot)
+			updates := map[string]any{
+				"status":            status,
+				"payout_cents":      payout,
+				"rebate_cents":      rebateCents,
+				"agent_share_cents": agentShareCents,
+				"settled_at":        settledAt,
+				"remark":            trimRemark(item.Remark, reason),
+				"operator":          operator,
+				"updated_at":        settledAt,
+			}
+			updated := tx.Model(&bet.Bet{}).Where("id = ? AND status = ?", item.ID, "pending").Updates(updates)
+			if updated.Error != nil {
+				return updated.Error
+			}
+			// Another settlement worker may have completed this row after the
+			// initial snapshot.  Never credit or notify unless this transaction
+			// actually won the pending -> settled transition.
+			if updated.RowsAffected == 0 {
+				result.Skipped++
+				continue
+			}
+			recipient := settlementRecipient{UserID: item.UserID, RoomScope: defaultString(strings.TrimSpace(item.RoomScope), "legacy")}
+			summary := summaries[recipient]
 			if summary == nil {
-				summary = &settleUserSummary{}
-				summaries[item.UserID] = summary
+				summary = &settleUserSummary{roomScope: recipient.RoomScope}
+				summaries[recipient] = summary
 			}
 			summary.stakeCents += item.AmountCents
+			summary.details = append(summary.details, NotificationBetDetail{
+				PlayCode: item.PlayCode, PlayName: settlementPositionLabel(item.Position, item.PlayCode, item.PlayName), Position: item.Position, Selection: item.Selection,
+				Amount: centsToAmount(item.AmountCents), Odds: item.Odds, Result: status,
+				Payout: centsToAmount(payout),
+			})
 			if won {
 				summary.wonCount++
 				summary.payoutCents += payout
 			} else {
 				summary.lostCount++
 			}
-			updates := map[string]any{
-				"status":       status,
-				"payout_cents": payout,
-				"remark":       trimRemark(item.Remark, reason),
-				"operator":     operator,
-				"updated_at":   time.Now().UTC(),
-			}
-			if err := tx.Model(&bet.Bet{}).Where("id = ? AND status = ?", item.ID, "pending").Updates(updates).Error; err != nil {
-				return err
-			}
 			result.StakeAmount += centsToAmount(item.AmountCents)
 			if won {
 				result.Won++
 				result.PayoutAmount += centsToAmount(payout)
 				if payout > 0 {
-					if err := creditSettlement(tx, item.UserID, payout, game.Name, issue, operator); err != nil {
+					if err := creditSettlement(tx, item.ID, item.UserID, payout, game.Name, issue, operator); err != nil {
 						return err
 					}
 				}
@@ -128,52 +170,267 @@ func (s *BetAdminService) SettleIssue(gameID, issue, operator string) (*Settleme
 				result.Lost++
 			}
 		}
-		return nil
+		var persistErr error
+		deliveries, persistErr = persistSettlementResults(tx, game.ID, game.Name, issue, numbers, draw.DrawAt, summaries)
+		if persistErr != nil {
+			return persistErr
+		}
+		roomMessages, persistErr = persistRoomSettlementMessages(tx, draw.ID, game.ID, game.Name, issue, summaries)
+		return persistErr
 	})
 	if err != nil {
+		s.setIssueStatus(game.ID, issue, lottery.IssueStatusError, err.Error(), &drawAt, nil)
 		if app, ok := err.(*apperrors.AppError); ok {
 			return nil, app
 		}
 		return nil, apperrors.NewSystemError("SETTLEMENT_FAILED", "开奖结算失败", err)
 	}
-	notifySettlementResults(s.db, game.Name, issue, numbers, summaries)
+	deliverSettlementNotifications(deliveries)
+	deliverRoomSettlementMessages(s.db, roomMessages)
+	settledAt := time.Now().UTC()
+	s.setIssueStatus(game.ID, issue, lottery.IssueStatusSettled, "", &drawAt, &settledAt)
 	ws.NotifyDraw(gameID, issue, numbers)
 	return result, nil
 }
 
+type roomSettlementPlayer struct {
+	userID       uint64
+	nickname     string
+	balanceCents int64
+	stakeCents   int64
+	payoutCents  int64
+	details      []NotificationBetDetail
+}
+
+// persistRoomSettlementMessages writes two durable room events for every room
+// that participated in the issue: the per-player settlement detail and the
+// post-settlement score board. drawID + message type is the idempotency key.
+func persistRoomSettlementMessages(db *gorm.DB, drawID uint64, gameID, gameName, issue string, summaries map[settlementRecipient]*settleUserSummary) ([]chat.Message, error) {
+	byRoom := make(map[string][]roomSettlementPlayer)
+	for recipient, summary := range summaries {
+		if summary == nil {
+			continue
+		}
+		var account user.User
+		if err := db.Select("user_id", "username", "nickname", "balance_cents", "remark").First(&account, recipient.UserID).Error; err != nil {
+			return nil, err
+		}
+		// Activity accounts keep the room moving through real bets and real
+		// settlement, but their synthetic results must not flood the member chat.
+		// A room message is created only for genuine member participation.
+		if strings.TrimSpace(account.Remark) == roomActivityRemark {
+			continue
+		}
+		roomScope := defaultString(strings.TrimSpace(summary.roomScope), recipient.RoomScope)
+		byRoom[roomScope] = append(byRoom[roomScope], roomSettlementPlayer{
+			userID: recipient.UserID, nickname: defaultString(account.Nickname, account.Username), balanceCents: account.BalanceCents,
+			stakeCents: summary.stakeCents, payoutCents: summary.payoutCents, details: summary.details,
+		})
+	}
+	rooms := make([]string, 0, len(byRoom))
+	for roomScope := range byRoom {
+		rooms = append(rooms, roomScope)
+	}
+	sort.Strings(rooms)
+	createdMessages := make([]chat.Message, 0, len(rooms)*2)
+	for _, roomScope := range rooms {
+		players := byRoom[roomScope]
+		sort.SliceStable(players, func(i, j int) bool { return players[i].userID < players[j].userID })
+		resultContent := formatRoomSettlement(gameName, issue, players)
+		resultRow, created, err := createRoomSettlementMessage(db, drawID, roomScope, gameID, "settlement", resultContent)
+		if err != nil {
+			return nil, err
+		}
+		if created {
+			createdMessages = append(createdMessages, resultRow)
+		}
+
+		scores, err := roomScorePlayers(db, roomScope)
+		if err != nil {
+			return nil, err
+		}
+		scoreContent := formatRoomScores(gameName, issue, scores)
+		scoreRow, created, err := createRoomSettlementMessage(db, drawID, roomScope, gameID, "scoreboard", scoreContent)
+		if err != nil {
+			return nil, err
+		}
+		if created {
+			createdMessages = append(createdMessages, scoreRow)
+		}
+	}
+	return createdMessages, nil
+}
+
+func createRoomSettlementMessage(db *gorm.DB, drawID uint64, roomScope, gameID, messageType, content string) (chat.Message, bool, error) {
+	row := chat.Message{
+		UserID: 0, Username: "draw_assistant", Nickname: "开奖助手", RoomType: "group",
+		Scope: roomScope, RoomScope: roomScope, GameID: gameID, Content: content,
+		MessageType: messageType, ReferenceID: drawID,
+	}
+	result := db.Where(
+		"room_type = ? AND room_scope = ? AND game_id = ? AND message_type = ? AND reference_id = ?",
+		"group", roomScope, gameID, messageType, drawID,
+	).FirstOrCreate(&row)
+	return row, result.RowsAffected > 0, result.Error
+}
+
+func formatRoomSettlement(gameName, issue string, players []roomSettlementPlayer) string {
+	var body strings.Builder
+	fmt.Fprintf(&body, "【%s - %s】\n结算内容如下：", gameName, issue)
+	for _, player := range players {
+		net := player.payoutCents - player.stakeCents
+		fmt.Fprintf(&body, "\n\n[%s]\n得分：%+.2f", player.nickname, centsToAmount(net))
+		for _, detail := range player.details {
+			label := settlementPositionLabel(detail.Position, detail.PlayCode, detail.PlayName)
+			lineNet := int64(math.Round((detail.Payout - detail.Amount) * 100))
+			fmt.Fprintf(&body, "\n%s [%s/%.2f=%+.2f]", label, detail.Selection, detail.Amount, centsToAmount(lineNet))
+		}
+	}
+	return body.String()
+}
+
+func settlementPositionLabel(position int, playCode, playName string) string {
+	if playCode == "sum" {
+		return "冠亚和"
+	}
+	names := []string{"冠军", "亚军", "第三名", "第四名", "第五名", "第六名", "第七名", "第八名", "第九名", "第十名"}
+	if position >= 1 && position <= len(names) {
+		return names[position-1]
+	}
+	if label := strings.TrimSpace(playName); label != "" && label != "指定名次号码" {
+		return label
+	}
+	return fmt.Sprintf("第%d名", position)
+}
+
+func roomScorePlayers(db *gorm.DB, roomScope string) ([]roomSettlementPlayer, error) {
+	query := db.Model(&user.User{}).Where("status = ? AND COALESCE(remark, '') <> ?", 1, roomActivityRemark)
+	if strings.HasPrefix(roomScope, "agent:") {
+		agentID, err := strconv.ParseUint(strings.TrimPrefix(roomScope, "agent:"), 10, 64)
+		if err != nil || agentID == 0 {
+			return nil, fmt.Errorf("invalid room scope")
+		}
+		query = query.Where("user_id = ? OR parent_agent_id = ?", agentID, agentID)
+	} else if roomScope == "lobby" {
+		query = query.Where("parent_agent_id IS NULL AND role NOT IN ?", []string{"admin", "tenant", "agent"})
+	} else {
+		return nil, fmt.Errorf("invalid room scope")
+	}
+	var accounts []user.User
+	if err := query.Select("user_id", "username", "nickname", "balance_cents").Order("balance_cents DESC, user_id ASC").Limit(100).Find(&accounts).Error; err != nil {
+		return nil, err
+	}
+	players := make([]roomSettlementPlayer, 0, len(accounts))
+	for _, account := range accounts {
+		players = append(players, roomSettlementPlayer{userID: account.UserID, nickname: defaultString(account.Nickname, account.Username), balanceCents: account.BalanceCents})
+	}
+	return players, nil
+}
+
+func formatRoomScores(gameName, issue string, players []roomSettlementPlayer) string {
+	var body strings.Builder
+	fmt.Fprintf(&body, "【%s - %s】\n玩家积分如下：", gameName, issue)
+	for _, player := range players {
+		fmt.Fprintf(&body, "\n[%s  积分：%.2f]", player.nickname, centsToAmount(player.balanceCents))
+	}
+	return body.String()
+}
+
+func deliverRoomSettlementMessages(db *gorm.DB, messages []chat.Message) {
+	for _, message := range messages {
+		if recipients, err := betScopeRecipients(db, message.RoomScope); err == nil {
+			notifyChatEvent(db, recipients, message.RoomType, message.RoomScope, message.GameID, message.Scope, message.ID)
+		}
+	}
+}
+
 type settleUserSummary struct {
+	roomScope   string
 	wonCount    int
 	lostCount   int
 	stakeCents  int64
 	payoutCents int64
+	details     []NotificationBetDetail
 }
 
-func notifySettlementResults(db *gorm.DB, gameName, issue string, numbers []int, summaries map[uint64]*settleUserSummary) {
+type settlementRecipient struct {
+	UserID    uint64
+	RoomScope string
+}
+
+type NotificationBetDetail struct {
+	PlayCode  string  `json:"play_code,omitempty"`
+	PlayName  string  `json:"play_name"`
+	Position  int     `json:"position,omitempty"`
+	Selection string  `json:"selection"`
+	Amount    float64 `json:"amount"`
+	Odds      float64 `json:"odds"`
+	Result    string  `json:"result"`
+	Payout    float64 `json:"payout"`
+}
+
+type settlementNotificationDelivery struct {
+	userID  uint64
+	payload map[string]any
+}
+
+func persistSettlementResults(db *gorm.DB, gameID, gameName, issue string, numbers []int, drawAt time.Time, summaries map[settlementRecipient]*settleUserSummary) ([]settlementNotificationDelivery, error) {
 	numText := formatDrawNumbers(numbers)
-	for userID, summary := range summaries {
+	deliveries := make([]settlementNotificationDelivery, 0, len(summaries))
+	for recipient, summary := range summaries {
 		if summary == nil || (summary.wonCount == 0 && summary.lostCount == 0) {
 			continue
 		}
-		title := "开奖结果"
+		userID := recipient.UserID
+		roomScope := defaultString(strings.TrimSpace(summary.roomScope), recipient.RoomScope)
+		title := "开奖通知"
 		level := "info"
-		content := fmt.Sprintf("【%s · %s】开奖 %s。", gameName, issue, numText)
+		betCount := summary.wonCount + summary.lostCount
+		content := fmt.Sprintf("%s 第 %s 期开奖，开奖号码 %s。共投注 %d 注，投注金额 %.2f 元", gameName, issue, numText, betCount, centsToAmount(summary.stakeCents))
 		if summary.wonCount > 0 {
 			level = "success"
-			title = "恭喜中奖"
-			content += fmt.Sprintf(" 您有 %d 注中奖，派彩 %.2f 元。", summary.wonCount, centsToAmount(summary.payoutCents))
+			content += fmt.Sprintf("；中奖 %d 注，中奖金额 %.2f 元。", summary.wonCount, centsToAmount(summary.payoutCents))
 		} else {
-			level = "warning"
-			title = "未中奖"
-			content += fmt.Sprintf(" 本期 %d 注未中奖，投注 %.2f 元。", summary.lostCount, centsToAmount(summary.stakeCents))
+			content += "；本期未中奖。"
 		}
-		_ = db.Create(&membernotify.MemberNotification{
+		detailsJSON, _ := json.Marshal(summary.details)
+		eventKey := settlementEventKey(gameID, issue, userID, roomScope)
+		notice := membernotify.MemberNotification{
 			UserID: userID, Title: title, Content: content,
-			Level: level, Category: "winning",
-		}).Error
-		ws.NotifyUser(userID, "notification", map[string]any{
+			GameID: gameID, RoomScope: roomScope, EventKey: eventKey,
+			Level: level, Category: "winning", GameName: gameName, Issue: issue,
+			DrawNumbers: joinNumbers(numbers), DrawAt: &drawAt,
+			BetCount: betCount, WonCount: summary.wonCount,
+			StakeCents: summary.stakeCents, PayoutCents: summary.payoutCents,
+			BetDetailsJSON: string(detailsJSON),
+		}
+		created := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&notice)
+		if created.Error != nil {
+			return nil, created.Error
+		}
+		if created.RowsAffected == 0 {
+			continue
+		}
+		deliveries = append(deliveries, settlementNotificationDelivery{userID: userID, payload: map[string]any{
+			"id": notice.ID, "game_id": gameID, "room_scope": roomScope,
 			"title": title, "content": content, "level": level, "category": "winning",
-		})
+			"game_name": gameName, "issue": issue, "draw_numbers": numbers,
+			"draw_at": drawAt, "bet_count": betCount, "won_count": summary.wonCount,
+			"stake_amount": centsToAmount(summary.stakeCents), "payout_amount": centsToAmount(summary.payoutCents),
+			"bet_details": summary.details, "created_at": notice.CreatedAt,
+		}})
 	}
+	return deliveries, nil
+}
+
+func deliverSettlementNotifications(deliveries []settlementNotificationDelivery) {
+	for _, delivery := range deliveries {
+		ws.NotifyUser(delivery.userID, "notification", delivery.payload)
+	}
+}
+
+func settlementEventKey(gameID, issue string, userID uint64, roomScope string) string {
+	return fmt.Sprintf("settlement:%s:%s:%d:%s", gameID, issue, userID, roomScope)
 }
 
 func formatDrawNumbers(numbers []int) string {
@@ -191,6 +448,9 @@ func (s *BetAdminService) PublishDraw(gameID, issue string, numbers []int, opera
 		return nil, err
 	}
 	issue = strings.TrimSpace(issue)
+	// Persist the accepting/sealed lifecycle before the immutable draw advances
+	// CurrentIssue to the following period.
+	_, _ = s.EnsureCurrentIssue(game)
 	if issue == "" {
 		issue, err = s.CurrentIssue(game.ID)
 		if err != nil {
@@ -281,7 +541,7 @@ func (s *BetAdminService) SettleImportedDraw(gameID, issue string) {
 	_, _ = s.SettleIssue(gameID, issue, "官方开奖自动结算")
 }
 
-func creditSettlement(tx *gorm.DB, userID uint64, payoutCents int64, gameName, issue, operator string) error {
+func creditSettlement(tx *gorm.DB, betID, userID uint64, payoutCents int64, gameName, issue, operator string) error {
 	var account user.User
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, userID).Error; err != nil {
 		return err
@@ -292,7 +552,8 @@ func creditSettlement(tx *gorm.DB, userID uint64, payoutCents int64, gameName, i
 		return err
 	}
 	return tx.Create(&user.BalanceTransaction{
-		UserID: userID, AmountCents: payoutCents, BeforeCents: before, AfterCents: after,
+		UserID: userID, Reference: fmt.Sprintf("settlement_bet:%d", betID),
+		AmountCents: payoutCents, BeforeCents: before, AfterCents: after,
 		Type: "settlement", Remark: fmt.Sprintf("开奖派彩 %s/%s", gameName, issue), Operator: operator,
 	}).Error
 }
@@ -325,13 +586,13 @@ func evaluateBet(numbers []int, playCode string, position int, selection string)
 
 	case "two_sided":
 		value, label := sideValue(balls, position)
-		if position == 6 || position < 1 || position > len(balls) {
+		if position < 1 || position > len(balls) {
 			if matchSumSize(value, len(balls), selection) {
 				return true, label + "命中" + selectionLabel(selection)
 			}
 			return false, fmt.Sprintf("%s为%d", label, value)
 		}
-		if matchSide(value, selection) {
+		if matchPositionSide(value, balls, selection) {
 			return true, label + "命中" + selectionLabel(selection)
 		}
 		return false, label + "为" + describeSide(value)
@@ -340,7 +601,12 @@ func evaluateBet(numbers []int, playCode string, position int, selection string)
 		if len(balls) < 2 {
 			return false, "号码不足"
 		}
-		left, right := balls[0], balls[len(balls)-1]
+		// 赛车龙虎按对应名次比较：冠军对第十、亚军对第九，依次到
+		// 第五对第六，不能把所有龙虎都误算成冠军对末位。
+		if position < 1 || position > len(balls)/2 {
+			return false, "龙虎名次无效"
+		}
+		left, right := balls[position-1], balls[len(balls)-position]
 		outcome := "tie"
 		if left > right {
 			outcome = "dragon"
@@ -353,7 +619,11 @@ func evaluateBet(numbers []int, playCode string, position int, selection string)
 		return false, fmt.Sprintf("龙虎 %d:%d", left, right)
 
 	case "sum":
+		// 赛车“冠亚和”只取冠军与亚军，不是十个号码总和。
 		total := sumInts(balls)
+		if len(balls) >= 2 {
+			total = balls[0] + balls[1]
+		}
 		if digit, ok := parseDigit(selection); ok {
 			if total%10 == digit {
 				return true, fmt.Sprintf("总和尾 %d", digit)
@@ -390,13 +660,6 @@ func evaluateBet(numbers []int, playCode string, position int, selection string)
 }
 
 func usableBalls(numbers []int) []int {
-	if len(numbers) == 0 {
-		return numbers
-	}
-	// Prefer first 5 balls for SSC-style matrices; keep all when shorter.
-	if len(numbers) > 5 {
-		return numbers[:5]
-	}
 	return numbers
 }
 
@@ -419,6 +682,23 @@ func matchSide(value int, selection string) bool {
 		return value%2 == 0
 	}
 	return false
+}
+
+func matchPositionSide(value int, balls []int, selection string) bool {
+	racing := len(balls) >= 10
+	if racing {
+		switch selection {
+		case "big", "大":
+			return value >= 6
+		case "small", "小":
+			return value <= 5
+		case "odd", "单":
+			return value%2 == 1
+		case "even", "双":
+			return value%2 == 0
+		}
+	}
+	return matchSide(value, selection)
 }
 
 func matchSumSize(total, ballCount int, selection string) bool {
@@ -624,4 +904,14 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// agentProfitShareCents applies an agent contract only to actual positive
+// room GGR. When players win more than they staked, the platform absorbs that
+// loss; it must never turn into a negative commission credit in the report.
+func agentProfitShareCents(grossProfitCents int64, rate float64) int64 {
+	if grossProfitCents <= 0 {
+		return 0
+	}
+	return int64(math.Round(float64(grossProfitCents) * clampPercent(rate) / 100))
 }

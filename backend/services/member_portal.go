@@ -23,16 +23,19 @@ type MemberPortalService struct {
 }
 
 type MemberRoomSettingsView struct {
-	RoomName        string          `json:"room_name"`
-	RoomNotice      string          `json:"room_notice"`
-	ShowOdds        bool            `json:"show_odds"`
-	SoundEnabled    bool            `json:"sound_enabled"`
-	MinCreditAmount float64         `json:"min_credit_amount"`
-	MinDebitAmount  float64         `json:"min_debit_amount"`
-	MinChatScore    float64         `json:"min_chat_score"`
-	ChatNickname    string          `json:"chat_nickname"`
-	Game            json.RawMessage `json:"game"`
-	QuickReplies    json.RawMessage `json:"quick_replies"`
+	RoomName          string             `json:"room_name"`
+	RoomLogo          string             `json:"room_logo"`
+	RoomNotice        string             `json:"room_notice"`
+	Announcements     []AnnouncementItem `json:"announcements"`
+	ShowOdds          bool               `json:"show_odds"`
+	SoundEnabled      bool               `json:"sound_enabled"`
+	PredictionEnabled bool               `json:"prediction_enabled"`
+	MinCreditAmount   float64            `json:"min_credit_amount"`
+	MinDebitAmount    float64            `json:"min_debit_amount"`
+	MinChatScore      float64            `json:"min_chat_score"`
+	ChatNickname      string             `json:"chat_nickname"`
+	Game              json.RawMessage    `json:"game"`
+	QuickReplies      json.RawMessage    `json:"quick_replies"`
 }
 
 type MemberOddsView struct {
@@ -71,14 +74,25 @@ type ActivityActionResult struct {
 }
 
 type MemberNotificationView struct {
-	ID        uint64    `json:"id"`
-	Title     string    `json:"title"`
-	Content   string    `json:"content"`
-	Level     string    `json:"level"`
-	Category  string    `json:"category"`
-	Link      string    `json:"link"`
-	Read      bool      `json:"read"`
-	CreatedAt time.Time `json:"created_at"`
+	ID           uint64                  `json:"id"`
+	GameID       string                  `json:"game_id,omitempty"`
+	RoomScope    string                  `json:"room_scope,omitempty"`
+	Title        string                  `json:"title"`
+	Content      string                  `json:"content"`
+	Level        string                  `json:"level"`
+	Category     string                  `json:"category"`
+	Link         string                  `json:"link"`
+	Read         bool                    `json:"read"`
+	GameName     string                  `json:"game_name,omitempty"`
+	Issue        string                  `json:"issue,omitempty"`
+	DrawNumbers  []int                   `json:"draw_numbers,omitempty"`
+	DrawAt       *time.Time              `json:"draw_at,omitempty"`
+	BetCount     int                     `json:"bet_count,omitempty"`
+	WonCount     int                     `json:"won_count,omitempty"`
+	StakeAmount  float64                 `json:"stake_amount,omitempty"`
+	PayoutAmount float64                 `json:"payout_amount,omitempty"`
+	BetDetails   []NotificationBetDetail `json:"bet_details,omitempty"`
+	CreatedAt    time.Time               `json:"created_at"`
 }
 
 type MemberNotificationList struct {
@@ -96,14 +110,29 @@ func NewMemberPortalService(db *gorm.DB) *MemberPortalService {
 	}
 }
 
-func (s *MemberPortalService) RoomSettings() (*MemberRoomSettingsView, error) {
+func (s *MemberPortalService) RoomSettings(userID uint64) (*MemberRoomSettingsView, error) {
 	cfg, err := s.settings.Get()
 	if err != nil {
 		return nil, err
 	}
+	roomName := defaultString(strings.TrimSpace(cfg.RoomName), "王者大厅")
+	roomLogo := cfg.RoomLogo
+	var account user.User
+	if err := s.db.Select("parent_agent_id").First(&account, userID).Error; err != nil {
+		return nil, err
+	}
+	if account.ParentAgentID != nil {
+		var agent user.User
+		if err := s.db.Select("username", "nickname", "agent_room_code", "agent_room_name", "agent_room_logo").First(&agent, *account.ParentAgentID).Error; err == nil {
+			roomName = agentRoomDisplayName(agent)
+			if strings.TrimSpace(agent.AgentRoomLogo) != "" {
+				roomLogo = agent.AgentRoomLogo
+			}
+		}
+	}
 	return &MemberRoomSettingsView{
-		RoomName: cfg.RoomName, RoomNotice: cfg.RoomNotice, ShowOdds: cfg.ShowOdds,
-		SoundEnabled: cfg.SoundEnabled, MinCreditAmount: cfg.MinCreditAmount,
+		RoomName: roomName, RoomLogo: roomLogo, RoomNotice: cfg.RoomNotice, Announcements: cfg.Announcements, ShowOdds: cfg.ShowOdds,
+		SoundEnabled: cfg.SoundEnabled, PredictionEnabled: cfg.PredictionEnabled, MinCreditAmount: cfg.MinCreditAmount,
 		MinDebitAmount: cfg.MinDebitAmount, MinChatScore: cfg.MinChatScore,
 		ChatNickname: cfg.ChatNickname,
 		Game:         cfg.Game, QuickReplies: cfg.QuickReplies,
@@ -208,14 +237,21 @@ func (s *MemberPortalService) ActivityStatus(userID, activityID uint64) (*Activi
 }
 
 func (s *MemberPortalService) CheckIn(userID, activityID uint64) (*ActivityActionResult, error) {
-	return s.participate(userID, activityID, "checkin")
+	return s.participate(userID, activityID, "checkin", "")
 }
 
 func (s *MemberPortalService) ClaimRedPacket(userID, activityID uint64) (*ActivityActionResult, error) {
-	return s.participate(userID, activityID, "redpacket")
+	return s.participate(userID, activityID, "redpacket", "")
 }
 
-func (s *MemberPortalService) participate(userID, activityID uint64, action string) (*ActivityActionResult, error) {
+// ClaimChatRedPacket binds a reward to one persisted chat message. The
+// message reference is permanent, so refreshing the page or waiting until the
+// next day can never make the same envelope claimable again.
+func (s *MemberPortalService) ClaimChatRedPacket(userID, activityID, messageID uint64) (*ActivityActionResult, error) {
+	return s.participate(userID, activityID, "redpacket", "chat_message:"+strconv.FormatUint(messageID, 10))
+}
+
+func (s *MemberPortalService) participate(userID, activityID uint64, action, reference string) (*ActivityActionResult, error) {
 	var result ActivityActionResult
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var row activity.Activity
@@ -233,6 +269,17 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action stri
 		}
 		if action == "redpacket" && row.Type != "redpacket" {
 			return apperrors.NewBusinessError("INVALID_REQUEST", "该活动不支持领红包")
+		}
+		if reference != "" {
+			var claimed int64
+			if err := tx.Model(&activity.Participation{}).
+				Where("user_id = ? AND activity_id = ? AND action = ? AND reference = ?", userID, activityID, action, reference).
+				Count(&claimed).Error; err != nil {
+				return err
+			}
+			if claimed > 0 {
+				return apperrors.NewBusinessError("REDPACKET_CLAIMED", "该红包已领取")
+			}
 		}
 
 		bizDate := bizDateCST(time.Now())
@@ -258,10 +305,13 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action stri
 
 		part := activity.Participation{
 			UserID: userID, ActivityID: activityID, Action: action, BizDate: bizDate,
-			RewardCents: rewardCents, Streak: streak, ParticipatedAt: now,
+			Reference: reference, RewardCents: rewardCents, Streak: streak, ParticipatedAt: now,
 		}
 		if err := tx.Create(&part).Error; err != nil {
 			if isDuplicateParticipation(err) {
+				if reference != "" {
+					return apperrors.NewBusinessError("REDPACKET_CLAIMED", "该红包已领取")
+				}
 				return apperrors.NewBusinessError("INVALID_REQUEST", "今日已参与，请明日再来")
 			}
 			return err
@@ -284,7 +334,8 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action stri
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, userID).Error; err != nil {
 			return err
 		}
-		after := account.BalanceCents + rewardCents
+		before := account.BalanceCents
+		after := before + rewardCents
 		if err := tx.Model(&account).Update("balance_cents", after).Error; err != nil {
 			return err
 		}
@@ -295,7 +346,8 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action stri
 			remark = "红包奖励 · " + row.Title
 		}
 		if err := tx.Create(&user.BalanceTransaction{
-			UserID: userID, AmountCents: rewardCents, BeforeCents: account.BalanceCents, AfterCents: after,
+			UserID: userID, Reference: "activity_participation:" + strconv.FormatUint(part.ID, 10),
+			AmountCents: rewardCents, BeforeCents: before, AfterCents: after,
 			Type: action, Remark: remark, Operator: "系统",
 		}).Error; err != nil {
 			return err
@@ -307,7 +359,7 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action stri
 		}
 		_ = tx.Create(&membernotify.MemberNotification{
 			UserID: userID, Title: title, Content: content,
-			Level: "success", Category: "system",
+			Level: "success", Category: "account",
 		}).Error
 		result = ActivityActionResult{
 			Reward: centsToAmount(rewardCents), Streak: streak,
@@ -332,18 +384,35 @@ func isDuplicateParticipation(err error) bool {
 	return strings.Contains(msg, "duplicate") || strings.Contains(msg, "unique") || strings.Contains(msg, "23505")
 }
 
-func (s *MemberPortalService) ListNotifications(userID uint64, limit int, beforeID uint64, category string) (*MemberNotificationList, error) {
+func (s *MemberPortalService) ListNotifications(userID uint64, limit int, beforeID uint64, category, gameID, issue string) (*MemberNotificationList, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
 	category = strings.TrimSpace(category)
-	if category != "" && category != "all" && category != "system" && category != "activity" && category != "winning" {
+	if category != "" && category != "all" && category != "system" && category != "account" && category != "activity" && category != "winning" {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "通知分类不正确")
 	}
 	var rows []membernotify.MemberNotification
 	query := s.db.Where("user_id = ? AND title <> ?", userID, "客服回复")
 	if category != "" && category != "all" {
 		query = query.Where("category = ?", category)
+		if category == "system" {
+			query = query.Where("title NOT IN ?", []string{"开奖结果", "恭喜中奖", "未中奖", "开奖通知"})
+		}
+	}
+	gameID = strings.TrimSpace(gameID)
+	issue = strings.TrimSpace(issue)
+	if gameID != "" {
+		var account user.User
+		if err := s.db.Select("user_id", "role", "parent_agent_id").First(&account, userID).Error; err != nil {
+			return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+		}
+		// The client chooses a game, never a room scope.  Room ownership is
+		// derived from the authenticated member to prevent cross-room replay.
+		query = query.Where("game_id = ? AND room_scope = ?", gameID, betRoomScope(account))
+	}
+	if issue != "" {
+		query = query.Where("issue = ?", issue)
 	}
 	if beforeID > 0 {
 		query = query.Where("id < ?", beforeID)
@@ -357,9 +426,17 @@ func (s *MemberPortalService) ListNotifications(userID uint64, limit int, before
 	}
 	out := make([]MemberNotificationView, 0, len(rows))
 	for _, row := range rows {
+		details := make([]NotificationBetDetail, 0)
+		if strings.TrimSpace(row.BetDetailsJSON) != "" {
+			_ = json.Unmarshal([]byte(row.BetDetailsJSON), &details)
+		}
 		out = append(out, MemberNotificationView{
-			ID: row.ID, Title: row.Title, Content: row.Content, Level: row.Level,
+			ID: row.ID, GameID: row.GameID, RoomScope: row.RoomScope,
+			Title: row.Title, Content: row.Content, Level: row.Level,
 			Category: row.Category, Link: row.Link, Read: row.Read, CreatedAt: row.CreatedAt,
+			GameName: row.GameName, Issue: row.Issue, DrawNumbers: parseNumbers(row.DrawNumbers), DrawAt: row.DrawAt,
+			BetCount: row.BetCount, WonCount: row.WonCount,
+			StakeAmount: centsToAmount(row.StakeCents), PayoutAmount: centsToAmount(row.PayoutCents), BetDetails: details,
 		})
 	}
 	nextBeforeID := uint64(0)
@@ -371,7 +448,9 @@ func (s *MemberPortalService) ListNotifications(userID uint64, limit int, before
 
 func (s *MemberPortalService) UnreadCount(userID uint64) (int64, error) {
 	var count int64
-	err := s.db.Model(&membernotify.MemberNotification{}).Where("user_id = ? AND read = ? AND title <> ?", userID, false, "客服回复").Count(&count).Error
+	err := s.db.Model(&membernotify.MemberNotification{}).
+		Where("user_id = ? AND read = ? AND title <> ? AND category <> ?", userID, false, "客服回复", "account").
+		Count(&count).Error
 	return count, err
 }
 

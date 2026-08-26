@@ -8,26 +8,32 @@ import (
 	"unicode"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type AgentAdminService struct{ db *gorm.DB }
 
 type AgentView struct {
-	ID          uint64  `json:"id"`
-	PublicID    uint64  `json:"public_id"`
-	Username    string  `json:"username"`
-	Email       string  `json:"email"`
-	Nickname    string  `json:"nickname"`
-	Phone       string  `json:"phone"`
-	RoomCode    string  `json:"room_code"`
-	Balance     float64 `json:"balance"`
-	Status      int     `json:"status"`
-	MemberCount int64   `json:"member_count"`
-	RebateRate  float64 `json:"rebate_rate"`
-	Remark      string  `json:"remark"`
-	CreatedAt   string  `json:"created_at"`
-	LastLoginAt string  `json:"last_login_at"`
-	LoginCount  int     `json:"login_count"`
+	ID              uint64  `json:"id"`
+	PublicID        uint64  `json:"public_id"`
+	Username        string  `json:"username"`
+	Email           string  `json:"email"`
+	Nickname        string  `json:"nickname"`
+	Phone           string  `json:"phone"`
+	RoomCode        string  `json:"room_code"`
+	RoomName        string  `json:"room_name"`
+	RoomLogo        string  `json:"room_logo"`
+	Balance         float64 `json:"balance"`
+	Status          int     `json:"status"`
+	MemberCount     int64   `json:"member_count"`
+	RebateRate      float64 `json:"rebate_rate"`
+	ProfitShareRate float64 `json:"profit_share_rate"`
+	Remark          string  `json:"remark"`
+	CreatedAt       string  `json:"created_at"`
+	LastLoginAt     string  `json:"last_login_at"`
+	LoginCount      int     `json:"login_count"`
+	TenantID        *uint64 `json:"tenant_id,omitempty"`
+	TenantName      string  `json:"tenant_name,omitempty"`
 }
 
 type AgentSummary struct {
@@ -46,30 +52,46 @@ type AgentListResult struct {
 }
 
 type CreateAgentInput struct {
-	Username   string
-	Password   string
-	Email      string
-	Nickname   string
-	Phone      string
-	RoomCode   string
-	Remark     string
-	Status     int
-	RebateRate float64
+	Username        string
+	Password        string
+	Email           string
+	Nickname        string
+	Phone           string
+	RoomCode        string
+	RoomName        string
+	RoomLogo        string
+	Remark          string
+	Status          int
+	RebateRate      float64
+	ProfitShareRate float64
+	TenantID        *uint64
 }
 
 type UpdateAgentInput struct {
-	Email      string
-	Nickname   string
-	Phone      string
-	RoomCode   string
-	Remark     string
-	Status     int
-	RebateRate float64
+	Email           string
+	Nickname        string
+	Phone           string
+	RoomCode        string
+	RoomName        string
+	RoomLogo        string
+	Remark          string
+	Status          int
+	RebateRate      float64
+	ProfitShareRate float64
+	TenantID        *uint64
 }
 
 func NewAgentAdminService(db *gorm.DB) *AgentAdminService { return &AgentAdminService{db: db} }
 
 func (s *AgentAdminService) List(query string, page, pageSize int) (*AgentListResult, error) {
+	return s.list(query, page, pageSize, nil)
+}
+
+func (s *AgentAdminService) ListForTenant(tenantID uint64, query string, page, pageSize int) (*AgentListResult, error) {
+	return s.list(query, page, pageSize, &tenantID)
+}
+
+func (s *AgentAdminService) list(query string, page, pageSize int, tenantID *uint64) (*AgentListResult, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -77,6 +99,9 @@ func (s *AgentAdminService) List(query string, page, pageSize int) (*AgentListRe
 		pageSize = 20
 	}
 	q := s.db.Model(&user.User{}).Where("role = ?", "agent")
+	if tenantID != nil {
+		q = q.Where("parent_tenant_id = ?", *tenantID)
+	}
 	if text := strings.TrimSpace(query); text != "" {
 		like := "%" + text + "%"
 		q = q.Where("username ILIKE ? OR nickname ILIKE ? OR agent_room_code ILIKE ? OR phone ILIKE ?", like, like, like, like)
@@ -93,31 +118,60 @@ func (s *AgentAdminService) List(query string, page, pageSize int) (*AgentListRe
 	for _, row := range rows {
 		var members int64
 		_ = s.db.Model(&user.User{}).Where("parent_agent_id = ?", row.UserID).Count(&members).Error
-		items = append(items, AgentView{
+		view := AgentView{
 			ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone,
-			RoomCode: row.AgentRoomCode, Balance: centsToAmount(row.BalanceCents), Status: row.Status,
-			MemberCount: members, RebateRate: row.RoomRebateRate, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount,
-		})
+			RoomCode: row.AgentRoomCode, RoomName: agentRoomDisplayName(row), RoomLogo: row.AgentRoomLogo, Balance: centsToAmount(row.BalanceCents), Status: row.Status,
+			MemberCount: members, RebateRate: row.RoomRebateRate, ProfitShareRate: row.RoomProfitShareRate, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount, TenantID: row.ParentTenantID,
+		}
+		if row.ParentTenantID != nil {
+			var tenant user.User
+			if s.db.Select("username", "nickname").First(&tenant, *row.ParentTenantID).Error == nil {
+				view.TenantName = firstNonEmpty(tenant.Nickname, tenant.Username)
+			}
+		}
+		items = append(items, view)
 		if row.LastLoginAt != nil {
 			items[len(items)-1].LastLoginAt = row.LastLoginAt.Local().Format("2006-01-02 15:04:05")
 		}
 	}
 	summary := AgentSummary{Total: total}
-	_ = s.db.Model(&user.User{}).Where("role = ? AND status = ?", "agent", 1).Count(&summary.Active).Error
+	summaryQuery := s.db.Model(&user.User{}).Where("role = ?", "agent")
+	if tenantID != nil {
+		summaryQuery = summaryQuery.Where("parent_tenant_id = ?", *tenantID)
+	}
+	_ = summaryQuery.Where("status = ?", 1).Count(&summary.Active).Error
 	summary.Disabled = summary.Total - summary.Active
-	_ = s.db.Model(&user.User{}).Where("parent_agent_id IS NOT NULL").Count(&summary.Members).Error
+	memberQuery := s.db.Model(&user.User{}).Where("parent_agent_id IS NOT NULL")
+	if tenantID != nil {
+		memberQuery = memberQuery.Where("parent_agent_id IN (?)", s.db.Model(&user.User{}).Select("user_id").Where("role = ? AND parent_tenant_id = ?", "agent", *tenantID))
+	}
+	_ = memberQuery.Count(&summary.Members).Error
 	return &AgentListResult{Items: items, Total: total, Page: page, PageSize: pageSize, Summary: summary}, nil
+}
+
+func (s *AgentAdminService) CreateForTenant(tenantID uint64, input CreateAgentInput) (*AgentView, error) {
+	input.TenantID = &tenantID
+	return s.Create(input)
 }
 
 func (s *AgentAdminService) Create(input CreateAgentInput) (*AgentView, error) {
 	input.Username = strings.TrimSpace(input.Username)
 	input.Email = strings.TrimSpace(input.Email)
 	input.RoomCode = normalizeAgentRoomCode(input.RoomCode)
+	input.RoomName = normalizeAgentRoomName(input.RoomName)
+	roomLogo, logoErr := normalizeRoomLogo(input.RoomLogo)
+	if logoErr != nil {
+		return nil, logoErr
+	}
+	input.RoomLogo = roomLogo
+	if err := validateAgentRoomName(input.RoomName); err != nil {
+		return nil, err
+	}
 	if len(input.Username) < 3 || len(input.Username) > 50 {
 		return nil, apperrors.NewBusinessError("INVALID_USERNAME", "登录账号长度应为 3–50 个字符")
 	}
-	if len(input.Password) < 6 {
-		return nil, apperrors.NewBusinessError("INVALID_PASSWORD", "登录密码至少需要 6 个字符")
+	if err := utils.ValidatePassword(input.Password); err != nil {
+		return nil, apperrors.NewBusinessError("INVALID_PASSWORD", "登录密码长度需为 8–72 个字符")
 	}
 	if err := validateAgentRoomCode(input.RoomCode); err != nil {
 		return nil, err
@@ -125,19 +179,34 @@ func (s *AgentAdminService) Create(input CreateAgentInput) (*AgentView, error) {
 	if input.RebateRate < 0 || input.RebateRate > 100 {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "房间返水比例需在 0-100 之间")
 	}
+	if input.ProfitShareRate < 0 || input.ProfitShareRate > 100 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "代理分成比例需在 0-100 之间")
+	}
 	hash, err := utils.HashPassword(input.Password)
 	if err != nil {
 		return nil, err
 	}
-	row := user.User{Username: input.Username, Password: hash, Email: input.Email, Nickname: strings.TrimSpace(input.Nickname), Phone: strings.TrimSpace(input.Phone), Role: "agent", AgentRoomCode: input.RoomCode, RoomRebateRate: input.RebateRate, Remark: strings.TrimSpace(input.Remark), RiskLevel: "normal", Status: normalizeAgentStatus(input.Status)}
+	loginScope := platformLoginScope
+	if input.TenantID != nil {
+		loginScope = tenantLoginScope(*input.TenantID)
+	}
+	row := user.User{Username: input.Username, LoginScope: loginScope, Password: hash, Email: input.Email, Nickname: strings.TrimSpace(input.Nickname), Phone: strings.TrimSpace(input.Phone), Role: "agent", AgentRoomCode: input.RoomCode, AgentRoomName: input.RoomName, AgentRoomLogo: input.RoomLogo, RoomRebateRate: input.RebateRate, RoomProfitShareRate: input.ProfitShareRate, Remark: strings.TrimSpace(input.Remark), RiskLevel: "normal", Status: normalizeAgentStatus(input.Status), ParentTenantID: input.TenantID}
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
-		var duplicate int64
-		if err := tx.Model(&user.User{}).Where("username = ?", row.Username).Count(&duplicate).Error; err != nil {
+		if row.ParentTenantID != nil {
+			var tenant user.User
+			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).
+				Where("user_id = ? AND role = ? AND status = ?", *row.ParentTenantID, "tenant", 1).
+				First(&tenant).Error; err != nil {
+				if err != gorm.ErrRecordNotFound {
+					return err
+				}
+				return apperrors.NewBusinessError("TENANT_NOT_FOUND", "租户不存在或已停用")
+			}
+		}
+		if err := ensureUsernameInScope(tx, row.LoginScope, row.Username, 0); err != nil {
 			return err
 		}
-		if duplicate > 0 {
-			return apperrors.NewBusinessError("USERNAME_EXISTS", "登录账号已存在")
-		}
+		var duplicate int64
 		if row.Email != "" {
 			if err := tx.Model(&user.User{}).Where("LOWER(email) = LOWER(?)", row.Email).Count(&duplicate).Error; err != nil {
 				return err
@@ -146,32 +215,49 @@ func (s *AgentAdminService) Create(input CreateAgentInput) (*AgentView, error) {
 				return apperrors.NewBusinessError("EMAIL_EXISTS", "邮箱已被使用")
 			}
 		}
-		return ensureRoomCodeAvailable(tx, row.AgentRoomCode, 0)
+		if err := ensureRoomCodeAvailable(tx, row.AgentRoomCode, 0); err != nil {
+			return err
+		}
+		return tx.Create(&row).Error
 	}); err != nil {
-		return nil, err
-	}
-	if err := s.db.Create(&row).Error; err != nil {
 		return nil, err
 	}
 	return s.view(row.UserID)
 }
 
 func (s *AgentAdminService) Update(id uint64, input UpdateAgentInput) (*AgentView, error) {
+	return s.update(id, input, nil)
+}
+
+func (s *AgentAdminService) update(id uint64, input UpdateAgentInput, ownerTenantID *uint64) (*AgentView, error) {
 	input.Email = strings.TrimSpace(input.Email)
 	input.RoomCode = normalizeAgentRoomCode(input.RoomCode)
+	input.RoomName = normalizeAgentRoomName(input.RoomName)
+	roomLogo, logoErr := normalizeRoomLogo(input.RoomLogo)
+	if logoErr != nil {
+		return nil, logoErr
+	}
+	input.RoomLogo = roomLogo
+	if err := validateAgentRoomName(input.RoomName); err != nil {
+		return nil, err
+	}
 	if err := validateAgentRoomCode(input.RoomCode); err != nil {
 		return nil, err
 	}
 	if input.RebateRate < 0 || input.RebateRate > 100 {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "房间返水比例需在 0-100 之间")
 	}
+	if input.ProfitShareRate < 0 || input.ProfitShareRate > 100 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "代理分成比例需在 0-100 之间")
+	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var row user.User
-		if err := tx.First(&row, id).Error; err != nil {
-			return apperrors.NewBusinessError("USER_NOT_FOUND", "代理不存在")
+		owned := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ? AND role = ?", id, "agent")
+		if ownerTenantID != nil {
+			owned = owned.Where("parent_tenant_id = ?", *ownerTenantID)
 		}
-		if row.Role != "agent" {
-			return apperrors.NewBusinessError("INVALID_REQUEST", "该账号不是代理")
+		if err := owned.First(&row).Error; err != nil {
+			return apperrors.NewBusinessError("USER_NOT_FOUND", "代理不存在或不属于当前租户")
 		}
 		if input.Email != "" {
 			var duplicate int64
@@ -185,7 +271,22 @@ func (s *AgentAdminService) Update(id uint64, input UpdateAgentInput) (*AgentVie
 		if err := ensureRoomCodeAvailable(tx, input.RoomCode, id); err != nil {
 			return err
 		}
-		return tx.Model(&row).Updates(map[string]any{"email": input.Email, "nickname": strings.TrimSpace(input.Nickname), "phone": strings.TrimSpace(input.Phone), "agent_room_code": input.RoomCode, "room_rebate_rate": input.RebateRate, "remark": strings.TrimSpace(input.Remark), "status": normalizeAgentStatus(input.Status)}).Error
+		updates := map[string]any{"email": input.Email, "nickname": strings.TrimSpace(input.Nickname), "phone": strings.TrimSpace(input.Phone), "agent_room_code": input.RoomCode, "agent_room_name": input.RoomName, "agent_room_logo": input.RoomLogo, "room_rebate_rate": input.RebateRate, "room_profit_share_rate": input.ProfitShareRate, "remark": strings.TrimSpace(input.Remark), "status": normalizeAgentStatus(input.Status)}
+		if ownerTenantID == nil && input.TenantID != nil {
+			var tenantCount int64
+			if err := tx.Model(&user.User{}).Where("user_id = ? AND role = ? AND status = ?", *input.TenantID, "tenant", 1).Count(&tenantCount).Error; err != nil {
+				return err
+			}
+			if tenantCount == 0 {
+				return apperrors.NewBusinessError("TENANT_NOT_FOUND", "租户不存在或已停用")
+			}
+			updates["parent_tenant_id"] = *input.TenantID
+			updates["login_scope"] = tenantLoginScope(*input.TenantID)
+			if err := ensureUsernameInScope(tx, tenantLoginScope(*input.TenantID), row.Username, row.UserID); err != nil {
+				return err
+			}
+		}
+		return tx.Model(&row).Updates(updates).Error
 	})
 	if err != nil {
 		return nil, err
@@ -193,22 +294,41 @@ func (s *AgentAdminService) Update(id uint64, input UpdateAgentInput) (*AgentVie
 	return s.view(id)
 }
 
+func (s *AgentAdminService) UpdateForTenant(tenantID, id uint64, input UpdateAgentInput) (*AgentView, error) {
+	// A tenant may edit only an agent already owned by it and may not transfer
+	// that agent to another tenant through a crafted request body.
+	input.TenantID = nil
+	return s.update(id, input, &tenantID)
+}
+
 func (s *AgentAdminService) ResetPassword(id uint64, password string) error {
-	if len(password) < 6 {
-		return apperrors.NewBusinessError("INVALID_PASSWORD", "登录密码至少需要 6 个字符")
+	return s.resetPassword(id, password, nil)
+}
+
+func (s *AgentAdminService) resetPassword(id uint64, password string, ownerTenantID *uint64) error {
+	if err := utils.ValidatePassword(password); err != nil {
+		return apperrors.NewBusinessError("INVALID_PASSWORD", "登录密码长度需为 8–72 个字符")
 	}
 	hash, err := utils.HashPassword(password)
 	if err != nil {
 		return err
 	}
-	result := s.db.Model(&user.User{}).Where("user_id = ? AND role = ?", id, "agent").Update("password", hash)
+	query := s.db.Model(&user.User{}).Where("user_id = ? AND role = ?", id, "agent")
+	if ownerTenantID != nil {
+		query = query.Where("parent_tenant_id = ?", *ownerTenantID)
+	}
+	result := query.Update("password", hash)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return apperrors.NewBusinessError("USER_NOT_FOUND", "代理不存在")
+		return apperrors.NewBusinessError("USER_NOT_FOUND", "代理不存在或不属于当前租户")
 	}
 	return nil
+}
+
+func (s *AgentAdminService) ResetPasswordForTenant(tenantID, id uint64, password string) error {
+	return s.resetPassword(id, password, &tenantID)
 }
 
 func (s *AgentAdminService) view(id uint64) (*AgentView, error) {
@@ -220,7 +340,13 @@ func (s *AgentAdminService) view(id uint64) (*AgentView, error) {
 	if err := s.db.Model(&user.User{}).Where("parent_agent_id = ?", id).Count(&members).Error; err != nil {
 		return nil, err
 	}
-	view := AgentView{ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone, RoomCode: row.AgentRoomCode, Balance: centsToAmount(row.BalanceCents), Status: row.Status, MemberCount: members, RebateRate: row.RoomRebateRate, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount}
+	view := AgentView{ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone, RoomCode: row.AgentRoomCode, RoomName: agentRoomDisplayName(row), RoomLogo: row.AgentRoomLogo, Balance: centsToAmount(row.BalanceCents), Status: row.Status, MemberCount: members, RebateRate: row.RoomRebateRate, ProfitShareRate: row.RoomProfitShareRate, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount, TenantID: row.ParentTenantID}
+	if row.ParentTenantID != nil {
+		var tenant user.User
+		if s.db.Select("username", "nickname").First(&tenant, *row.ParentTenantID).Error == nil {
+			view.TenantName = firstNonEmpty(tenant.Nickname, tenant.Username)
+		}
+	}
 	if row.LastLoginAt != nil {
 		view.LastLoginAt = row.LastLoginAt.Local().Format("2006-01-02 15:04:05")
 	}
@@ -239,7 +365,7 @@ func (s *AgentAdminService) Promote(userID uint64, roomCode string) (*AgentView,
 		if err := tx.First(&account, userID).Error; err != nil {
 			return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
 		}
-		if account.Role == "admin" {
+		if account.Role == "admin" || account.Role == "tenant" {
 			return apperrors.NewBusinessError("INVALID_REQUEST", "管理员不能设置为代理")
 		}
 		updates := map[string]any{"role": "agent"}
@@ -262,6 +388,41 @@ func (s *AgentAdminService) Promote(userID uint64, roomCode string) (*AgentView,
 }
 
 func normalizeAgentRoomCode(value string) string { return strings.TrimSpace(value) }
+
+func normalizeAgentRoomName(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func validateAgentRoomName(value string) error {
+	if len([]rune(value)) > 30 {
+		return apperrors.NewBusinessError("INVALID_REQUEST", "房间名称不能超过 30 个字符")
+	}
+	return nil
+}
+
+func normalizeRoomLogo(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if len(value) > 500000 {
+		return "", apperrors.NewBusinessError("INVALID_REQUEST", "房间 Logo 文件过大")
+	}
+	allowed := []string{"data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,"}
+	for _, prefix := range allowed {
+		if strings.HasPrefix(value, prefix) {
+			return value, nil
+		}
+	}
+	return "", apperrors.NewBusinessError("INVALID_REQUEST", "房间 Logo 仅支持 PNG、JPG 或 WebP 图片")
+}
+
+func agentRoomDisplayName(agent user.User) string {
+	if name := normalizeAgentRoomName(agent.AgentRoomName); name != "" {
+		return name
+	}
+	return defaultString(agent.Nickname, agent.Username) + "的房间"
+}
 
 func validateAgentRoomCode(value string) error {
 	if len(value) < 4 || len(value) > 12 {

@@ -11,11 +11,24 @@ type Message struct {
 	RoomType string `gorm:"size:20;not null;index" json:"room_type"` // group / service
 	// Scope identifies the audience allowed to read this message. Examples:
 	// agent:42, lobby, and user:17 (one-to-one service chat).
-	Scope     string     `gorm:"size:64;not null;default:lobby;index" json:"-"`
-	Content   string     `gorm:"size:500;not null" json:"content"`
-	CreatedAt time.Time  `gorm:"index" json:"created_at"`
-	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"`
-	DeletedBy string     `gorm:"size:80" json:"-"`
+	Scope string `gorm:"size:64;not null;default:lobby;index" json:"-"`
+	// RoomScope freezes the owning room when the message is sent. GameID is the
+	// lottery conversation inside that room; lobby and service are explicit
+	// values rather than implicit catch-all channels.
+	RoomScope   string `gorm:"size:64;not null;default:legacy;index;index:idx_chat_room_game_created,priority:1" json:"room_scope"`
+	GameID      string `gorm:"size:40;not null;default:legacy;index;index:idx_chat_room_game_created,priority:2" json:"game_id"`
+	Content     string `gorm:"size:500;not null" json:"content"`
+	MessageType string `gorm:"size:20;not null;default:text;index" json:"message_type"`
+	ReferenceID uint64 `gorm:"not null;default:0;index" json:"reference_id,omitempty"`
+	// Red-packet display data is snapshotted on the message so message history
+	// can render without issuing one lookup per envelope.
+	RedPacketCount            int        `gorm:"not null;default:0" json:"red_packet_count,omitempty"`
+	RedPacketTotalCents       int64      `gorm:"not null;default:0" json:"-"`
+	RedPacketMinTurnoverCents int64      `gorm:"not null;default:0" json:"-"`
+	RedPacketCover            string     `gorm:"size:24;not null;default:''" json:"red_packet_cover,omitempty"`
+	CreatedAt                 time.Time  `gorm:"index;index:idx_chat_room_game_created,priority:3" json:"created_at"`
+	DeletedAt                 *time.Time `gorm:"index" json:"deleted_at,omitempty"`
+	DeletedBy                 string     `gorm:"size:80" json:"-"`
 }
 
 func (Message) TableName() string { return "member_chat_messages" }

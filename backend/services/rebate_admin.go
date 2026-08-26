@@ -52,11 +52,15 @@ func (s *RebateAdminService) PreviewToday() (*RebatePreview, error) {
 	bizDate := bizDateCST(time.Now())
 	start := startOfDayCST(time.Now())
 	type previewRow struct {
-		UserID   uint64
-		Turnover int64
+		UserID      uint64
+		Turnover    int64
+		RebateCents int64
 	}
 	var rows []previewRow
-	if err := s.db.Model(&bet.Bet{}).Select("user_id, COALESCE(SUM(amount_cents),0) AS turnover").Where("created_at >= ? AND status IN ?", start, []string{"won", "lost"}).Group("user_id").Scan(&rows).Error; err != nil {
+	if err := s.db.Model(&bet.Bet{}).
+		Select("user_id, COALESCE(SUM(amount_cents),0) AS turnover, COALESCE(SUM(rebate_cents),0) AS rebate_cents").
+		Where("COALESCE(settled_at,updated_at,created_at) >= ? AND status IN ?", start, []string{"won", "lost"}).
+		Group("user_id").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	estimated := 0.0
@@ -65,11 +69,7 @@ func (s *RebateAdminService) PreviewToday() (*RebatePreview, error) {
 			if centsToAmount(item.Turnover) < cfg.MinTurnover {
 				continue
 			}
-			rate, _, err := NewTradingAdminService(s.db).ResolveRebateRate(item.UserID)
-			if err != nil || rate <= 0 {
-				continue
-			}
-			estimated += roundMoney(centsToAmount(item.Turnover) * rate / 100)
+			estimated += centsToAmount(item.RebateCents)
 		}
 	}
 	var credited int64
@@ -103,14 +103,15 @@ func (s *RebateAdminService) RunToday(operator string) (*RebateRunResult, error)
 	bizDate := bizDateCST(time.Now())
 	start := startOfDayCST(time.Now())
 	type row struct {
-		UserID   uint64
-		Username string
-		Turnover int64
+		UserID      uint64
+		Username    string
+		Turnover    int64
+		RebateCents int64
 	}
 	var rows []row
 	if err := s.db.Model(&bet.Bet{}).
-		Select("user_id, MAX(username) as username, COALESCE(SUM(amount_cents),0) as turnover").
-		Where("created_at >= ? AND status IN ?", start, []string{"won", "lost"}).
+		Select("user_id, MAX(username) as username, COALESCE(SUM(amount_cents),0) as turnover, COALESCE(SUM(rebate_cents),0) as rebate_cents").
+		Where("COALESCE(settled_at,updated_at,created_at) >= ? AND status IN ?", start, []string{"won", "lost"}).
 		Group("user_id").Having("COALESCE(SUM(amount_cents),0) > 0").
 		Scan(&rows).Error; err != nil {
 		return nil, apperrors.NewSystemError("REBATE_READ_FAILED", "统计回水流水失败", err)
@@ -131,12 +132,7 @@ func (s *RebateAdminService) RunToday(operator string) (*RebateRunResult, error)
 				result.Skipped++
 				continue
 			}
-			rate, _, rateErr := NewTradingAdminService(tx).ResolveRebateRate(item.UserID)
-			if rateErr != nil || rate <= 0 {
-				result.Skipped++
-				continue
-			}
-			amount := int64(math.Round(float64(item.Turnover) * rate / 100))
+			amount := item.RebateCents
 			if amount <= 0 {
 				result.Skipped++
 				continue
@@ -150,11 +146,13 @@ func (s *RebateAdminService) RunToday(operator string) (*RebateRunResult, error)
 				return err
 			}
 			if err := tx.Create(&user.BalanceTransaction{
-				UserID: account.UserID, AmountCents: amount, BeforeCents: account.BalanceCents, AfterCents: after,
+				UserID: account.UserID, Reference: "rebate:" + bizDate,
+				AmountCents: amount, BeforeCents: account.BalanceCents, AfterCents: after,
 				Type: "rebate", Remark: "每日回水 " + bizDate, Operator: defaultString(operator, "系统"),
 			}).Error; err != nil {
 				return err
 			}
+			rate := roundMoney(float64(amount) / float64(item.Turnover) * 100)
 			if err := tx.Create(&rebate.DailyRecord{
 				BizDate: bizDate, UserID: item.UserID, Username: item.Username,
 				TurnoverCents: item.Turnover, RatePercent: rate, AmountCents: amount,

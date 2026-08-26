@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Icon } from '../components/Icon'
 import { memberApi } from '../api/member'
 import { setToken } from '../api/client'
-import { BRAND_NAME, DEMO_ACCOUNT, DEMO_PASSWORD } from '../data/brand'
+import { BRAND_NAME, DEMO_ACCOUNT, DEMO_PASSWORD, DEMO_ROOM } from '../data/brand'
 import type { Theme } from '../types'
 
 type Props = { onContinue: (account: string, nickname: string) => void; onRegister?: () => void; theme?: Theme }
@@ -11,17 +11,18 @@ type Props = { onContinue: (account: string, nickname: string) => void; onRegist
 export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
   const [account, setAccount] = useState(DEMO_ACCOUNT)
   const [password, setPassword] = useState(DEMO_PASSWORD)
+  const [workspace, setWorkspace] = useState(DEMO_ROOM)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
   const submit = async () => {
     const value = account.trim()
     if (value.length < 3) return setError('请输入至少 3 位帐号')
-    if (password.length < 6) return setError('请输入至少 6 位密码')
+    if (!password) return setError('请输入登录密码')
     setLoading(true)
     setError('')
     try {
-      const result = await memberApi.login(value, password)
+      const result = await memberApi.login(value, password, workspace.trim())
       setToken(result.token)
       onContinue(result.user.username, result.user.nickname || result.user.username)
     } catch (reason) {
@@ -47,6 +48,19 @@ export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
           <p>验证帐号后，继续进入你的专属彩种空间。</p>
         </div>
         <label className="login-field">
+          <span>房间号 / 代理</span>
+          <div>
+            <i>◈</i>
+            <input
+              autoComplete="organization"
+              maxLength={40}
+              onChange={(event) => { setWorkspace(event.target.value.replace(/\s/g, '')); setError('') }}
+              placeholder="输入所属房间号"
+              value={workspace}
+            />
+          </div>
+        </label>
+        <label className="login-field">
           <span>帐号</span>
           <div>
             <i>◉</i>
@@ -70,7 +84,7 @@ export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
               maxLength={32}
               onChange={(event) => { setPassword(event.target.value); setError('') }}
               onKeyDown={(event) => event.key === 'Enter' && void submit()}
-              placeholder="输入至少 6 位密码"
+              placeholder="输入登录密码"
               type="password"
               value={password}
             />
@@ -86,7 +100,7 @@ export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
         </div>
         <footer className="login-foot">
           <span>{BRAND_NAME}娱乐</span>
-          {onRegister ? <button className="room-entry-back" onClick={onRegister}>没有帐号？注册</button> : <p>会员端已接入后端鉴权</p>}
+          {onRegister ? <button className="room-entry-back" onClick={onRegister}>没有帐号？注册</button> : <p>安全登录 · 账户信息已加密</p>}
         </footer>
       </section>
     </main>

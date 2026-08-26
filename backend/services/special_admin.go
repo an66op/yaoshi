@@ -1,6 +1,7 @@
 package services
 
 import (
+	"backend/accesscontrol"
 	"backend/data/models/special"
 	"backend/data/models/user"
 	apperrors "backend/errors"
@@ -47,9 +48,12 @@ type SpecialOverview struct {
 type RoomResolveResult struct {
 	RoomCode      string `json:"room_code"`
 	RoomName      string `json:"room_name"`
+	RoomLogo      string `json:"room_logo"`
 	AgentID       uint64 `json:"agent_id"`
 	AgentUsername string `json:"agent_username"`
 	AgentNickname string `json:"agent_nickname"`
+	Status        string `json:"status"`
+	ApplicationID uint64 `json:"application_id,omitempty"`
 }
 
 func NewSpecialAdminService(db *gorm.DB) *SpecialAdminService { return &SpecialAdminService{db: db} }
@@ -144,7 +148,7 @@ func (s *SpecialAdminService) Grant(campaignID, resourceID, userID uint64, opera
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, userID).Error; err != nil {
 			return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
 		}
-		if account.Role == "admin" {
+		if account.Role == "admin" || account.Role == "tenant" {
 			return apperrors.NewBusinessError("INVALID_REQUEST", "不能给管理员发放代理房间号")
 		}
 		if strings.TrimSpace(account.AgentRoomCode) != "" && account.AgentRoomCode != resource.Number {
@@ -204,10 +208,18 @@ func (s *SpecialAdminService) ResolveRoom(code string) (*RoomResolveResult, erro
 	if err != nil {
 		return nil, err
 	}
+	hierarchyActive, hierarchyErr := accesscontrol.AgentHierarchyActive(s.db, account)
+	if hierarchyErr != nil {
+		return nil, hierarchyErr
+	}
+	if !hierarchyActive {
+		return nil, apperrors.NewBusinessError("ROOM_NOT_FOUND", "房间号无效或未开通")
+	}
 	return &RoomResolveResult{
-		RoomCode: code,
-		RoomName: defaultString(account.Nickname, account.Username) + "的房间",
-		AgentID: account.UserID,
+		RoomCode:      code,
+		RoomName:      agentRoomDisplayName(account),
+		RoomLogo:      account.AgentRoomLogo,
+		AgentID:       account.UserID,
 		AgentUsername: account.Username,
 		AgentNickname: defaultString(account.Nickname, account.Username),
 	}, nil

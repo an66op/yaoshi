@@ -2,6 +2,8 @@ package api
 
 import (
 	"backend/controller/admin"
+	agentctrl "backend/controller/agent"
+	tenantctrl "backend/controller/tenant"
 	"backend/controller/user"
 	"backend/lotteryfeed"
 
@@ -21,6 +23,10 @@ type HandlerRegistry struct {
 	BetHandler              *admin.BetHandler
 	OpsHandler              *admin.OpsHandler
 	AgentHandler            *admin.AgentHandler
+	TenantHandler           *admin.TenantHandler
+	AgentWorkspaceHandler   *agentctrl.WorkspaceHandler
+	TenantWorkspaceHandler  *tenantctrl.WorkspaceHandler
+	SystemAuditHandler      *admin.SystemAuditHandler
 }
 
 func InitHandlers(db *gorm.DB, scheduler *lotteryfeed.Scheduler) *HandlerRegistry {
@@ -37,5 +43,9 @@ func InitHandlers(db *gorm.DB, scheduler *lotteryfeed.Scheduler) *HandlerRegistr
 		BetHandler:              admin.NewBetHandler(db),
 		OpsHandler:              admin.NewOpsHandler(db),
 		AgentHandler:            admin.NewAgentHandler(db),
+		TenantHandler:           admin.NewTenantHandler(db),
+		AgentWorkspaceHandler:   agentctrl.NewWorkspaceHandler(db),
+		TenantWorkspaceHandler:  tenantctrl.NewWorkspaceHandler(db),
+		SystemAuditHandler:      admin.NewSystemAuditHandler(db),
 	}
 }

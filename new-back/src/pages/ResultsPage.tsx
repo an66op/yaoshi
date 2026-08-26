@@ -423,7 +423,7 @@ export function ResultsPage() {
             >
               {games.map((game) => (
                 <MenuItem value={game.id} key={game.id}>
-                  {game.source_kind === "official" ? "【官方】" : "【演示】"}
+                  {game.source_kind === "official" ? "【官方】" : "【平台】"}
                   {game.name}
                 </MenuItem>
               ))}

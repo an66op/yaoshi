@@ -1,4 +1,17 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&family=Rajdhani:wght@600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Rajdhani:wght@600;700&display=swap");
+
+/* 用户端统一使用普通数字字形，禁止等宽字体把 0 渲染成带斜线的 Ø。 */
+body,
+button,
+input,
+textarea,
+select,
+output,
+.mobile-app *,
+.game-room * {
+  font-family: Arial, "Noto Sans SC", system-ui, sans-serif !important;
+  font-feature-settings: "zero" 0;
+}
 
 * {
   box-sizing: border-box;
@@ -121,7 +134,7 @@ button:active {
   align-items: center;
   padding: 8px 10px;
   border: 1px solid #ffffff28;
-  border-radius: 9px;
+  border-radius: 7px;
   background: #064d8254;
 }
 .announcement span {
@@ -212,6 +225,22 @@ button:active {
   color: #fff;
   font: 700 11px "Rajdhani";
 }
+.game-logo.has-image {
+  overflow: hidden;
+  width: 42px;
+  height: 42px;
+  border: 0;
+  background: transparent;
+}
+.game-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.game-logo.compact-source-logo img {
+  transform: scale(2.8);
+}
 .game-lead div {
   display: grid;
   gap: 3px;
@@ -297,6 +326,26 @@ button:active {
 .violet {
   background: #8470bf;
 }
+.lottery-ball {
+  border-radius: 3px !important;
+  color: #fff !important;
+  font-family: "Arial Black", "Rajdhani", system-ui, sans-serif !important;
+  font-weight: 900 !important;
+  line-height: 1;
+  text-shadow: 0 1px 1px #0009, 0 0 1px #0008;
+  box-shadow: inset 0 1px #ffffff42, inset 0 -1px #0000001f;
+}
+.ball-0 { background: #e83d86; }
+.ball-1 { background: #e9df00; }
+.ball-2 { background: #0795d2; }
+.ball-3 { background: #4b4b4b; }
+.ball-4 { background: #ff7008; }
+.ball-5 { background: #20ced1; }
+.ball-6 { background: #5934f5; }
+.ball-7 { background: #bdbdbd; }
+.ball-8 { background: #ff2a14; }
+.ball-9 { background: #870b02; }
+.ball-10 { background: #00bd0b; }
 .lobby-tip {
   margin: 16px 0 4px;
   color: #a3adb5;
@@ -562,9 +611,9 @@ button:active {
 .chat-row {
   width: 100%;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 15px 17px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
   border: 0;
   border-bottom: 1px solid #edf0f2;
   background: #fff;
@@ -606,22 +655,28 @@ button:active {
   flex: 1;
   min-width: 0;
   display: grid;
-  gap: 4px;
+  gap: 3px;
 }
 .chat-row b {
-  font-size: 15px;
+  font-size: 14px;
+  line-height: 1.15;
 }
 .chat-row small {
   overflow: hidden;
   color: #929daa;
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1.2;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 .chat-row time {
-  align-self: flex-start;
   color: #aab2bc;
   font-size: 10px;
+  line-height: 1.2;
+  flex: none;
+  min-width: 38px;
+  text-align: right;
+  align-self: flex-start;
 }
 .chat-row-pinned {
   position: relative;
@@ -1001,12 +1056,32 @@ button:active {
 }
 .game-header .game-header-meta {
   display: grid;
-  justify-items: end;
-  gap: 2px;
+  grid-template-columns: repeat(2, minmax(0, auto));
+  gap: 3px 9px;
+  justify-content: end;
   text-align: right;
-  opacity: 0.88;
+  line-height: 1.15;
 }
-.game-header .game-header-meta small { white-space: nowrap; }
+.game-header .game-header-meta span {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 3px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.game-header .game-header-meta em {
+  color: #d7f7f8;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 600;
+}
+.game-header .game-header-meta strong {
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
 .game-info {
   display: flex;
   align-items: center;

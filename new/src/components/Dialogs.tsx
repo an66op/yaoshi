@@ -1,17 +1,23 @@
 import { Icon } from './Icon'
 import { createPortal } from 'react-dom'
 import type { ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import { BRAND_NAME } from '../data/brand'
+import type { AnnouncementItem } from '../api/portal'
 
-export function AnnouncementDialog({ title, body, onClose }: { title?: string; body?: string; onClose: () => void }) {
-  const heading = title ?? '本周系统维护安排与活动说明'
-  const content = body ?? '为了提升服务稳定性，系统将进行例行维护。维护期间，部分页面可能暂时无法访问。如有疑问，请通过「聊天 - 在线客服」联系工作人员。'
-  return createPortal(<div className="modal-layer" role="presentation" onClick={onClose}><section className="notice-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><header><span>系统公告</span><button onClick={onClose}>×</button></header><article><h2>{heading}</h2><p>{content}</p></article><footer><button onClick={onClose}>我知道了</button></footer></section></div>, document.body)
+export function AnnouncementDialog({ items, onClose }: { items: AnnouncementItem[]; onClose: () => void }) {
+  const [index, setIndex] = useState(0)
+  useEffect(() => setIndex(current => Math.min(current, Math.max(0, items.length - 1))), [items.length])
+  const current = items[index]
+  if (!current) return null
+  const multiple = items.length > 1
+  return createPortal(<div className="modal-layer" role="presentation" onClick={onClose}><section className="notice-modal multi-notice-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><header><span>大厅公告</span>{multiple && <em>{index + 1} / {items.length}</em>}<button aria-label="关闭公告" onClick={onClose}>×</button></header><article><small>IMPORTANT NOTICE</small><h2>{current.title}</h2><p>{current.content}</p></article><footer className={multiple ? 'notice-footer-multiple' : ''}>{multiple && <button className="notice-secondary" disabled={index === 0} onClick={() => setIndex(currentIndex => Math.max(0, currentIndex - 1))}>上一条</button>}<button onClick={() => index < items.length - 1 ? setIndex(currentIndex => currentIndex + 1) : onClose()}>{index < items.length - 1 ? '下一条' : '我知道了'}</button></footer></section></div>, document.body)
 }
 
-export function RedPacketDialog({ type, claimed, onOpen, onClose }: { type: 'daily' | 'lucky'; claimed: boolean; onOpen: () => void; onClose: () => void }) {
+export function RedPacketDialog({ type, claimed, reward, greeting = '恭喜发财', cover = 'classic', minTurnover = 0, opening = false, error = '', onOpen, onClose }: { type: 'daily' | 'lucky'; claimed: boolean; reward?: number | null; greeting?: string; cover?: string; minTurnover?: number; opening?: boolean; error?: string; onOpen: () => void; onClose: () => void }) {
   const canOpen = type === 'lucky' && !claimed
-  return createPortal(<div className="modal-layer red-layer" role="presentation" onClick={onClose}><section className="packet-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={onClose}>×</button><div className="packet-modal-top"><b>{BRAND_NAME} · 奖励包</b><small>{canOpen ? '给你发了一个奖励包' : '奖励已领取'}</small></div><div className="packet-gift"><Icon name="gift" /></div>{canOpen ? <><h2>好运相伴</h2><p>本期专属积分奖励，祝您一切顺利</p><button className="open-packet" onClick={onOpen}>开</button></> : <><h2>{type === 'daily' ? '18.00' : '8.00'} <small>积分</small></h2><p>奖励已存入积分账户</p><button className="packet-detail" onClick={onClose}>查看积分明细</button></>}</section></div>, document.body)
+  const amount = reward != null ? reward.toFixed(2) : type === 'daily' ? '18.00' : '--'
+  return createPortal(<div className="modal-layer red-layer" role="presentation" onClick={() => !opening && onClose()}><section className={`packet-modal packet-cover-${cover} ${canOpen ? '' : 'packet-result-modal'}`} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><button aria-label="关闭红包" className="modal-close" disabled={opening} onClick={onClose}>×</button><div className="packet-modal-top"><b>{BRAND_NAME} · 红包</b><small>{canOpen ? '给你发了一个红包' : '领取成功'}</small></div><div className="packet-gift"><Icon name="gift" /></div>{canOpen ? <><h2>{greeting}</h2><p>{opening ? '正在开启红包…' : minTurnover > 0 ? `今日有效流水满 ${minTurnover.toFixed(2)} 可领取` : '点击领取本次红包'}</p>{error && <div className="packet-error" role="alert">{error}</div>}<button aria-label={opening ? '正在开启红包' : '开启红包'} className={`open-packet ${opening ? 'opening' : ''}`} disabled={opening} onClick={onOpen}>{opening ? <span /> : '开'}</button></> : <div className="packet-result"><small>本次领取</small><h2><strong>{amount}</strong><em>积分</em></h2><p>已存入积分账户</p></div>}</section></div>, document.body)
 }
 
 export function ActionDialog({ title, description, confirmLabel = '我知道了', onConfirm, onClose, children }: { title: string; description: string; confirmLabel?: string; onConfirm?: () => void; onClose: () => void; children?: ReactNode }) {

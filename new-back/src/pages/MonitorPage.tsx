@@ -18,7 +18,6 @@ import {
   Typography,
 } from '@mui/material'
 import RefreshRounded from '@mui/icons-material/RefreshRounded'
-import AutoAwesomeRounded from '@mui/icons-material/AutoAwesomeRounded'
 import CasinoRounded from '@mui/icons-material/CasinoRounded'
 import TaskAltRounded from '@mui/icons-material/TaskAltRounded'
 import { useCallback, useEffect, useState } from 'react'
@@ -27,7 +26,8 @@ import { PageHeader } from '../components/PageHeader'
 import { useFeedback } from '../components/feedback'
 
 const money = (value: number) => new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
-const columns = ['第一球', '第二球', '第三球', '第四球', '第五球', '总和']
+const compactColumns = ['第一球', '第二球', '第三球', '第四球', '第五球', '总和']
+const racingColumns = ['冠军', '亚军', '第三名', '第四名', '第五名', '第六名', '第七名', '第八名', '第九名', '第十名']
 
 export function MonitorPage() {
   const [games, setGames] = useState<AdminGame[]>([])
@@ -79,16 +79,12 @@ export function MonitorPage() {
     return () => window.clearInterval(poll)
   }, [gameId, load])
 
-  const run = async (action: 'seed' | 'publish' | 'settle') => {
+  const run = async (action: 'publish' | 'settle') => {
     if (!gameId || !data) return
     setBusy(action)
     setError('')
     try {
-      if (action === 'seed') {
-        const snapshot = await adminApi.seedMonitor(gameId)
-        setData(snapshot)
-        showMessage('演示注单已生成')
-      } else if (action === 'publish') {
+      if (action === 'publish') {
         const result = await adminApi.publishDraw(gameId, { issue: data.issue })
         showMessage(`${result.game_name} ${result.issue} 已开奖结算：中 ${result.won} / 未中 ${result.lost}，派彩 ${money(result.payout_amount)}`)
         await load(gameId)
@@ -105,6 +101,8 @@ export function MonitorPage() {
   }
 
   const settlement = data?.settlement
+  const matrixColumns = (data?.matrix?.[0]?.length ?? 6) >= 10 ? racingColumns : compactColumns
+  const matrixRows = data?.matrix?.length ?? 10
 
   return (
     <Box p={{ xs: 2, lg: 2.5 }}>
@@ -118,7 +116,6 @@ export function MonitorPage() {
               {games.map(game => <MenuItem key={game.id} value={game.id}>{game.name}</MenuItem>)}
             </TextField>
             <Button variant="outlined" startIcon={<RefreshRounded />} disabled={loading || Boolean(busy)} onClick={() => void load(gameId, true)}>刷新</Button>
-            <Button variant="outlined" startIcon={<AutoAwesomeRounded />} disabled={!gameId || loading || Boolean(busy)} onClick={() => void run('seed')}>{busy === 'seed' ? '生成中…' : '生成演示注单'}</Button>
             <Button variant="contained" startIcon={<CasinoRounded />} disabled={!gameId || !data || loading || Boolean(busy)} onClick={() => void run('publish')}>{busy === 'publish' ? '开奖中…' : '开奖并结算'}</Button>
             <Button variant="contained" color="secondary" startIcon={<TaskAltRounded />} disabled={!gameId || !data || loading || Boolean(busy) || !settlement?.has_draw || settlement.pending === 0} onClick={() => void run('settle')}>{busy === 'settle' ? '结算中…' : '仅结算'}</Button>
             <Chip color="success" label="实时更新" />
@@ -150,14 +147,14 @@ export function MonitorPage() {
             <TableHead>
               <TableRow>
                 <TableCell>号码</TableCell>
-                {columns.map(column => <TableCell align="center" key={column}>{column}</TableCell>)}
+                {matrixColumns.map(column => <TableCell align="center" key={column}>{column}</TableCell>)}
               </TableRow>
             </TableHead>
             <TableBody>
-              {Array.from({ length: 10 }, (_, n) => (
+              {Array.from({ length: matrixRows }, (_, n) => (
                 <TableRow key={n}>
                   <TableCell><Chip label={n} color="primary" size="small" /></TableCell>
-                  {Array.from({ length: 6 }, (_, col) => {
+                  {Array.from({ length: matrixColumns.length }, (_, col) => {
                     const amount = data?.matrix?.[n]?.[col] ?? 0
                     return <TableCell align="center" key={col}>{amount > 0 ? money(amount) : '0'}</TableCell>
                   })}

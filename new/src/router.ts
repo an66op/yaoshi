@@ -7,6 +7,8 @@ export type ChatView =
   | "winning"
   | "activity"
   | "group"
+  | "plans"
+  | "plan"
   | "service";
 
 export type WalletActionSlug =
@@ -28,7 +30,7 @@ export type AppRoute =
   | { kind: "register" }
   | { kind: "room" }
   | { kind: "tab"; tab: Exclude<Tab, "chat">; walletAction?: WalletActionSlug; returnGameId?: string }
-  | { kind: "chat"; tab: "chat"; view: ChatView; returnGameId?: string }
+  | { kind: "chat"; tab: "chat"; view: ChatView; returnGameId?: string; planGameId?: string }
   | { kind: "results"; gameId?: string; returnGameId?: string }
   | { kind: "game"; gameId: string; quickMenu?: boolean };
 
@@ -63,12 +65,18 @@ export function parseRoute(pathname: string): AppRoute {
   if (path === "/results") return { kind: "results", gameId: query.get("game")?.trim() || undefined, returnGameId };
   if (path === "/messages/system")
     return { kind: "chat", tab: "chat", view: "system" };
+  if (path === "/messages/account")
+    return { kind: "chat", tab: "chat", view: "list" };
   if (path === "/messages/winning")
     return { kind: "chat", tab: "chat", view: "winning" };
   if (path === "/messages/activity")
     return { kind: "chat", tab: "chat", view: "activity" };
   if (path === "/messages/group")
     return { kind: "chat", tab: "chat", view: "group" };
+  if (path.startsWith("/messages/plans/"))
+    return { kind: "chat", tab: "chat", view: "plan", planGameId: decodeURIComponent(path.slice("/messages/plans/".length)) };
+  if (path === "/messages/plans")
+    return { kind: "chat", tab: "chat", view: "plans" };
   if (path === "/messages/service") {
     const returnGameId = query.get("from_game")?.trim();
     return { kind: "chat", tab: "chat", view: "service", returnGameId: returnGameId || undefined };
@@ -103,10 +111,16 @@ export function pathForChat(view: ChatView, fromGameId?: string) {
     winning: "/messages/winning",
     activity: "/messages/activity",
     group: "/messages/group",
+    plans: "/messages/plans",
+    plan: "/messages/plans",
     service: "/messages/service",
   };
   const path = routes[view];
   return view === "service" && fromGameId ? `${path}?from_game=${encodeURIComponent(fromGameId)}` : path;
+}
+
+export function pathForPlanGame(gameId: string) {
+  return `/messages/plans/${encodeURIComponent(gameId)}`;
 }
 
 export function pathForGame(gameId: string, quickMenu = false) {

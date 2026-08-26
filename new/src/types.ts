@@ -10,7 +10,15 @@ export type Game = {
   period: string
   due: string
   color: string
+  logo?: string
   balls: number[]
+  issueStatus: string
+  sourceKind: string
+  sourceName: string
+  sourceHealthy: boolean
+  syncStatus: string
+  sourceError: string
+  lastSyncAt?: string
 }
 
 export type IconName = 'game' | 'shop' | 'chat' | 'user' | 'back' | 'bell' | 'plus' | 'more' | 'gift' | 'arrow' | 'switch' | 'room'

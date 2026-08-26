@@ -159,6 +159,8 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
   const [paymentAccountHolder, setPaymentAccountHolder] = useState('')
   const [paymentAccountSaving, setPaymentAccountSaving] = useState(false)
   const [betFilter, setBetFilter] = useState<'all' | 'pending' | 'settled'>('all')
+  const [betHasMore, setBetHasMore] = useState(false)
+  const [betLoadingMore, setBetLoadingMore] = useState(false)
   // 详情保留一份快照，列表刷新、筛选或余额更新时不会把刚点开的记录清空。
   const [selectedBet, setSelectedBet] = useState<MemberBet | null>(null)
   const [copied, setCopied] = useState(false)
@@ -185,6 +187,7 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
     let cancelled = false
     setSubpageLoading(true)
     setMessage('')
+    if (activeAction === '游戏记录' || activeAction === '竞猜列表') setBetHasMore(false)
     void (async () => {
       try {
         if (activeAction === '申请记录') {
@@ -216,10 +219,16 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
           }
         } else if (activeAction === '游戏记录') {
           const result = await betsApi.list({ page_size: 30 })
-          if (!cancelled) setBets(result.items)
+          if (!cancelled) {
+            setBets(result.items)
+            setBetHasMore(result.has_more)
+          }
         } else if (activeAction === '竞猜列表') {
           const result = await betsApi.list({ status: betFilter, page_size: 30 })
-          if (!cancelled) setBets(result.items)
+          if (!cancelled) {
+            setBets(result.items)
+            setBetHasMore(result.has_more)
+          }
         } else if (activeAction === '娱乐额度') {
           const result = await memberApi.walletSummary()
           if (!cancelled) setSummary(result)
@@ -263,6 +272,25 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
       setMessage('暂时无法读取更多账变记录，请稍后重试')
     } finally {
       setHistoryLoadingMore(false)
+    }
+  }
+
+  const loadMoreBets = async () => {
+    const beforeID = bets.at(-1)?.id
+    if (!beforeID || !betHasMore || betLoadingMore) return
+    setBetLoadingMore(true)
+    try {
+      const result = await betsApi.list({
+        status: activeAction === '竞猜列表' ? betFilter : 'all',
+        page_size: 30,
+        before_id: beforeID,
+      })
+      setBets((current) => [...current, ...result.items.filter((item) => !current.some((existing) => existing.id === item.id))])
+      setBetHasMore(result.has_more)
+    } catch {
+      setMessage('暂时无法读取更多注单，请稍后重试')
+    } finally {
+      setBetLoadingMore(false)
     }
   }
 
@@ -467,6 +495,7 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
               <div><b>{bet.play_name || bet.selection}</b><small>{bet.game_id} · 第 {bet.issue} 期</small></div><aside><strong>¥ {formatMoney(bet.amount)}</strong><span className={`wallet-bet-status ${bet.status}`}>{betStatusLabel[bet.status] ?? bet.status}</span></aside><Icon name="arrow" />
             </button>
           )) : <EmptyHint text={activeAction === '竞猜列表' && betFilter === 'pending' ? '暂无待开奖注单' : '暂无注单'} />}
+          {betHasMore && <button className="wallet-load-more" disabled={betLoadingMore} onClick={() => void loadMoreBets()}>{betLoadingMore ? '正在加载…' : '加载更早注单'}</button>}
           {selectedBet && <BetDetail bet={selectedBet} onClose={() => setSelectedBet(null)} onCancel={() => void cancelBet(selectedBet)} />}
         </WalletPage>
       )

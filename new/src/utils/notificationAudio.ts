@@ -2,6 +2,8 @@ import { defaultNotificationSounds, notificationSounds } from '../data/notificat
 import type { NotificationKind, NotificationSound } from '../data/notificationSounds'
 
 const mutedStorageKey = 'seven-star-notification-muted'
+let activeNotification: SoundPlayback | null = null
+let activeNotificationTimer: number | null = null
 
 export type SoundPlayback = { stop: () => void; durationMs: number }
 
@@ -61,9 +63,26 @@ export function playNotificationSound(kind: NotificationKind) {
     if (isNotificationMuted()) return
     const selections = { ...defaultNotificationSounds, ...JSON.parse(window.localStorage.getItem('seven-star-notification-sounds') ?? '{}') }
     const sound = notificationSounds.find((item) => item.id === selections[kind])
+      ?? notificationSounds.find((item) => item.id === defaultNotificationSounds[kind])
     if (!sound) return
-    startNotificationSound(sound)
+    stopNotificationSounds()
+    activeNotification = startNotificationSound(sound)
+    if (activeNotification) {
+      activeNotificationTimer = window.setTimeout(() => {
+        activeNotification = null
+        activeNotificationTimer = null
+      }, activeNotification.durationMs)
+    }
   } catch {
     // 浏览器未允许自动播放或本地存储不可用时，静默跳过即可。
   }
+}
+
+export function stopNotificationSounds() {
+  if (activeNotificationTimer != null) {
+    window.clearTimeout(activeNotificationTimer)
+    activeNotificationTimer = null
+  }
+  activeNotification?.stop()
+  activeNotification = null
 }

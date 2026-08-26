@@ -94,11 +94,7 @@ export function LimitsPage() {
   }, [loadGames])
 
   useEffect(() => {
-    if (!gameId) {
-      setLoading(false)
-      setItems([])
-      return
-    }
+    if (!gameId) return
     const timer = window.setTimeout(() => void loadLimits(gameId), 0)
     return () => window.clearTimeout(timer)
   }, [gameId, loadLimits])

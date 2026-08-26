@@ -134,7 +134,9 @@ func (s *LotteryService) syncOfficialGame(ctx context.Context, gameID string, fe
 	if !game.Enabled {
 		return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "ok"}
 	}
-	_ = s.db.Model(&game).Updates(map[string]any{"sync_status": "syncing", "last_sync_error": ""}).Error
+	// Keep the previous error visible while retrying.  A failed source must not
+	// reopen betting until a complete successful response clears the error.
+	_ = s.db.Model(&game).Update("sync_status", "syncing").Error
 	draws, err := fetch(ctx)
 	if err != nil {
 		return s.recordSyncError(gameID, err)
@@ -174,6 +176,9 @@ func (s *LotteryService) syncOfficialGame(ctx context.Context, gameID string, fe
 	if err := s.db.Model(&game).Updates(updates).Error; err != nil {
 		return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "error", Error: err.Error()}
 	}
+	if err := s.db.First(&game, "id = ?", gameID).Error; err == nil {
+		_, _ = NewBetAdminService(s.db).EnsureCurrentIssue(&game)
+	}
 	latestIssue := ""
 	if len(draws) > 0 {
 		latestIssue = draws[0].Issue
@@ -207,6 +212,9 @@ func (s *LotteryService) recordSyncError(gameID string, syncErr error) SourceSyn
 	var game lottery.Game
 	_ = s.db.First(&game, "id = ?", gameID).Error
 	_ = s.db.Model(&lottery.Game{}).Where("id = ?", gameID).Updates(map[string]any{"sync_status": "error", "last_sync_error": message}).Error
+	if err := s.db.First(&game, "id = ?", gameID).Error; err == nil {
+		_, _ = NewBetAdminService(s.db).EnsureCurrentIssue(&game)
+	}
 	return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "error", Error: message}
 }
 

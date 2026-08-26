@@ -4,6 +4,8 @@ import (
 	"backend/data/models/settings"
 	apperrors "backend/errors"
 	"encoding/json"
+	"fmt"
+	"sort"
 	"strings"
 
 	"gorm.io/gorm"
@@ -12,44 +14,55 @@ import (
 
 type SettingsAdminService struct{ db *gorm.DB }
 
+type AnnouncementItem struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	Content      string `json:"content"`
+	Enabled      bool   `json:"enabled"`
+	PopupOnLogin bool   `json:"popup_on_login"`
+	SortOrder    int    `json:"sort_order"`
+}
+
 type SystemSettingsView struct {
-	RoomName              string          `json:"room_name"`
-	RoomCode              string          `json:"room_code"`
-	ChatNickname          string          `json:"chat_nickname"`
-	NicknameDisplayLength int             `json:"nickname_display_length"`
-	MinChatScore          float64         `json:"min_chat_score"`
-	MinCreditAmount       float64         `json:"min_credit_amount"`
-	MinDebitAmount        float64         `json:"min_debit_amount"`
-	RequireJoinReview     bool            `json:"require_join_review"`
-	SoundEnabled          bool            `json:"sound_enabled"`
-	ShowOdds              bool            `json:"show_odds"`
-	PredictionEnabled     bool            `json:"prediction_enabled"`
-	AbnormalLoginAlert    bool            `json:"abnormal_login_alert"`
-	SecurityPasswordCheck bool            `json:"security_password_check"`
-	RoomNotice            string          `json:"room_notice"`
-	Game                  json.RawMessage `json:"game"`
-	QuickReplies          json.RawMessage `json:"quick_replies"`
-	Rebate                json.RawMessage `json:"rebate"`
+	RoomName              string             `json:"room_name"`
+	RoomLogo              string             `json:"room_logo"`
+	ChatNickname          string             `json:"chat_nickname"`
+	NicknameDisplayLength int                `json:"nickname_display_length"`
+	MinChatScore          float64            `json:"min_chat_score"`
+	MinCreditAmount       float64            `json:"min_credit_amount"`
+	MinDebitAmount        float64            `json:"min_debit_amount"`
+	RequireJoinReview     bool               `json:"require_join_review"`
+	SoundEnabled          bool               `json:"sound_enabled"`
+	ShowOdds              bool               `json:"show_odds"`
+	PredictionEnabled     bool               `json:"prediction_enabled"`
+	AbnormalLoginAlert    bool               `json:"abnormal_login_alert"`
+	SecurityPasswordCheck bool               `json:"security_password_check"`
+	RoomNotice            string             `json:"room_notice"`
+	Announcements         []AnnouncementItem `json:"announcements"`
+	Game                  json.RawMessage    `json:"game"`
+	QuickReplies          json.RawMessage    `json:"quick_replies"`
+	Rebate                json.RawMessage    `json:"rebate"`
 }
 
 type UpdateSystemSettingsInput struct {
-	RoomName              string          `json:"room_name"`
-	RoomCode              string          `json:"room_code"`
-	ChatNickname          string          `json:"chat_nickname"`
-	NicknameDisplayLength int             `json:"nickname_display_length"`
-	MinChatScore          float64         `json:"min_chat_score"`
-	MinCreditAmount       float64         `json:"min_credit_amount"`
-	MinDebitAmount        float64         `json:"min_debit_amount"`
-	RequireJoinReview     bool            `json:"require_join_review"`
-	SoundEnabled          bool            `json:"sound_enabled"`
-	ShowOdds              bool            `json:"show_odds"`
-	PredictionEnabled     bool            `json:"prediction_enabled"`
-	AbnormalLoginAlert    bool            `json:"abnormal_login_alert"`
-	SecurityPasswordCheck bool            `json:"security_password_check"`
-	RoomNotice            string          `json:"room_notice"`
-	Game                  json.RawMessage `json:"game"`
-	QuickReplies          json.RawMessage `json:"quick_replies"`
-	Rebate                json.RawMessage `json:"rebate"`
+	RoomName              string             `json:"room_name"`
+	RoomLogo              string             `json:"room_logo"`
+	ChatNickname          string             `json:"chat_nickname"`
+	NicknameDisplayLength int                `json:"nickname_display_length"`
+	MinChatScore          float64            `json:"min_chat_score"`
+	MinCreditAmount       float64            `json:"min_credit_amount"`
+	MinDebitAmount        float64            `json:"min_debit_amount"`
+	RequireJoinReview     bool               `json:"require_join_review"`
+	SoundEnabled          bool               `json:"sound_enabled"`
+	ShowOdds              bool               `json:"show_odds"`
+	PredictionEnabled     bool               `json:"prediction_enabled"`
+	AbnormalLoginAlert    bool               `json:"abnormal_login_alert"`
+	SecurityPasswordCheck bool               `json:"security_password_check"`
+	RoomNotice            string             `json:"room_notice"`
+	Announcements         []AnnouncementItem `json:"announcements"`
+	Game                  json.RawMessage    `json:"game"`
+	QuickReplies          json.RawMessage    `json:"quick_replies"`
+	Rebate                json.RawMessage    `json:"rebate"`
 }
 
 func NewSettingsAdminService(db *gorm.DB) *SettingsAdminService {
@@ -69,8 +82,16 @@ func (s *SettingsAdminService) Update(input UpdateSystemSettingsInput) (*SystemS
 	if err != nil {
 		return nil, err
 	}
-	row.RoomName = defaultString(strings.TrimSpace(input.RoomName), "王者")
-	row.RoomCode = defaultString(strings.TrimSpace(input.RoomCode), "1231")
+	roomName := strings.Join(strings.Fields(input.RoomName), " ")
+	if len([]rune(roomName)) < 2 || len([]rune(roomName)) > 30 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "房间名称长度需为 2–30 个字符")
+	}
+	roomLogo, logoErr := normalizeRoomLogo(input.RoomLogo)
+	if logoErr != nil {
+		return nil, logoErr
+	}
+	row.RoomName = roomName
+	row.RoomLogo = roomLogo
 	row.ChatNickname = defaultString(strings.TrimSpace(input.ChatNickname), "群主")
 	if input.NicknameDisplayLength < 0 {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "昵称显示长度不能为负数")
@@ -88,7 +109,16 @@ func (s *SettingsAdminService) Update(input UpdateSystemSettingsInput) (*SystemS
 	row.PredictionEnabled = input.PredictionEnabled
 	row.AbnormalLoginAlert = input.AbnormalLoginAlert
 	row.SecurityPasswordCheck = input.SecurityPasswordCheck
-	row.RoomNotice = strings.TrimSpace(input.RoomNotice)
+	if input.Announcements != nil {
+		announcements, encoded, normalizeErr := normalizeAnnouncements(input.Announcements)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		row.AnnouncementsJSON = encoded
+		row.RoomNotice = firstEnabledAnnouncementContent(announcements)
+	} else {
+		row.RoomNotice = strings.TrimSpace(input.RoomNotice)
+	}
 	row.GameSettingsJSON = rawOrEmptyObject(input.Game)
 	row.QuickRepliesJSON = rawOrEmptyArray(input.QuickReplies)
 	row.RebateSettingsJSON = rawOrEmptyObject(input.Rebate)
@@ -102,6 +132,24 @@ func (s *SettingsAdminService) ensure() (*settings.SystemConfig, error) {
 	var row settings.SystemConfig
 	err := s.db.First(&row, 1).Error
 	if err == nil {
+		if strings.TrimSpace(row.AnnouncementsJSON) == "" {
+			notice := strings.TrimSpace(row.RoomNotice)
+			if notice == "" {
+				notice = "欢迎来到王者，祝您游戏愉快。"
+				row.RoomNotice = notice
+			}
+			_, encoded, _ := normalizeAnnouncements([]AnnouncementItem{{
+				ID: "welcome", Title: "欢迎公告", Content: notice,
+				Enabled: true, PopupOnLogin: true, SortOrder: 10,
+			}})
+			row.AnnouncementsJSON = encoded
+			if saveErr := s.db.Model(&row).Updates(map[string]any{
+				"announcements_json": row.AnnouncementsJSON,
+				"room_notice":        row.RoomNotice,
+			}).Error; saveErr != nil {
+				return nil, apperrors.NewSystemError("SETTINGS_SAVE_FAILED", "初始化公告设置失败", saveErr)
+			}
+		}
 		return &row, nil
 	}
 	if err != gorm.ErrRecordNotFound {
@@ -116,7 +164,9 @@ func (s *SettingsAdminService) ensure() (*settings.SystemConfig, error) {
 		SoundEnabled:       true,
 		ShowOdds:           true,
 		PredictionEnabled:  true,
-		GameSettingsJSON:   `{"seal_seconds":30,"allow_cancel":true,"default_fly_rate":0,"max_open_games":8,"room_activity_enabled":true,"room_activity_interval_secs":10,"room_activity_bots_per_room":6,"room_activity_bets_per_cycle":2,"room_activity_chat_chance_percent":28}`,
+		RoomNotice:         "欢迎来到王者，祝您游戏愉快。",
+		AnnouncementsJSON:  `[{"id":"welcome","title":"欢迎公告","content":"欢迎来到王者，祝您游戏愉快。","enabled":true,"popup_on_login":true,"sort_order":10}]`,
+		GameSettingsJSON:   `{"seal_seconds":30,"allow_cancel":true,"default_fly_rate":0,"max_open_games":8,"room_activity_enabled":true,"room_activity_interval_secs":10,"room_activity_bots_per_room":6,"room_activity_bets_per_cycle":2,"room_activity_chat_chance_percent":0}`,
 		QuickRepliesJSON:   `[{"title":"欢迎光临","content":"欢迎进入王者房间，祝您游戏愉快。"},{"title":"封盘提醒","content":"本期即将封盘，请尽快完成下注。"},{"title":"开奖公告","content":"本期已开奖，请留意中奖结果。"}]`,
 		RebateSettingsJSON: `{"enabled":true,"rate_percent":0.5,"min_turnover":0,"settle_mode":"daily","auto_credit":false}`,
 	}
@@ -130,9 +180,10 @@ func (s *SettingsAdminService) ensure() (*settings.SystemConfig, error) {
 }
 
 func toSettingsView(row *settings.SystemConfig) *SystemSettingsView {
+	announcements := decodeAnnouncements(row.AnnouncementsJSON, row.RoomNotice)
 	return &SystemSettingsView{
-		RoomName:              row.RoomName,
-		RoomCode:              defaultString(row.RoomCode, "1231"),
+		RoomName:              defaultString(strings.TrimSpace(row.RoomName), "王者大厅"),
+		RoomLogo:              row.RoomLogo,
 		ChatNickname:          row.ChatNickname,
 		NicknameDisplayLength: row.NicknameDisplayLength,
 		MinChatScore:          row.MinChatScore,
@@ -145,10 +196,77 @@ func toSettingsView(row *settings.SystemConfig) *SystemSettingsView {
 		AbnormalLoginAlert:    row.AbnormalLoginAlert,
 		SecurityPasswordCheck: row.SecurityPasswordCheck,
 		RoomNotice:            row.RoomNotice,
-		Game:                  json.RawMessage(defaultJSON(row.GameSettingsJSON, `{"seal_seconds":30,"allow_cancel":true,"default_fly_rate":0,"max_open_games":8,"room_activity_enabled":true,"room_activity_interval_secs":10,"room_activity_bots_per_room":6,"room_activity_bets_per_cycle":2,"room_activity_chat_chance_percent":28}`)),
+		Announcements:         announcements,
+		Game:                  json.RawMessage(defaultJSON(row.GameSettingsJSON, `{"seal_seconds":30,"allow_cancel":true,"default_fly_rate":0,"max_open_games":8,"room_activity_enabled":true,"room_activity_interval_secs":10,"room_activity_bots_per_room":6,"room_activity_bets_per_cycle":2,"room_activity_chat_chance_percent":0}`)),
 		QuickReplies:          json.RawMessage(defaultJSON(row.QuickRepliesJSON, `[]`)),
 		Rebate:                json.RawMessage(defaultJSON(row.RebateSettingsJSON, `{"enabled":true,"rate_percent":0.5,"min_turnover":0,"settle_mode":"daily","auto_credit":false}`)),
 	}
+}
+
+func decodeAnnouncements(value, fallback string) []AnnouncementItem {
+	var items []AnnouncementItem
+	if json.Unmarshal([]byte(value), &items) == nil {
+		normalized, _, err := normalizeAnnouncements(items)
+		if err == nil {
+			return normalized
+		}
+	}
+	fallback = strings.TrimSpace(fallback)
+	if fallback == "" {
+		return []AnnouncementItem{}
+	}
+	return []AnnouncementItem{{ID: "welcome", Title: "欢迎公告", Content: fallback, Enabled: true, PopupOnLogin: true, SortOrder: 10}}
+}
+
+func normalizeAnnouncements(input []AnnouncementItem) ([]AnnouncementItem, string, error) {
+	if len(input) > 50 {
+		return nil, "", apperrors.NewBusinessError("INVALID_REQUEST", "公告最多保留 50 条")
+	}
+	items := make([]AnnouncementItem, 0, len(input))
+	usedIDs := map[string]struct{}{}
+	for index, item := range input {
+		item.Title = strings.TrimSpace(item.Title)
+		item.Content = strings.TrimSpace(item.Content)
+		if item.Title == "" || item.Content == "" {
+			return nil, "", apperrors.NewBusinessError("INVALID_REQUEST", "公告标题和内容不能为空")
+		}
+		if len([]rune(item.Title)) > 80 || len([]rune(item.Content)) > 2000 {
+			return nil, "", apperrors.NewBusinessError("INVALID_REQUEST", "公告标题或内容过长")
+		}
+		item.ID = strings.TrimSpace(item.ID)
+		if item.ID == "" {
+			item.ID = fmt.Sprintf("announcement-%d", index+1)
+		}
+		baseID := item.ID
+		for suffix := 2; ; suffix++ {
+			if _, exists := usedIDs[item.ID]; !exists {
+				break
+			}
+			item.ID = fmt.Sprintf("%s-%d", baseID, suffix)
+		}
+		usedIDs[item.ID] = struct{}{}
+		items = append(items, item)
+	}
+	sort.SliceStable(items, func(left, right int) bool {
+		if items[left].SortOrder == items[right].SortOrder {
+			return false
+		}
+		return items[left].SortOrder < items[right].SortOrder
+	})
+	encoded, err := json.Marshal(items)
+	if err != nil {
+		return nil, "", apperrors.NewSystemError("SETTINGS_ENCODE_FAILED", "编码公告设置失败", err)
+	}
+	return items, string(encoded), nil
+}
+
+func firstEnabledAnnouncementContent(items []AnnouncementItem) string {
+	for _, item := range items {
+		if item.Enabled {
+			return item.Content
+		}
+	}
+	return ""
 }
 
 func rawOrEmptyObject(raw json.RawMessage) string {

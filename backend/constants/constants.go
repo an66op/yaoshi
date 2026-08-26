@@ -47,9 +47,9 @@ func SendError(c *gin.Context, defaultCode int, defaultMessage string, err error
 				httpCode = http.StatusConflict // 409
 			case "USER_NOT_FOUND", "INVALID_CREDENTIALS", "USER_DISABLED":
 				httpCode = http.StatusUnauthorized // 401
-			case "FORBIDDEN", "ADMIN_REQUIRED":
+			case "FORBIDDEN", "ADMIN_REQUIRED", "ROOM_UNAVAILABLE":
 				httpCode = http.StatusForbidden // 403
-			case "DRAW_NOT_FOUND", "GAME_NOT_FOUND", "CHANNEL_NOT_FOUND":
+			case "DRAW_NOT_FOUND", "GAME_NOT_FOUND", "CHANNEL_NOT_FOUND", "ROOM_NOT_FOUND", "NOT_FOUND":
 				httpCode = http.StatusNotFound
 			case "INSUFFICIENT_BALANCE":
 				httpCode = http.StatusBadRequest

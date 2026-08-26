@@ -57,6 +57,7 @@ func (h *ApplicationAdminHandler) Create(c *gin.Context) {
 		UserID      uint64  `json:"user_id" binding:"required"`
 		RequestType string  `json:"request_type" binding:"required"`
 		PaymentType string  `json:"payment_type" binding:"required"`
+		GameID      string  `json:"game_id" binding:"max=40"`
 		Amount      float64 `json:"amount"`
 		Remark      string  `json:"remark" binding:"max=500"`
 	}
@@ -64,7 +65,7 @@ func (h *ApplicationAdminHandler) Create(c *gin.Context) {
 		constants.SendError(c, http.StatusBadRequest, "申请资料不正确", err)
 		return
 	}
-	result, err := h.applications.Create(services.CreateApplicationInput{UserID: request.UserID, RequestType: request.RequestType, PaymentType: request.PaymentType, Amount: request.Amount, Remark: request.Remark})
+	result, err := h.applications.Create(services.CreateApplicationInput{UserID: request.UserID, RequestType: request.RequestType, PaymentType: request.PaymentType, GameID: request.GameID, Amount: request.Amount, Remark: request.Remark})
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "创建申请失败", err)
 		return

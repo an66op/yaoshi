@@ -6,7 +6,6 @@ import (
 	settingsmodel "backend/data/models/settings"
 	"backend/data/models/user"
 	"backend/utils"
-	"backend/ws"
 	"encoding/json"
 	"fmt"
 	"hash/crc32"
@@ -19,22 +18,48 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
-// RoomActivityService supplies the demo rooms with persisted, room-scoped
+// RoomActivityService supplies rooms with persisted, room-scoped
 // activity.  The accounts are ordinary member accounts from the perspective
 // of the feed: no client-facing label identifies them as automation.
 //
-// This is intentionally a demo convenience. Set BACKEND_ROOM_ACTIVITY=0 to
+// Set BACKEND_ROOM_ACTIVITY=0 to
 // disable it in an environment that should contain only real member activity.
-const roomActivityRemark = "房间演示活跃账号"
+const roomActivityRemark = "房间活跃账号"
 
 type RoomActivityService struct {
-	db     *gorm.DB
-	bets   *BetAdminService
-	mu     sync.Mutex
-	random *rand.Rand
+	db       *gorm.DB
+	bets     *BetAdminService
+	mu       sync.Mutex
+	cycleMu  sync.Mutex
+	statusMu sync.RWMutex
+	random   *rand.Rand
+	status   RoomActivityStatus
+}
+
+type RoomActivityStatus struct {
+	Running       bool      `json:"running"`
+	Enabled       bool      `json:"enabled"`
+	IntervalSecs  int       `json:"interval_secs"`
+	BotsPerRoom   int       `json:"bots_per_room"`
+	BetsPerCycle  int       `json:"bets_per_cycle"`
+	ChatChancePct int       `json:"chat_chance_percent"`
+	TargetRooms   int       `json:"target_rooms"`
+	EnabledGames  int       `json:"enabled_games"`
+	BotAccounts   int       `json:"bot_accounts"`
+	Cycles        int64     `json:"cycles"`
+	BetsPlaced    int64     `json:"bets_placed"`
+	ChatsPosted   int64     `json:"chats_posted"`
+	LastRunAt     time.Time `json:"last_run_at,omitempty"`
+	LastError     string    `json:"last_error,omitempty"`
+}
+
+var roomActivityRegistry struct {
+	sync.RWMutex
+	service *RoomActivityService
 }
 
 type roomActivityConfig struct {
@@ -55,15 +80,6 @@ var roomActivityAliases = []string{
 	"月光捕手", "暖风经过", "青柠汽水", "漫游小队", "蓝鲸跃迁", "晴天预报", "星轨玩家", "橙色闪电",
 }
 
-var roomActivityMessages = []string{
-	"这一期先稳一点，祝大家手气在线。",
-	"刚看完走势，等开奖一起看看。",
-	"今天节奏不错，大家量力参与。",
-	"记录一下这一期，祝大家顺利。",
-	"号码已看好，坐等结果。",
-	"祝各位好运常在，理性娱乐。",
-}
-
 func StartRoomActivity(ctxDone <-chan struct{}, db *gorm.DB) {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("BACKEND_ROOM_ACTIVITY")), "0") {
 		log.Printf("房间活跃数据已通过 BACKEND_ROOM_ACTIVITY=0 关闭")
@@ -75,9 +91,13 @@ func StartRoomActivity(ctxDone <-chan struct{}, db *gorm.DB) {
 	service := &RoomActivityService{
 		db: activityDB, bets: NewBetAdminService(activityDB), random: rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
+	roomActivityRegistry.Lock()
+	roomActivityRegistry.service = service
+	roomActivityRegistry.Unlock()
 	// Seed synchronously: a newly opened game page has stored activity before
 	// its first request, rather than becoming populated only after a user bets.
 	config := service.config()
+	service.setRuntimeConfig(config, true)
 	if config.Enabled {
 		if err := service.warmup(config); err != nil {
 			log.Printf("预置房间活跃数据失败: %v", err)
@@ -91,6 +111,7 @@ func StartRoomActivity(ctxDone <-chan struct{}, db *gorm.DB) {
 func (s *RoomActivityService) run(ctxDone <-chan struct{}) {
 	for {
 		config := s.config()
+		s.setRuntimeConfig(config, true)
 		wait := time.Duration(config.IntervalSecs) * time.Second
 		timer := time.NewTimer(wait)
 		select {
@@ -107,6 +128,9 @@ func (s *RoomActivityService) run(ctxDone <-chan struct{}) {
 				default:
 				}
 			}
+			s.statusMu.Lock()
+			s.status.Running = false
+			s.statusMu.Unlock()
 			return
 		}
 	}
@@ -124,9 +148,6 @@ func (s *RoomActivityService) warmup(config roomActivityConfig) error {
 	for _, target := range targets {
 		bots, err := s.ensureAccounts(target, config.BotsPerRoom)
 		if err != nil {
-			return err
-		}
-		if err := s.ensureGroupMessages(target, bots); err != nil {
 			return err
 		}
 		for gameIndex, game := range games {
@@ -148,51 +169,164 @@ func (s *RoomActivityService) warmup(config roomActivityConfig) error {
 }
 
 func (s *RoomActivityService) runCycle(config roomActivityConfig) error {
+	s.cycleMu.Lock()
+	defer s.cycleMu.Unlock()
+	started := time.Now().UTC()
+	betsPlaced, chatsPosted, botAccounts := 0, 0, 0
 	targets, err := s.targets()
 	if err != nil || len(targets) == 0 {
+		if err == nil {
+			err = fmt.Errorf("没有可用房间")
+		}
+		s.recordActivityRun(config, started, len(targets), 0, botAccounts, betsPlaced, chatsPosted, err)
 		return err
 	}
 	games, err := s.enabledGames()
 	if err != nil || len(games) == 0 {
+		if err == nil {
+			err = fmt.Errorf("没有已启用的彩种")
+		}
+		s.recordActivityRun(config, started, len(targets), len(games), botAccounts, betsPlaced, chatsPosted, err)
 		return err
 	}
 	for _, target := range targets {
 		bots, accountErr := s.ensureAccounts(target, config.BotsPerRoom)
 		if accountErr != nil {
+			s.recordActivityRun(config, started, len(targets), len(games), botAccounts, betsPlaced, chatsPosted, accountErr)
 			return accountErr
 		}
+		botAccounts += len(bots)
 		if len(bots) == 0 {
 			continue
 		}
-		lastGameName := ""
 		for index := 0; index < config.BetsPerCycle; index++ {
 			game := games[s.randomIndex(len(games))]
 			issue, issueErr := s.bets.CurrentIssue(game.ID)
 			if issueErr != nil {
 				continue
 			}
-			lastGameName = game.Name
 			bot := bots[s.randomIndex(len(bots))]
 			if placeErr := s.place(bot, game, issue, int(time.Now().UnixNano())+index); placeErr != nil {
 				// The official scheduler may close an issue between CurrentIssue and
 				// Place. Do not block the remaining rooms because of that normal race.
 				continue
 			}
-		}
-		// Chat messages are ordinary persisted group messages. The frontend sees
-		// them exactly like member messages and reload keeps the same history.
-		if config.ChatChancePct > 0 && s.randomIndex(100) < config.ChatChancePct {
-			if chatErr := s.postGroupMessage(target, bots[s.randomIndex(len(bots))], lastGameName); chatErr != nil {
-				return chatErr
-			}
+			betsPlaced++
 		}
 	}
+	s.recordActivityRun(config, started, len(targets), len(games), botAccounts, betsPlaced, chatsPosted, nil)
 	return nil
+}
+
+func (s *RoomActivityService) setRuntimeConfig(config roomActivityConfig, running bool) {
+	s.statusMu.Lock()
+	s.status.Running = running
+	s.status.Enabled = config.Enabled
+	s.status.IntervalSecs = config.IntervalSecs
+	s.status.BotsPerRoom = config.BotsPerRoom
+	s.status.BetsPerCycle = config.BetsPerCycle
+	s.status.ChatChancePct = config.ChatChancePct
+	s.statusMu.Unlock()
+}
+
+func (s *RoomActivityService) recordActivityRun(config roomActivityConfig, at time.Time, rooms, games, bots, bets, chats int, runErr error) {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	s.status.Running = true
+	s.status.Enabled = config.Enabled
+	s.status.IntervalSecs = config.IntervalSecs
+	s.status.BotsPerRoom = config.BotsPerRoom
+	s.status.BetsPerCycle = config.BetsPerCycle
+	s.status.ChatChancePct = config.ChatChancePct
+	s.status.TargetRooms = rooms
+	s.status.EnabledGames = games
+	s.status.BotAccounts = bots
+	s.status.Cycles++
+	s.status.BetsPlaced += int64(bets)
+	s.status.ChatsPosted += int64(chats)
+	s.status.LastRunAt = at
+	if runErr != nil {
+		s.status.LastError = runErr.Error()
+	} else {
+		s.status.LastError = ""
+	}
+}
+
+func (s *RoomActivityService) Status() RoomActivityStatus {
+	config := s.config()
+	s.setRuntimeConfig(config, true)
+	s.statusMu.RLock()
+	defer s.statusMu.RUnlock()
+	return s.status
+}
+
+func RoomActivityStatusSnapshot() RoomActivityStatus {
+	roomActivityRegistry.RLock()
+	service := roomActivityRegistry.service
+	roomActivityRegistry.RUnlock()
+	if service == nil {
+		return RoomActivityStatus{LastError: "房间自动活跃服务尚未启动"}
+	}
+	return service.Status()
+}
+
+func RunRoomActivityOnce() (RoomActivityStatus, error) {
+	roomActivityRegistry.RLock()
+	service := roomActivityRegistry.service
+	roomActivityRegistry.RUnlock()
+	if service == nil {
+		return RoomActivityStatus{}, fmt.Errorf("房间自动活跃服务尚未启动")
+	}
+	config := service.config()
+	err := service.runCycle(config)
+	return service.Status(), err
+}
+
+// RunRoomActivityOnceForAgent executes only the authenticated room. It is used
+// by the agent workbench and never accepts a browser supplied room scope.
+func RunRoomActivityOnceForAgent(agentID uint64) (RoomActivityStatus, error) {
+	roomActivityRegistry.RLock()
+	service := roomActivityRegistry.service
+	roomActivityRegistry.RUnlock()
+	if service == nil {
+		return RoomActivityStatus{}, fmt.Errorf("房间自动活跃服务尚未启动")
+	}
+	if agentID == 0 {
+		return RoomActivityStatus{}, fmt.Errorf("房间代理编号不正确")
+	}
+	config := service.config()
+	target := roomActivityTarget{scope: "agent:" + strconv.FormatUint(agentID, 10), agentID: &agentID}
+	service.cycleMu.Lock()
+	defer service.cycleMu.Unlock()
+	bots, err := service.ensureAccounts(target, config.BotsPerRoom)
+	if err != nil {
+		return service.Status(), err
+	}
+	games, err := service.enabledGames()
+	if err != nil || len(games) == 0 {
+		if err == nil {
+			err = fmt.Errorf("没有已启用的彩种")
+		}
+		return service.Status(), err
+	}
+	betsPlaced, chatsPosted := 0, 0
+	for index := 0; index < config.BetsPerCycle; index++ {
+		game := games[service.randomIndex(len(games))]
+		issue, issueErr := service.bets.CurrentIssue(game.ID)
+		if issueErr != nil {
+			continue
+		}
+		if err := service.place(bots[service.randomIndex(len(bots))], game, issue, int(time.Now().UnixNano())+index); err == nil {
+			betsPlaced++
+		}
+	}
+	service.recordActivityRun(config, time.Now().UTC(), 1, len(games), len(bots), betsPlaced, chatsPosted, nil)
+	return service.Status(), nil
 }
 
 func (s *RoomActivityService) config() roomActivityConfig {
 	config := roomActivityConfig{
-		Enabled: true, IntervalSecs: 10, BotsPerRoom: 6, BetsPerCycle: 2, ChatChancePct: 28,
+		Enabled: true, IntervalSecs: 10, BotsPerRoom: 6, BetsPerCycle: 2, ChatChancePct: 0,
 	}
 	var row settingsmodel.SystemConfig
 	if err := s.db.Select("game_settings_json").First(&row, 1).Error; err == nil && strings.TrimSpace(row.GameSettingsJSON) != "" {
@@ -201,7 +335,9 @@ func (s *RoomActivityService) config() roomActivityConfig {
 	config.IntervalSecs = clampRoomActivity(config.IntervalSecs, 5, 120, 10)
 	config.BotsPerRoom = clampRoomActivity(config.BotsPerRoom, 1, len(roomActivityAliases), 6)
 	config.BetsPerCycle = clampRoomActivity(config.BetsPerCycle, 1, 8, 2)
-	config.ChatChancePct = clampRoomActivity(config.ChatChancePct, 0, 100, 28)
+	// Room activity is represented by persisted bets only. Ignore older saved
+	// chat probability values so synthetic chatter cannot return after restart.
+	config.ChatChancePct = 0
 	return config
 }
 
@@ -236,25 +372,34 @@ func (s *RoomActivityService) ensureAccounts(target roomActivityTarget, count in
 	for slot := 0; slot < count; slot++ {
 		key := fmt.Sprintf("room_activity_%08x_%d", crc32.ChecksumIEEE([]byte(target.scope)), slot+1)
 		nickname := roomActivityAliases[(int(crc32.ChecksumIEEE([]byte(target.scope)))+slot)%len(roomActivityAliases)]
+		loginScope := platformLoginScope
+		if target.agentID != nil {
+			loginScope = agentLoginScope(*target.agentID)
+		}
 		var account user.User
-		err := s.db.Where("username = ?", key).First(&account).Error
+		err := s.db.Where("login_scope = ? AND username = ?", loginScope, key).First(&account).Error
 		if err == nil {
-			if account.BalanceCents < 1000000 || account.Status != 1 || !sameParent(account.ParentAgentID, target.agentID) || account.Nickname != nickname || account.Remark != roomActivityRemark {
-				updates := map[string]any{"balance_cents": int64(100000000000), "status": 1, "parent_agent_id": target.agentID, "nickname": nickname, "remark": roomActivityRemark}
-				if updateErr := s.db.Model(&account).Updates(updates).Error; updateErr != nil {
-					return nil, updateErr
+			if txErr := s.db.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, account.UserID).Error; err != nil {
+					return err
 				}
-				account.BalanceCents = 100000000000
+				updates := map[string]any{"status": 1, "login_scope": loginScope, "parent_agent_id": target.agentID, "nickname": nickname, "remark": roomActivityRemark}
+				if err := tx.Model(&account).Updates(updates).Error; err != nil {
+					return err
+				}
 				account.Status = 1
 				account.ParentAgentID = target.agentID
 				account.Nickname = nickname
 				account.Remark = roomActivityRemark
-				// Older demo messages may have been written before the alias was
+				if err := ensureSeededBalance(tx, &account, 1000000, 100000000000, "房间活跃账户"); err != nil {
+					return err
+				}
+				// Older messages may have been written before the alias was
 				// finalized. Keep historical rows readable without leaking the
 				// generated login name into a room.
-				if updateErr := s.db.Model(&chat.Message{}).Where("user_id = ?", account.UserID).Update("nickname", nickname).Error; updateErr != nil {
-					return nil, updateErr
-				}
+				return tx.Model(&chat.Message{}).Where("user_id = ?", account.UserID).Update("nickname", nickname).Error
+			}); txErr != nil {
+				return nil, txErr
 			}
 			bots = append(bots, account)
 			continue
@@ -267,12 +412,17 @@ func (s *RoomActivityService) ensureAccounts(target roomActivityTarget, count in
 			return nil, hashErr
 		}
 		account = user.User{
-			Username: key, Password: password, Nickname: nickname,
+			Username: key, LoginScope: loginScope, Password: password, Nickname: nickname,
 			Role: "member", Status: 1, BalanceCents: 100000000000,
 			AgentRoomCode: "active-" + key, ParentAgentID: target.agentID,
 			Remark: roomActivityRemark,
 		}
-		if err := s.db.Create(&account).Error; err != nil {
+		if err := s.db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&account).Error; err != nil {
+				return err
+			}
+			return ensureSeededBalance(tx, &account, 1000000, 100000000000, "房间活跃账户")
+		}); err != nil {
 			return nil, err
 		}
 		bots = append(bots, account)
@@ -291,38 +441,6 @@ func (s *RoomActivityService) place(account user.User, game lottery.Game, issue 
 		Remark: "房间实时动态", Operator: "房间活动",
 	})
 	return err
-}
-
-func (s *RoomActivityService) ensureGroupMessages(target roomActivityTarget, bots []user.User) error {
-	var count int64
-	if err := s.db.Model(&chat.Message{}).Where("room_type = ? AND scope = ? AND deleted_at IS NULL", "group", target.scope).Count(&count).Error; err != nil {
-		return err
-	}
-	for count < 3 && len(bots) > 0 {
-		if err := s.postGroupMessage(target, bots[int(count)%len(bots)], ""); err != nil {
-			return err
-		}
-		count++
-	}
-	return nil
-}
-
-func (s *RoomActivityService) postGroupMessage(target roomActivityTarget, account user.User, gameName string) error {
-	content := roomActivityMessages[s.randomIndex(len(roomActivityMessages))]
-	if gameName != "" && s.randomIndex(2) == 0 {
-		content = fmt.Sprintf("%s：%s", gameName, content)
-	}
-	row := chat.Message{
-		UserID: account.UserID, Username: account.Username, Nickname: account.Nickname,
-		RoomType: "group", Scope: target.scope, Content: content,
-	}
-	if err := s.db.Create(&row).Error; err != nil {
-		return err
-	}
-	if recipients, err := chatScopeRecipients(s.db, target.scope); err == nil {
-		ws.NotifyChat(recipients, "group", target.scope, row.ID)
-	}
-	return nil
 }
 
 func (s *RoomActivityService) randomIndex(limit int) int {

@@ -1,8 +1,23 @@
-.service-history {
+.chat-history-ready {
   display: grid;
+  /* 消息少时从顶部开始排，剩余空间留在列表底部。
+     消息多时仍由 ChatRoom 的首次滚动逻辑定位到最新消息。 */
   align-content: start;
+}
+.service-history {
+  display: block;
+  align-content: normal;
+  padding-top: 14px;
   gap: 0;
 }
+.service-history.service-history-empty {
+  align-content: normal;
+}
+.chat-history-positioning > :not(.chat-initial-loading) { visibility: hidden; }
+.chat-initial-loading { display: grid; min-height: 100%; place-content: center; justify-items: center; gap: 10px; color: #78939e; }
+.chat-initial-loading span { width: 24px; height: 24px; border: 3px solid #a8d8dc; border-top-color: #1d9da8; border-radius: 50%; animation: chat-loading-spin .7s linear infinite; }
+.chat-initial-loading b { font-size: 11px; font-weight: 700; letter-spacing: .03em; }
+@keyframes chat-loading-spin { to { transform: rotate(360deg); } }
 .service-time {
   margin: 2px 0 4px;
   color: #879aa6;
@@ -112,13 +127,118 @@
   display: block;
 }
 .chat-input input{flex:1;min-width:0;padding:9px 11px;border:0;border-radius:7px;outline:0;background:#f1f3f6;color:#294653;font:inherit;font-size:12px}.chat-input input::placeholder{color:#9aa7b0}.chat-input .service-send{border-radius:9px;background:#1b98a7;color:#fff}.chat-input .service-send:disabled{background:transparent;color:#aab4ba}.theme-night .chat-input input{background:#143a56;color:#e2f7fb}.theme-night .chat-input input::placeholder{color:#8eb9c6}
+@media (max-width: 767px) { .chat-input input { font-size: 16px; } }
+.service-room-status{display:flex;align-items:center;justify-content:center;gap:7px}.service-room-status b{color:inherit;font-size:12px}.service-room-status span{font-size:10px;opacity:.72}.service-room-status b::before{display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:#36b991;box-shadow:0 0 0 3px #36b99120;content:''}
 .chat-input-muted{justify-content:center}.chat-input .chat-muted-placeholder{display:flex;flex:none;align-items:center;justify-content:center;gap:7px;width:calc(100% - 12px);padding:10px 13px;background:#f0f4f5;color:#90a1a8;font-size:12px;letter-spacing:.04em}.chat-muted-placeholder::before{width:13px;height:13px;border:1.5px solid currentColor;border-radius:50%;background:linear-gradient(135deg,transparent 44%,currentColor 45% 55%,transparent 56%);content:''}.theme-night .chat-input .chat-muted-placeholder{background:#143a56;color:#7faab4}
 
 /* 消息入口：四种身份统一为一套线性图标语言，颜色用于区分而非文字缩写。 */
-.message-logo{position:relative;display:grid;place-items:center;flex:none;width:47px;height:47px;overflow:visible;border:1px solid #ffffff8c;border-radius:15px;box-shadow:inset 0 1px #ffffff80,0 7px 14px #1f586a22;color:#fff}.message-logo::before{position:absolute;top:5px;right:6px;width:11px;height:6px;border-radius:999px;background:#ffffff35;content:'';transform:rotate(-38deg)}.message-logo svg{position:relative;z-index:1;width:25px;height:25px}.message-logo-service{background:linear-gradient(145deg,#137ba9,#20b9b5)}.message-logo-group{background:linear-gradient(145deg,#6d76da,#a26ad7)}.message-logo-notice{background:linear-gradient(145deg,#e1913f,#ef7054)}.message-logo-activity{background:linear-gradient(145deg,#e85983,#bd58a8)}.message-logo i{position:absolute;z-index:2;top:-6px;right:-7px;display:grid;place-items:center;min-width:19px;height:19px;padding:0 4px;border:2px solid #fff;border-radius:10px;background:#e55252;color:#fff;font:700 9px "DM Mono",monospace;font-style:normal;box-shadow:0 3px 6px #a7383f3d}.message-logo-notice svg{transform:translateX(-1px)}.message-logo-activity svg{stroke-width:1.7}.theme-night .message-logo{border-color:#b9ffff35;box-shadow:inset 0 1px #d9ffff33,0 7px 14px #0005}.theme-night .message-logo-service{background:linear-gradient(145deg,#135a89,#188d92)}.theme-night .message-logo-group{background:linear-gradient(145deg,#585eaf,#8654ae)}.theme-night .message-logo-notice{background:linear-gradient(145deg,#bb7031,#ba4c4e)}.theme-night .message-logo-activity{background:linear-gradient(145deg,#b64d73,#873e7a)}
+.message-logo{position:relative;display:grid;place-items:center;flex:none;width:47px;height:47px;overflow:visible;border:1px solid #ffffff8c;border-radius:15px;box-shadow:inset 0 1px #ffffff80,0 7px 14px #1f586a22;color:#fff}.message-logo::before{position:absolute;top:5px;right:6px;width:11px;height:6px;border-radius:999px;background:#ffffff35;content:'';transform:rotate(-38deg)}.message-logo svg{position:relative;z-index:1;width:25px;height:25px}.message-logo-service{background:linear-gradient(145deg,#137ba9,#20b9b5)}.message-logo-group{background:linear-gradient(145deg,#6d76da,#a26ad7)}.message-logo-notice{background:linear-gradient(145deg,#e1913f,#ef7054)}.message-logo-account{background:linear-gradient(145deg,#2875ba,#31a2a0)}.message-logo-activity{background:linear-gradient(145deg,#e85983,#bd58a8)}.message-logo i{position:absolute;z-index:2;top:-6px;right:-7px;display:grid;place-items:center;min-width:19px;height:19px;padding:0 4px;border:2px solid #fff;border-radius:10px;background:#e55252;color:#fff;font:700 9px "DM Mono",monospace;font-style:normal;box-shadow:0 3px 6px #a7383f3d}.message-logo-notice svg{transform:translateX(-1px)}.message-logo-activity svg{stroke-width:1.7}.theme-night .message-logo{border-color:#b9ffff35;box-shadow:inset 0 1px #d9ffff33,0 7px 14px #0005}.theme-night .message-logo-service{background:linear-gradient(145deg,#135a89,#188d92)}.theme-night .message-logo-group{background:linear-gradient(145deg,#585eaf,#8654ae)}.theme-night .message-logo-notice{background:linear-gradient(145deg,#bb7031,#ba4c4e)}.theme-night .message-logo-account{background:linear-gradient(145deg,#20598e,#287f7d)}.theme-night .message-logo-activity{background:linear-gradient(145deg,#b64d73,#873e7a)}
 .message-logo-winning { background: linear-gradient(145deg, #e89a2f, #ffd15b 55%, #ee7550); }
 .message-logo-winning svg { filter: drop-shadow(0 2px 2px #a24f285c); }
 .theme-night .message-logo-winning { background: linear-gradient(145deg, #9b641f, #d69a32 58%, #a94735); }
+.message-logo-plan { background: linear-gradient(145deg, #178ab2, #35c3a9 58%, #8bd455); }
+.message-logo.has-room-logo::before { display: none; }
+.message-logo.has-room-logo img { width: 100%; height: 100%; border-radius: 14px; object-fit: cover; }
+.message-logo-plan svg { width: 27px; height: 27px; filter: drop-shadow(0 2px 2px #16596745); }
+.theme-night .message-logo-plan { background: linear-gradient(145deg, #176487, #258a7c 60%, #527e39); }
+
+/* 计划群：入口仍属于消息中心，内容采用彩票计划而不是伪造群聊。 */
+.plan-page { min-height: 100%; overflow-y: auto; background: linear-gradient(180deg, #eefbfd, #e5f4f7); color: #183f54; }
+.plan-page .blue-header { position: sticky; z-index: 4; top: 0; }
+.plan-lobby-overview { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 14px; padding: 14px 15px; border: 1px solid #75cbd064; border-radius: 17px; background: linear-gradient(135deg, #fff, #ecfbfb); box-shadow: 0 8px 20px #256b8020; }
+.plan-lobby-overview > div:first-child { display: grid; gap: 3px; min-width: 0; }
+.plan-lobby-overview small { color: #19919e; font: 800 7px "DM Mono", monospace; letter-spacing: .14em; }
+.plan-lobby-overview b { color: #17475b; font-size: 17px; }
+.plan-lobby-overview span { color: #79939e; font-size: 8px; }
+.plan-overview-masters { display: flex; align-items: center; flex: none; }
+.plan-overview-masters i { display: grid; place-items: center; width: 24px; height: 24px; margin-left: -6px; border: 2px solid #fff; border-radius: 50%; color: #fff; font-size: 8px; font-style: normal; font-weight: 800; box-shadow: 0 3px 7px #1d536b2a; }
+.plan-overview-masters i:first-child { margin-left: 0; }
+.plan-overview-masters em { margin-left: 5px; color: #4b7a89; font-size: 8px; font-style: normal; white-space: nowrap; }
+.plan-game-list { display: grid; gap: 9px; padding: 0 14px 20px; }
+.plan-game-card { position: relative; width: 100%; overflow: hidden; padding: 0; border: 1px solid #83c9cf70; border-radius: 16px; background: #fff; color: #214a5d; text-align: left; box-shadow: 0 6px 15px #256b8018; }
+.plan-game-card::before { position: absolute; z-index: 2; top: 12px; bottom: 12px; left: 0; width: 3px; border-radius: 0 5px 5px 0; background: linear-gradient(#178daf, #2cc0ad); content: ''; }
+.plan-game-main { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 11px 12px 10px 14px; background: linear-gradient(120deg, #f8ffff, #effafb); }
+.plan-game-logo, .plan-current-logo { display: grid; place-items: center; width: 42px; height: 42px; overflow: hidden; border: 3px solid #fff; border-radius: 50%; background: #2aa6b4; color: #fff; font-size: 10px; font-weight: 800; box-shadow: 0 4px 10px #214b5c2a; }
+.plan-game-logo img, .plan-current-logo img { width: 100%; height: 100%; object-fit: contain; }
+.plan-game-main > div { display: grid; gap: 4px; min-width: 0; }
+.plan-game-main > div b { overflow: hidden; font-size: 14px; white-space: nowrap; text-overflow: ellipsis; }
+.plan-game-main > div small { display: flex; align-items: center; gap: 4px; color: #6c8b99; font-size: 8px; }
+.plan-game-main > div small i { width: 5px; height: 5px; border-radius: 50%; background: #28b38f; box-shadow: 0 0 0 3px #28b38f1c; }
+.plan-game-main > em { display: flex; align-items: center; gap: 2px; color: #63818d; font-size: 8px; font-style: normal; white-space: nowrap; }
+.plan-game-main > em svg { width: 11px; color: #188c9b; }
+.plan-game-card footer { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; min-height: 42px; padding: 8px 12px 8px 14px; border-top: 1px solid #86ccd041; background: #fff; }
+.plan-game-card footer > span { color: #73909b; font-size: 9px; }
+.plan-result-balls { display: flex; min-width: 0; gap: 3px; overflow: hidden; }
+.plan-result-balls .lottery-ball { display: grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 4px; font-size: 10px; }
+.plan-canada-result { align-items: center; overflow: visible; }
+.plan-canada-result > span { display: flex; align-items: center; gap: 3px; }
+.plan-canada-result b, .plan-canada-result strong { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 50%; color: #fff; font-size: 10px; font-weight: 900; box-shadow: inset 0 1px #ffffff65, 0 2px 5px #25485c26; }
+.plan-canada-result .canada-tone-1 { background: linear-gradient(145deg, #f46161, #da3039); }
+.plan-canada-result .canada-tone-2 { background: linear-gradient(145deg, #4ca3ef, #3268d3); }
+.plan-canada-result .canada-tone-3 { background: linear-gradient(145deg, #ffd54d, #edae19); }
+.plan-canada-result strong { background: linear-gradient(145deg, #2f77cf, #2d479e); }
+.plan-canada-result i { color: #78919d; font-size: 10px; font-style: normal; font-weight: 800; }
+.plan-empty { margin: 70px 24px; color: #78929c; text-align: center; font-size: 11px; }
+.plan-current { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 10px; margin: 13px 14px 10px; padding: 13px; border: 1px solid #70c6ce61; border-radius: 17px; background: linear-gradient(130deg, #e4fbfb, #fff); box-shadow: 0 7px 17px #256f841c; }
+.plan-current > div { display: grid; gap: 3px; }
+.plan-current > div small, .plan-current > time { color: #78909b; font-size: 9px; }
+.plan-current > div b { color: #12929a; font-size: 14px; }
+.plan-current > time { align-self: start; white-space: nowrap; }
+.plan-master-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; padding: 0 14px 10px; }
+.plan-master-tabs button { display: grid; justify-items: center; gap: 4px; min-width: 0; padding: 10px 3px; border: 1px solid #9fd3d866; border-radius: 13px; background: #ffffffc7; color: #365e6f; }
+.plan-master-tabs button span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 9px; color: #fff; font-size: 11px; font-weight: 800; box-shadow: 0 3px 7px #153e5530; }
+.plan-master-tabs button b { overflow: hidden; max-width: 100%; font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+.plan-master-tabs button small { color: #8298a1; font-size: 7px; }
+.plan-master-tabs button.active { border-color: #22aab3; background: #e3faf9; box-shadow: inset 0 0 0 1px #22aab338, 0 5px 11px #19798c1c; }
+.plan-mode-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 0 14px 10px; }
+.plan-mode-tabs button { padding: 9px; border: 1px solid #76bdc86b; border-radius: 10px; background: #ffffffb5; color: #58808f; font-size: 10px; }
+.plan-mode-tabs button.active { border-color: #159eaa; background: linear-gradient(135deg, #168db0, #21b8ae); color: #fff; font-weight: 700; }
+.plan-recommendation { margin: 0 14px 11px; padding: 14px; border: 1px solid #62c4ca66; border-radius: 17px; background: #fff; box-shadow: 0 8px 20px #2a72871c; }
+.plan-recommendation header { display: flex; justify-content: space-between; gap: 10px; }
+.plan-recommendation header > div { display: grid; gap: 3px; }
+.plan-recommendation header small { color: #1e98a1; font-size: 9px; font-weight: 700; }
+.plan-recommendation header b { font-size: 14px; }
+.plan-recommendation header em { color: #92a3aa; font-size: 8px; font-style: normal; }
+.plan-picks { display: flex; flex-wrap: wrap; gap: 9px; margin: 13px 0 10px; }
+.plan-picks > span { display: flex; align-items: center; gap: 9px; min-width: 92px; padding: 9px 12px; border-radius: 12px; color: #fff; box-shadow: 0 5px 11px #143e5d25; }
+.plan-picks > span.blue { background: linear-gradient(135deg, #178ed1, #357cef); }
+.plan-picks > span.orange { background: linear-gradient(135deg, #f09a31, #ed6e45); }
+.plan-picks small { font-size: 8px; opacity: .8; }
+.plan-picks b { font-size: 20px; }
+.plan-picks > .plan-number-pick { flex: 1 0 100%; justify-content: space-between; border: 1px solid #ffffff40; background: linear-gradient(135deg, #156f9e, #1caeaa); }
+.plan-number-pick strong { display: flex; gap: 6px; }
+.plan-number-pick i { display: grid; place-items: center; min-width: 31px; height: 31px; padding: 0 5px; border: 1px solid #ffffff70; border-radius: 9px; background: #ffffff20; color: #fff; font-size: 15px; font-style: normal; font-weight: 900; box-shadow: inset 0 1px #ffffff45; }
+.plan-recommendation > p { margin: 0; color: #81949c; font-size: 8px; line-height: 1.6; }
+.plan-history { margin: 0 14px 18px; overflow: hidden; border: 1px solid #75bec764; border-radius: 17px; background: #fff; box-shadow: 0 7px 17px #235a7118; }
+.plan-history > header { display: flex; justify-content: space-between; align-items: center; padding: 12px 13px; border-bottom: 1px solid #e1edef; }
+.plan-history > header b { font-size: 13px; }
+.plan-history > header span { color: #148f9b; font-size: 8px; }
+.plan-history-head, .plan-history-row { display: grid; grid-template-columns: 1.1fr .72fr 1.28fr .42fr; align-items: center; gap: 5px; padding: 9px 11px; }
+.plan-history-head { background: #f2fafb; color: #718b96; font-size: 8px; }
+.plan-history-row { min-height: 49px; border-top: 1px solid #edf2f3; color: #426575; font-size: 9px; }
+.plan-history-row > span:first-child, .plan-history-row > span:nth-child(2) { display: grid; gap: 2px; }
+.plan-history-row span b { font-size: 10px; }
+.plan-history-row span small { color: #93a4aa; font-size: 7px; }
+.plan-history-row > .plan-history-pick { display: grid; justify-content: start; gap: 4px; min-width: 0; }
+.plan-history-pick > strong { display: flex; gap: 2px; }
+.plan-history-row > .plan-history-pick.has-numbers i { min-width: 18px; height: 21px; padding: 0 2px; font-size: 8px; }
+.plan-history-pick > small { display: flex; align-items: center; gap: 3px; color: #718b96; line-height: 1; white-space: nowrap; }
+.plan-history-pick > small b { color: #168ca0; font-size: 7px; }
+.plan-history-pick > small em { color: #9aadb4; font-style: normal; }
+.plan-history-row i { display: grid; place-items: center; min-width: 21px; height: 21px; border-radius: 6px; background: #278de1; color: #fff; font-size: 8px; font-style: normal; font-weight: 700; }
+.plan-history-row i + i { background: #ef8844; }
+.plan-history-row > em { justify-self: end; padding: 3px 5px; border-radius: 6px; font-size: 8px; font-style: normal; font-weight: 700; }
+.plan-history-row > em.hit { background: #ddf8ef; color: #13866c; }
+.plan-history-row > em.miss { background: #fff0ec; color: #df6d55; }
+.plan-history-loading { margin: 0; padding: 22px; color: #8297a0; text-align: center; font-size: 9px; }
+.theme-night .plan-page { background: linear-gradient(180deg, #071f37, #0a2941); color: #e8faff; }
+.theme-night .plan-lobby-overview, .theme-night .plan-game-card, .theme-night .plan-current, .theme-night .plan-master-tabs button, .theme-night .plan-mode-tabs button, .theme-night .plan-recommendation, .theme-night .plan-history { border-color: #55c8cc3d; background: #103650; color: #e4f8fb; box-shadow: 0 8px 20px #0004; }
+.theme-night .plan-lobby-overview b { color: #e4f8fb; }
+.theme-night .plan-lobby-overview span, .theme-night .plan-overview-masters em { color: #9fc8d0; }
+.theme-night .plan-game-main { background: linear-gradient(120deg, #123e58, #12445b); }
+.theme-night .plan-game-card footer, .theme-night .plan-history-head { border-color: #55c8cc2f; background: #0c2d47; }
+.theme-night .plan-master-tabs button.active, .theme-night .plan-mode-tabs button.active { border-color: #45d3d0; background: linear-gradient(135deg, #166887, #178b84); }
+.theme-night .plan-history-row, .theme-night .plan-history > header { border-color: #69cfd02a; }
 
 /* 通知以置顶会话呈现，进入后再查看各自的消息流。 */
 .notification-page { min-height: 100%; background: linear-gradient(180deg, #f4fbfc, #edf6f7); }
@@ -169,6 +289,35 @@
 .system-notice-card p { display: -webkit-box; overflow: hidden; margin: 0; color: #708a95; font-size: 11px; line-height: 1.75; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .system-notice-card em, .activity-notice-copy em { display: inline-flex; align-items: center; gap: 2px; width: max-content; color: #168c96; font-size: 10px; font-style: normal; font-weight: 700; }
 .system-notice-card em svg, .activity-notice-copy em svg { width: 12px; height: 12px; }
+.draw-notice-card { border-color: #c5e6e8; background: linear-gradient(145deg, #fff 0%, #f5ffff 100%); }
+.draw-notice-summary, .draw-notice-detail { display: grid; gap: 10px; }
+.draw-notice-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.draw-notice-game { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.draw-notice-game > span { display: grid; place-items: center; flex: none; width: 36px; height: 36px; overflow: hidden; border: 3px solid #fff; border-radius: 50%; background: #e8f6f7; box-shadow: 0 4px 10px #204d5e27; }
+.draw-notice-game img { width: 100%; height: 100%; object-fit: contain; }
+.draw-notice-heading b { color: #204a59; font-size: 14px; }
+.draw-notice-heading small { color: #76939c; font-size: 10px; }
+.draw-notice-balls { display: flex; flex-wrap: wrap; gap: 6px; }
+.draw-notice-balls i { display: grid; place-items: center; min-width: 28px; height: 28px; padding: 0 5px; border-radius: 9px; background: linear-gradient(145deg, #20aab4, #177a99); color: #fff; font-size: 12px; font-style: normal; font-weight: 900; box-shadow: 0 5px 10px #168f9a2d; }
+.draw-notice-balls i:nth-child(3n + 2) { background: linear-gradient(145deg, #6c91e9, #506ac8); }
+.draw-notice-balls i:nth-child(3n) { background: linear-gradient(145deg, #ef9073, #de6368); }
+.draw-notice-summary > time, .draw-notice-detail > time { color: #8199a1; font-size: 9px; }
+.draw-notice-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.draw-notice-stats > span { display: grid; gap: 2px; padding: 9px 10px; border-radius: 12px; background: #edf7f8; }
+.draw-notice-stats small { color: #78929b; font-size: 9px; }
+.draw-notice-stats b { color: #244e5b; font-size: 13px; }
+.draw-notice-stats em { color: #4d727c; font-size: 10px; font-style: normal; }
+.draw-notice-stats .has-prize { background: #fff4e5; }
+.draw-notice-stats .has-prize b, .draw-notice-stats .has-prize em { color: #e26c3f; }
+.draw-notice-detail { margin-top: 5px; }
+.draw-bet-list { display: grid; gap: 8px; margin-top: 4px; }
+.draw-bet-list h3 { margin: 5px 0 0; color: #244b58; font-size: 13px; }
+.draw-bet-list section { display: grid; gap: 5px; padding: 10px 11px; border: 1px solid #dbeaec; border-radius: 12px; background: #f8fcfc; }
+.draw-bet-list section > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.draw-bet-list section b { color: #244b58; font-size: 11px; }
+.draw-bet-list section small { color: #6e8d96; font-size: 9px; }
+.draw-bet-list section p { margin: 0; color: #637e87; font-size: 10px; line-height: 1.5; }
+.draw-bet-list section em { color: #e16443; font-size: 10px; font-style: normal; font-weight: 800; }
 .empty-notice { margin: 30px 0; color: #79949d; text-align: center; font-size: 11px; }
 
 /* 活动采用海报流：支持后台 Cover，未配置时展示品牌化视觉兜底。 */
@@ -176,6 +325,11 @@
 .activity-notice-list { display: grid; gap: 14px; padding: 16px 15px 27px; }
 .activity-notice-card { position: relative; isolation: isolate; display: block; overflow: hidden; width: 100%; aspect-ratio: 2.22 / 1; border: 0; border-radius: 18px; background: #164f72; color: #fff; text-align: left; box-shadow: 0 10px 20px #1f52652b; }
 .activity-notice-card > img { position: absolute; inset: 0; z-index: -2; width: 100%; height: 100%; object-fit: cover; }
+.activity-notice-card.has-cover { aspect-ratio: auto; overflow: visible; border: 1px solid #d8e8eb; background: #fff; box-shadow: 0 8px 18px #1f526520; }
+.activity-notice-card.has-cover > img { position: relative; inset: auto; z-index: auto; display: block; width: 100%; height: auto; min-height: 0; border-radius: inherit; object-fit: contain; }
+.activity-cover-badge { position: absolute; top: 9px; left: 9px; padding: 4px 7px; border: 1px solid #ffffffa8; border-radius: 999px; background: #e9564edb; color: #fff; font-size: 8px; font-weight: 800; box-shadow: 0 3px 9px #5314144a; }
+.activity-cover-action { position: absolute; right: 9px; bottom: 9px; display: grid; place-items: center; width: 27px; height: 27px; border: 1px solid #ffffff9c; border-radius: 50%; background: #063d5ca8; color: #fff; box-shadow: 0 3px 9px #00253a4f; }
+.activity-cover-action svg { width: 14px; height: 14px; }
 .activity-notice-shade { position: absolute; inset: 0; z-index: -1; background: linear-gradient(90deg, #062d47df 0%, #07365094 48%, #07365013 100%); }
 .activity-notice-art { position: absolute; inset: 0; display: grid; align-content: center; justify-items: end; padding: 13px 18px; background: radial-gradient(circle at 83% 28%, #fff9 0 3%, transparent 3.5%), radial-gradient(circle at 77% 74%, #fff7 0 2%, transparent 2.5%), linear-gradient(125deg, #2757ae, #6748bc 52%, #bc68c4); }
 .activity-notice-art::before { position: absolute; right: -17px; bottom: -42px; width: 142px; height: 142px; border: 24px solid #f8d0ff43; border-radius: 50%; content: ""; }
@@ -199,4 +353,15 @@
 .theme-night .system-notice-intro p, .theme-night .system-notice-card p { color: #9bc4cd; }
 .theme-night .system-notice-card { border-color: #4bb6bd42; background: #103650; color: #d8f1f5; box-shadow: none; }
 .theme-night .system-notice-card.is-unread { border-color: #51cdd1; }
+.theme-night .draw-notice-card { border-color: #3b8e9a; background: linear-gradient(145deg, #103650, #102f48); }
+.theme-night .draw-notice-heading b, .theme-night .draw-notice-stats b, .theme-night .draw-bet-list h3, .theme-night .draw-bet-list section b { color: #e0faff; }
+.theme-night .draw-notice-game > span { border-color: #b9ffff38; background: #143f57; box-shadow: 0 4px 10px #0005; }
+.theme-night .draw-notice-heading small, .theme-night .draw-notice-summary > time, .theme-night .draw-notice-detail > time { color: #91b9c2; }
+.theme-night .draw-notice-stats > span { background: #153f57; }
+.theme-night .draw-notice-stats .has-prize { background: #503b31; }
+.theme-night .draw-bet-list section { border-color: #356475; background: #12384f; }
+.theme-night .draw-bet-list section p { color: #a7c5cc; }
 .theme-night .activity-notice-page { background: #082944; }
+.theme-night .activity-notice-card.has-cover { border-color: #4bb6bd4d; background: #103650; box-shadow: 0 8px 18px #0004; }
+.theme-night .chat-initial-loading { color: #9bc4cd; }
+.theme-night .chat-initial-loading span { border-color: #34677a; border-top-color: #67d9dc; }

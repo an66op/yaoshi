@@ -3,6 +3,7 @@ package services
 import (
 	"backend/data/models/wallet"
 	apperrors "backend/errors"
+	"backend/utils"
 	"fmt"
 	"strings"
 
@@ -12,17 +13,24 @@ import (
 type WalletAdminService struct{ db *gorm.DB }
 
 type PaymentChannelView struct {
-	ID         uint64  `json:"id"`
-	Provider   string  `json:"provider"`
-	Name       string  `json:"name"`
-	MerchantNo string  `json:"merchant_no"`
-	CreditType string  `json:"credit_type"`
-	FeeRate    float64 `json:"fee_rate"`
-	MinAmount  float64 `json:"min_amount"`
-	MaxAmount  float64 `json:"max_amount"`
-	Status     string  `json:"status"`
-	Remark     string  `json:"remark"`
-	SortOrder  int     `json:"sort_order"`
+	ID              uint64  `json:"id"`
+	Provider        string  `json:"provider"`
+	Name            string  `json:"name"`
+	MerchantNo      string  `json:"merchant_no"`
+	CreditType      string  `json:"credit_type"`
+	FeeRate         float64 `json:"fee_rate"`
+	MinAmount       float64 `json:"min_amount"`
+	MaxAmount       float64 `json:"max_amount"`
+	Status          string  `json:"status"`
+	Remark          string  `json:"remark"`
+	SortOrder       int     `json:"sort_order"`
+	Mode            string  `json:"mode"`
+	APIBase         string  `json:"api_base"`
+	CreateOrderPath string  `json:"create_order_path"`
+	QueryOrderPath  string  `json:"query_order_path"`
+	CallbackPath    string  `json:"callback_path"`
+	HasSecret       bool    `json:"has_secret"`
+	TimeoutSeconds  int     `json:"timeout_seconds"`
 }
 
 type WalletListFilter struct {
@@ -31,16 +39,23 @@ type WalletListFilter struct {
 }
 
 type PaymentChannelPayload struct {
-	Provider   string  `json:"provider"`
-	Name       string  `json:"name"`
-	MerchantNo string  `json:"merchant_no"`
-	CreditType string  `json:"credit_type"`
-	FeeRate    float64 `json:"fee_rate"`
-	MinAmount  float64 `json:"min_amount"`
-	MaxAmount  float64 `json:"max_amount"`
-	Status     string  `json:"status"`
-	Remark     string  `json:"remark"`
-	SortOrder  int     `json:"sort_order"`
+	Provider        string  `json:"provider"`
+	Name            string  `json:"name"`
+	MerchantNo      string  `json:"merchant_no"`
+	CreditType      string  `json:"credit_type"`
+	FeeRate         float64 `json:"fee_rate"`
+	MinAmount       float64 `json:"min_amount"`
+	MaxAmount       float64 `json:"max_amount"`
+	Status          string  `json:"status"`
+	Remark          string  `json:"remark"`
+	SortOrder       int     `json:"sort_order"`
+	Mode            string  `json:"mode"`
+	APIBase         string  `json:"api_base"`
+	CreateOrderPath string  `json:"create_order_path"`
+	QueryOrderPath  string  `json:"query_order_path"`
+	CallbackPath    string  `json:"callback_path"`
+	SecretKey       string  `json:"secret_key"`
+	TimeoutSeconds  int     `json:"timeout_seconds"`
 }
 
 var allowedCreditTypes = map[string]string{
@@ -116,6 +131,15 @@ func (s *WalletAdminService) Update(id uint64, input PaymentChannelPayload) (*Pa
 	row.Status = next.Status
 	row.Remark = next.Remark
 	row.SortOrder = next.SortOrder
+	row.Mode = next.Mode
+	row.APIBase = next.APIBase
+	row.CreateOrderPath = next.CreateOrderPath
+	row.QueryOrderPath = next.QueryOrderPath
+	row.CallbackPath = next.CallbackPath
+	row.TimeoutSeconds = next.TimeoutSeconds
+	if strings.TrimSpace(input.SecretKey) != "" {
+		row.SecretKey = next.SecretKey
+	}
 	if err := s.db.Save(&row).Error; err != nil {
 		return nil, apperrors.NewSystemError("WALLET_UPDATE_FAILED", "更新收款方式失败", err)
 	}
@@ -163,7 +187,7 @@ func (s *WalletAdminService) ensureDefaults() error {
 		return nil
 	}
 	defaults := []wallet.PaymentChannel{
-		{Provider: "manual", Name: "人工处理", MerchantNo: "-", CreditType: "manual", FeeRate: 0, MinAmount: 1, MaxAmount: 100000, Status: "enabled", SortOrder: 0, Remark: "线下人工上下分"},
+		{Provider: "manual", Name: "人工处理", MerchantNo: "-", CreditType: "manual", FeeRate: 0, MinAmount: 1, MaxAmount: 100000, Status: "enabled", SortOrder: 0, Remark: "线下人工上下分", Mode: "manual", TimeoutSeconds: 10},
 		{Provider: "bank_transfer", Name: "银行卡转账", MerchantNo: "BANK-001", CreditType: "bank", FeeRate: 0, MinAmount: 100, MaxAmount: 50000, Status: "enabled", SortOrder: 1, Remark: "对公银行卡收款"},
 		{Provider: "alipay", Name: "支付宝", MerchantNo: "ALI-001", CreditType: "alipay", FeeRate: 0.6, MinAmount: 10, MaxAmount: 20000, Status: "enabled", SortOrder: 2},
 		{Provider: "wechat", Name: "微信支付", MerchantNo: "WX-001", CreditType: "wechat", FeeRate: 0.6, MinAmount: 10, MaxAmount: 20000, Status: "enabled", SortOrder: 3},
@@ -177,6 +201,13 @@ func validatePaymentChannel(input PaymentChannelPayload) (*wallet.PaymentChannel
 	name := strings.TrimSpace(input.Name)
 	creditType := strings.TrimSpace(input.CreditType)
 	status := strings.TrimSpace(input.Status)
+	mode := strings.TrimSpace(input.Mode)
+	if mode == "" {
+		mode = "manual"
+	}
+	if mode != "manual" && mode != "gateway" {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "接入模式不正确")
+	}
 	if provider == "" || name == "" {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "支付接口和支付名称不能为空")
 	}
@@ -198,6 +229,22 @@ func validatePaymentChannel(input PaymentChannelPayload) (*wallet.PaymentChannel
 	if input.MaxAmount > 0 && input.MinAmount > input.MaxAmount {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "最小金额不能高于最大金额")
 	}
+	apiBase := strings.TrimSpace(input.APIBase)
+	createPath := strings.TrimSpace(input.CreateOrderPath)
+	if mode == "gateway" && (apiBase == "" || createPath == "") {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "API 网关必须填写接口地址和创建订单路径")
+	}
+	timeout := input.TimeoutSeconds
+	if timeout == 0 {
+		timeout = 10
+	}
+	if timeout < 2 || timeout > 60 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "接口超时需在 2–60 秒之间")
+	}
+	encryptedSecret, err := utils.EncryptSensitive(strings.TrimSpace(input.SecretKey))
+	if err != nil {
+		return nil, apperrors.NewSystemError("WALLET_SECRET_SAVE_FAILED", "保存支付密钥失败", err)
+	}
 	return &wallet.PaymentChannel{
 		Provider:   provider,
 		Name:       name,
@@ -209,6 +256,7 @@ func validatePaymentChannel(input PaymentChannelPayload) (*wallet.PaymentChannel
 		Status:     status,
 		Remark:     strings.TrimSpace(input.Remark),
 		SortOrder:  input.SortOrder,
+		Mode:       mode, APIBase: apiBase, CreateOrderPath: createPath, QueryOrderPath: strings.TrimSpace(input.QueryOrderPath), CallbackPath: strings.TrimSpace(input.CallbackPath), SecretKey: encryptedSecret, TimeoutSeconds: timeout,
 	}, nil
 }
 
@@ -225,6 +273,7 @@ func toPaymentChannelView(row wallet.PaymentChannel) PaymentChannelView {
 		Status:     row.Status,
 		Remark:     row.Remark,
 		SortOrder:  row.SortOrder,
+		Mode:       row.Mode, APIBase: row.APIBase, CreateOrderPath: row.CreateOrderPath, QueryOrderPath: row.QueryOrderPath, CallbackPath: row.CallbackPath, HasSecret: strings.TrimSpace(row.SecretKey) != "", TimeoutSeconds: row.TimeoutSeconds,
 	}
 }
 

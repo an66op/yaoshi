@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { BRAND_NAME } from "../data/brand";
 import { Icon } from "../components/Icon";
 import { Avatar } from "../components/Avatar";
@@ -9,6 +9,9 @@ import { playNotificationSound } from "../utils/notificationAudio";
 import { portalApi, type ActivityItem, type MemberNotification } from "../api/portal";
 import { chatApi, type ChatMessage, type ChatPreview } from "../api/chat";
 import { WS_EVENT, type WsEvent } from "../hooks/useWebSocket";
+import { lotteryGameLogo } from "../hooks/useLotteryGames";
+import type { Game } from "../types";
+import { PlanDetail, PlanLobby } from "./PlanGroup";
 
 type Room = "group" | "service";
 
@@ -30,14 +33,14 @@ function mergeMessages(...groups: ChatMessage[][]) {
   }));
 }
 
-function useChatHistory(room: Room) {
+function useChatHistory(room: Room, gameId = room === "service" ? "service" : "lobby") {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [initialLoaded, setInitialLoaded] = useState(false);
   const messagesRef = useRef<ChatMessage[]>([]);
-  const roomRef = useRef(room);
-  roomRef.current = room;
+  const conversationRef = useRef(`${room}:${gameId}`);
+	conversationRef.current = `${room}:${gameId}`;
 
   const replaceMessages = useCallback((next: ChatMessage[]) => {
     const ordered = mergeMessages(next);
@@ -46,56 +49,56 @@ function useChatHistory(room: Room) {
   }, []);
 
   const loadInitial = useCallback(async () => {
-    const requestRoom = room;
+	const requestConversation = `${room}:${gameId}`;
     try {
-      const page = await chatApi.messages(room, 20);
-      if (roomRef.current !== requestRoom) return;
+	  const page = await chatApi.messages(room, gameId, 20);
+	  if (conversationRef.current !== requestConversation) return;
       // A send may complete while the initial history request is still in
       // flight. Merge the snapshot with the locally appended response instead
       // of replacing it and making the member's own message disappear.
       replaceMessages([...messagesRef.current, ...page.items]);
       setHasMore(page.has_more);
     } catch {
-      if (roomRef.current === requestRoom && messagesRef.current.length === 0) setHasMore(false);
+	  if (conversationRef.current === requestConversation && messagesRef.current.length === 0) setHasMore(false);
     } finally {
-      if (roomRef.current === requestRoom) setInitialLoaded(true);
+	  if (conversationRef.current === requestConversation) setInitialLoaded(true);
     }
-  }, [replaceMessages, room]);
+  }, [gameId, replaceMessages, room]);
 
   const loadNew = useCallback(async () => {
-    const requestRoom = room;
+	const requestConversation = `${room}:${gameId}`;
     const newest = messagesRef.current.at(-1);
     if (!newest) {
       await loadInitial();
       return;
     }
     try {
-      const page = await chatApi.messages(room, 50, { after_id: newest.id });
-      if (roomRef.current === requestRoom && page.items.length) replaceMessages([...messagesRef.current, ...page.items]);
+	  const page = await chatApi.messages(room, gameId, 50, { after_id: newest.id });
+	  if (conversationRef.current === requestConversation && page.items.length) replaceMessages([...messagesRef.current, ...page.items]);
     } catch {
       // A later poll will retry without interrupting the current conversation.
     }
-  }, [loadInitial, replaceMessages, room]);
+  }, [gameId, loadInitial, replaceMessages, room]);
 
   const loadOlder = useCallback(async () => {
-    const requestRoom = room;
+	const requestConversation = `${room}:${gameId}`;
     const oldest = messagesRef.current[0];
     if (!oldest || historyLoading || !hasMore) return;
     setHistoryLoading(true);
     try {
-      const page = await chatApi.messages(room, 20, { before_id: oldest.id });
-      if (roomRef.current !== requestRoom) return;
+	  const page = await chatApi.messages(room, gameId, 20, { before_id: oldest.id });
+	  if (conversationRef.current !== requestConversation) return;
       replaceMessages([...page.items, ...messagesRef.current]);
       setHasMore(page.has_more);
     } finally {
       setHistoryLoading(false);
     }
-  }, [hasMore, historyLoading, replaceMessages, room]);
+  }, [gameId, hasMore, historyLoading, replaceMessages, room]);
 
   const appendMessage = useCallback((message: ChatMessage) => {
-    if (message.room_type !== room) return;
+	if (message.room_type !== room || message.game_id !== gameId) return;
     replaceMessages([...messagesRef.current, message]);
-  }, [replaceMessages, room]);
+  }, [gameId, replaceMessages, room]);
 
   useEffect(() => {
     // Group and service conversations are separate timelines. Clear the old
@@ -118,12 +121,6 @@ function HistoryLoadButton({ hasMore, loading, onLoad }: { hasMore: boolean; loa
   return <button type="button" className="chat-load-history" disabled={loading} onClick={onLoad}>{loading ? "正在加载…" : "查看更早消息"}</button>;
 }
 
-function todayAt(hour: number, minute: number) {
-  const value = new Date();
-  value.setHours(hour, minute, 0, 0);
-  return value;
-}
-
 function messageTime(value?: string | Date) {
   const date = value instanceof Date ? value : value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return "刚刚";
@@ -137,6 +134,9 @@ export function Chats({
   onNavigate,
   onServiceBack,
   onRefreshUnread,
+  games,
+  planGameId,
+  onOpenPlanGame,
 }: {
   view: ChatView;
   unreadCount: number;
@@ -144,12 +144,27 @@ export function Chats({
   onNavigate: (view: ChatView) => void;
   onServiceBack?: () => void;
   onRefreshUnread?: () => void;
+  games: Game[];
+  planGameId?: string;
+  onOpenPlanGame: (gameId: string) => void;
 }) {
-  const allRead = unreadCount === 0;
   const [preview, setPreview] = useState<ChatPreview | null>(null);
   const [notifications, setNotifications] = useState<MemberNotification[]>([]);
   const [promotionTitles, setPromotionTitles] = useState<string[]>([]);
   const [servicePreview, setServicePreview] = useState("客服小七：已为您接入专属客服");
+  const [roomLogo, setRoomLogo] = useState("");
+  const [pinnedRows, setPinnedRows] = useState<string[]>(["service", "group"]);
+  const [hiddenRows, setHiddenRows] = useState<string[]>(["winning"]);
+
+  useEffect(() => {
+    void portalApi.roomSettings().then((settings) => {
+      setRoomLogo(settings.room_logo || "");
+      const pinned = settings.game?.message_pinned_rows;
+      const hidden = settings.game?.message_hidden_rows;
+      if (Array.isArray(pinned)) setPinnedRows(pinned.filter((item): item is string => typeof item === "string"));
+      if (Array.isArray(hidden)) setHiddenRows(hidden.filter((item): item is string => typeof item === "string"));
+    }).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const loadPreview = () => {
@@ -158,9 +173,9 @@ export function Chats({
       void portalApi.activities().then((items) => {
         setPromotionTitles(items.filter((item) => item.status === "active").map((item) => item.title));
       }).catch(() => setPromotionTitles([]));
-      void chatApi.messages("service", 1).then((page) => {
+	  void chatApi.messages("service", "service", 1).then((page) => {
         const last = page.items.at(-1);
-        if (last) setServicePreview(`${last.mine ? "我" : last.nickname}：${last.content}`);
+        if (last) setServicePreview(`${last.mine ? "我" : "客服"}：${last.content}`);
       }).catch(() => undefined);
     };
     loadPreview();
@@ -182,13 +197,15 @@ export function Chats({
     : "刚刚";
   const promotionNotices = notifications.filter((item) => item.category === "activity" && promotionTitles.includes(item.title));
   const noticeFor = (category: "system" | "activity" | "winning") => {
-    const items = category === "activity" ? promotionNotices : notifications.filter((item) => item.category === category);
+    const items = category === "activity"
+      ? promotionNotices
+      : notifications.filter((item) => item.category === category && (category !== "system" || !resultNotificationTitles.has(item.title)));
     return items.find((item) => !item.read) ?? items[0] ?? null;
   };
-  const unreadFor = (category: "system" | "activity" | "winning") => (category === "activity" ? promotionNotices : notifications.filter((item) => item.category === category)).filter((item) => !item.read).length;
+  const unreadFor = (category: "system" | "activity" | "winning") => (category === "activity" ? promotionNotices : notifications.filter((item) => item.category === category && (category !== "system" || !resultNotificationTitles.has(item.title)))).filter((item) => !item.read).length;
   const systemNotice = noticeFor("system");
-  const winningNotice = noticeFor("winning");
   const activityNotice = noticeFor("activity");
+  const allRead = unreadFor("system") + unreadFor("activity") + unreadFor("winning") === 0;
 
   if (view === "system")
     return (
@@ -208,6 +225,10 @@ export function Chats({
     );
   if (view === "activity")
     return <ActivityNoticePage onBack={() => onNavigate("list")} onRefreshUnread={onRefreshUnread} />;
+  if (view === "plans")
+    return <PlanLobby games={games} onBack={() => onNavigate("list")} onSelect={onOpenPlanGame} />;
+  if (view === "plan")
+    return <PlanDetail games={games} gameId={planGameId} onBack={() => onNavigate("plans")} />;
   if (view === "group" || view === "service")
     return (
       <ChatRoom
@@ -233,6 +254,33 @@ export function Chats({
     void Promise.resolve(onMarkAllRead()).finally(() => onRefreshUnread?.());
   };
 
+  const pinned = new Set(pinnedRows);
+  const messageRows = [
+    {
+      key: "system", kind: "notice" as const, name: "系统通知",
+      message: systemNotice?.content || systemNotice?.title || "暂无系统通知",
+      time: systemNotice?.created_at ? new Date(systemNotice.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "通知",
+      badge: unreadFor("system") ? (unreadFor("system") > 9 ? "9+" : String(unreadFor("system"))) : undefined,
+      onClick: () => openNoticeThread("system", systemNotice),
+    },
+    {
+      key: "activity", kind: "activity" as const, name: "活动通知",
+      message: activityNotice?.content || activityNotice?.title || "优惠活动与专属礼遇会在这里展示",
+      time: activityNotice?.created_at ? new Date(activityNotice.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "活动",
+      badge: unreadFor("activity") ? (unreadFor("activity") > 9 ? "9+" : String(unreadFor("activity"))) : undefined,
+      onClick: () => openNoticeThread("activity", activityNotice),
+    },
+    { key: "service", kind: "service" as const, name: "在线客服", message: servicePreview, time: "刚刚", badge: undefined, onClick: () => onNavigate("service") },
+    { key: "group", kind: "group" as const, name: "聊天室", message: groupMessage, time: groupTime, badge: undefined, onClick: () => onNavigate("group") },
+    { key: "plan", kind: "plan" as const, name: "计划群", message: "大师推荐 · 3 个彩票人工计划", time: "每期更新", badge: undefined, onClick: () => onNavigate("plans") },
+  ].filter((row) => !hiddenRows.includes(row.key)).sort((left, right) => {
+    const leftPinned = pinned.has(left.key);
+    const rightPinned = pinned.has(right.key);
+    if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
+    if (leftPinned && rightPinned) return pinnedRows.indexOf(left.key) - pinnedRows.indexOf(right.key);
+    return 0;
+  });
+
   return (
     <section className="chat-list">
       <header className="blue-header">
@@ -244,45 +292,7 @@ export function Chats({
           {allRead ? "已全部读" : "全部已读"}
         </button>
       </div>
-      <ChatRow
-        kind="notice"
-        pinned
-        name="系统通知"
-        message={systemNotice?.content || systemNotice?.title || "暂无系统通知"}
-        time={systemNotice?.created_at ? new Date(systemNotice.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "通知"}
-        badge={unreadFor("system") ? (unreadFor("system") > 9 ? "9+" : String(unreadFor("system"))) : undefined}
-        onClick={() => openNoticeThread("system", systemNotice)}
-      />
-      <ChatRow
-        kind="activity"
-        name="活动通知"
-        message={activityNotice?.content || activityNotice?.title || "优惠活动与专属礼遇会在这里展示"}
-        time={activityNotice?.created_at ? new Date(activityNotice.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "活动"}
-        badge={unreadFor("activity") ? (unreadFor("activity") > 9 ? "9+" : String(unreadFor("activity"))) : undefined}
-        onClick={() => openNoticeThread("activity", activityNotice)}
-      />
-      <ChatRow
-        kind="winning"
-        name="中奖通知"
-        message={winningNotice?.content || winningNotice?.title || "开奖与派奖结果会在这里单独展示"}
-        time={winningNotice?.created_at ? new Date(winningNotice.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "开奖"}
-        badge={unreadFor("winning") ? (unreadFor("winning") > 9 ? "9+" : String(unreadFor("winning"))) : undefined}
-        onClick={() => openNoticeThread("winning", winningNotice)}
-      />
-      <ChatRow
-        kind="service"
-        name="在线客服"
-        message={servicePreview}
-        time="刚刚"
-        onClick={() => onNavigate("service")}
-      />
-      <ChatRow
-        kind="group"
-        name="聊天室"
-        message={groupMessage}
-        time={groupTime}
-        onClick={() => onNavigate("group")}
-      />
+      {messageRows.map((row) => <ChatRow key={row.key} kind={row.kind} image={row.key === "group" ? roomLogo : undefined} pinned={pinned.has(row.key)} name={row.name} message={row.message} time={row.time} badge={row.badge} onClick={row.onClick} />)}
     </section>
   );
 }
@@ -293,20 +303,22 @@ function ChatRow({
   message,
   time,
   badge,
+  image,
   pinned,
   onClick,
 }: {
-  kind: Room | "notice" | "activity" | "winning";
+  kind: Room | "notice" | "activity" | "winning" | "plan";
   name: string;
   message: string;
   time: string;
   badge?: string;
+  image?: string;
   pinned?: boolean;
   onClick: () => void;
 }) {
   return (
     <button aria-label={`${name}${badge ? `，${badge} 条未读消息` : ""}`} className={`chat-row ${pinned ? "chat-row-pinned" : ""}`} onClick={onClick}>
-      <MessageLogo kind={kind} badge={badge} />
+      <MessageLogo kind={kind} badge={badge} image={image} />
       <div>
         <b>{name}</b>
         <small>{message}</small>
@@ -316,13 +328,14 @@ function ChatRow({
   );
 }
 
-function MessageLogo({ kind, badge }: { kind: Room | "notice" | "activity" | "winning"; badge?: string }) {
+function MessageLogo({ kind, badge, image }: { kind: Room | "notice" | "activity" | "winning" | "plan"; badge?: string; image?: string }) {
   const art = kind === "service" ? <><path d="M5 13a7 7 0 0 1 14 0v4" /><path d="M5 14H3v4h3m13-4h2v4h-3M16 20c-1 1-2.3 1.5-4 1.5" /><path d="M8 12h.01M16 12h.01" /></>
     : kind === "group" ? <><path d="M4 6.5h11v8H9l-4 3v-11Z" /><path d="M15 9.5h5v7l-3 2v-2h-2" /><path d="M7.5 10h4" /></>
       : kind === "notice" ? <><path d="m4 13 12-5v10L4 13Z" /><path d="M16 10.5 20 8v10l-4-2.5M7 15.5l1.5 3h3" /></>
         : kind === "winning" ? <><path d="M8 4h8v4a4 4 0 0 1-8 0V4Z" /><path d="M8 6H5v1a4 4 0 0 0 4 4m7-5h3v1a4 4 0 0 1-4 4M12 12v4m-3 3h6m-5-3h4" /></>
-          : <><rect x="5" y="8" width="14" height="11" rx="2" /><path d="M3.5 8h17v4h-17zM12 8v11M12 8S8 7 8 4.8C8 3.4 10 3.6 12 8Zm0 0s4-1 4-3.2C16 3.4 14 3.6 12 8Z" /></>;
-  return <span className={`message-logo message-logo-${kind}`} aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{art}</svg>{badge && <i>{badge}</i>}</span>;
+            : kind === "plan" ? <><path d="M4 18V9m5 9V5m5 13v-6m5 6V3" /><path d="m3 7 5-3 5 5 7-7" /></>
+            : <><rect x="5" y="8" width="14" height="11" rx="2" /><path d="M3.5 8h17v4h-17zM12 8v11M12 8S8 7 8 4.8C8 3.4 10 3.6 12 8Zm0 0s4-1 4-3.2C16 3.4 14 3.6 12 8Z" /></>;
+  return <span className={`message-logo message-logo-${kind} ${image ? "has-room-logo" : ""}`} aria-hidden="true">{image ? <img alt="" src={image} /> : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{art}</svg>}{badge && <i>{badge}</i>}</span>;
 }
 
 function ChatRoom({
@@ -336,33 +349,32 @@ function ChatRoom({
   onBack: () => void;
   onRefreshUnread?: () => void;
 }) {
-  const [opened, setOpened] = useState(false);
-  const [packet, setPacket] = useState<"daily" | "lucky" | null>(null);
-  const [redPacketId, setRedPacketId] = useState<number | null>(null);
+  const [packet, setPacket] = useState<{ messageId: number; claimed: boolean; greeting: string; cover: string; minTurnover: number } | null>(null);
+  const [claimedPacketIDs, setClaimedPacketIDs] = useState<Set<number>>(() => new Set());
+  const [packetReward, setPacketReward] = useState<number | null>(null);
+  const [packetOpening, setPacketOpening] = useState(false);
+  const [packetError, setPacketError] = useState("");
   const [roomNotice, setRoomNotice] = useState("加载房间公告…");
   const [quickReplies, setQuickReplies] = useState<string[]>([]);
-  const [chatPreview, setChatPreview] = useState<ChatPreview | null>(null);
-  const [checkInDone, setCheckInDone] = useState(false);
   const [groupDraft, setGroupDraft] = useState("");
   const [groupSending, setGroupSending] = useState(false);
   const groupHistoryRef = useRef<HTMLDivElement>(null);
   const groupInitialScrollDone = useRef(false);
+  const [groupScrollReady, setGroupScrollReady] = useState(false);
   const { messages, hasMore, historyLoading, initialLoaded, loadOlder, loadNew, appendMessage } = useChatHistory(room);
 
   useEffect(() => {
     groupInitialScrollDone.current = false;
+    setGroupScrollReady(false);
   }, [room]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (room !== "group" || !initialLoaded || groupInitialScrollDone.current) return;
+    const history = groupHistoryRef.current;
+    if (!history) return;
     groupInitialScrollDone.current = true;
-    const scrollToLatest = () => groupHistoryRef.current?.scrollTo({ top: groupHistoryRef.current.scrollHeight, behavior: "auto" });
-    const frame = window.requestAnimationFrame(scrollToLatest);
-    const timer = window.setTimeout(scrollToLatest, 120);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(timer);
-    };
+    history.scrollTop = history.scrollHeight;
+    setGroupScrollReady(true);
   }, [initialLoaded, room]);
 
   useEffect(() => {
@@ -380,27 +392,12 @@ function ChatRoom({
         }).filter(Boolean))
       }
     }).catch(() => undefined);
-    void chatApi.preview().then(setChatPreview).catch(() => setChatPreview(null));
-    void portalApi.activities("redpacket").then((items) => {
-      const active = items.find((item) => item.status === "active");
-      if (active) setRedPacketId(active.id);
-    }).catch(() => undefined);
-    void portalApi.activities("checkin").then(async (items) => {
-      const active = items.find((item) => item.status === "active");
-      if (!active) return;
-      try {
-        const status = await portalApi.activityStatus(active.id);
-        setCheckInDone(status.checked_in);
-      } catch {
-        setCheckInDone(false);
-      }
-    }).catch(() => undefined);
   }, [room]);
 
   useEffect(() => {
     const onWs = (event: Event) => {
       const detail = (event as CustomEvent<WsEvent>).detail;
-      if (detail?.type === "chat_message" && detail.data.room_type === room) {
+		if (detail?.type === "chat_message" && detail.data.room_type === room && detail.data.game_id === (room === "service" ? "service" : "lobby")) {
         void loadNew();
       }
     };
@@ -411,14 +408,19 @@ function ChatRoom({
   }, [loadNew, room]);
 
   const claimRedPacket = async () => {
-    if (!redPacketId) return;
+    if (!packet || packet.claimed || claimedPacketIDs.has(packet.messageId) || packetOpening) return;
+    setPacketOpening(true);
+    setPacketError("");
     try {
-      await portalApi.claimRedPacket(redPacketId);
-      setOpened(true);
+      const result = await chatApi.claimRedPacket(packet.messageId);
+      setClaimedPacketIDs((current) => new Set(current).add(packet.messageId));
+      setPacketReward(result.reward);
       onRefreshUnread?.();
-      playNotificationSound("message");
-    } catch {
-      setOpened(true);
+      playNotificationSound("reward");
+    } catch (reason) {
+      setPacketError(reason instanceof Error ? reason.message : "红包暂时无法领取，请稍后重试");
+    } finally {
+      setPacketOpening(false);
     }
   };
 
@@ -427,11 +429,10 @@ function ChatRoom({
     if (!text || groupSending) return;
     setGroupSending(true);
     try {
-      const created = await chatApi.send(text, "group");
+	  const created = await chatApi.send(text, "group", "lobby");
       setGroupDraft("");
       appendMessage(created);
       onRefreshUnread?.();
-      playNotificationSound("message");
     } catch {
       setGroupDraft(text);
     } finally {
@@ -439,25 +440,21 @@ function ChatRoom({
     }
   };
 
-  const groupTimeline = [
-    ...messages.map((message) => ({ kind: "message" as const, at: new Date(message.created_at).getTime(), message })),
-    {
-      kind: "packet" as const,
-      at: todayAt(11, 26).getTime(),
-      packetKind: "daily" as const,
-      title: "每日福利红包",
-      description: checkInDone ? "今日福利已领取" : "点击查看每日福利",
-      claimed: checkInDone,
-    },
-    ...(redPacketId ? [{
-      kind: "packet" as const,
-      at: todayAt(11, 28).getTime(),
-      packetKind: "lucky" as const,
-      title: opened ? "好运奖励包" : "打开好运奖励包",
-      description: opened ? "红包奖励已领取" : "点击领取随机红包",
-      claimed: opened,
-    }] : []),
-  ].sort((left, right) => left.at - right.at);
+  const groupMessageTimeline = messages.map((message) => message.message_type === "redpacket" ? ({
+    kind: "packet" as const,
+    at: new Date(message.created_at).getTime(),
+    packetKind: "lucky" as const,
+    packetKey: `message-${message.id}`,
+    referenceId: message.reference_id,
+    title: message.content || "房间福利红包",
+    description: message.claimed || claimedPacketIDs.has(message.id) ? "红包已领取" : `共 ${message.red_packet_count || 1} 个红包 · 点击领取`,
+    cover: message.red_packet_cover || "classic",
+    minTurnover: Number(message.red_packet_min_turnover || 0),
+    reward: message.red_packet_reward ?? null,
+    claimed: Boolean(message.claimed || claimedPacketIDs.has(message.id)),
+    messageId: message.id,
+  }) : ({ kind: "message" as const, at: new Date(message.created_at).getTime(), message }));
+  const groupTimeline = groupMessageTimeline.sort((left, right) => left.at - right.at);
 
   return (
     <section className="chat-room">
@@ -468,24 +465,26 @@ function ChatRoom({
         <b>{title}</b>
       </header>
       {room === "service" ? (
-        <ServiceConversation quickReplies={quickReplies} chatNickname={chatPreview?.chat_nickname} onRefreshUnread={onRefreshUnread} />
+        <ServiceConversation quickReplies={quickReplies} onRefreshUnread={onRefreshUnread} />
       ) : (
         <>
           <div className="room-notice">{roomNotice}</div>
-          <div className="chat-history" ref={groupHistoryRef}>
-            <HistoryLoadButton hasMore={hasMore} loading={historyLoading} onLoad={() => void loadOlder()} />
-            <p>今天 · 房间消息来自后端</p>
-            {groupTimeline.map((item) => item.kind === "message" ? (
-              <div className={`service-message chat-message-row ${item.message.mine ? "outgoing" : ""}`} key={`message-${item.message.id}`}>
-                {!item.message.mine && <Avatar className="service-avatar" index={Number(item.message.user_id) % 20} label={`${item.message.nickname}头像`} />}
-                <div className="service-bubble">
-                  {!item.message.mine && <small>{item.message.nickname}</small>}
-                  <span>{item.message.content}</span>
-                  <time className="message-bubble-time">{messageTime(item.message.created_at)}</time>
+          <div aria-busy={!initialLoaded || !groupScrollReady} className={`chat-history ${!initialLoaded || !groupScrollReady ? "chat-history-positioning" : "chat-history-ready"}`} ref={groupHistoryRef}>
+            {!initialLoaded ? <ChatInitialLoading /> : <>
+              <HistoryLoadButton hasMore={hasMore} loading={historyLoading} onLoad={() => void loadOlder()} />
+              <p>今天</p>
+              {groupTimeline.map((item) => item.kind === "message" ? (
+                <div className={`service-message chat-message-row ${item.message.mine ? "outgoing" : ""}`} key={`message-${item.message.id}`}>
+                  {!item.message.mine && <Avatar className="service-avatar" index={Number(item.message.user_id) % 20} label={`${item.message.nickname}头像`} />}
+                  <div className="service-bubble">
+                    {!item.message.mine && <small>{item.message.nickname}</small>}
+                    <span>{item.message.content}</span>
+                    <time className="message-bubble-time">{messageTime(item.message.created_at)}</time>
+                  </div>
+                  {item.message.mine && <Avatar className="service-avatar user" index={-1} label="我的头像" />}
                 </div>
-                {item.message.mine && <Avatar className="service-avatar user" index={-1} label="我的头像" />}
-              </div>
-            ) : <PacketBubble key={item.packetKind} title={item.title} description={item.description} claimed={item.claimed} time={new Date(item.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} onClick={() => setPacket(item.packetKind)} />)}
+              ) : <PacketBubble key={item.packetKey} title={item.title} description={item.minTurnover > 0 && !item.claimed ? `${item.description} · 流水满 ${item.minTurnover.toFixed(2)}` : item.description} cover={item.cover} claimed={item.claimed} time={new Date(item.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} onClick={() => { setPacketReward(item.reward); setPacketError(""); setPacketOpening(false); setPacket({ messageId: item.messageId, claimed: item.claimed, greeting: item.title, cover: item.cover, minTurnover: item.minTurnover }); }} />)}
+            </>}
           </div>
           <div className="chat-input">
             <button aria-label="添加内容" disabled><Icon name="plus" /></button>
@@ -496,10 +495,16 @@ function ChatRoom({
           </div>
           {packet && (
             <RedPacketDialog
-              type={packet}
-              claimed={opened || packet === "daily"}
+              type="lucky"
+              claimed={packet.claimed || claimedPacketIDs.has(packet.messageId)}
+              reward={packetReward}
+              greeting={packet.greeting}
+              cover={packet.cover}
+              minTurnover={packet.minTurnover}
+              opening={packetOpening}
+              error={packetError}
               onOpen={() => void claimRedPacket()}
-              onClose={() => setPacket(null)}
+              onClose={() => { if (!packetOpening) setPacket(null); }}
             />
           )}
         </>
@@ -508,23 +513,27 @@ function ChatRoom({
   );
 }
 
-function ServiceConversation({ quickReplies, chatNickname, onRefreshUnread }: { quickReplies: string[]; chatNickname?: string; onRefreshUnread?: () => void }) {
+function ServiceConversation({ quickReplies, onRefreshUnread }: { quickReplies: string[]; onRefreshUnread?: () => void }) {
   const [draft, setDraft] = useState("");
-  const label = chatNickname || "客服小七";
+  // A room owner nickname belongs to the agent room, not to customer service.
+  // Keep this identity stable so the heading can never become “群主在线”.
+  const label = "客服小七";
+  const welcomeTime = useRef(messageTime()).current;
   const historyRef = useRef<HTMLDivElement>(null);
   const initialScrollDone = useRef(false);
-  const { messages, hasMore, historyLoading, initialLoaded, loadOlder, loadNew, appendMessage } = useChatHistory("service");
+  const [scrollReady, setScrollReady] = useState(false);
+  const { messages, hasMore, historyLoading, initialLoaded, loadOlder, loadNew, appendMessage } = useChatHistory("service", "service");
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!initialLoaded || initialScrollDone.current) return;
+    const history = historyRef.current;
+    if (!history) return;
     initialScrollDone.current = true;
-    const scrollToLatest = () => historyRef.current?.scrollTo({ top: historyRef.current.scrollHeight, behavior: "auto" });
-    const frame = window.requestAnimationFrame(scrollToLatest);
-    const timer = window.setTimeout(scrollToLatest, 120);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(timer);
-    };
+    // Customer service is a ticket-style conversation: its greeting and the
+    // first historical message must always start below the status bar. Do not
+    // reuse the group-chat behaviour that opens on the latest message.
+    history.scrollTop = 0;
+    setScrollReady(true);
   }, [initialLoaded]);
 
   // The periodic request in useChatHistory is only a recovery path. Replies
@@ -533,7 +542,7 @@ function ServiceConversation({ quickReplies, chatNickname, onRefreshUnread }: { 
   useEffect(() => {
     const onWs = (event: Event) => {
       const detail = (event as CustomEvent<WsEvent>).detail;
-      if (detail?.type === "chat_message" && detail.data.room_type === "service") {
+	  if (detail?.type === "chat_message" && detail.data.room_type === "service" && detail.data.game_id === "service") {
         void loadNew();
       }
     };
@@ -545,32 +554,33 @@ function ServiceConversation({ quickReplies, chatNickname, onRefreshUnread }: { 
     const text = value.trim();
     if (!text) return;
     try {
-      const created = await chatApi.send(text, "service");
+	  const created = await chatApi.send(text, "service", "service");
       setDraft("");
       appendMessage(created);
       onRefreshUnread?.();
-      playNotificationSound("message");
     } catch {
       setDraft(text);
     }
   };
   return (
     <>
-      <div className="room-notice">{label}在线 · 消息已同步后端</div>
-      <div className="chat-history service-history" ref={historyRef}>
-        <HistoryLoadButton hasMore={hasMore} loading={historyLoading} onLoad={() => void loadOlder()} />
-        <p className="service-time">今天</p>
-        <ServiceMessage text={`您好，我是${label}，很高兴为您服务。请问有什么可以帮您？`} time={messageTime()} />
-        {messages.map((message) => message.mine
-          ? <ServiceMessage key={message.id} outgoing text={message.content} time={messageTime(message.created_at)} />
-          : <ServiceMessage key={message.id} text={message.content} time={messageTime(message.created_at)} />)}
-        {messages.length === 0 && quickReplies.length > 0 && (
-          <div className="service-replies">
-            {quickReplies.slice(0, 3).map((text) => (
-              <button key={text} onClick={() => void sendMessage(text)}>{text}</button>
-            ))}
-          </div>
-        )}
+      <div className="room-notice service-room-status"><b>专属客服在线</b><span>随时为您服务</span></div>
+      <div aria-busy={!initialLoaded || !scrollReady} className={`chat-history service-history ${messages.length === 0 ? "service-history-empty" : ""} ${!initialLoaded || !scrollReady ? "chat-history-positioning" : "chat-history-ready"}`} ref={historyRef}>
+        {!initialLoaded ? <ChatInitialLoading /> : <>
+          <HistoryLoadButton hasMore={hasMore} loading={historyLoading} onLoad={() => void loadOlder()} />
+          <p className="service-time">今天</p>
+          <ServiceMessage text={`您好，我是${label}，很高兴为您服务。请问有什么可以帮您？`} time={welcomeTime} />
+          {messages.map((message) => message.mine
+            ? <ServiceMessage key={message.id} outgoing text={message.content} time={messageTime(message.created_at)} />
+            : <ServiceMessage key={message.id} text={message.content} time={messageTime(message.created_at)} />)}
+          {messages.length === 0 && quickReplies.length > 0 && (
+            <div className="service-replies">
+              {quickReplies.slice(0, 3).map((text) => (
+                <button key={text} onClick={() => void sendMessage(text)}>{text}</button>
+              ))}
+            </div>
+          )}
+        </>}
       </div>
       <div className="chat-input">
         <button aria-label="添加内容" disabled><Icon name="plus" /></button>
@@ -605,15 +615,21 @@ function ServiceMessage({
   );
 }
 
+function ChatInitialLoading() {
+  return <div className="chat-initial-loading" role="status"><span aria-hidden="true" /><b>正在加载最新消息</b></div>;
+}
+
 function PacketBubble({
   title,
   description,
+  cover,
   claimed,
   time,
   onClick,
 }: {
   title: string;
   description: string;
+  cover: string;
   claimed: boolean;
   time: string;
   onClick: () => void;
@@ -624,7 +640,7 @@ function PacketBubble({
       <div>
         <small>{BRAND_NAME} · {time}</small>
         <button
-          className={`red-packet ${claimed ? "claimed" : ""}`}
+          className={`red-packet packet-cover-${cover} ${claimed ? "claimed" : ""}`}
           onClick={onClick}
         >
           <span>
@@ -641,9 +657,60 @@ function PacketBubble({
 
 const notificationThreads = {
   system: { title: "系统通知", preview: "维护安排与重要服务提醒", time: "最新", icon: "系" },
-  winning: { title: "中奖通知", preview: "开奖与派奖结果", time: "最新", icon: "奖" },
-  activity: { title: "活动通知", preview: "签到奖励与红包活动", time: "最新", icon: "活" },
+  winning: { title: "开奖通知", preview: "开奖号码与投注结果", time: "最新", icon: "开" },
+  activity: { title: "活动通知", preview: "优惠活动与专属礼遇", time: "最新", icon: "活" },
 } as const;
+
+const resultNotificationTitles = new Set(["开奖结果", "恭喜中奖", "未中奖", "开奖通知"]);
+
+function visibleNotifications(kind: "system" | "winning", rows: MemberNotification[]) {
+  if (kind === "winning") return rows.filter((item) => item.category === "winning");
+  return rows.filter((item) => item.category === "system" && !resultNotificationTitles.has(item.title));
+}
+
+function money(value?: number) {
+  return Number(value ?? 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function DrawBalls({ numbers }: { numbers?: number[] }) {
+  if (!numbers?.length) return null;
+  return <div className="draw-notice-balls" aria-label={`开奖号码 ${numbers.join("、")}`}>{numbers.map((number, index) => <i key={`${number}-${index}`}>{number}</i>)}</div>;
+}
+
+function DrawNoticeSummary({ message, detail = false }: { message: MemberNotification; detail?: boolean }) {
+  const hasStructuredResult = Boolean(message.game_name || message.issue || message.draw_numbers?.length);
+  if (!hasStructuredResult) return <p>{message.content}</p>;
+  const gameLogo = lotteryGameLogo(message.game_id);
+  return (
+    <div className={detail ? "draw-notice-detail" : "draw-notice-summary"}>
+      <div className="draw-notice-heading">
+        <div className="draw-notice-game">
+          {gameLogo && <span><img alt={`${message.game_name || "彩票"} Logo`} src={gameLogo} /></span>}
+          <b>{message.game_name || "开奖信息"}</b>
+        </div>
+        {message.issue && <small>第 {message.issue} 期</small>}
+      </div>
+      <DrawBalls numbers={message.draw_numbers} />
+      <time>开奖时间 {new Date(message.draw_at || message.created_at).toLocaleString("zh-CN")}</time>
+      <div className="draw-notice-stats">
+        <span><small>投注</small><b>{message.bet_count ?? 0} 注</b><em>{money(message.stake_amount)} 元</em></span>
+        <span className={(message.payout_amount ?? 0) > 0 ? "has-prize" : ""}><small>中奖</small><b>{message.won_count ?? 0} 注</b><em>{money(message.payout_amount)} 元</em></span>
+      </div>
+      {detail && Boolean(message.bet_details?.length) && (
+        <div className="draw-bet-list">
+          <h3>投注明细</h3>
+          {message.bet_details?.map((bet, index) => (
+            <section key={`${bet.play_name}-${bet.position}-${bet.selection}-${index}`}>
+              <div><b>{bet.play_name}{bet.position ? ` · 第${bet.position}球` : ""}</b><small>{bet.result === "won" ? "已中奖" : "未中奖"}</small></div>
+              <p>{bet.selection} · 投注 {money(bet.amount)} 元 · 赔率 {Number(bet.odds || 0).toFixed(3)}</p>
+              {bet.result === "won" && <em>中奖 {money(bet.payout)} 元</em>}
+            </section>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function NotificationThread({
   kind,
@@ -663,7 +730,7 @@ function NotificationThread({
 
   useEffect(() => {
     void portalApi.notifications(20, { category: kind }).then((page) => {
-      setItems(page.items);
+      setItems(visibleNotifications(kind, page.items));
       setHasMore(page.has_more);
     }).catch(() => {
       setItems([]);
@@ -677,7 +744,8 @@ function NotificationThread({
     setHistoryLoading(true);
     try {
       const page = await portalApi.notifications(20, { category: kind, before_id: beforeID });
-      setItems((current) => [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]);
+      const visible = visibleNotifications(kind, page.items);
+      setItems((current) => [...current, ...visible.filter((item) => !current.some((existing) => existing.id === item.id))]);
       setHasMore(page.has_more);
     } finally {
       setHistoryLoading(false);
@@ -701,30 +769,30 @@ function NotificationThread({
         <b>{thread.title}</b>
         <span aria-hidden="true" />
       </header>
-      <div className="system-notice-intro">
-        <span>{isWinning ? "开奖中心" : "系统公告"}</span>
-        <h1>{isWinning ? "开奖与派奖结果" : "重要信息与服务提醒"}</h1>
-        <p>{isWinning ? "您的中奖、未中奖及派奖结果将在这里单独展示。" : "重要公告将以独立卡片展示，请留意最新内容。"}</p>
-      </div>
       <div className="system-notice-list">
-        {items.length === 0 && <p className="empty-notice">{isWinning ? "暂无中奖通知" : "暂无系统公告"}</p>}
+        {items.length === 0 && <p className="empty-notice">{isWinning ? "暂无开奖通知" : "暂无系统公告"}</p>}
         {items.map((message) => (
-          <button className={`system-notice-card ${!message.read ? "is-unread" : ""}`} key={message.id} onClick={() => void openItem(message)}>
+          <button className={`system-notice-card ${isWinning ? "draw-notice-card" : ""} ${!message.read ? "is-unread" : ""}`} key={message.id} onClick={() => void openItem(message)}>
             <div className="system-notice-card-top">
-              <span>{isWinning ? "开奖结果" : "系统公告"}</span>
+              <span>
+                {isWinning ? "开奖通知" : "系统公告"}
+                {isWinning && !message.read && <i className="notification-unread-dot" aria-label="未读" />}
+              </span>
               <time>{new Date(message.created_at).toLocaleString("zh-CN")}</time>
             </div>
             <div>
-              <b>{message.title}{!message.read && <i className="notification-unread-dot" aria-label="未读" />}</b>
-              <p>{message.content}</p>
-              <em>阅读全文 <Icon name="arrow" /></em>
+              {!isWinning && <b>{message.title}{!message.read && <i className="notification-unread-dot" aria-label="未读" />}</b>}
+              {isWinning ? <DrawNoticeSummary message={message} /> : <p>{message.content}</p>}
+              <em>查看详情 <Icon name="arrow" /></em>
             </div>
           </button>
         ))}
         <HistoryLoadButton hasMore={hasMore} loading={historyLoading} onLoad={() => void loadOlder()} />
       </div>
       {selected && (
-        <ActionDialog title={selected.title} description={selected.content} onClose={() => setSelected(null)} />
+        <ActionDialog title={isWinning ? "开奖通知" : selected.title} description={isWinning && (selected.game_name || selected.issue) ? `${selected.game_name || "开奖信息"}${selected.issue ? ` · 第 ${selected.issue} 期` : ""}` : selected.content} onClose={() => setSelected(null)}>
+          {isWinning && <DrawNoticeSummary message={selected} detail />}
+        </ActionDialog>
       )}
     </section>
   );
@@ -739,6 +807,23 @@ type ActivityNotice = {
   activity?: ActivityItem;
 };
 
+function openActivityAction(activity?: ActivityItem) {
+  const config = activity?.config;
+  const actionType = typeof config?.action_type === "string" ? config.action_type : "none";
+  const actionURL = typeof config?.action_url === "string" ? config.action_url.trim() : "";
+  if (!actionURL || actionType === "none") return false;
+  if (actionType === "internal" && actionURL.startsWith("/")) {
+    window.history.pushState({}, "", actionURL);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    return true;
+  }
+  if (actionType === "external" && /^https:\/\//i.test(actionURL)) {
+    window.location.assign(actionURL);
+    return true;
+  }
+  return false;
+}
+
 function ActivityNoticePage({ onBack, onRefreshUnread }: { onBack: () => void; onRefreshUnread?: () => void }) {
   const [notices, setNotices] = useState<MemberNotification[]>([]);
   const [activities, setActivities] = useState<ActivityItem[]>([]);
@@ -750,7 +835,7 @@ function ActivityNoticePage({ onBack, onRefreshUnread }: { onBack: () => void; o
     void Promise.all([portalApi.notifications(20, { category: "activity" }), portalApi.activities()]).then(([notificationPage, activityRows]) => {
       setNotices(notificationPage.items);
       setHasMore(notificationPage.has_more);
-      setActivities(activityRows.filter((row) => row.status === "active"));
+      setActivities(activityRows.filter((row) => row.status === "active" && row.type === "promotion"));
     }).catch(() => {
       setNotices([]);
       setHasMore(false);
@@ -782,34 +867,41 @@ function ActivityNoticePage({ onBack, onRefreshUnread }: { onBack: () => void; o
     })),
   ];
 
-  const openCard = async (card: ActivityNotice) => {
-    setSelected(card);
+  const openCard = (card: ActivityNotice) => {
     if (card.notification && !card.notification.read) {
       setNotices((current) => current.map((item) => item.id === card.notification?.id ? { ...item, read: true } : item));
-      await portalApi.markRead(card.notification.id).catch(() => undefined);
+      void portalApi.markRead(card.notification.id).catch(() => undefined);
       onRefreshUnread?.();
     }
+    if (openActivityAction(card.activity)) return;
+    setSelected(card);
   };
 
   return (
     <section className="notification-page activity-notice-page">
       <header className="blue-header">
         <button aria-label="返回消息列表" onClick={onBack}><Icon name="back" /></button>
-        <b>优惠活动</b>
+        <b>活动通知</b>
         <span aria-hidden="true" />
       </header>
       <div className="activity-notice-list">
         {cards.length === 0 && <p className="empty-notice">暂无进行中的活动</p>}
         {cards.map((card, index) => (
-          <button className={`activity-notice-card card-tone-${index % 4}`} key={card.id} onClick={() => void openCard(card)}>
-            {card.cover ? <img alt="" src={card.cover} /> : <span className="activity-notice-art" aria-hidden="true"><i>{index % 2 ? "福利" : "好运"}</i><b>{index % 2 ? "专属礼遇" : "幸运相伴"}</b></span>}
-            <div className="activity-notice-shade" />
-            <div className="activity-notice-copy">
-              <small>{card.notification && !card.notification.read ? "新活动" : "正在进行"}</small>
-              <b>{card.title}</b>
-              <p>{card.subtitle}</p>
-              <em>查看活动 <Icon name="arrow" /></em>
-            </div>
+          <button aria-label={`${card.title}，${card.subtitle}`} className={`activity-notice-card card-tone-${index % 4} ${card.cover ? "has-cover" : ""}`} key={card.id} onClick={() => void openCard(card)}>
+            {card.cover ? <>
+              <img alt={card.title} src={card.cover} />
+              {card.notification && !card.notification.read && <span className="activity-cover-badge">新活动</span>}
+              <span className="activity-cover-action" aria-hidden="true"><Icon name="arrow" /></span>
+            </> : <>
+              <span className="activity-notice-art" aria-hidden="true"><i>{index % 2 ? "福利" : "好运"}</i><b>{index % 2 ? "专属礼遇" : "幸运相伴"}</b></span>
+              <div className="activity-notice-shade" />
+              <div className="activity-notice-copy">
+                <small>{card.notification && !card.notification.read ? "新活动" : "正在进行"}</small>
+                <b>{card.title}</b>
+                <p>{card.subtitle}</p>
+                <em>查看活动 <Icon name="arrow" /></em>
+              </div>
+            </>}
           </button>
         ))}
         <HistoryLoadButton hasMore={hasMore} loading={historyLoading} onLoad={() => void loadOlder()} />

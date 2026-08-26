@@ -1,6 +1,7 @@
 package services
 
 import (
+	"backend/data/models/chat"
 	"backend/data/models/user"
 	apperrors "backend/errors"
 	"backend/utils"
@@ -16,31 +17,36 @@ import (
 type UserAdminService struct{ db *gorm.DB }
 
 type AdminUser struct {
-	ID            uint64     `json:"id"`
-	PublicID      uint64     `json:"public_id"`
-	Username      string     `json:"username"`
-	Email         string     `json:"email"`
-	Nickname      string     `json:"nickname"`
-	Phone         string     `json:"phone"`
-	Role          string     `json:"role"`
-	Remark        string     `json:"remark"`
-	RiskLevel     string     `json:"risk_level"`
-	Balance       float64    `json:"balance"`
-	FlyMode       string     `json:"fly_mode"`
-	FlyRate       float64    `json:"fly_rate"`
-	AgentRoomCode string     `json:"agent_room_code"`
-	ParentAgentID *uint64    `json:"parent_agent_id"`
-	Status        int        `json:"status"`
-	LastLoginAt   *time.Time `json:"last_login_at"`
-	LoginCount    int        `json:"login_count"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID             uint64     `json:"id"`
+	PublicID       uint64     `json:"public_id"`
+	Username       string     `json:"username"`
+	Email          string     `json:"email"`
+	Nickname       string     `json:"nickname"`
+	Phone          string     `json:"phone"`
+	Role           string     `json:"role"`
+	Remark         string     `json:"remark"`
+	RiskLevel      string     `json:"risk_level"`
+	Balance        float64    `json:"balance"`
+	FlyMode        string     `json:"fly_mode"`
+	FlyRate        float64    `json:"fly_rate"`
+	AgentRoomCode  string     `json:"agent_room_code"`
+	ParentAgentID  *uint64    `json:"parent_agent_id"`
+	ParentTenantID *uint64    `json:"parent_tenant_id"`
+	AgentName      string     `json:"agent_name"`
+	TenantName     string     `json:"tenant_name"`
+	LoginIdentity  string     `json:"login_identity"`
+	Status         int        `json:"status"`
+	LastLoginAt    *time.Time `json:"last_login_at"`
+	LoginCount     int        `json:"login_count"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type UserListFilter struct {
 	Query    string
 	Status   string
 	Role     string
+	Kind     string
 	Page     int
 	PageSize int
 }
@@ -62,15 +68,16 @@ type UserStats struct {
 }
 
 type CreateAdminUserInput struct {
-	Username  string
-	Password  string
-	Email     string
-	Nickname  string
-	Phone     string
-	Role      string
-	Remark    string
-	RiskLevel string
-	Status    int
+	Username      string
+	Password      string
+	Email         string
+	Nickname      string
+	Phone         string
+	Role          string
+	Remark        string
+	RiskLevel     string
+	Status        int
+	ParentAgentID uint64
 }
 
 type UpdateAdminUserInput struct {
@@ -86,6 +93,7 @@ type UpdateAdminUserInput struct {
 type BalanceRecord struct {
 	ID        uint64    `json:"id"`
 	UserID    uint64    `json:"user_id"`
+	Reference string    `json:"reference,omitempty"`
 	Amount    float64   `json:"amount"`
 	Before    float64   `json:"before"`
 	After     float64   `json:"after"`
@@ -124,6 +132,12 @@ func (s *UserAdminService) List(filter UserListFilter) (*UserList, error) {
 	if role := strings.TrimSpace(filter.Role); role != "" && role != "all" {
 		query = query.Where("role = ?", role)
 	}
+	switch strings.TrimSpace(filter.Kind) {
+	case "member":
+		query = query.Where("role = ? AND COALESCE(remark, '') <> ? AND COALESCE(remark, '') NOT LIKE ?", "member", roomActivityRemark, "测试机器人专用账号%")
+	case "account":
+		query = query.Where("role IN ?", []string{"admin", "tenant", "agent"})
+	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		return nil, err
@@ -136,31 +150,45 @@ func (s *UserAdminService) List(filter UserListFilter) (*UserList, error) {
 	for _, row := range rows {
 		items = append(items, adminUser(row))
 	}
+	if err := s.enrichOwnership(items); err != nil {
+		return nil, err
+	}
 	return &UserList{Items: items, Total: total, Page: filter.Page, PageSize: filter.PageSize}, nil
 }
 
-func (s *UserAdminService) Stats() (*UserStats, error) {
+func (s *UserAdminService) Stats(kind string) (*UserStats, error) {
 	stats := &UserStats{}
 	base := s.db.Model(&user.User{})
+	applyKind := func(query *gorm.DB) *gorm.DB {
+		switch strings.TrimSpace(kind) {
+		case "member":
+			return query.Where("role = ? AND COALESCE(remark, '') <> ? AND COALESCE(remark, '') NOT LIKE ?", "member", roomActivityRemark, "测试机器人专用账号%")
+		case "account":
+			return query.Where("role IN ?", []string{"admin", "tenant", "agent"})
+		default:
+			return query
+		}
+	}
+	base = applyKind(base)
 	if err := base.Count(&stats.Total).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&user.User{}).Where("status = 1").Count(&stats.Active).Error; err != nil {
+	if err := applyKind(s.db.Model(&user.User{})).Where("status = 1").Count(&stats.Active).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&user.User{}).Where("status = 0").Count(&stats.Disabled).Error; err != nil {
+	if err := applyKind(s.db.Model(&user.User{})).Where("status = 0").Count(&stats.Disabled).Error; err != nil {
 		return nil, err
 	}
 	now := time.Now()
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	if err := s.db.Model(&user.User{}).Where("created_at >= ?", startOfDay).Count(&stats.NewToday).Error; err != nil {
+	if err := applyKind(s.db.Model(&user.User{})).Where("created_at >= ?", startOfDay).Count(&stats.NewToday).Error; err != nil {
 		return nil, err
 	}
 	if err := s.db.Model(&user.User{}).Where("role = ?", "admin").Count(&stats.Administrators).Error; err != nil {
 		return nil, err
 	}
 	var cents int64
-	if err := s.db.Model(&user.User{}).Select("COALESCE(SUM(balance_cents), 0)").Scan(&cents).Error; err != nil {
+	if err := applyKind(s.db.Model(&user.User{})).Select("COALESCE(SUM(balance_cents), 0)").Scan(&cents).Error; err != nil {
 		return nil, err
 	}
 	stats.TotalBalance = centsToAmount(cents)
@@ -173,7 +201,75 @@ func (s *UserAdminService) Get(id uint64) (*AdminUser, error) {
 		return nil, err
 	}
 	result := adminUser(row)
-	return &result, nil
+	items := []AdminUser{result}
+	if err := s.enrichOwnership(items); err != nil {
+		return nil, err
+	}
+	return &items[0], nil
+}
+
+func (s *UserAdminService) enrichOwnership(items []AdminUser) error {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]uint64, 0, len(items)*2)
+	for _, item := range items {
+		if item.ParentAgentID != nil {
+			ids = append(ids, *item.ParentAgentID)
+		}
+		if item.ParentTenantID != nil {
+			ids = append(ids, *item.ParentTenantID)
+		}
+	}
+	owners := map[uint64]user.User{}
+	if len(ids) > 0 {
+		var rows []user.User
+		if err := s.db.Select("user_id", "username", "nickname", "parent_tenant_id", "agent_room_code").Where("user_id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		for _, row := range rows {
+			owners[row.UserID] = row
+		}
+		for _, row := range rows {
+			if row.ParentTenantID != nil {
+				ids = append(ids, *row.ParentTenantID)
+			}
+		}
+		var more []user.User
+		if err := s.db.Select("user_id", "username", "nickname").Where("user_id IN ?", ids).Find(&more).Error; err != nil {
+			return err
+		}
+		for _, row := range more {
+			owners[row.UserID] = row
+		}
+	}
+	for index := range items {
+		item := &items[index]
+		prefix := "平台"
+		if item.Role == "tenant" {
+			prefix = defaultString(item.Nickname, item.Username)
+			item.TenantName = prefix
+		}
+		if item.ParentTenantID != nil {
+			if tenant, ok := owners[*item.ParentTenantID]; ok {
+				item.TenantName = defaultString(tenant.Nickname, tenant.Username)
+				prefix = item.TenantName
+			}
+		}
+		if item.ParentAgentID != nil {
+			if agent, ok := owners[*item.ParentAgentID]; ok {
+				item.AgentName = defaultString(agent.Nickname, agent.Username)
+				prefix = item.AgentName
+				if agent.ParentTenantID != nil {
+					if tenant, ok := owners[*agent.ParentTenantID]; ok {
+						item.TenantName = defaultString(tenant.Nickname, tenant.Username)
+					}
+				}
+			}
+		}
+		item.LoginIdentity = prefix + " / " + item.Username
+	}
+	return nil
 }
 
 func (s *UserAdminService) Create(input CreateAdminUserInput) (*AdminUser, error) {
@@ -182,14 +278,26 @@ func (s *UserAdminService) Create(input CreateAdminUserInput) (*AdminUser, error
 	if len(input.Username) < 3 || len(input.Username) > 50 {
 		return nil, apperrors.NewBusinessError("INVALID_USERNAME", "用户名长度应为 3–50 个字符")
 	}
-	if len(input.Password) < 6 {
-		return nil, apperrors.NewBusinessError("INVALID_PASSWORD", "密码至少需要 6 个字符")
-	}
-	if err := s.ensureUnique(0, input.Username, input.Email); err != nil {
-		return nil, err
+	if err := utils.ValidatePassword(input.Password); err != nil {
+		return nil, apperrors.NewBusinessError("INVALID_PASSWORD", "密码长度需为 8–72 个字符")
 	}
 	role, err := validRole(input.Role)
 	if err != nil {
+		return nil, err
+	}
+	loginScope := platformLoginScope
+	var parentAgentID *uint64
+	var parentTenantID *uint64
+	if role == "member" && input.ParentAgentID > 0 {
+		scope, tenantID, scopeErr := loginScopeForAgent(s.db, input.ParentAgentID)
+		if scopeErr != nil {
+			return nil, scopeErr
+		}
+		loginScope = scope
+		parentAgentID = &input.ParentAgentID
+		parentTenantID = tenantID
+	}
+	if err := s.ensureUnique(0, loginScope, input.Username, input.Email); err != nil {
 		return nil, err
 	}
 	risk, err := validRisk(input.RiskLevel)
@@ -200,7 +308,7 @@ func (s *UserAdminService) Create(input CreateAdminUserInput) (*AdminUser, error
 	if err != nil {
 		return nil, err
 	}
-	row := user.User{Username: input.Username, Password: hash, Email: input.Email, Nickname: strings.TrimSpace(input.Nickname), Phone: strings.TrimSpace(input.Phone), Role: role, Remark: strings.TrimSpace(input.Remark), RiskLevel: risk, Status: normalizeStatus(input.Status)}
+	row := user.User{Username: input.Username, LoginScope: loginScope, Password: hash, Email: input.Email, Nickname: strings.TrimSpace(input.Nickname), Phone: strings.TrimSpace(input.Phone), Role: role, Remark: strings.TrimSpace(input.Remark), RiskLevel: risk, Status: normalizeStatus(input.Status), ParentAgentID: parentAgentID, ParentTenantID: parentTenantID}
 	if err := s.db.Create(&row).Error; err != nil {
 		return nil, err
 	}
@@ -214,7 +322,7 @@ func (s *UserAdminService) Update(id uint64, input UpdateAdminUserInput) (*Admin
 		return nil, err
 	}
 	input.Email = strings.TrimSpace(input.Email)
-	if err := s.ensureUnique(id, "", input.Email); err != nil {
+	if err := s.ensureUnique(id, row.LoginScope, "", input.Email); err != nil {
 		return nil, err
 	}
 	role, err := validRole(input.Role)
@@ -225,27 +333,50 @@ func (s *UserAdminService) Update(id uint64, input UpdateAdminUserInput) (*Admin
 	if err != nil {
 		return nil, err
 	}
-	updates := map[string]any{"email": input.Email, "nickname": strings.TrimSpace(input.Nickname), "phone": strings.TrimSpace(input.Phone), "role": role, "remark": strings.TrimSpace(input.Remark), "risk_level": risk, "status": normalizeStatus(input.Status)}
-	if err := s.db.Model(&row).Updates(updates).Error; err != nil {
+	nickname := strings.TrimSpace(input.Nickname)
+	updates := map[string]any{"email": input.Email, "nickname": nickname, "phone": strings.TrimSpace(input.Phone), "role": role, "remark": strings.TrimSpace(input.Remark), "risk_level": risk, "status": normalizeStatus(input.Status)}
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&row).Updates(updates).Error; err != nil {
+			return err
+		}
+		return tx.Model(&chat.Message{}).Where("user_id = ?", id).Update("nickname", nickname).Error
+	}); err != nil {
 		return nil, err
 	}
 	return s.Get(id)
 }
 
 func (s *UserAdminService) SetStatus(id uint64, status int) (*AdminUser, error) {
-	var row user.User
-	if err := s.db.First(&row, id).Error; err != nil {
-		return nil, err
-	}
-	if err := s.db.Model(&row).Update("status", normalizeStatus(status)).Error; err != nil {
+	return s.setStatus(id, status, nil)
+}
+
+// SetStatusOwned performs the ownership check while the user row is locked.
+// This prevents a former room agent from changing a member after an admin has
+// concurrently reassigned that member to another room.
+func (s *UserAdminService) SetStatusOwned(id, ownerAgentID uint64, status int) (*AdminUser, error) {
+	return s.setStatus(id, status, &ownerAgentID)
+}
+
+func (s *UserAdminService) setStatus(id uint64, status int, ownerAgentID *uint64) (*AdminUser, error) {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var row user.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, id).Error; err != nil {
+			return err
+		}
+		if err := requireRoomOwnership(row, ownerAgentID); err != nil {
+			return err
+		}
+		return tx.Model(&row).Update("status", normalizeStatus(status)).Error
+	})
+	if err != nil {
 		return nil, err
 	}
 	return s.Get(id)
 }
 
 func (s *UserAdminService) ResetPassword(id uint64, password string) error {
-	if len(password) < 6 {
-		return apperrors.NewBusinessError("INVALID_PASSWORD", "密码至少需要 6 个字符")
+	if err := utils.ValidatePassword(password); err != nil {
+		return apperrors.NewBusinessError("INVALID_PASSWORD", "密码长度需为 8–72 个字符")
 	}
 	hash, err := utils.HashPassword(password)
 	if err != nil {
@@ -262,6 +393,16 @@ func (s *UserAdminService) ResetPassword(id uint64, password string) error {
 }
 
 func (s *UserAdminService) AdjustBalance(id uint64, amount float64, remark, operator string) (*AdminUser, error) {
+	return s.adjustBalance(id, amount, remark, operator, nil)
+}
+
+// AdjustBalanceOwned is the room-agent variant. The ownership check, balance
+// change and ledger insert are deliberately one locked transaction.
+func (s *UserAdminService) AdjustBalanceOwned(id, ownerAgentID uint64, amount float64, remark, operator string) (*AdminUser, error) {
+	return s.adjustBalance(id, amount, remark, operator, &ownerAgentID)
+}
+
+func (s *UserAdminService) adjustBalance(id uint64, amount float64, remark, operator string, ownerAgentID *uint64) (*AdminUser, error) {
 	amountCents := int64(math.Round(amount * 100))
 	if amountCents == 0 {
 		return nil, apperrors.NewBusinessError("INVALID_AMOUNT", "调整金额不能为 0")
@@ -272,6 +413,9 @@ func (s *UserAdminService) AdjustBalance(id uint64, amount float64, remark, oper
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var row user.User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, id).Error; err != nil {
+			return err
+		}
+		if err := requireRoomOwnership(row, ownerAgentID); err != nil {
 			return err
 		}
 		after := row.BalanceCents + amountCents
@@ -290,6 +434,13 @@ func (s *UserAdminService) AdjustBalance(id uint64, amount float64, remark, oper
 	return s.Get(id)
 }
 
+func requireRoomOwnership(account user.User, ownerAgentID *uint64) error {
+	if ownerAgentID != nil && (account.ParentAgentID == nil || *account.ParentAgentID != *ownerAgentID) {
+		return apperrors.NewBusinessError("FORBIDDEN", "该用户不属于当前房间")
+	}
+	return nil
+}
+
 func (s *UserAdminService) BalanceHistory(id uint64, limit int) ([]BalanceRecord, error) {
 	if limit < 1 || limit > 100 {
 		limit = 20
@@ -300,7 +451,7 @@ func (s *UserAdminService) BalanceHistory(id uint64, limit int) ([]BalanceRecord
 	}
 	result := make([]BalanceRecord, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, BalanceRecord{ID: row.ID, UserID: row.UserID, Amount: centsToAmount(row.AmountCents), Before: centsToAmount(row.BeforeCents), After: centsToAmount(row.AfterCents), Type: row.Type, Remark: row.Remark, Operator: row.Operator, CreatedAt: row.CreatedAt})
+		result = append(result, BalanceRecord{ID: row.ID, UserID: row.UserID, Reference: row.Reference, Amount: centsToAmount(row.AmountCents), Before: centsToAmount(row.BeforeCents), After: centsToAmount(row.AfterCents), Type: row.Type, Remark: row.Remark, Operator: row.Operator, CreatedAt: row.CreatedAt})
 	}
 	return result, nil
 }
@@ -325,7 +476,7 @@ func (s *UserAdminService) BalanceHistoryPage(id uint64, limit int, beforeID uin
 	}
 	items := make([]BalanceRecord, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, BalanceRecord{ID: row.ID, UserID: row.UserID, Amount: centsToAmount(row.AmountCents), Before: centsToAmount(row.BeforeCents), After: centsToAmount(row.AfterCents), Type: row.Type, Remark: row.Remark, Operator: row.Operator, CreatedAt: row.CreatedAt})
+		items = append(items, BalanceRecord{ID: row.ID, UserID: row.UserID, Reference: row.Reference, Amount: centsToAmount(row.AmountCents), Before: centsToAmount(row.BeforeCents), After: centsToAmount(row.AfterCents), Type: row.Type, Remark: row.Remark, Operator: row.Operator, CreatedAt: row.CreatedAt})
 	}
 	page := &BalanceHistoryPage{Items: items, HasMore: hasMore}
 	if len(items) > 0 {
@@ -334,18 +485,10 @@ func (s *UserAdminService) BalanceHistoryPage(id uint64, limit int, beforeID uin
 	return page, nil
 }
 
-func (s *UserAdminService) ensureUnique(excludeID uint64, username, email string) error {
+func (s *UserAdminService) ensureUnique(excludeID uint64, scope, username, email string) error {
 	if username != "" {
-		query := s.db.Model(&user.User{}).Where("username = ?", username)
-		if excludeID > 0 {
-			query = query.Where("user_id <> ?", excludeID)
-		}
-		var count int64
-		if err := query.Count(&count).Error; err != nil {
+		if err := ensureUsernameInScope(s.db, defaultString(scope, platformLoginScope), username, excludeID); err != nil {
 			return err
-		}
-		if count > 0 {
-			return apperrors.NewBusinessError("USERNAME_EXISTS", "用户名已存在")
 		}
 	}
 	if email != "" {
@@ -369,7 +512,7 @@ func validRole(value string) (string, error) {
 		value = "member"
 	}
 	switch value {
-	case "member", "agent", "admin":
+	case "member", "agent", "tenant", "admin":
 		return value, nil
 	default:
 		return "", apperrors.NewBusinessError("INVALID_ROLE", "账号角色不正确")
@@ -400,7 +543,7 @@ func adminUser(row user.User) AdminUser {
 		ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone,
 		Role: defaultString(row.Role, "member"), Remark: row.Remark, RiskLevel: defaultString(row.RiskLevel, "normal"),
 		Balance: centsToAmount(row.BalanceCents), FlyMode: defaultString(row.FlyMode, "inherit"), FlyRate: row.FlyRate,
-		AgentRoomCode: row.AgentRoomCode, ParentAgentID: row.ParentAgentID,
+		AgentRoomCode: row.AgentRoomCode, ParentAgentID: row.ParentAgentID, ParentTenantID: row.ParentTenantID,
 		Status: row.Status, LastLoginAt: row.LastLoginAt, LoginCount: row.LoginCount, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }

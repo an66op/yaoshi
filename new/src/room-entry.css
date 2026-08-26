@@ -142,6 +142,12 @@
   color: #d55c50;
   font-size: 10px;
 }
+.room-entry-success {
+  margin: -4px 0 0;
+  color: #168a75;
+  font-size: 10px;
+  line-height: 1.55;
+}
 .room-entry-submit {
   display: flex;
   justify-content: center;

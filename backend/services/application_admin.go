@@ -1,6 +1,7 @@
 package services
 
 import (
+	"backend/accesscontrol"
 	"backend/data/models/application"
 	"backend/data/models/user"
 	apperrors "backend/errors"
@@ -24,6 +25,10 @@ type AdminApplication struct {
 	PaymentType         string     `json:"payment_type"`
 	PaymentAccountID    uint64     `json:"payment_account_id"`
 	PaymentAccountLabel string     `json:"payment_account_label"`
+	RoomScope           string     `json:"-"`
+	TargetRoomCode      string     `json:"target_room_code,omitempty"`
+	GameID              string     `json:"game_id,omitempty"`
+	ChatMessageID       uint64     `json:"-"`
 	RequestedAmount     float64    `json:"requested_amount"`
 	ReceivedAmount      float64    `json:"received_amount"`
 	Remark              string     `json:"remark"`
@@ -60,6 +65,10 @@ type CreateApplicationInput struct {
 	RequestType      string
 	PaymentType      string
 	PaymentAccountID uint64
+	AllowManualDebit bool
+	RoomScope        string
+	GameID           string
+	ChatMessageID    uint64
 	Amount           float64
 	Remark           string
 }
@@ -90,9 +99,7 @@ func (s *ApplicationAdminService) List(filter ApplicationFilter) (*ApplicationLi
 	if filter.Status != "" && filter.Status != "all" {
 		query = query.Where("status = ?", filter.Status)
 	}
-	if filter.RequestType != "" && filter.RequestType != "all" {
-		query = query.Where("request_type = ?", filter.RequestType)
-	}
+	query = filterApplicationCategory(query, filter.RequestType)
 	if filter.Date != "" {
 		if day, err := time.ParseInLocation("2006-01-02", filter.Date, time.Local); err == nil {
 			query = query.Where("created_at >= ? AND created_at < ?", day, day.AddDate(0, 0, 1))
@@ -168,13 +175,17 @@ func (s *ApplicationAdminService) Create(input CreateApplicationInput) (*AdminAp
 	if account.Status != 1 {
 		return nil, apperrors.NewBusinessError("USER_DISABLED", "停用用户不能创建申请")
 	}
+	roomScope := betRoomScope(account)
+	if requestedScope := strings.TrimSpace(input.RoomScope); requestedScope != "" && requestedScope != roomScope {
+		return nil, apperrors.NewBusinessError("FORBIDDEN", "申请所属房间与当前账号不一致")
+	}
 	payment := strings.TrimSpace(input.PaymentType)
 	if payment == "" {
 		payment = "manual"
 	}
 	paymentAccountID := uint64(0)
 	paymentAccountLabel := ""
-	if requestType == "debit" {
+	if requestType == "debit" && !(input.AllowManualDebit && input.PaymentAccountID == 0) {
 		paymentAccount, err := NewMemberPaymentAccountService(s.db).GetOwned(account.UserID, input.PaymentAccountID)
 		if err != nil {
 			return nil, err
@@ -183,7 +194,12 @@ func (s *ApplicationAdminService) Create(input CreateApplicationInput) (*AdminAp
 		paymentAccountID = paymentAccount.ID
 		paymentAccountLabel = paymentAccount.Label + " · " + maskPaymentAccountNo(paymentAccount.AccountNo)
 	}
-	row := application.Application{UserID: account.UserID, Username: account.Username, AccountType: defaultString(account.Role, "member"), RequestType: requestType, PaymentType: payment, PaymentAccountID: paymentAccountID, PaymentAccountLabel: paymentAccountLabel, RequestedCents: amountCents, Remark: strings.TrimSpace(input.Remark), Status: "pending"}
+	row := application.Application{
+		UserID: account.UserID, Username: account.Username, AccountType: defaultString(account.Role, "member"),
+		RequestType: requestType, PaymentType: payment, PaymentAccountID: paymentAccountID, PaymentAccountLabel: paymentAccountLabel,
+		RoomScope: roomScope, GameID: strings.TrimSpace(input.GameID), ChatMessageID: input.ChatMessageID,
+		RequestedCents: amountCents, Remark: strings.TrimSpace(input.Remark), Status: "pending",
+	}
 	if err := s.db.Create(&row).Error; err != nil {
 		return nil, err
 	}
@@ -192,6 +208,17 @@ func (s *ApplicationAdminService) Create(input CreateApplicationInput) (*AdminAp
 }
 
 func (s *ApplicationAdminService) Review(id uint64, input ReviewApplicationInput) (*AdminApplication, error) {
+	return s.review(id, input, nil)
+}
+
+// ReviewOwned is used by room agents. Ownership comes from the immutable room
+// snapshot on the application, not from the member's current room.  Both rows
+// are locked so legacy requests without a snapshot still have a safe fallback.
+func (s *ApplicationAdminService) ReviewOwned(id, ownerAgentID uint64, input ReviewApplicationInput) (*AdminApplication, error) {
+	return s.review(id, input, &ownerAgentID)
+}
+
+func (s *ApplicationAdminService) review(id uint64, input ReviewApplicationInput, ownerAgentID *uint64) (*AdminApplication, error) {
 	if input.Decision != "approved" && input.Decision != "rejected" {
 		return nil, apperrors.NewBusinessError("INVALID_DECISION", "审核结果不正确")
 	}
@@ -203,6 +230,19 @@ func (s *ApplicationAdminService) Review(id uint64, input ReviewApplicationInput
 		if item.Status != "pending" {
 			return apperrors.NewBusinessError("ALREADY_REVIEWED", "该申请已经审核，不能重复操作")
 		}
+		var account user.User
+		accountLoaded := false
+		if ownerAgentID != nil || (input.Decision == "approved" && (item.RequestType == "credit" || item.RequestType == "debit" || item.RequestType == "agent" || item.RequestType == "join")) {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, item.UserID).Error; err != nil {
+				return err
+			}
+			accountLoaded = true
+			if ownerAgentID != nil {
+				if err := requireApplicationOwnership(item, account, *ownerAgentID); err != nil {
+					return err
+				}
+			}
+		}
 		now := time.Now().UTC()
 		receivedCents := int64(math.Round(input.ReceivedAmount * 100))
 		if input.Decision == "rejected" {
@@ -212,9 +252,8 @@ func (s *ApplicationAdminService) Review(id uint64, input ReviewApplicationInput
 			return apperrors.NewBusinessError("INVALID_AMOUNT", "到账金额超出限制")
 		}
 		if input.Decision == "approved" && (item.RequestType == "credit" || item.RequestType == "debit") {
-			var account user.User
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, item.UserID).Error; err != nil {
-				return err
+			if !accountLoaded {
+				return fmt.Errorf("review account lock was not acquired")
 			}
 			change := item.RequestedCents
 			if item.RequestType == "credit" {
@@ -235,13 +274,50 @@ func (s *ApplicationAdminService) Review(id uint64, input ReviewApplicationInput
 			if err := tx.Model(&account).Update("balance_cents", after).Error; err != nil {
 				return err
 			}
-			record := user.BalanceTransaction{UserID: account.UserID, AmountCents: change, BeforeCents: account.BalanceCents, AfterCents: after, Type: "application_" + item.RequestType, Remark: "申请 #" + formatUint(item.ID) + " 审核通过", Operator: defaultString(input.Operator, "后台管理员")}
+			record := user.BalanceTransaction{UserID: account.UserID, Reference: "application:" + formatUint(item.ID) + ":" + item.RequestType, AmountCents: change, BeforeCents: account.BalanceCents, AfterCents: after, Type: "application_" + item.RequestType, Remark: "申请 #" + formatUint(item.ID) + " 审核通过", Operator: defaultString(input.Operator, "后台管理员")}
 			if err := tx.Create(&record).Error; err != nil {
 				return err
 			}
 		}
 		if input.Decision == "approved" && item.RequestType == "agent" {
-			if err := tx.Model(&user.User{}).Where("user_id = ?", item.UserID).Update("role", "agent").Error; err != nil {
+			if !accountLoaded {
+				return fmt.Errorf("review account lock was not acquired")
+			}
+			if err := tx.Model(&account).Update("role", "agent").Error; err != nil {
+				return err
+			}
+		}
+		if input.Decision == "approved" && item.RequestType == "join" {
+			if !accountLoaded {
+				return fmt.Errorf("join review account lock was not acquired")
+			}
+			targetAgentID, ok := agentIDFromScope(item.RoomScope)
+			if !ok {
+				return apperrors.NewBusinessError("INVALID_ROOM_SCOPE", "入房申请缺少有效目标房间")
+			}
+			var agent user.User
+			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("user_id = ? AND role = ? AND status = ?", targetAgentID, "agent", 1).First(&agent).Error; err != nil {
+				return apperrors.NewBusinessError("ROOM_NOT_FOUND", "目标房间已停用或不存在")
+			}
+			active, err := accesscontrol.AgentHierarchyActive(tx, agent)
+			if err != nil {
+				return err
+			}
+			if !active {
+				return apperrors.NewBusinessError("ROOM_NOT_FOUND", "目标房间所属租户已停用")
+			}
+			updates := map[string]any{"parent_agent_id": targetAgentID}
+			loginScope := agentLoginScope(targetAgentID)
+			if err := ensureUsernameInScope(tx, loginScope, account.Username, account.UserID); err != nil {
+				return err
+			}
+			updates["login_scope"] = loginScope
+			if agent.ParentTenantID != nil {
+				updates["parent_tenant_id"] = *agent.ParentTenantID
+			} else {
+				updates["parent_tenant_id"] = nil
+			}
+			if err := tx.Model(&account).Updates(updates).Error; err != nil {
 				return err
 			}
 		}
@@ -255,11 +331,35 @@ func (s *ApplicationAdminService) Review(id uint64, input ReviewApplicationInput
 		return nil, err
 	}
 	notifyMemberApplication(s.db, &applicationReviewNotify{
-		UserID:   result.UserID,
-		Decision: input.Decision,
-		Remark:   applicationReviewMessage(*result),
+		UserID:          result.UserID,
+		Decision:        input.Decision,
+		Remark:          applicationReviewMessage(*result),
+		RequestType:     result.RequestType,
+		RequestedAmount: result.RequestedAmount,
+		ReceivedAmount:  result.ReceivedAmount,
+		RoomScope:       result.RoomScope,
+		GameID:          result.GameID,
+		ApplicationID:   result.ID,
 	})
 	return result, nil
+}
+
+func applicationBelongsToAgent(item application.Application, account user.User, agentID uint64) bool {
+	snapshot := strings.TrimSpace(item.RoomScope)
+	if snapshot != "" {
+		return snapshot == fmt.Sprintf("agent:%d", agentID)
+	}
+	// Compatibility for rows created before room snapshots were introduced.
+	// They are visible only to the member's current room and are never widened
+	// to every agent.
+	return account.ParentAgentID != nil && *account.ParentAgentID == agentID
+}
+
+func requireApplicationOwnership(item application.Application, account user.User, agentID uint64) error {
+	if !applicationBelongsToAgent(item, account, agentID) {
+		return apperrors.NewBusinessError("FORBIDDEN", "该申请不属于当前房间")
+	}
+	return nil
 }
 
 func applicationReviewMessage(app AdminApplication) string {
@@ -289,8 +389,25 @@ func validRequestType(value string) (string, error) {
 	}
 }
 
+// filterApplicationCategory keeps the three operator-facing queues separate
+// without inventing a second money-settlement path. Entertainment transfers
+// remain credit/debit applications and are identified by their provider id,
+// while ordinary wallet transfers have no game id.
+func filterApplicationCategory(query *gorm.DB, value string) *gorm.DB {
+	switch strings.TrimSpace(value) {
+	case "", "all":
+		return query
+	case "wallet":
+		return query.Where("request_type IN ? AND (game_id = '' OR game_id IS NULL)", []string{"credit", "debit"})
+	case "entertainment":
+		return query.Where("request_type IN ? AND game_id <> ''", []string{"credit", "debit"})
+	default:
+		return query.Where("request_type = ?", value)
+	}
+}
+
 func adminApplication(row application.Application) AdminApplication {
-	return AdminApplication{ID: row.ID, UserID: row.UserID, Username: row.Username, AccountType: row.AccountType, RequestType: row.RequestType, PaymentType: row.PaymentType, PaymentAccountID: row.PaymentAccountID, PaymentAccountLabel: row.PaymentAccountLabel, RequestedAmount: centsToAmount(row.RequestedCents), ReceivedAmount: centsToAmount(row.ReceivedCents), Remark: row.Remark, Status: row.Status, Operator: row.Operator, ReviewRemark: row.ReviewRemark, ReviewedAt: row.ReviewedAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return AdminApplication{ID: row.ID, UserID: row.UserID, Username: row.Username, AccountType: row.AccountType, RequestType: row.RequestType, PaymentType: row.PaymentType, PaymentAccountID: row.PaymentAccountID, PaymentAccountLabel: row.PaymentAccountLabel, RoomScope: row.RoomScope, TargetRoomCode: row.TargetRoomCode, GameID: row.GameID, ChatMessageID: row.ChatMessageID, RequestedAmount: centsToAmount(row.RequestedCents), ReceivedAmount: centsToAmount(row.ReceivedCents), Remark: row.Remark, Status: row.Status, Operator: row.Operator, ReviewRemark: row.ReviewRemark, ReviewedAt: row.ReviewedAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
 func formatUint(value uint64) string {

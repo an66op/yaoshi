@@ -1,12 +1,15 @@
 package services
 
 import (
+	modeluser "backend/data/models/user"
 	"backend/data/models/wallet"
 	apperrors "backend/errors"
+	"backend/utils"
 	"strings"
 	"unicode/utf8"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type MemberPaymentAccountService struct{ db *gorm.DB }
@@ -41,7 +44,11 @@ func (s *MemberPaymentAccountService) List(userID uint64) ([]MemberPaymentAccoun
 	}
 	items := make([]MemberPaymentAccountView, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, memberPaymentAccountView(row))
+		view, err := memberPaymentAccountView(row)
+		if err != nil {
+			return nil, apperrors.NewSystemError("PAYMENT_ACCOUNT_DECRYPT_FAILED", "读取收款方式失败", err)
+		}
+		items = append(items, view)
 	}
 	return items, nil
 }
@@ -51,8 +58,22 @@ func (s *MemberPaymentAccountService) Create(userID uint64, input CreateMemberPa
 	if err != nil {
 		return nil, err
 	}
+	encryptedAccountNo, err := utils.EncryptSensitive(accountNo)
+	if err != nil {
+		return nil, apperrors.NewSystemError("PAYMENT_ACCOUNT_ENCRYPT_FAILED", "保存收款方式失败", err)
+	}
 	var created wallet.MemberPaymentAccount
 	err = s.db.Transaction(func(tx *gorm.DB) error {
+		// Serialize all account-list mutations for one member.  Without this
+		// lock two concurrent "first account" requests can both observe count=0
+		// and leave two defaults behind.
+		var owner modeluser.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("user_id").First(&owner, userID).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+			}
+			return err
+		}
 		var count int64
 		if err := tx.Model(&wallet.MemberPaymentAccount{}).Where("user_id = ?", userID).Count(&count).Error; err != nil {
 			return err
@@ -65,24 +86,58 @@ func (s *MemberPaymentAccountService) Create(userID uint64, input CreateMemberPa
 		}
 		created = wallet.MemberPaymentAccount{
 			UserID: userID, AccountType: accountType, Label: label, AccountName: accountName,
-			AccountNo: accountNo, HolderName: holderName, IsDefault: isDefault,
+			AccountNo: encryptedAccountNo, HolderName: holderName, IsDefault: isDefault,
 		}
 		return tx.Create(&created).Error
 	})
 	if err != nil {
 		return nil, apperrors.NewSystemError("PAYMENT_ACCOUNT_CREATE_FAILED", "新增收款方式失败", err)
 	}
-	view := memberPaymentAccountView(created)
+	view, err := memberPaymentAccountView(created)
+	if err != nil {
+		return nil, apperrors.NewSystemError("PAYMENT_ACCOUNT_DECRYPT_FAILED", "读取收款方式失败", err)
+	}
 	return &view, nil
 }
 
 func (s *MemberPaymentAccountService) Delete(userID, id uint64) error {
-	result := s.db.Where("id = ? AND user_id = ?", id, userID).Delete(&wallet.MemberPaymentAccount{})
-	if result.Error != nil {
-		return apperrors.NewSystemError("PAYMENT_ACCOUNT_DELETE_FAILED", "删除收款方式失败", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return apperrors.NewBusinessError("PAYMENT_ACCOUNT_NOT_FOUND", "收款方式不存在")
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var owner modeluser.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("user_id").First(&owner, userID).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+			}
+			return err
+		}
+		var row wallet.MemberPaymentAccount
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", id, userID).First(&row).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return apperrors.NewBusinessError("PAYMENT_ACCOUNT_NOT_FOUND", "收款方式不存在")
+			}
+			return err
+		}
+		if err := tx.Delete(&row).Error; err != nil {
+			return err
+		}
+		if !row.IsDefault {
+			return nil
+		}
+		// Keep the product invariant "accounts exist => one default" after a
+		// member removes the current default.
+		var replacement wallet.MemberPaymentAccount
+		if err := tx.Where("user_id = ?", userID).Order("id DESC").First(&replacement).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil
+			}
+			return err
+		}
+		return tx.Model(&replacement).Update("is_default", true).Error
+	})
+	if err != nil {
+		if _, ok := err.(*apperrors.AppError); ok {
+			return err
+		}
+		return apperrors.NewSystemError("PAYMENT_ACCOUNT_DELETE_FAILED", "删除收款方式失败", err)
 	}
 	return nil
 }
@@ -98,6 +153,11 @@ func (s *MemberPaymentAccountService) GetOwned(userID, id uint64) (*wallet.Membe
 		}
 		return nil, apperrors.NewSystemError("PAYMENT_ACCOUNT_READ_FAILED", "读取收款方式失败", err)
 	}
+	plainAccountNo, err := utils.DecryptSensitive(row.AccountNo)
+	if err != nil {
+		return nil, apperrors.NewSystemError("PAYMENT_ACCOUNT_DECRYPT_FAILED", "读取收款方式失败", err)
+	}
+	row.AccountNo = plainAccountNo
 	return &row, nil
 }
 
@@ -125,11 +185,15 @@ func validateMemberPaymentAccount(input CreateMemberPaymentAccountInput) (string
 	return accountType, label, accountName, accountNo, holderName, nil
 }
 
-func memberPaymentAccountView(row wallet.MemberPaymentAccount) MemberPaymentAccountView {
+func memberPaymentAccountView(row wallet.MemberPaymentAccount) (MemberPaymentAccountView, error) {
+	accountNo, err := utils.DecryptSensitive(row.AccountNo)
+	if err != nil {
+		return MemberPaymentAccountView{}, err
+	}
 	return MemberPaymentAccountView{
 		ID: row.ID, AccountType: row.AccountType, Label: row.Label, AccountName: row.AccountName,
-		AccountNo: maskPaymentAccountNo(row.AccountNo), HolderName: row.HolderName, IsDefault: row.IsDefault,
-	}
+		AccountNo: maskPaymentAccountNo(accountNo), HolderName: row.HolderName, IsDefault: row.IsDefault,
+	}, nil
 }
 
 func maskPaymentAccountNo(value string) string {

@@ -13,21 +13,21 @@ import (
 type ActivityAdminService struct{ db *gorm.DB }
 
 type ActivityView struct {
-	ID             uint64     `json:"id"`
-	Type           string     `json:"type"`
-	Title          string     `json:"title"`
-	Subtitle       string     `json:"subtitle"`
-	Status         string     `json:"status"`
-	Cover          string     `json:"cover"`
-	Reward         float64    `json:"reward"`
-	PoolTotal      float64    `json:"pool_total,omitempty"`
-	PoolRemaining  float64    `json:"pool_remaining,omitempty"`
-	Config         any        `json:"config"`
-	Participants   int64      `json:"participants"`
-	SortOrder      int        `json:"sort_order"`
-	StartsAt       *time.Time `json:"starts_at"`
-	EndsAt         *time.Time `json:"ends_at"`
-	CreatedAt      time.Time  `json:"created_at"`
+	ID            uint64     `json:"id"`
+	Type          string     `json:"type"`
+	Title         string     `json:"title"`
+	Subtitle      string     `json:"subtitle"`
+	Status        string     `json:"status"`
+	Cover         string     `json:"cover"`
+	Reward        float64    `json:"reward"`
+	PoolTotal     float64    `json:"pool_total,omitempty"`
+	PoolRemaining float64    `json:"pool_remaining,omitempty"`
+	Config        any        `json:"config"`
+	Participants  int64      `json:"participants"`
+	SortOrder     int        `json:"sort_order"`
+	StartsAt      *time.Time `json:"starts_at"`
+	EndsAt        *time.Time `json:"ends_at"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 type ActivityPayload struct {
@@ -41,7 +41,7 @@ type ActivityPayload struct {
 	SortOrder int     `json:"sort_order"`
 }
 
-var activityTypes = map[string]string{"checkin": "签到", "banner": "轮播", "invite": "邀请", "redpacket": "红包"}
+var activityTypes = map[string]string{"checkin": "签到", "banner": "轮播", "promotion": "推广活动", "invite": "邀请", "redpacket": "红包"}
 
 func NewActivityAdminService(db *gorm.DB) *ActivityAdminService { return &ActivityAdminService{db: db} }
 
@@ -131,20 +131,28 @@ func (s *ActivityAdminService) Delete(id uint64) error {
 }
 
 func (s *ActivityAdminService) ensureDefaults() error {
-	var count int64
-	if err := s.db.Model(&activity.Activity{}).Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
 	defaults := []activity.Activity{
 		{Type: "checkin", Title: "每日签到", Subtitle: "连续签到领取积分", Status: "active", RewardCents: 100, Participants: 128, SortOrder: 1, ConfigJSON: `{"days":7}`},
 		{Type: "banner", Title: "首页轮播", Subtitle: "运营位轮播图", Status: "active", SortOrder: 2, ConfigJSON: `{"slides":[]}`},
 		{Type: "invite", Title: "邀请有礼", Subtitle: "邀请好友双方得奖励", Status: "active", RewardCents: 500, SortOrder: 3, ConfigJSON: `{"bonus":5}`},
 		{Type: "redpacket", Title: "幸运红包", Subtitle: "开奖聊天室随机红包", Status: "active", RewardCents: 888, PoolTotalCents: 8800, PoolRemainingCents: 8800, Participants: 56, SortOrder: 4, ConfigJSON: `{"pool":88,"min_amount":1,"max_amount":8.8}`},
+		{Type: "promotion", Title: "幸运大转盘", Subtitle: "单转最高可获 288.88 积分", Status: "active", Cover: "/images/activities/lucky-wheel.jpg", SortOrder: 101, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/welfare"}`},
+		{Type: "promotion", Title: "加拿大28玩法上线", Subtitle: "全新加拿大28玩法现已开放", Status: "active", Cover: "/images/activities/canada-28-launch.jpg", SortOrder: 102, ConfigJSON: `{"action_type":"internal","action_url":"/games/canada-28"}`},
+		{Type: "promotion", Title: "连续签到七天送彩金", Subtitle: "连续签到，天天领取积分好礼", Status: "active", Cover: "/images/activities/seven-day-checkin.jpg", SortOrder: 103, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/welfare"}`},
+		{Type: "promotion", Title: "98Pay首充礼", Subtitle: "积分首充活动", Status: "active", Cover: "/images/activities/98pay-first-credit.jpg", SortOrder: 104, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/credit"}`},
+		{Type: "promotion", Title: "爆庄来袭", Subtitle: "全场福利活动", Status: "active", Cover: "/images/activities/bonus-arrival.jpg", SortOrder: 105, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/welfare"}`},
+		{Type: "promotion", Title: "每周累计流水送彩金", Subtitle: "每周累计流水领取专属奖励", Status: "active", Cover: "/images/activities/weekly-turnover.jpg", SortOrder: 106, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/rebate"}`},
+		{Type: "promotion", Title: "天天返水", Subtitle: "每日返水福利活动", Status: "active", Cover: "/images/activities/daily-rebate.jpg", SortOrder: 107, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/rebate"}`},
+		{Type: "promotion", Title: "组合及单点连中奖励", Subtitle: "组合及单点连中享额外奖励", Status: "active", Cover: "/images/activities/streak-reward.jpg", SortOrder: 108, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/welfare"}`},
+		{Type: "promotion", Title: "全民代理计划", Subtitle: "邀请好友，查看代理奖励计划", Status: "active", Cover: "/images/activities/agent-plan.jpg", SortOrder: 109, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/invite"}`},
 	}
-	return s.db.Create(&defaults).Error
+	for index := range defaults {
+		row := defaults[index]
+		if err := s.db.Where("type = ? AND title = ?", row.Type, row.Title).FirstOrCreate(&row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateActivity(input ActivityPayload) (*activity.Activity, error) {

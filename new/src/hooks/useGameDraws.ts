@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { lotteryApi, type DrawResult } from '../api/lottery'
-import { WS_EVENT, type WsEvent } from './useWebSocket'
+import { WS_EVENT, type WsEvent, useWebSocketConnected } from './useWebSocket'
 
-export function useGameDraws(gameId: string, limit = 12, pollMs = 12_000) {
+export function useGameDraws(gameId: string, limit = 12, recoveryMs = 10_000) {
+  const realtimeConnected = useWebSocketConnected()
   const [draws, setDraws] = useState<DrawResult[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -30,13 +31,13 @@ export function useGameDraws(gameId: string, limit = 12, pollMs = 12_000) {
     }
     void load()
     window.addEventListener(WS_EVENT, onWs)
-    const timer = window.setInterval(() => void load(), pollMs)
+    const timer = realtimeConnected ? 0 : window.setInterval(() => void load(), recoveryMs)
     return () => {
       cancelled = true
       window.removeEventListener(WS_EVENT, onWs)
-      window.clearInterval(timer)
+      if (timer) window.clearInterval(timer)
     }
-  }, [gameId, limit, pollMs])
+  }, [gameId, limit, realtimeConnected, recoveryMs])
 
   return { draws, loading, error }
 }

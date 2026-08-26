@@ -2,6 +2,10 @@
   min-height: 400px;
 }
 
+.packet-modal.packet-result-modal {
+  min-height: 365px;
+}
+
 .packet-modal-top {
   gap: 5px;
   padding-top: 34px;
@@ -26,4 +30,101 @@
   width: 46px;
   height: 46px;
   filter: drop-shadow(0 3px 2px #a8402e70);
+}
+
+.packet-error {
+  position: relative;
+  z-index: 2;
+  width: calc(100% - 46px);
+  margin: 10px auto -15px;
+  padding: 7px 10px;
+  border: 1px solid #ffe0b5aa;
+  border-radius: 9px;
+  background: #7b1f2480;
+  color: #fff3dd;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.packet-result {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  justify-items: center;
+  margin-top: 8px;
+}
+
+.packet-result > small {
+  color: #ffe9c1;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+
+.packet-result h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-top: 5px;
+}
+
+.packet-result h2 strong {
+  font-size: 42px;
+  line-height: 1.1;
+  letter-spacing: -.035em;
+  text-shadow: 0 3px 9px #8a1f2950;
+}
+
+.packet-result h2 em {
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 750;
+}
+
+.packet-result > p {
+  margin-top: 8px;
+  color: #fff1d6;
+  font-size: 12px;
+}
+
+.open-packet:disabled { cursor: wait; opacity: .94; }
+.open-packet.opening span {
+  display: block;
+  width: 25px;
+  height: 25px;
+  margin: auto;
+  border: 3px solid #d7563655;
+  border-top-color: #d75636;
+  border-radius: 50%;
+  animation: packet-opening-spin .7s linear infinite;
+}
+
+@keyframes packet-opening-spin { to { transform: rotate(360deg); } }
+
+.red-packet.packet-cover-celebration,
+.packet-modal.packet-cover-celebration {
+  background: linear-gradient(150deg, #ff6464, #d72945 58%, #a81534);
+}
+
+.red-packet.packet-cover-lucky,
+.packet-modal.packet-cover-lucky {
+  background: linear-gradient(150deg, #2cc9bb, #10969c 58%, #08747f);
+}
+
+.packet-modal.packet-cover-celebration::after {
+  background: #99112f;
+}
+
+.packet-modal.packet-cover-lucky::after {
+  background: #086c76;
+}
+
+.red-packet.packet-cover-celebration > span {
+  background: #ffd2a7;
+  color: #b21832;
+}
+
+.red-packet.packet-cover-lucky > span {
+  background: #ffe29b;
+  color: #08727b;
 }

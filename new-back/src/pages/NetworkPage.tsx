@@ -12,7 +12,7 @@ import {
 import PublicRounded from '@mui/icons-material/PublicRounded'
 import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import CloudSyncRounded from '@mui/icons-material/CloudSyncRounded'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { adminApi, type FeedJobStatus, type FeedStatus } from '../api'
 import { PageHeader } from '../components/PageHeader'
 import { useFeedback } from '../components/feedback'
@@ -90,7 +90,7 @@ export function NetworkPage() {
   }
 
   const jobs = feed?.jobs ?? []
-  const active = useMemo(() => jobs.find(job => job.id === selected) ?? jobs[0], [jobs, selected])
+  const active = jobs.find(job => job.id === selected) ?? jobs[0]
   const healthy = jobs.filter(job => !job.last_error && job.consecutive_errors === 0).length
 
   return (
@@ -110,7 +110,7 @@ export function NetworkPage() {
       <Alert severity={feed?.running ? 'success' : 'warning'} sx={{ mt: 2.5 }} icon={<PublicRounded />}>
         {feed?.running
           ? `调度器运行中 · ${healthy}/${jobs.length} 条线路正常 · 服务器时间 ${formatTime(feed.server_time)}`
-          : '调度器未运行，请确认后端 lotteryfeed 已启动。'}
+          : '开奖调度服务未运行，请检查服务状态。'}
       </Alert>
       {loading && !feed && <Box mt={2}><CircularProgress size={22} /></Box>}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)', xl: 'repeat(4,1fr)' }, gap: 1.5, mt: 1.5 }}>
@@ -130,7 +130,7 @@ export function NetworkPage() {
                 </Stack>
                 <Typography variant="h6" mt={3}>{job.name}</Typography>
                 <Typography fontSize={22} fontWeight={850} color={best ? 'inherit' : tone === 'error' ? 'error.main' : 'success.main'}>
-                  {latencyText(job, feed?.server_time_ms ?? Date.now())}
+                  {latencyText(job, feed?.server_time_ms ?? 0)}
                 </Typography>
                 <Typography fontSize={11} mt={1} color={best ? 'rgba(255,255,255,.85)' : 'text.secondary'}>
                   最近成功 {formatTime(job.last_success_at)} · 期号 {job.latest_issue || '—'}

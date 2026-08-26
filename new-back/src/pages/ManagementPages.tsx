@@ -13,21 +13,25 @@ import {
   Divider,
   LinearProgress,
   MenuItem,
+  Paper,
   Stack,
+  Switch,
   TextField,
   Typography,
 } from '@mui/material'
 import AddRounded from '@mui/icons-material/AddRounded'
+import CloudUploadRounded from '@mui/icons-material/CloudUploadRounded'
+import DeleteOutlineRounded from '@mui/icons-material/DeleteOutlineRounded'
 import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import SportsEsportsRounded from '@mui/icons-material/SportsEsportsRounded'
-import StarsRounded from '@mui/icons-material/StarsRounded'
 import InboxRounded from '@mui/icons-material/InboxRounded'
+import SendRounded from '@mui/icons-material/SendRounded'
 import { useCallback, useEffect, useState } from 'react'
-import { adminApi, type EntertainmentPlatform, type OpsActivity, type SpecialOverview } from '../api'
+import { adminApi, resolveApiAsset, type AdminGame, type AdminUser, type EntertainmentPlatform, type OpsActivity, type SpecialOverview } from '../api'
 import { PageHeader } from '../components/PageHeader'
 import { useFeedback } from '../components/feedback'
 
-const typeLabel: Record<string, string> = { checkin: '签到', banner: '轮播', invite: '邀请', redpacket: '红包' }
+const typeLabel: Record<string, string> = { checkin: '签到', banner: '轮播', promotion: '推广活动', invite: '邀请', redpacket: '红包' }
 const statusColor = (status: string): 'default' | 'success' | 'warning' | 'error' => {
   if (status === 'active' || status === 'enabled' || status === 'available') return 'success'
   if (status === 'maintenance' || status === 'draft' || status === 'reserved') return 'warning'
@@ -52,8 +56,9 @@ function ActivitiesPage() {
   const [error, setError] = useState('')
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<OpsActivity | null>(null)
-  const [form, setForm] = useState({ type: 'checkin', title: '', subtitle: '', status: 'draft', reward: 0, sort_order: 0, pool: 88, min_amount: 1, max_amount: 8.8 })
+  const [form, setForm] = useState({ type: 'checkin', title: '', subtitle: '', status: 'draft', cover: '', action_type: 'none', action_url: '', reward: 0, sort_order: 0, pool: 88, min_amount: 1, max_amount: 8.8 })
   const [saving, setSaving] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const { showMessage } = useFeedback()
 
   const load = useCallback(async (notify = false) => {
@@ -73,7 +78,7 @@ function ActivitiesPage() {
 
   const openCreate = () => {
     setEditing(null)
-    setForm({ type: 'checkin', title: '', subtitle: '', status: 'draft', reward: 0, sort_order: 0, pool: 88, min_amount: 1, max_amount: 8.8 })
+    setForm({ type: 'checkin', title: '', subtitle: '', status: 'draft', cover: '', action_type: 'none', action_url: '', reward: 0, sort_order: 0, pool: 88, min_amount: 1, max_amount: 8.8 })
     setOpen(true)
   }
 
@@ -85,6 +90,9 @@ function ActivitiesPage() {
       title: item.title,
       subtitle: item.subtitle,
       status: item.status,
+      cover: item.cover,
+      action_type: String(cfg.action_type ?? 'none'),
+      action_url: String(cfg.action_url ?? ''),
       reward: item.reward,
       sort_order: item.sort_order,
       pool: Number(cfg.pool ?? item.pool_total ?? 88),
@@ -99,11 +107,12 @@ function ActivitiesPage() {
     title: form.title,
     subtitle: form.subtitle,
     status: form.status,
+    cover: form.cover,
     reward: form.reward,
     sort_order: form.sort_order,
     config: form.type === 'redpacket'
-      ? { pool: form.pool, min_amount: form.min_amount, max_amount: form.max_amount }
-      : {},
+      ? { pool: form.pool, min_amount: form.min_amount, max_amount: form.max_amount, action_type: form.action_type, action_url: form.action_url }
+      : { action_type: form.action_type, action_url: form.action_url },
   })
 
   const save = async () => {
@@ -125,12 +134,31 @@ function ActivitiesPage() {
     }
   }
 
+  const uploadCover = async (file?: File) => {
+    if (!file) return
+    if (!/^image\/(jpeg|png|webp)$/i.test(file.type)) {
+      setError('仅支持 JPG、PNG 或 WebP 图片')
+      return
+    }
+    setUploading(true)
+    setError('')
+    try {
+      const result = await adminApi.uploadActivityImage(file)
+      setForm(current => ({ ...current, cover: result.url }))
+      showMessage('活动图片已上传')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '上传活动图片失败')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   return (
     <Box p={{ xs: 2, lg: 2.5 }}>
       <PageHeader
         eyebrow="游戏运营 / 活动"
         title="活动管理"
-        description="管理签到、轮播、邀请和红包活动。"
+        description="管理签到、轮播、推广海报、邀请和红包活动；推广海报可配置封面与点击跳转。"
         actions={
           <>
             <Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)} disabled={loading}>刷新</Button>
@@ -143,7 +171,7 @@ function ActivitiesPage() {
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'repeat(2,1fr)' }, gap: 2, mt: 2.5 }}>
         {items.map(item => (
           <Card key={item.id}>
-            <Box sx={{ height: 140, p: 2.5, color: '#fff', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', background: 'radial-gradient(circle at 80% 20%,#8ff5e5,#29aeb4 34%,#0e5488)' }}>
+            <Box sx={{ height: 140, p: 2.5, color: '#fff', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', backgroundImage: item.cover ? `linear-gradient(0deg,rgba(5,28,48,.72),transparent 74%),url(${resolveApiAsset(item.cover)})` : 'radial-gradient(circle at 80% 20%,#8ff5e5,#29aeb4 34%,#0e5488)', backgroundSize: 'cover', backgroundPosition: 'center' }}>
               <Typography variant="caption">{typeLabel[item.type] ?? item.type}</Typography>
               <Typography variant="h6" fontWeight={800}>{item.title}</Typography>
             </Box>
@@ -181,6 +209,29 @@ function ActivitiesPage() {
             </TextField>
             <TextField label="标题" value={form.title} onChange={e => setForm(current => ({ ...current, title: e.target.value }))} />
             <TextField label="副标题" value={form.subtitle} onChange={e => setForm(current => ({ ...current, subtitle: e.target.value }))} />
+            <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
+              {form.cover ? (
+                <Box component="img" src={resolveApiAsset(form.cover)} alt="活动图片预览" sx={{ width: '100%', height: 150, display: 'block', objectFit: 'cover', bgcolor: 'action.hover' }} />
+              ) : (
+                <Stack height={120} alignItems="center" justifyContent="center" color="text.secondary">
+                  <CloudUploadRounded color="primary" />
+                  <Typography variant="caption" mt={1}>上传后会在用户端活动通知中展示</Typography>
+                </Stack>
+              )}
+              <Stack direction="row" gap={1} p={1.25}>
+                <Button component="label" variant="outlined" startIcon={<CloudUploadRounded />} disabled={uploading}>
+                  {uploading ? '上传中…' : form.cover ? '更换图片' : '上传图片'}
+                  <input hidden type="file" accept="image/jpeg,image/png,image/webp" onChange={event => { void uploadCover(event.target.files?.[0]); event.target.value = '' }} />
+                </Button>
+                {form.cover && <Button color="error" startIcon={<DeleteOutlineRounded />} onClick={() => setForm(current => ({ ...current, cover: '' }))}>移除</Button>}
+              </Stack>
+            </Paper>
+            <TextField select label="点击后操作" value={form.action_type} onChange={e => setForm(current => ({ ...current, action_type: e.target.value }))}>
+              <MenuItem value="none">仅查看活动</MenuItem>
+              <MenuItem value="internal">跳转站内页面</MenuItem>
+              <MenuItem value="external">跳转外部链接</MenuItem>
+            </TextField>
+            {form.action_type !== 'none' && <TextField label="跳转地址" value={form.action_url} onChange={e => setForm(current => ({ ...current, action_url: e.target.value }))} helperText={form.action_type === 'internal' ? '例如 /wallet/rebate 或 /games/canada-28' : '请填写完整的 https:// 地址'} />}
             <TextField select label="状态" value={form.status} onChange={e => setForm(current => ({ ...current, status: e.target.value }))}>
               <MenuItem value="draft">草稿</MenuItem>
               <MenuItem value="active">进行中</MenuItem>
@@ -208,10 +259,14 @@ function ActivitiesPage() {
 
 function EntertainmentPage() {
   const [items, setItems] = useState<EntertainmentPlatform[]>([])
+  const [games, setGames] = useState<AdminGame[]>([])
+  const [gameFilter, setGameFilter] = useState<'all' | 'enabled' | 'disabled'>('all')
+  const [gameQuery, setGameQuery] = useState('')
+  const [pendingGame, setPendingGame] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [open, setOpen] = useState(false)
-  const [form, setForm] = useState({ code: '', name: '', category: '其他', merchant_no: '', api_base: '', launch_path: '/portal', secret_key: 'demo', status: 'disabled', remark: '', sort_order: 0 })
+  const [form, setForm] = useState({ code: '', name: '', category: '其他', merchant_no: '', api_base: '', launch_path: '/portal', secret_key: '', status: 'disabled', remark: '', sort_order: 0 })
   const [saving, setSaving] = useState(false)
   const { showMessage } = useFeedback()
 
@@ -219,8 +274,10 @@ function EntertainmentPage() {
     setLoading(true)
     setError('')
     try {
-      setItems(await adminApi.entertainment())
-      if (notify) showMessage('娱乐平台已刷新')
+      const [platforms, lotteryGames] = await Promise.all([adminApi.entertainment(), adminApi.games()])
+      setItems(platforms)
+      setGames(lotteryGames)
+      if (notify) showMessage('游戏与彩种已刷新')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '读取娱乐平台失败')
     } finally {
@@ -229,6 +286,31 @@ function EntertainmentPage() {
   }, [showMessage])
 
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load])
+
+  const visibleGames = games.filter(game => {
+    if (gameFilter === 'enabled' && !game.enabled) return false
+    if (gameFilter === 'disabled' && game.enabled) return false
+    const query = gameQuery.trim().toLowerCase()
+    return !query || game.name.toLowerCase().includes(query) || game.id.toLowerCase().includes(query) || game.category.toLowerCase().includes(query)
+  })
+  const groupedGames = Array.from(visibleGames.reduce((map, game) => {
+    map.set(game.category, [...(map.get(game.category) ?? []), game])
+    return map
+  }, new Map<string, AdminGame[]>()).entries()).sort(([left], [right]) => left.localeCompare(right, 'zh-CN'))
+
+  const toggleGame = async (game: AdminGame, enabled: boolean) => {
+    setPendingGame(game.id)
+    setError('')
+    try {
+      const updated = await adminApi.updateGameStatus(game.id, enabled)
+      setGames(current => current.map(item => item.id === updated.id ? { ...item, ...updated } : item))
+      showMessage(`${game.name}已${enabled ? '启用' : '停用'}`)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '更新彩种状态失败')
+    } finally {
+      setPendingGame('')
+    }
+  }
 
   const save = async () => {
     if (!form.code.trim() || !form.name.trim()) {
@@ -251,19 +333,50 @@ function EntertainmentPage() {
   return (
     <Box p={{ xs: 2, lg: 2.5 }}>
       <PageHeader
-        eyebrow="扩展服务 / 娱乐"
-        title="彩票娱乐"
-        description="管理开元 / PG / AG 等第三方娱乐平台配置与启停。"
+        eyebrow="彩票运营 / 游戏中心"
+        title="游戏与彩种"
+        description="所有已接入、已停用和维护中的游戏统一在这里管理；停用彩种仍会保留，随时可以重新开放。"
         actions={
           <>
             <Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)}>刷新</Button>
-            <Button variant="contained" startIcon={<SportsEsportsRounded />} onClick={() => { setForm({ code: '', name: '', category: '其他', merchant_no: '', api_base: '', launch_path: '/portal', secret_key: 'demo', status: 'disabled', remark: '', sort_order: items.length + 1 }); setOpen(true) }}>接入新平台</Button>
+            <Button variant="contained" startIcon={<SportsEsportsRounded />} onClick={() => { setForm({ code: '', name: '', category: '其他', merchant_no: '', api_base: '', launch_path: '/portal', secret_key: '', status: 'disabled', remark: '', sort_order: items.length + 1 }); setOpen(true) }}>接入扩展游戏</Button>
           </>
         }
       />
       {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
       {loading && <Box mt={2}><CircularProgress size={20} /></Box>}
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'repeat(2,1fr)' }, gap: 1.5, mt: 2.5 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2,minmax(0,1fr))', md: 'repeat(4,minmax(0,1fr))' }, gap: 1.2, mt: 2 }}>
+        {[['全部彩种', games.length, 'primary.main'], ['正常开放', games.filter(game => game.enabled).length, 'success.main'], ['已停用', games.filter(game => !game.enabled).length, 'text.secondary'], ['彩票分类', new Set(games.map(game => game.category)).size, 'warning.main']].map(([label, value, color]) => <Card key={String(label)}><CardContent sx={{ p: '14px !important' }}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography fontSize={{ xs: 21, md: 26 }} fontWeight={900} color={String(color)}>{value}</Typography></CardContent></Card>)}
+      </Box>
+      <Paper variant="outlined" sx={{ mt: 1.5, p: 1.35 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} alignItems={{ sm: 'center' }}>
+          <TextField size="small" placeholder="搜索彩种名称、编号或分类" value={gameQuery} onChange={event => setGameQuery(event.target.value)} sx={{ flex: 1, minWidth: 220 }} />
+          <Stack direction="row" gap={.75}>{(['all', 'enabled', 'disabled'] as const).map(filter => <Button key={filter} size="small" variant={gameFilter === filter ? 'contained' : 'outlined'} onClick={() => setGameFilter(filter)}>{filter === 'all' ? `全部 ${games.length}` : filter === 'enabled' ? `已启用 ${games.filter(game => game.enabled).length}` : `已停用 ${games.filter(game => !game.enabled).length}`}</Button>)}</Stack>
+        </Stack>
+      </Paper>
+      <Stack gap={1.5} mt={1.5}>
+        {groupedGames.map(([category, categoryGames]) => <Paper key={category} variant="outlined" sx={{ overflow: 'hidden' }}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" px={1.6} py={1.2} bgcolor="action.hover">
+            <Box><Typography fontWeight={850}>{category}</Typography><Typography variant="caption" color="text.secondary">{categoryGames.length} 个彩种 · {categoryGames.filter(game => game.enabled).length} 个开放</Typography></Box>
+            <Chip size="small" color={categoryGames.some(game => game.enabled) ? 'primary' : 'default'} label={categoryGames.some(game => game.enabled) ? '分类已开放' : '分类已停用'} />
+          </Stack>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,minmax(0,1fr))', xl: 'repeat(3,minmax(0,1fr))' }, gap: 1, p: 1.2 }}>
+            {categoryGames.map(game => <Card key={game.id} variant="outlined" sx={{ boxShadow: 'none', opacity: game.enabled ? 1 : .68 }}>
+              <CardContent sx={{ p: '13px !important' }}>
+                <Stack direction="row" alignItems="flex-start" gap={1.1}>
+                  <Box sx={{ width: 40, height: 40, flex: '0 0 40px', display: 'grid', placeItems: 'center', borderRadius: 2.2, color: 'white', fontSize: 12, fontWeight: 900, background: game.enabled ? 'linear-gradient(145deg,#1684ad,#29bdb0)' : 'linear-gradient(145deg,#77838d,#a3acb3)' }}>{game.name.slice(0, 2)}</Box>
+                  <Box flex={1} minWidth={0}><Typography fontSize={13} fontWeight={850} noWrap>{game.name}</Typography><Typography fontSize={9} color="text.secondary" noWrap>{game.id}</Typography><Stack direction="row" gap={.5} mt={.7} flexWrap="wrap"><Chip size="small" variant="outlined" label={game.source_kind === 'official' ? '官方源' : game.source_kind === 'external' ? '外部源' : '平台彩'} sx={{ height: 20, fontSize: 9 }} /><Chip size="small" label={game.enabled ? '已启用' : '已停用'} color={game.enabled ? 'success' : 'default'} sx={{ height: 20, fontSize: 9 }} /></Stack></Box>
+                  <Switch size="small" checked={game.enabled} disabled={pendingGame === game.id} onChange={event => void toggleGame(game, event.target.checked)} inputProps={{ 'aria-label': `${game.name}状态` }} />
+                </Stack>
+                {game.source_kind !== 'platform' && <Typography mt={1} fontSize={9} color={game.sync_status === 'error' ? 'error.main' : 'text.secondary'} noWrap>{game.sync_status === 'error' ? game.last_sync_error || '开奖源异常' : game.last_sync_at ? `最近同步 ${new Date(game.last_sync_at).toLocaleString('zh-CN', { hour12: false })}` : game.source_name || '等待首次同步'}</Typography>}
+              </CardContent>
+            </Card>)}
+          </Box>
+        </Paper>)}
+        {!loading && groupedGames.length === 0 && <Paper variant="outlined"><EmptyState message="没有符合条件的彩种" description="可切换“全部”或清除搜索条件" /></Paper>}
+      </Stack>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" mt={3} mb={1.2}><Box><Typography fontSize={17} fontWeight={900}>扩展娱乐服务</Typography><Typography variant="caption" color="text.secondary">捕鱼、体育、真人、电子和电竞等第三方服务；未配置的项目保持停用。</Typography></Box><Chip size="small" label={`${items.length} 个平台`} /></Stack>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'repeat(2,1fr)' }, gap: 1.5 }}>
         {items.map(item => (
           <Card key={item.id}>
             <CardContent>
@@ -272,13 +385,13 @@ function EntertainmentPage() {
                 <Box flex={1} minWidth={0}>
                   <Typography variant="caption" color="primary">{item.category}</Typography>
                   <Typography fontWeight={750}>{item.name}</Typography>
-                  <Typography variant="caption" color="text.secondary">{item.remark || item.merchant_no || '尚未填写商户信息'}</Typography>
+                  <Typography variant="caption" color="text.secondary">{item.remark || item.merchant_no || '尚未填写商户信息'} · {item.has_secret ? '密钥已配置' : '密钥未配置'}</Typography>
                 </Box>
                 <Chip size="small" color={statusColor(item.status)} label={statusLabel(item.status)} />
               </Stack>
               <Divider sx={{ my: 2 }} />
               <Stack direction="row" justifyContent="flex-end" gap={1} flexWrap="wrap">
-                <Button size="small" variant="outlined" onClick={() => { setForm({ code: item.code, name: item.name, category: item.category, merchant_no: item.merchant_no, api_base: item.api_base, launch_path: item.launch_path ?? '/portal', secret_key: item.secret_key ?? '', status: item.status, remark: item.remark, sort_order: item.sort_order }); setOpen(true) }}>编辑配置</Button>
+                <Button size="small" variant="outlined" onClick={() => { setForm({ code: item.code, name: item.name, category: item.category, merchant_no: item.merchant_no, api_base: item.api_base, launch_path: item.launch_path ?? '/portal', secret_key: '', status: item.status, remark: item.remark, sort_order: item.sort_order }); setOpen(true) }}>编辑配置</Button>
                 {item.status !== 'enabled' && <Button size="small" variant="contained" onClick={() => void adminApi.setEntertainmentStatus(item.id, 'enabled').then(() => load()).then(() => showMessage('已启用'))}>启用</Button>}
                 {item.status === 'enabled' && <Button size="small" onClick={() => void adminApi.setEntertainmentStatus(item.id, 'maintenance').then(() => load()).then(() => showMessage('已设为维护'))}>维护</Button>}
                 {item.status !== 'disabled' && <Button size="small" color="inherit" onClick={() => void adminApi.setEntertainmentStatus(item.id, 'disabled').then(() => load()).then(() => showMessage('已停用'))}>停用</Button>}
@@ -286,6 +399,7 @@ function EntertainmentPage() {
             </CardContent>
           </Card>
         ))}
+        {!loading && items.length === 0 && <Paper variant="outlined"><EmptyState message="暂无扩展娱乐平台" description="彩票彩种不受影响；需要时可在右上角接入捕鱼、体育或真人平台" /></Paper>}
       </Box>
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>娱乐平台配置</DialogTitle>
@@ -297,7 +411,7 @@ function EntertainmentPage() {
             <TextField label="商户号" value={form.merchant_no} onChange={e => setForm(current => ({ ...current, merchant_no: e.target.value }))} />
             <TextField label="API 地址" value={form.api_base} onChange={e => setForm(current => ({ ...current, api_base: e.target.value }))} helperText="留空则使用本地桥接页；也可填第三方根地址" />
             <TextField label="Launch 路径" value={form.launch_path} onChange={e => setForm(current => ({ ...current, launch_path: e.target.value }))} helperText="例如 /portal 或完整 URL 模板" />
-            <TextField label="签名密钥" value={form.secret_key} onChange={e => setForm(current => ({ ...current, secret_key: e.target.value }))} helperText="用于生成 launch token" />
+            <TextField label="签名密钥" type="password" autoComplete="new-password" value={form.secret_key} onChange={e => setForm(current => ({ ...current, secret_key: e.target.value }))} helperText="仅写入时接收；编辑留空会保留现有密钥，后台不会回显原文" />
             <TextField select label="状态" value={form.status} onChange={e => setForm(current => ({ ...current, status: e.target.value }))}>
               <MenuItem value="enabled">已启用</MenuItem>
               <MenuItem value="maintenance">维护中</MenuItem>
@@ -321,9 +435,11 @@ function SpecialPage() {
   const [error, setError] = useState('')
   const [numbers, setNumbers] = useState('')
   const [level, setLevel] = useState('normal')
-  const [campaignTitle, setCampaignTitle] = useState('')
-  const [campaignRule, setCampaignRule] = useState('')
-  const [grant, setGrant] = useState({ campaign_id: 0, resource_id: 0, user_id: 0 })
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [assigning, setAssigning] = useState(false)
+  const [candidates, setCandidates] = useState<AdminUser[]>([])
+  const [assignResourceID, setAssignResourceID] = useState(0)
+  const [assignUserID, setAssignUserID] = useState(0)
   const { showMessage } = useFeedback()
 
   const load = useCallback(async (notify = false) => {
@@ -332,7 +448,6 @@ function SpecialPage() {
     try {
       const overview = await adminApi.specialOverview()
       setData(overview)
-      if (overview.campaigns[0]) setGrant(current => ({ ...current, campaign_id: overview.campaigns[0].id }))
       if (notify) showMessage('房间靓号已刷新')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '读取房间号失败')
@@ -345,6 +460,35 @@ function SpecialPage() {
 
   const total = (data?.available ?? 0) + (data?.reserved ?? 0) + (data?.granted ?? 0)
   const progress = total ? ((data?.granted ?? 0) / total) * 100 : 0
+  const availableResources = (data?.resources ?? []).filter(item => item.status === 'available')
+
+  const openAssign = async () => {
+    setError('')
+    try {
+      const result = await adminApi.users({ role: 'member', status: 'active', page: 1, pageSize: 100 })
+      setCandidates(result.items)
+      setAssignResourceID(availableResources[0]?.id ?? 0)
+      setAssignUserID(result.items[0]?.id ?? 0)
+      setAssignOpen(true)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '读取可发放会员失败')
+    }
+  }
+
+  const assignRoom = async () => {
+    if (!assignResourceID || !assignUserID) return
+    setAssigning(true)
+    try {
+      await adminApi.assignAgentRoom({ resource_id: assignResourceID, user_id: assignUserID })
+      setAssignOpen(false)
+      showMessage('房间号已发放，会员已升级为代理')
+      await load()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '发放房间号失败')
+    } finally {
+      setAssigning(false)
+    }
+  }
 
   return (
     <Box p={{ xs: 2, lg: 2.5 }}>
@@ -352,7 +496,7 @@ function SpecialPage() {
         eyebrow="扩展服务 / 房间号"
         title="房间靓号"
         description="靓号即代理房间号。用户输入该号进入对应代理房间；发放时用户自动升为代理。"
-        actions={<Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)}>刷新</Button>}
+        actions={<><Button variant="contained" startIcon={<SendRounded />} disabled={!availableResources.length} onClick={() => void openAssign()}>发放给代理</Button><Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)}>刷新</Button></>}
       />
       {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
       {loading && <Box mt={2}><CircularProgress size={20} /></Box>}
@@ -364,7 +508,7 @@ function SpecialPage() {
           <LinearProgress variant="determinate" value={progress} sx={{ mt: 2, maxWidth: 380, bgcolor: 'rgba(255,255,255,.18)' }} />
         </CardContent>
       </Card>
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '1.1fr 1fr' }, gap: 1.5, mt: 1.5 }}>
+      <Box sx={{ mt: 1.5, maxWidth: 860 }}>
         <Card>
           <CardContent>
             <Typography fontWeight={750} mb={1.5}>批量添加房间号</Typography>
@@ -394,41 +538,23 @@ function SpecialPage() {
             )}
           </CardContent>
         </Card>
-        <Card>
-          <CardContent>
-            <Typography fontWeight={750} mb={1.5}>创建活动 / 发放给代理</Typography>
-            <Stack gap={1.5}>
-              <TextField label="活动标题" value={campaignTitle} onChange={e => setCampaignTitle(e.target.value)} />
-              <TextField label="规则说明" value={campaignRule} onChange={e => setCampaignRule(e.target.value)} />
-              <Button variant="contained" startIcon={<StarsRounded />} onClick={() => void adminApi.createSpecialCampaign({ title: campaignTitle, rule_text: campaignRule, status: 'active' }).then(() => { showMessage('活动已创建'); setCampaignTitle(''); setCampaignRule(''); return load() })}>创建活动</Button>
-              <Divider />
-              <TextField select label="活动" value={grant.campaign_id || ''} onChange={e => setGrant(current => ({ ...current, campaign_id: Number(e.target.value) }))}>
-                {(data?.campaigns ?? []).map(item => <MenuItem key={item.id} value={item.id}>{item.title}</MenuItem>)}
-              </TextField>
-              <TextField select label="可用房间号" value={grant.resource_id || ''} onChange={e => setGrant(current => ({ ...current, resource_id: Number(e.target.value) }))}>
-                {(data?.resources ?? []).filter(item => item.status === 'available').map(item => <MenuItem key={item.id} value={item.id}>{item.number}</MenuItem>)}
-              </TextField>
-              <TextField type="number" label="用户 ID（将升为代理）" value={grant.user_id || ''} onChange={e => setGrant(current => ({ ...current, user_id: Number(e.target.value) }))} />
-              <Button variant="outlined" onClick={() => void adminApi.grantSpecialNumber(grant).then(() => { showMessage('已发放房间号并升为代理'); return load() })}>发放房间号</Button>
-            </Stack>
-            <Divider sx={{ my: 2 }} />
-            <Typography fontWeight={750} mb={1}>活动列表</Typography>
-            {(data?.campaigns ?? []).length === 0 ? <EmptyState message="暂无房间号活动" /> : (
-              <Stack gap={1}>
-                {data?.campaigns.map(item => (
-                  <Stack key={item.id} direction="row" justifyContent="space-between">
-                    <Box>
-                      <Typography fontWeight={700}>{item.title}</Typography>
-                      <Typography variant="caption" color="text.secondary">已发放 {item.granted_count}</Typography>
-                    </Box>
-                    <Chip size="small" color={statusColor(item.status)} label={statusLabel(item.status)} />
-                  </Stack>
-                ))}
-              </Stack>
-            )}
-          </CardContent>
-        </Card>
       </Box>
+      <Dialog open={assignOpen} onClose={() => !assigning && setAssignOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>发放房间号给代理</DialogTitle>
+        <DialogContent>
+          <Stack gap={1.5} pt={1}>
+            <Alert severity="info">选择会员并发放房间号后，该会员会升级为代理并获得独立房间工作台。</Alert>
+            <TextField select label="房间号" value={assignResourceID || ''} onChange={event => setAssignResourceID(Number(event.target.value))}>
+              {availableResources.map(item => <MenuItem key={item.id} value={item.id}>{item.number} · {item.level === 'rare' ? '稀有' : item.level === 'epic' ? '史诗' : '普通'}</MenuItem>)}
+            </TextField>
+            <TextField select label="升级为代理的会员" value={assignUserID || ''} onChange={event => setAssignUserID(Number(event.target.value))}>
+              {candidates.map(item => <MenuItem key={item.id} value={item.id}>{item.nickname || item.username} · @{item.username} · ID {item.public_id}</MenuItem>)}
+            </TextField>
+            {!candidates.length && <Alert severity="warning">暂无可升级的正常会员，请先在用户管理中创建会员。</Alert>}
+          </Stack>
+        </DialogContent>
+        <DialogActions><Button disabled={assigning} onClick={() => setAssignOpen(false)}>取消</Button><Button variant="contained" disabled={assigning || !assignResourceID || !assignUserID} onClick={() => void assignRoom()}>{assigning ? '发放中…' : '确认发放'}</Button></DialogActions>
+      </Dialog>
     </Box>
   )
 }

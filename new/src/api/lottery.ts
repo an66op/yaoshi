@@ -14,6 +14,13 @@ export type LotteryGame = {
   latest_numbers?: number[]
   next_draw_at: string
   source_kind: string
+  source_name: string
+  sync_status: string
+  last_sync_at?: string | null
+  last_sync_error?: string
+  issue_status: string
+  seal_at?: string | null
+  source_healthy: boolean
 }
 
 export type ServerClock = {

@@ -40,3 +40,28 @@ func TestEvaluateBetPatterns(t *testing.T) {
 		t.Fatal("expected pair")
 	}
 }
+
+func TestSettlementEventKeyKeepsGameAndRoomIsolation(t *testing.T) {
+	base := settlementEventKey("speed-racing", "34130076", 23, "agent:9")
+	if base == settlementEventKey("speed-ssc", "34130076", 23, "agent:9") {
+		t.Fatal("different games must not share a settlement event key")
+	}
+	if base == settlementEventKey("speed-racing", "34130076", 23, "agent:10") {
+		t.Fatal("different rooms must not share a settlement event key")
+	}
+	if base != settlementEventKey("speed-racing", "34130076", 23, "agent:9") {
+		t.Fatal("the same settlement event must be idempotent")
+	}
+}
+
+func TestAgentProfitShareOnlyUsesPositiveGrossProfit(t *testing.T) {
+	if got := agentProfitShareCents(10_000, 25); got != 2_500 {
+		t.Fatalf("positive GGR share = %d, want 2500", got)
+	}
+	if got := agentProfitShareCents(-10_000, 25); got != 0 {
+		t.Fatalf("negative GGR must not create a negative share, got %d", got)
+	}
+	if got := agentProfitShareCents(10_000, 150); got != 10_000 {
+		t.Fatalf("share rate must be clamped to 100%%, got %d", got)
+	}
+}

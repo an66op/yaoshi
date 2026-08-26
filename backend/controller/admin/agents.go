@@ -55,21 +55,25 @@ func (h *AgentHandler) Promote(c *gin.Context) {
 
 func (h *AgentHandler) Create(c *gin.Context) {
 	var request struct {
-		Username   string  `json:"username" binding:"required,min=3,max=50"`
-		Password   string  `json:"password" binding:"required,min=6,max=72"`
-		Email      string  `json:"email" binding:"omitempty,email"`
-		Nickname   string  `json:"nickname" binding:"max=50"`
-		Phone      string  `json:"phone" binding:"max=30"`
-		RoomCode   string  `json:"room_code" binding:"required"`
-		Remark     string  `json:"remark" binding:"max=500"`
-		Status     int     `json:"status"`
-		RebateRate float64 `json:"rebate_rate"`
+		Username        string  `json:"username" binding:"required,min=3,max=50"`
+		Password        string  `json:"password" binding:"required,min=8,max=72"`
+		Email           string  `json:"email" binding:"omitempty,email"`
+		Nickname        string  `json:"nickname" binding:"max=50"`
+		Phone           string  `json:"phone" binding:"max=30"`
+		RoomCode        string  `json:"room_code" binding:"required"`
+		RoomName        string  `json:"room_name" binding:"max=30"`
+		RoomLogo        string  `json:"room_logo"`
+		Remark          string  `json:"remark" binding:"max=500"`
+		Status          int     `json:"status"`
+		RebateRate      float64 `json:"rebate_rate"`
+		ProfitShareRate float64 `json:"profit_share_rate"`
+		TenantID        *uint64 `json:"tenant_id"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		constants.SendError(c, http.StatusBadRequest, "代理资料不正确", err)
 		return
 	}
-	result, err := h.agents.Create(services.CreateAgentInput{Username: request.Username, Password: request.Password, Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, Remark: request.Remark, Status: request.Status, RebateRate: request.RebateRate})
+	result, err := h.agents.Create(services.CreateAgentInput{Username: request.Username, Password: request.Password, Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, RoomName: request.RoomName, RoomLogo: request.RoomLogo, Remark: request.Remark, Status: request.Status, RebateRate: request.RebateRate, ProfitShareRate: request.ProfitShareRate, TenantID: request.TenantID})
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "创建代理失败", err)
 		return
@@ -84,19 +88,23 @@ func (h *AgentHandler) Update(c *gin.Context) {
 		return
 	}
 	var request struct {
-		Email      string  `json:"email" binding:"omitempty,email"`
-		Nickname   string  `json:"nickname" binding:"max=50"`
-		Phone      string  `json:"phone" binding:"max=30"`
-		RoomCode   string  `json:"room_code" binding:"required"`
-		Remark     string  `json:"remark" binding:"max=500"`
-		Status     int     `json:"status"`
-		RebateRate float64 `json:"rebate_rate"`
+		Email           string  `json:"email" binding:"omitempty,email"`
+		Nickname        string  `json:"nickname" binding:"max=50"`
+		Phone           string  `json:"phone" binding:"max=30"`
+		RoomCode        string  `json:"room_code" binding:"required"`
+		RoomName        string  `json:"room_name" binding:"max=30"`
+		RoomLogo        string  `json:"room_logo"`
+		Remark          string  `json:"remark" binding:"max=500"`
+		Status          int     `json:"status"`
+		RebateRate      float64 `json:"rebate_rate"`
+		ProfitShareRate float64 `json:"profit_share_rate"`
+		TenantID        *uint64 `json:"tenant_id"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		constants.SendError(c, http.StatusBadRequest, "代理资料不正确", err)
 		return
 	}
-	result, err := h.agents.Update(id, services.UpdateAgentInput{Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, Remark: request.Remark, Status: request.Status, RebateRate: request.RebateRate})
+	result, err := h.agents.Update(id, services.UpdateAgentInput{Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, RoomName: request.RoomName, RoomLogo: request.RoomLogo, Remark: request.Remark, Status: request.Status, RebateRate: request.RebateRate, ProfitShareRate: request.ProfitShareRate, TenantID: request.TenantID})
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "保存代理失败", err)
 		return
@@ -144,10 +152,10 @@ func (h *AgentHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 	var request struct {
-		Password string `json:"password" binding:"required,min=6,max=72"`
+		Password string `json:"password" binding:"required,min=8,max=72"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		constants.SendError(c, http.StatusBadRequest, "新密码至少需要 6 个字符", err)
+		constants.SendError(c, http.StatusBadRequest, "新密码长度需为 8–72 个字符", err)
 		return
 	}
 	if err := h.agents.ResetPassword(id, request.Password); err != nil {

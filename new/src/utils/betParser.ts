@@ -24,24 +24,37 @@ const dualLabels: Record<string, { position: number; selection: string }> = {
   冠亚和大: { position: 6, selection: '大' }, 冠亚和小: { position: 6, selection: '小' },
 }
 
+function splitAmount(amount: number, count: number) {
+  const cents = Math.round(amount * 100)
+  const base = Math.floor(cents / count)
+  const remainder = cents % count
+  return Array.from({ length: count }, (_, index) => (base + (index < remainder ? 1 : 0)) / 100)
+}
+
 function segmentPayload(play: string, amount: number): BetPayload[] {
-  if (dualLabels[play]) {
-    const item = dualLabels[play]
-    return [{ position: item.position, selection: item.selection, amount, play_name: play }]
+  const compactPlay = play.replace(/^冠亚和\//, '冠亚和')
+  if (dualLabels[compactPlay]) {
+    const item = dualLabels[compactPlay]
+    return [{ position: item.position, selection: item.selection, amount, play_code: compactPlay.startsWith('冠亚和') ? 'sum' : undefined, play_name: compactPlay }]
   }
   for (const [rank, pos] of Object.entries(rankMap)) {
     if (play.startsWith(rank)) {
-      const selection = play.slice(rank.length)
-      if (selection) return [{ position: pos, selection, amount, play_name: play }]
+      const selection = play.slice(rank.length).replace(/^\//, '')
+      if (selection) return [{ position: pos, selection, amount, play_code: /^\d+$/.test(selection) ? 'ball_1_5' : ['大', '小', '单', '双'].includes(selection) ? 'two_sided' : 'dragon_tiger', play_name: play }]
     }
   }
   const ranked = play.match(/^(\d+)([大小单双龙虎])$/)
   if (ranked) {
-    return [{ position: Number(ranked[1]), selection: ranked[2], amount, play_name: `第${ranked[1]}名${ranked[2]}` }]
+    return [{ position: Number(ranked[1]), selection: ranked[2], amount, play_code: ['大', '小', '单', '双'].includes(ranked[2]) ? 'two_sided' : 'dragon_tiger', play_name: `第${ranked[1]}名${ranked[2]}` }]
   }
-  const posNum = play.match(/^(\d+)\/(\d+)$/)
+  const positionedSide = play.match(/^(10|[1-9])\/([大小单双龙虎])$/)
+  if (positionedSide) {
+    return [{ position: Number(positionedSide[1]), selection: positionedSide[2], amount, play_code: ['大', '小', '单', '双'].includes(positionedSide[2]) ? 'two_sided' : 'dragon_tiger', play_name: `第${positionedSide[1]}名${positionedSide[2]}` }]
+  }
+  const posNum = play.match(/^(10|[1-9])\/(\d+)$/)
   if (posNum) {
-    return [{ position: Number(posNum[1]), selection: posNum[2], amount, play_name: `第${posNum[1]}名号码` }]
+    const amounts = splitAmount(amount, posNum[2].length)
+    return [...posNum[2]].map((digit, index) => ({ position: Number(posNum[1]), selection: digit, amount: amounts[index], play_code: 'ball_1_5', play_name: `第${posNum[1]}名号码` }))
   }
   if (/^\d+$/.test(play) && play.length > 1) {
     const each = Math.round((amount / play.length) * 100) / 100
@@ -61,7 +74,7 @@ function describePayload(payload: BetPayload): string {
 }
 
 function inferPlayCode(payload: BetPayload): string {
-  if (payload.position === 6) return 'sum'
+	if (payload.play_code) return payload.play_code
   if (payload.selection === '龙' || payload.selection === '虎') return 'dragon_tiger'
   if (/^\d$/.test(payload.selection)) return 'ball_1_5'
   if (['大', '小', '单', '双'].includes(payload.selection)) return 'two_sided'

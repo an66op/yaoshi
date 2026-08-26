@@ -18,12 +18,6 @@ export const notificationKinds: Array<{ id: NotificationKind; label: string; des
 ]
 
 export const notificationSounds: NotificationSound[] = [
-  { id: 'crystal-bell', name: '水晶铃', description: '清脆、适合开奖提醒', src: '/sounds/bell1.wav', sourceLevel: 0.72 },
-  { id: 'quick-switch', name: '轻触提示', description: '短促、适合普通消息', src: '/sounds/switch1.wav', sourceLevel: 0.95 },
-  { id: 'golden-pop', name: '金币礼花', description: '明亮、适合红包奖励', src: '/sounds/cracker1.wav', sourceLevel: 0.42 },
-  { id: 'festival-pop', name: '节庆礼花', description: '热闹、适合活动通知', src: '/sounds/cracker2.wav', sourceLevel: 0.95 },
-  { id: 'metal-ping', name: '金属叮', description: '明确、适合重要公告', src: '/sounds/metal1.wav', sourceLevel: 0.60 },
-  { id: 'silver-tone', name: '银铃提示', description: '柔和、适合连续通知', src: '/sounds/steel1.wav', sourceLevel: 0.95 },
   { id: 'blessing-chime', name: '祝福和弦', description: '温和上行，适合奖励到账', tones: [523, 659, 784] },
   { id: 'aurora-chime', name: '极光编钟', description: '清亮上行，适合开奖', tones: [659, 784, 1047] },
   { id: 'lucky-triad', name: '幸运三连', description: '明快三音，适合中奖', tones: [523, 659, 784] },
@@ -36,8 +30,8 @@ export const notificationSounds: NotificationSound[] = [
 ]
 
 export const defaultNotificationSounds: Record<NotificationKind, string> = {
-  lottery: 'crystal-bell',
-  message: 'quick-switch',
-  reward: 'golden-pop',
-  announcement: 'metal-ping',
+  lottery: 'aurora-chime',
+  message: 'soft-knock',
+  reward: 'lucky-triad',
+  announcement: 'starlight',
 }

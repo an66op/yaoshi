@@ -55,6 +55,13 @@ const emptyForm = (): PaymentChannelPayload => ({
   status: 'enabled',
   remark: '',
   sort_order: 0,
+  mode: 'manual',
+  api_base: '',
+  create_order_path: '',
+  query_order_path: '',
+  callback_path: '',
+  secret_key: '',
+  timeout_seconds: 10,
 })
 
 const money = (value: number) => new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
@@ -107,6 +114,13 @@ export function WalletPage() {
       status: item.status,
       remark: item.remark,
       sort_order: item.sort_order,
+      mode: item.mode || 'manual',
+      api_base: item.api_base || '',
+      create_order_path: item.create_order_path || '',
+      query_order_path: item.query_order_path || '',
+      callback_path: item.callback_path || '',
+      secret_key: '',
+      timeout_seconds: item.timeout_seconds || 10,
     })
     setDialogOpen(true)
   }
@@ -158,7 +172,7 @@ export function WalletPage() {
       <PageHeader
         eyebrow="业务管理 / 钱包"
         title="钱包配置"
-        description="管理收款方式、出款渠道和充值规则。"
+        description="统一管理人工收款与 API 支付网关。网关密钥加密保存，后台只显示是否已配置。"
         actions={
           <>
             <Button variant="contained" startIcon={<AddRounded />} onClick={openCreate}>新增收款方式</Button>
@@ -192,14 +206,14 @@ export function WalletPage() {
             <Table size="small" sx={{ minWidth: 980 }}>
               <TableHead>
                 <TableRow>
-                  {['序号', '支付接口', '支付名称', '商户号', '充值种类', '手续费率', '最小金额', '最大金额', '状态', '操作'].map(column => <TableCell key={column}>{column}</TableCell>)}
+                  {['序号', '接入方式', '支付名称', '商户号', '充值种类', '手续费率', '最小金额', '最大金额', '状态', '操作'].map(column => <TableCell key={column}>{column}</TableCell>)}
                 </TableRow>
               </TableHead>
               <TableBody>
                 {items.map((item, index) => (
                   <TableRow hover key={item.id}>
                     <TableCell>{index + 1}</TableCell>
-                    <TableCell>{item.provider}</TableCell>
+                    <TableCell><Chip size="small" color={item.mode === 'gateway' ? 'primary' : 'default'} label={item.mode === 'gateway' ? 'API 网关' : '人工收款'} />{item.mode === 'gateway' && <Typography fontSize={9} color="text.secondary" mt={.4}>{item.has_secret ? '密钥已配置' : '未配置密钥'}</Typography>}</TableCell>
                     <TableCell>
                       <Typography fontSize={13} fontWeight={700}>{item.name}</Typography>
                       {item.remark && <Typography fontSize={11} color="text.secondary">{item.remark}</Typography>}
@@ -242,6 +256,11 @@ export function WalletPage() {
         <DialogTitle>{editing ? '编辑收款方式' : '新增收款方式'}</DialogTitle>
         <DialogContent>
           <Stack gap={2} pt={1}>
+            <Alert severity={form.mode === 'gateway' ? 'warning' : 'info'}>{form.mode === 'gateway' ? 'API 模式需要供应商接口资料。密钥保存后不回显；留空表示保留原密钥。' : '人工模式保留现有上下分申请、审核、流水和余额闭环，不会自动请求第三方。'}</Alert>
+            <TextField select label="接入模式" value={form.mode} onChange={event => setForm(current => ({ ...current, mode: event.target.value as PaymentChannel['mode'] }))}>
+              <MenuItem value="manual">人工收款 / 人工审核</MenuItem>
+              <MenuItem value="gateway">API 支付网关</MenuItem>
+            </TextField>
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)' }, gap: 2 }}>
               <TextField label="支付接口" required value={form.provider} onChange={event => setForm(current => ({ ...current, provider: event.target.value }))} />
               <TextField label="支付名称" required value={form.name} onChange={event => setForm(current => ({ ...current, name: event.target.value }))} />
@@ -257,6 +276,17 @@ export function WalletPage() {
               <TextField type="number" label="最小金额" value={form.min_amount} onChange={event => setForm(current => ({ ...current, min_amount: Number(event.target.value) }))} />
               <TextField type="number" label="最大金额" value={form.max_amount} onChange={event => setForm(current => ({ ...current, max_amount: Number(event.target.value) }))} />
             </Box>
+            {form.mode === 'gateway' && <Stack gap={1.5} sx={{ p: 1.5, border: 1, borderColor: 'divider', borderRadius: 2 }}>
+              <Typography fontWeight={800}>网关接口</Typography>
+              <TextField label="API 基础地址" required placeholder="https://pay.example.com" value={form.api_base} onChange={event => setForm(current => ({ ...current, api_base: event.target.value }))} />
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)' }, gap: 1.5 }}>
+                <TextField label="创建订单路径" required placeholder="/v1/orders" value={form.create_order_path} onChange={event => setForm(current => ({ ...current, create_order_path: event.target.value }))} />
+                <TextField label="查询订单路径" placeholder="/v1/orders/{order_no}" value={form.query_order_path} onChange={event => setForm(current => ({ ...current, query_order_path: event.target.value }))} />
+                <TextField label="回调路径" placeholder="/api/public/payment/callback/provider" value={form.callback_path} onChange={event => setForm(current => ({ ...current, callback_path: event.target.value }))} />
+                <TextField type="number" label="超时秒数" value={form.timeout_seconds} onChange={event => setForm(current => ({ ...current, timeout_seconds: Number(event.target.value) }))} inputProps={{ min: 2, max: 60 }} />
+              </Box>
+              <TextField type="password" label={editing?.has_secret ? '签名密钥（已配置，留空不修改）' : '签名密钥'} value={form.secret_key} onChange={event => setForm(current => ({ ...current, secret_key: event.target.value }))} autoComplete="new-password" />
+            </Stack>}
             <TextField label="备注" multiline minRows={3} value={form.remark} onChange={event => setForm(current => ({ ...current, remark: event.target.value }))} />
           </Stack>
         </DialogContent>

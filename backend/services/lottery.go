@@ -35,6 +35,9 @@ type GameSummary struct {
 	LastSyncAt    *time.Time `json:"last_sync_at"`
 	LastSyncError string     `json:"last_sync_error"`
 	ScheduleMode  string     `json:"schedule_mode"`
+	IssueStatus   string     `json:"issue_status"`
+	SealAt        *time.Time `json:"seal_at,omitempty"`
+	SourceHealthy bool       `json:"source_healthy"`
 }
 
 type DrawResult struct {
@@ -63,12 +66,19 @@ func (s *LotteryService) ListGames() ([]GameSummary, error) {
 		if err != nil && err != gorm.ErrRecordNotFound {
 			return nil, err
 		}
+		lifecycle, lifecycleErr := NewBetAdminService(s.db).EnsureCurrentIssue(&game)
+		if lifecycleErr != nil {
+			return nil, lifecycleErr
+		}
+		sealAt := lifecycle.SealAt
 		result = append(result, GameSummary{
 			ID: game.ID, Code: game.Code, Name: game.Name, Category: game.Category,
 			Badge: game.Badge, BadgeColor: game.BadgeColor, Enabled: game.Enabled,
 			Issue: draw.Issue, LatestNumbers: parseNumbers(draw.Numbers), NextDrawAt: game.NextDrawAt,
 			SourceKind: game.SourceKind, SourceName: game.SourceName, SourceURL: game.SourceURL,
 			SyncStatus: game.SyncStatus, LastSyncAt: game.LastSyncAt, LastSyncError: game.LastSyncError,
+			IssueStatus: lifecycle.Status, SealAt: &sealAt,
+			SourceHealthy: game.SourceKind != "external" && game.SourceKind != "official" || lifecycle.Status != lottery.IssueStatusError,
 			ScheduleMode: func() string {
 				if game.SourceKind == "official" {
 					return "official-feed"
@@ -173,7 +183,7 @@ var defaultGames = []seedGame{
 	{"happy8-mark-six", "HAPPY8_MARK_SIX", "快乐8六合彩", "六合彩", "六合彩", "green", 600, 9},
 	{"new-macau-mark-six", "NEW_MACAU_MARK_SIX", "新澳门六合彩", "六合彩", "六合彩", "gold", 600, 10},
 	{"old-macau-mark-six", "OLD_MACAU_MARK_SIX", "老澳门六合彩", "六合彩", "六合彩", "brown", 600, 11},
-	// 其他演示盘
+	// 平台自开彩
 	{"speed-racing", "SPEED_RACING", "极速赛车", "赛车", "赛车", "red", 180, 21},
 	{"au-lucky-10", "AU_LUCKY_10", "澳洲幸运10", "幸运10", "幸运10", "purple", 300, 22},
 	{"au-lucky-5", "AU_LUCKY_5", "澳洲幸运5", "幸运5", "幸运5", "purple", 300, 23},
@@ -212,11 +222,16 @@ func SeedLotteryData(db *gorm.DB) error {
 		game := lottery.Game{
 			ID: item.ID, Code: item.Code, Name: item.Name, Category: item.Category, Badge: item.Badge, BadgeColor: item.Color,
 			Enabled: true, SortOrder: sortOrder, DrawInterval: item.Interval, NextDrawAt: next,
-			SourceKind: "simulated", SourceName: "本地演示", SyncStatus: "idle",
+			SourceKind: "platform", SourceName: "王者开奖", SyncStatus: "ok",
 		}
 		created := db.Where("id = ?", game.ID).FirstOrCreate(&game)
 		if created.Error != nil {
 			return created.Error
+		}
+		if created.RowsAffected == 0 && game.SourceKind == "simulated" {
+			if err := db.Model(&game).Updates(map[string]any{"source_kind": "platform", "source_name": "王者开奖", "sync_status": "ok", "last_sync_error": ""}).Error; err != nil {
+				return err
+			}
 		}
 		if created.RowsAffected == 0 {
 			continue
@@ -275,7 +290,7 @@ func SyncTargetGames(db *gorm.DB) (*SyncTargetResult, error) {
 		game := lottery.Game{
 			ID: item.ID, Code: item.Code, Name: item.Name, Category: item.Category, Badge: item.Badge, BadgeColor: item.Color,
 			Enabled: true, SortOrder: sortOrder, DrawInterval: item.Interval, NextDrawAt: next,
-			SourceKind: "simulated", SourceName: "本地演示", SyncStatus: "idle",
+			SourceKind: "platform", SourceName: "王者开奖", SyncStatus: "ok",
 		}
 		created := db.Where("id = ?", game.ID).FirstOrCreate(&game)
 		if created.Error != nil {

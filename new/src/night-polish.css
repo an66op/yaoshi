@@ -1,4 +1,40 @@
 /* Final dark-mode surfaces for screens that keep their own light cards. */
+html:has(.theme-night),
+body:has(.theme-night),
+#root:has(.theme-night) {
+  background: #061a34;
+  color-scheme: dark;
+}
+
+.mobile-app.theme-night .app-content {
+  background: #071d35;
+  color: #e5f7fa;
+}
+
+.theme-night .wallet-page,
+.theme-night .profile-simple-page,
+.theme-night .chat-list,
+.theme-night .chat-room,
+.theme-night .notification-page,
+.theme-night .system-notice-page,
+.theme-night .activity-notice-page,
+.theme-night .plan-page {
+  min-height: 100%;
+}
+
+.theme-night .app-content:has(.wallet-page),
+.theme-night .app-content:has(.profile-simple-page),
+.theme-night .app-content:has(.chat-list),
+.theme-night .app-content:has(.chat-room),
+.theme-night .app-content:has(.notification-page),
+.theme-night .app-content:has(.system-notice-page),
+.theme-night .app-content:has(.activity-notice-page),
+.theme-night .app-content:has(.plan-page) {
+  background:
+    radial-gradient(circle at 88% 5%, #176f8740, transparent 31%),
+    linear-gradient(180deg, #071d35, #092842);
+}
+
 .theme-night .chat-list {
   background:
     radial-gradient(circle at 88% 6%, #16728a42, transparent 30%),

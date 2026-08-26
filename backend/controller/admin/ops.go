@@ -3,9 +3,16 @@ package admin
 import (
 	"backend/constants"
 	"backend/services"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -34,7 +41,14 @@ func NewOpsHandler(db *gorm.DB) *OpsHandler {
 func (h *OpsHandler) ListChatConversations(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "30"))
-	result, err := h.chat.Conversations(c.Query("room_type"), c.Query("query"), page, pageSize)
+	roomScope := strings.TrimSpace(c.Query("room_scope"))
+	var result *services.AdminConversationList
+	var err error
+	if roomScope != "" {
+		result, err = h.chat.ConversationsForRoom(c.Query("room_type"), c.Query("query"), c.Query("channel"), roomScope, page, pageSize)
+	} else {
+		result, err = h.chat.Conversations(c.Query("room_type"), c.Query("query"), c.Query("channel"), page, pageSize)
+	}
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "读取会话失败", err)
 		return
@@ -45,7 +59,7 @@ func (h *OpsHandler) ListChatConversations(c *gin.Context) {
 func (h *OpsHandler) ListChatMessages(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	beforeID, _ := strconv.ParseUint(c.DefaultQuery("before_id", "0"), 10, 64)
-	result, err := h.chat.Messages(c.Query("scope"), c.Query("room_type"), limit, beforeID)
+	result, err := h.chat.Messages(c.Query("scope"), c.Query("room_type"), c.Query("room_scope"), c.Query("game_id"), limit, beforeID)
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "读取聊天记录失败", err)
 		return
@@ -55,21 +69,49 @@ func (h *OpsHandler) ListChatMessages(c *gin.Context) {
 
 func (h *OpsHandler) ReplyChat(c *gin.Context) {
 	var request struct {
-		Scope    string `json:"scope" binding:"required"`
-		RoomType string `json:"room_type" binding:"required"`
-		Content  string `json:"content" binding:"required"`
+		Scope     string `json:"scope" binding:"required"`
+		RoomType  string `json:"room_type" binding:"required"`
+		RoomScope string `json:"room_scope"`
+		GameID    string `json:"game_id"`
+		Content   string `json:"content" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		constants.SendError(c, http.StatusBadRequest, "回复参数不正确", err)
 		return
 	}
 	operator, _ := c.Get("username")
-	result, err := h.chat.Reply(request.Scope, request.RoomType, request.Content, operatorName(operator))
+	result, err := h.chat.Reply(request.Scope, request.RoomType, request.RoomScope, request.GameID, request.Content, operatorName(operator))
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "发送回复失败", err)
 		return
 	}
 	constants.SendSuccess(c, http.StatusCreated, "回复已发送", result)
+}
+
+func (h *OpsHandler) SendChatRedPacket(c *gin.Context) {
+	var request struct {
+		Scope            string  `json:"scope" binding:"required"`
+		RoomScope        string  `json:"room_scope"`
+		GameID           string  `json:"game_id"`
+		Count            int     `json:"count" binding:"required"`
+		TotalAmount      float64 `json:"total_amount" binding:"required"`
+		MinDailyTurnover float64 `json:"min_daily_turnover"`
+		Greeting         string  `json:"greeting"`
+		Cover            string  `json:"cover"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "红包参数不正确", err)
+		return
+	}
+	operator, _ := c.Get("username")
+	result, err := h.chat.SendRedPacket(request.Scope, request.RoomScope, request.GameID, services.ChatRedPacketInput{
+		Count: request.Count, TotalAmount: request.TotalAmount, MinDailyTurnover: request.MinDailyTurnover, Greeting: request.Greeting, Cover: request.Cover,
+	}, operatorName(operator))
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "发送红包失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusCreated, "红包已发送到聊天室", result)
 }
 
 func (h *OpsHandler) DeleteChatMessage(c *gin.Context) {
@@ -136,6 +178,85 @@ func (h *OpsHandler) ListActivities(c *gin.Context) {
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+const maxActivityImageSize = 8 << 20
+
+func activityUploadRoot() string {
+	if root := strings.TrimSpace(os.Getenv("BACKEND_UPLOAD_DIR")); root != "" {
+		return root
+	}
+	return "uploads"
+}
+
+func (h *OpsHandler) UploadActivityImage(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "请选择活动图片", err)
+		return
+	}
+	if file.Size <= 0 || file.Size > maxActivityImageSize {
+		constants.SendError(c, http.StatusBadRequest, "图片大小需在 8MB 以内", fmt.Errorf("invalid image size: %d", file.Size))
+		return
+	}
+	source, err := file.Open()
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "读取图片失败", err)
+		return
+	}
+	defer source.Close()
+
+	header := make([]byte, 512)
+	n, err := io.ReadFull(source, header)
+	if err != nil && err != io.ErrUnexpectedEOF {
+		constants.SendError(c, http.StatusBadRequest, "读取图片失败", err)
+		return
+	}
+	contentType := http.DetectContentType(header[:n])
+	extensions := map[string]string{
+		"image/jpeg": ".jpg",
+		"image/png":  ".png",
+		"image/webp": ".webp",
+	}
+	ext, ok := extensions[contentType]
+	if !ok {
+		constants.SendError(c, http.StatusBadRequest, "仅支持 JPG、PNG 或 WebP 图片", fmt.Errorf("unsupported content type: %s", contentType))
+		return
+	}
+	if _, err := source.Seek(0, io.SeekStart); err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取图片失败", err)
+		return
+	}
+
+	bytes := make([]byte, 8)
+	if _, err := rand.Read(bytes); err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "生成图片名称失败", err)
+		return
+	}
+	directory := filepath.Join(activityUploadRoot(), "activities")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "创建图片目录失败", err)
+		return
+	}
+	name := fmt.Sprintf("%d-%s%s", time.Now().UnixMilli(), hex.EncodeToString(bytes), ext)
+	targetPath := filepath.Join(directory, name)
+	target, err := os.OpenFile(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "保存图片失败", err)
+		return
+	}
+	if _, err := io.Copy(target, source); err != nil {
+		_ = target.Close()
+		_ = os.Remove(targetPath)
+		constants.SendError(c, http.StatusInternalServerError, "保存图片失败", err)
+		return
+	}
+	if err := target.Close(); err != nil {
+		_ = os.Remove(targetPath)
+		constants.SendError(c, http.StatusInternalServerError, "保存图片失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusCreated, "图片已上传", gin.H{"url": "/api/public/uploads/activities/" + name})
 }
 
 func (h *OpsHandler) CreateActivity(c *gin.Context) {
@@ -383,4 +504,28 @@ func (h *OpsHandler) RunRebate(c *gin.Context) {
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "回水已结算入账", result)
+}
+
+func (h *OpsHandler) SetLotteryRoomStatus(c *gin.Context) {
+	var request struct {
+		RoomScope string `json:"room_scope"`
+		GameID    string `json:"game_id"`
+		Enabled   bool   `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "彩票室参数不正确", err)
+		return
+	}
+	roomScope := strings.TrimSpace(request.RoomScope)
+	agentID, err := strconv.ParseUint(strings.TrimPrefix(roomScope, "agent:"), 10, 64)
+	if err != nil || agentID == 0 || roomScope != "agent:"+strconv.FormatUint(agentID, 10) {
+		constants.SendError(c, http.StatusBadRequest, "房间范围不正确", err)
+		return
+	}
+	result, err := h.chat.SetLotteryRoomEnabled(agentID, request.GameID, request.Enabled)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "保存彩票室状态失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "彩票室状态已保存", result)
 }

@@ -4,7 +4,6 @@ import (
 	"backend/data/models/application"
 	"backend/data/models/bet"
 	"backend/data/models/notify"
-	"backend/data/models/settings"
 	apperrors "backend/errors"
 	"fmt"
 	"time"
@@ -30,7 +29,9 @@ func (s *NotifyAdminService) List(limit int) ([]NotificationView, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
-	_ = s.refreshDerived()
+	if err := s.refreshDerived(); err != nil {
+		return nil, apperrors.NewSystemError("NOTIFY_REFRESH_FAILED", "刷新待办提醒失败", err)
+	}
 	var rows []notify.Notification
 	if err := s.db.Order("id desc").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, apperrors.NewSystemError("NOTIFY_READ_FAILED", "读取通知失败", err)
@@ -60,37 +61,66 @@ func (s *NotifyAdminService) MarkAllRead() error {
 }
 
 func (s *NotifyAdminService) refreshDerived() error {
-	var unread int64
-	_ = s.db.Model(&notify.Notification{}).Where("read = ?", false).Count(&unread).Error
 	var pendingApps int64
-	_ = s.db.Model(&application.Application{}).Where("status = ?", "pending").Count(&pendingApps).Error
-	if pendingApps > 0 {
-		title := fmt.Sprintf("有 %d 笔申请待审核", pendingApps)
-		var exists int64
-		_ = s.db.Model(&notify.Notification{}).Where("title = ? AND read = ?", title, false).Count(&exists).Error
-		if exists == 0 {
-			_ = s.db.Create(&notify.Notification{Title: title, Content: "请前往申请管理处理上下分/入群申请。", Level: "warning", Link: "/applications"}).Error
-		}
+	if err := s.db.Model(&application.Application{}).Where("status = ?", "pending").Count(&pendingApps).Error; err != nil {
+		return err
 	}
 	var pendingBets int64
-	_ = s.db.Model(&bet.Bet{}).Where("status = ?", "pending").Count(&pendingBets).Error
-	if pendingBets > 0 {
-		title := fmt.Sprintf("有 %d 笔注单待结算", pendingBets)
-		var exists int64
-		_ = s.db.Model(&notify.Notification{}).Where("title = ? AND read = ?", title, false).Count(&exists).Error
-		if exists == 0 {
-			_ = s.db.Create(&notify.Notification{Title: title, Content: "可在现场监控或开奖结果页执行结算。", Level: "info", Link: "/monitor"}).Error
-		}
+	if err := s.db.Model(&bet.Bet{}).Where("status = ?", "pending").Count(&pendingBets).Error; err != nil {
+		return err
 	}
-	var count int64
-	_ = s.db.Model(&notify.Notification{}).Count(&count).Error
-	if count == 0 {
-		room := "王者"
-		var cfg settings.SystemConfig
-		if s.db.First(&cfg, 1).Error == nil && cfg.RoomName != "" {
-			room = cfg.RoomName
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		// Older code generated a new row whenever a count changed. Remove those
+		// snapshots and keep one stable actionable reminder per work queue.
+		if err := tx.Where("title = ?", "系统运行正常").Delete(&notify.Notification{}).Error; err != nil {
+			return err
 		}
-		_ = s.db.Create(&notify.Notification{Title: "系统运行正常", Content: room + " 管理中心已就绪，开奖线路与调度服务可在扩展服务中查看。", Level: "success", Link: "/lottery-network"}).Error
+		if err := syncAdminReminder(tx, "待审核申请", "有 % 笔申请待审核", pendingApps,
+			fmt.Sprintf("%d 笔申请等待处理", pendingApps), "warning", "/applications"); err != nil {
+			return err
+		}
+		return syncAdminReminder(tx, "待结算注单", "有 % 笔注单待结算", pendingBets,
+			fmt.Sprintf("%d 笔注单等待结算", pendingBets), "info", "/monitor")
+	})
+}
+
+func syncAdminReminder(tx *gorm.DB, stableTitle, legacyPattern string, count int64, content, level, link string) error {
+	var rows []notify.Notification
+	if err := tx.Where("title = ? OR title LIKE ?", stableTitle, legacyPattern).Order("id desc").Find(&rows).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		if len(rows) == 0 {
+			return nil
+		}
+		ids := make([]uint64, 0, len(rows))
+		for _, row := range rows {
+			ids = append(ids, row.ID)
+		}
+		return tx.Where("id IN ?", ids).Delete(&notify.Notification{}).Error
+	}
+	if len(rows) == 0 {
+		return tx.Create(&notify.Notification{Title: stableTitle, Content: content, Level: level, Link: link}).Error
+	}
+	keep := rows[0]
+	updates := map[string]any{
+		"title": stableTitle, "content": content, "level": level, "link": link,
+	}
+	if keep.Content != content {
+		updates["read"] = false
+		updates["read_at"] = nil
+	}
+	if err := tx.Model(&keep).Updates(updates).Error; err != nil {
+		return err
+	}
+	if len(rows) > 1 {
+		ids := make([]uint64, 0, len(rows)-1)
+		for _, row := range rows[1:] {
+			ids = append(ids, row.ID)
+		}
+		if err := tx.Where("id IN ?", ids).Delete(&notify.Notification{}).Error; err != nil {
+			return err
+		}
 	}
 	return nil
 }

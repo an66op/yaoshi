@@ -6,7 +6,17 @@ export type ChatMessage = {
   public_id?: number
   nickname: string
   room_type: string
+  room_scope: string
+  game_id: string
   content: string
+  message_type: 'text' | 'redpacket' | string
+  reference_id?: number
+  red_packet_count?: number
+  red_packet_total?: number
+  red_packet_min_turnover?: number
+  red_packet_cover?: 'classic' | 'celebration' | 'lucky' | string
+  claimed?: boolean
+  red_packet_reward?: number
   mine: boolean
   created_at: string
 }
@@ -28,15 +38,16 @@ export type ChatMessagePage = {
 
 export const chatApi = {
   preview: () => request<ChatPreview>('/member/chat/preview'),
-  messages: (room_type: 'group' | 'service', limit = 20, cursor?: { before_id?: number; after_id?: number }) => {
-    const query = new URLSearchParams({ room_type, limit: String(limit) })
+  messages: (room_type: 'group' | 'service', game_id = room_type === 'service' ? 'service' : 'lobby', limit = 20, cursor?: { before_id?: number; after_id?: number }) => {
+    const query = new URLSearchParams({ room_type, game_id, limit: String(limit) })
     if (cursor?.before_id) query.set('before_id', String(cursor.before_id))
     if (cursor?.after_id) query.set('after_id', String(cursor.after_id))
     return request<ChatMessagePage>(`/member/chat/messages?${query}`)
   },
-  send: (content: string, room_type: 'group' | 'service' = 'group') =>
+  send: (content: string, room_type: 'group' | 'service' = 'group', game_id = room_type === 'service' ? 'service' : 'lobby') =>
     request<ChatMessage>('/member/chat/messages', {
       method: 'POST',
-      body: JSON.stringify({ content, room_type }),
+      body: JSON.stringify({ content, room_type, game_id }),
     }),
+  claimRedPacket: (messageId: number) => request<{ reward: number; balance: number; message: string }>(`/member/chat/redpackets/${messageId}/claim`, { method: 'POST' }),
 }

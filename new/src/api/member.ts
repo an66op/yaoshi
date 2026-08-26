@@ -29,9 +29,9 @@ export type WsTicket = {
 export type RoomResolve = {
   room_code: string
   room_name: string
-  agent_id: number
-  agent_username: string
-  agent_nickname: string
+  room_logo?: string
+  status: 'joined' | 'pending'
+  application_id?: number
 }
 
 export type MemberApplication = {
@@ -140,8 +140,8 @@ export type EntertainmentLaunch = {
 }
 
 export const memberApi = {
-  login: (username: string, password: string) =>
-    request<LoginResult>('/member/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  login: (username: string, password: string, workspace = '') =>
+    request<LoginResult>('/member/login', { method: 'POST', body: JSON.stringify({ username, password, workspace }) }),
   register: (payload: { username: string; password: string; nickname?: string; invite_code?: string; room_code?: string }) =>
     request<LoginResult>('/member/register', { method: 'POST', body: JSON.stringify(payload) }),
   me: () => request<MemberProfile>('/member/me'),

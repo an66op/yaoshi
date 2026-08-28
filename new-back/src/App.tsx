@@ -2,7 +2,7 @@ import { Box, CircularProgress, CssBaseline, ThemeProvider } from '@mui/material
 import type { PaletteMode } from '@mui/material'
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { adminApi } from './api'
-import { clearSession, getStoredUser, getToken, type AuthUser } from './auth'
+import { ADMIN_AUTH_EVENT_KEY, broadcastAdminLogout, clearLegacyAdminSession, setCurrentUser, type AuthUser } from './auth'
 import { AdminShell } from './components/AdminShell'
 import { FeedbackProvider } from './components/FeedbackProvider'
 import { createAdminTheme } from './theme'
@@ -29,15 +29,20 @@ const AnnouncementPage = lazy(() => import('./pages/AnnouncementPage').then(modu
 const MenuManagementPage = lazy(() => import('./pages/MenuManagementPage').then(module => ({ default: module.MenuManagementPage })))
 const AgentWorkspacePage = lazy(() => import('./pages/AgentWorkspacePage').then(module => ({ default: module.AgentWorkspacePage })))
 const ManagementPage = lazy(() => import('./pages/ManagementPages').then(module => ({ default: module.ManagementPage })))
+const RobotsPage = lazy(() => import('./pages/RobotsPage').then(module => ({ default: module.RobotsPage })))
+const WorkspaceRobotsPage = lazy(() => import('./pages/WorkspaceRobotsPage').then(module => ({ default: module.WorkspaceRobotsPage })))
+const RoomSettingsPage = lazy(() => import('./pages/RoomSettingsPage').then(module => ({ default: module.RoomSettingsPage })))
+const WorkspaceGamesPage = lazy(() => import('./pages/WorkspaceGamesPage').then(module => ({ default: module.WorkspaceGamesPage })))
+const DataMaintenancePage = lazy(() => import('./pages/DataMaintenancePage').then(module => ({ default: module.DataMaintenancePage })))
 
-const routes = new Set(['/', '/users', '/members', '/tenants', '/agents', '/applications', '/room-reviews', '/chat', '/lottery-chat', '/announcements', '/reports', '/wallet', '/activities', '/monitor', '/bets', '/results', '/limits', '/board-report', '/lottery-network', '/entertainment', '/special-numbers', '/menu-management', '/system'])
+const routes = new Set(['/', '/users', '/members', '/robots', '/tenants', '/agents', '/applications', '/room-reviews', '/chat', '/lottery-chat', '/announcements', '/reports', '/wallet', '/activities', '/monitor', '/bets', '/results', '/limits', '/board-report', '/lottery-network', '/interface-test', '/entertainment', '/special-numbers', '/menu-management', '/audit', '/data-maintenance', '/system'])
 const currentPath = () => routes.has(window.location.pathname) ? window.location.pathname : '/'
 
 function App() {
   const [path, setPath] = useState(currentPath)
   const [mode, setMode] = useState<PaletteMode>(() => window.localStorage.getItem('yaotu-back-theme') === 'dark' ? 'dark' : 'light')
-  const [user, setUser] = useState<AuthUser | null>(() => getToken() ? getStoredUser() : null)
-  const [authChecking, setAuthChecking] = useState(() => Boolean(getToken()))
+	const [user, setUser] = useState<AuthUser | null>(null)
+	const [authChecking, setAuthChecking] = useState(true)
   const theme = useMemo(() => createAdminTheme(mode), [mode])
   useManagementWebSocket(user?.role, Boolean(user))
 
@@ -49,7 +54,7 @@ function App() {
 
   useEffect(() => {
     const onExpired = () => {
-      clearSession()
+      setCurrentUser(null)
       setUser(null)
     }
     window.addEventListener('yaotu-auth-expired', onExpired)
@@ -57,17 +62,30 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!getToken()) return
+    const onStorage = (event: StorageEvent) => {
+	  if (event.key !== ADMIN_AUTH_EVENT_KEY) return
+      setCurrentUser(null)
+      setUser(null)
+      window.history.replaceState({}, '', '/')
+      setPath('/')
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  useEffect(() => {
+	clearLegacyAdminSession()
     let cancelled = false
     void adminApi.me()
       .then(profile => {
         if (cancelled) return
+        setCurrentUser(profile)
         setUser(profile)
-        window.localStorage.setItem('yaotu-admin-user', JSON.stringify(profile))
+		void adminApi.refreshSession().catch(() => undefined)
       })
       .catch(() => {
         if (cancelled) return
-        clearSession()
+        setCurrentUser(null)
         setUser(null)
       })
       .finally(() => {
@@ -79,10 +97,12 @@ function App() {
   const navigate = (next: string) => { if (next === path) return; window.history.pushState({}, '', next); setPath(next) }
   const toggleMode = () => setMode(current => { const next = current === 'light' ? 'dark' : 'light'; window.localStorage.setItem('yaotu-back-theme', next); return next })
   const logout = () => {
-    clearSession()
+	broadcastAdminLogout()
+    setCurrentUser(null)
     setUser(null)
     window.history.pushState({}, '', '/')
     setPath('/')
+	void adminApi.logout().catch(() => undefined)
   }
 
   if (authChecking) {
@@ -90,47 +110,62 @@ function App() {
   }
 
   if (!user) {
-    return <ThemeProvider theme={theme}><CssBaseline /><LoginPage onSuccess={setUser} /></ThemeProvider>
+    return <ThemeProvider theme={theme}><CssBaseline /><LoginPage onSuccess={profile => { setCurrentUser(profile); setUser(profile) }} /></ThemeProvider>
   }
 
   const agentPage = path === '/members' ? <AgentWorkspacePage key="members" section="users" />
     : path === '/room-reviews' ? <AgentWorkspacePage key="room-reviews" section="room-reviews" />
-    : path === '/applications' ? <AgentWorkspacePage key="applications" section="applications" />
+    : path === '/applications' ? <ApplicationsPage />
+    : path === '/entertainment' ? <WorkspaceGamesPage />
     : path === '/bets' ? <AgentWorkspacePage key="bets" section="bets" />
     : path === '/lottery-chat' ? <AgentWorkspacePage key="lottery-chat" section="lottery-chat" />
     : path === '/chat' ? <AgentWorkspacePage key="chat" section="chat" />
-    : path === '/reports' ? <AgentWorkspacePage key="reports" section="reports" />
+    : path === '/reports' ? <ReportsPage />
+    : path === '/robots' ? <WorkspaceRobotsPage />
+    : path === '/announcements' ? <RoomSettingsPage section="content" />
+    : path === '/limits' ? <RoomSettingsPage section="limits" />
+    : path === '/wallet' ? <RoomSettingsPage section="wallet" />
+    : path === '/system' ? <RoomSettingsPage section="room" />
     : <AgentWorkspacePage key="dashboard" section="dashboard" />
 
-  const tenantPage = path === '/agents' ? <TenantWorkspacePage key="agents" section="agents" />
-    : path === '/members' ? <TenantWorkspacePage key="members" section="users" />
-    : path === '/room-reviews' ? <TenantWorkspacePage key="room-reviews" section="room-reviews" />
-    : path === '/applications' ? <TenantWorkspacePage key="applications" section="applications" />
-    : path === '/bets' ? <TenantWorkspacePage key="bets" section="bets" />
-    : path === '/lottery-chat' ? <TenantWorkspacePage key="lottery-chat" section="lottery-chat" />
-    : path === '/chat' ? <TenantWorkspacePage key="chat" section="chat" />
-    : path === '/reports' ? <TenantWorkspacePage key="reports" section="reports" />
+  const tenantPage = path === '/agents'
+    ? <TenantWorkspacePage key="agents" section="agents" />
+    : path === '/members' ? <AgentWorkspacePage key="tenant-members" section="users" tenantDirect />
+    : path === '/applications' ? <ApplicationsPage />
+    : path === '/entertainment' ? <WorkspaceGamesPage />
+    : path === '/bets' ? <AgentWorkspacePage key="tenant-bets" section="bets" tenantDirect />
+    : path === '/lottery-chat' ? <AgentWorkspacePage key="tenant-lottery-chat" section="lottery-chat" tenantDirect />
+    : path === '/chat' ? <AgentWorkspacePage key="tenant-chat" section="chat" tenantDirect />
+    : path === '/reports' ? <ReportsPage />
+    : path === '/robots' ? <WorkspaceRobotsPage />
+    : path === '/announcements' ? <RoomSettingsPage section="content" />
+    : path === '/limits' ? <RoomSettingsPage section="limits" />
+    : path === '/wallet' ? <RoomSettingsPage section="wallet" />
+    : path === '/system' ? <RoomSettingsPage section="room" />
     : <TenantWorkspacePage key="dashboard" section="dashboard" />
 
   const page = user.role === 'agent' ? agentPage
-	: user.role === 'tenant' ? tenantPage
+    : user.role === 'tenant' ? tenantPage
     : path === '/' ? <DashboardPage />
     : path === '/results' ? <ResultsPage />
     : path === '/users' ? <UsersPage view="accounts" />
     : path === '/members' ? <UsersPage view="members" />
+    : path === '/robots' ? <RobotsPage />
     : path === '/agents' ? <AgentsPage />
     : path === '/tenants' ? <TenantsPage />
     : path === '/lottery-chat' ? <ChatPage key="lottery" view="lottery" />
     : path === '/chat' ? <ChatPage key="support" />
     : path === '/announcements' ? <AnnouncementPage />
     : path === '/applications' ? <ApplicationsPage />
-    : path === '/room-reviews' ? <ApplicationsPage initialCategory="join" />
+    : path === '/room-reviews' ? <ApplicationsPage initialCategory="wallet" />
     : path === '/reports' ? <ReportsPage />
     : path === '/wallet' ? <WalletPage />
     : path === '/limits' ? <LimitsPage />
     : path === '/menu-management' ? <MenuManagementPage />
+    : path === '/audit' ? <ReportsPage initialReport="logs" />
+    : path === '/data-maintenance' ? <DataMaintenancePage />
     : path === '/system' ? <SystemPage />
-    : path === '/lottery-network' ? <NetworkPage />
+    : path === '/interface-test' || path === '/lottery-network' ? <NetworkPage />
     : path === '/monitor' ? <MonitorPage />
     : path === '/bets' ? <BetsPage />
     : path === '/board-report' ? <BoardReportPage />

@@ -17,7 +17,6 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
 import { useCallback, useEffect, useState } from 'react'
 import { adminApi, type AdminBet, type AdminGame } from '../api'
@@ -65,7 +64,7 @@ export function BetsPage() {
         }),
         adminApi.dashboard(),
       ])
-      setItems(list.items)
+      setItems(Array.isArray(list?.items) ? list.items : [])
       setTotal(list.total)
       setGames(dashboard.games ?? [])
       if (notify) showMessage('注单列表已刷新')
@@ -93,8 +92,7 @@ export function BetsPage() {
       <PageHeader
         eyebrow="游戏运营 / 注单"
         title="注单管理"
-        description="按用户、期号、彩种查询注单，对待结算订单执行撤单。"
-        actions={<Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)} disabled={loading}>刷新</Button>}
+        description=""
       />
       {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
       <Card sx={{ mt: 2.5, p: 2 }}>

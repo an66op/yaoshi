@@ -1,4 +1,5 @@
 import { request } from './client'
+import { createRequestId } from '../utils/requestId'
 
 export type MemberBet = {
   id: number
@@ -35,6 +36,7 @@ export type AssistantBetLine = {
   play_code: string
   play_name: string
   amount: number
+  odds: number
   label: string
 }
 
@@ -93,11 +95,21 @@ export const betsApi = {
     position: number
     selection: string
     amount: number
-    odds?: number
     request_id?: string
   }) => request<MemberBet>('/member/bets', {
     method: 'POST',
-    body: JSON.stringify({ ...payload, request_id: payload.request_id ?? crypto.randomUUID() }),
+    // Serialize the accepted contract explicitly. In particular, a caller can
+    // never inject a client-supplied odds value into the placement request.
+    body: JSON.stringify({
+      game_id: payload.game_id,
+      issue: payload.issue,
+      play_code: payload.play_code,
+      play_name: payload.play_name,
+      position: payload.position,
+      selection: payload.selection,
+      amount: payload.amount,
+      request_id: payload.request_id ?? createRequestId(),
+    }),
   }),
   assistantStatus: (gameId: string) => request<AssistantDrawStatus>(`/member/games/${encodeURIComponent(gameId)}/assistant`),
   assistantHistory: (gameId: string, limit = 20) => request<AssistantBetResult[]>(`/member/games/${encodeURIComponent(gameId)}/assistant/history?limit=${limit}`),

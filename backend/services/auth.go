@@ -26,6 +26,9 @@ func NewAuthService(db *gorm.DB) AuthService {
 
 // Register 注册
 func (s *authService) Register(req *vo.RegisterRequest) (*user.User, error) {
+	if err := validateHumanUsername(req.Username); err != nil {
+		return nil, err
+	}
 	if err := utils.ValidatePassword(req.Password); err != nil {
 		return nil, errors.NewBusinessError("INVALID_PASSWORD", "密码长度需为 8–72 个字符")
 	}
@@ -122,7 +125,7 @@ func (s *authService) LoginMember(username, password, workspace string) (*user.U
 		return nil, "", err
 	}
 	var u user.User
-	err = s.db.Where("login_scope = ? AND LOWER(username) = LOWER(?)", scope, strings.TrimSpace(username)).First(&u).Error
+	err = memberLoginAccountQuery(s.db, scope, username).First(&u).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			utils.CheckMissingUserPassword(password)
@@ -139,16 +142,26 @@ func (s *authService) LoginMember(username, password, workspace string) (*user.U
 	if u.Role == "admin" || u.Role == "tenant" {
 		return nil, "", errors.NewBusinessError("FORBIDDEN", "请使用管理后台登录")
 	}
-	if u.Role == "agent" {
-		active, hierarchyErr := accesscontrol.AgentHierarchyActive(s.db, u)
-		if hierarchyErr != nil {
-			return nil, "", errors.NewSystemError("DATABASE_ERROR", "读取代理权限失败", hierarchyErr)
-		}
-		if !active {
-			return nil, "", errors.NewBusinessError("USER_DISABLED", "所属租户已停用")
-		}
+	active, hierarchyErr := accesscontrol.AccountRoomActive(s.db, u)
+	if hierarchyErr != nil {
+		return nil, "", errors.NewSystemError("DATABASE_ERROR", "读取房间权限失败", hierarchyErr)
+	}
+	if !active {
+		return nil, "", errors.NewBusinessError("USER_DISABLED", "所属房间或上级账号已停用")
 	}
 	return s.issueToken(&u)
+}
+
+// memberLoginAccountQuery is a defence-in-depth boundary: robot accounts are
+// persisted members for betting/settlement, but they are never interactive
+// identities and must not receive a member session even if a password leaks.
+func memberLoginAccountQuery(db *gorm.DB, scope, username string) *gorm.DB {
+	return db.Model(&user.User{}).
+		Where("login_scope = ? AND LOWER(username) = LOWER(?)", scope, strings.TrimSpace(username)).
+		Where(`NOT EXISTS (
+			SELECT 1 FROM workspace_robot_profiles AS robot
+			WHERE robot.user_id = "user".user_id
+		)`)
 }
 
 func (s *authService) issueToken(u *user.User) (*user.User, string, error) {
@@ -157,7 +170,7 @@ func (s *authService) issueToken(u *user.User) (*user.User, string, error) {
 		u.LastLoginAt = &now
 		u.LoginCount++
 	}
-	token, err := utils.GenerateToken(u.UserID, 24)
+	token, err := utils.GenerateToken(u.UserID, u.AuthVersion)
 	if err != nil {
 		return nil, "", errors.NewSystemError("GENERATE_TOKEN_ERROR", constants.ErrGenerateToken, err)
 	}

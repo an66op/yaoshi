@@ -6,7 +6,6 @@ import AccountBalanceWalletRounded from '@mui/icons-material/AccountBalanceWalle
 import DownloadRounded from '@mui/icons-material/DownloadRounded'
 import PaidRounded from '@mui/icons-material/PaidRounded'
 import PendingActionsRounded from '@mui/icons-material/PendingActionsRounded'
-import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import { useCallback, useEffect, useState } from 'react'
 import { adminApi, agentApi, type ProfitShareStatement } from '../api'
 import { useFeedback } from './feedback'
@@ -35,7 +34,7 @@ export function ProfitSharePanel({ agent = false, initialDate = '' }: { agent?: 
     setLoading(true); setError('')
     try {
       const result = await (agent ? agentApi : adminApi).profitShares(date)
-      setData(result)
+      setData({ ...result, items: Array.isArray(result?.items) ? result.items : [] })
       if (notify) showMessage('代理分账账单已刷新')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '读取代理分账账单失败')
@@ -75,7 +74,6 @@ export function ProfitSharePanel({ agent = false, initialDate = '' }: { agent?: 
         <Box><Typography fontWeight={900}>每日代理分账</Typography><Typography variant="caption" color="text.secondary">应计金额来自下注时冻结快照；已入账金额来自代理余额流水，迟到结算会在下次执行时补差额。</Typography></Box>
         <Stack direction="row" gap={.75} flexWrap="wrap">
           <TextField size="small" type="date" label="分账日期" value={date} onChange={event => setDate(event.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-          <Button variant="outlined" startIcon={loading ? <CircularProgress size={15} /> : <RefreshRounded />} disabled={loading || running} onClick={() => void load(true)}>刷新</Button>
           <Button variant="outlined" startIcon={<DownloadRounded />} disabled={!data?.items.length} onClick={exportStatement}>导出</Button>
           {!agent && <Button variant="contained" color="success" disabled={running || loading || (data?.total_pending_share ?? 0) <= 0} startIcon={running ? <CircularProgress color="inherit" size={15} /> : <PaidRounded />} onClick={() => setConfirmOpen(true)}>{running ? '分账中…' : '执行待分账'}</Button>}
         </Stack>

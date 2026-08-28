@@ -2,6 +2,7 @@ package services
 
 import (
 	"backend/data/models/user"
+	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
 	"fmt"
 	"strings"
@@ -11,8 +12,23 @@ import (
 
 const platformLoginScope = "platform"
 
+var reservedRobotUsernamePrefixes = []string{"room_robot_", "room_activity_"}
+
 func tenantLoginScope(tenantID uint64) string { return fmt.Sprintf("tenant:%d", tenantID) }
 func agentLoginScope(agentID uint64) string   { return fmt.Sprintf("agent:%d", agentID) }
+
+// validateHumanUsername keeps the internal robot identity namespace out of
+// every public/admin account-creation path. Robot provisioning deliberately
+// bypasses this helper and is the only code allowed to allocate these names.
+func validateHumanUsername(username string) error {
+	value := strings.ToLower(strings.TrimSpace(username))
+	for _, prefix := range reservedRobotUsernamePrefixes {
+		if strings.HasPrefix(value, prefix) {
+			return apperrors.NewBusinessError("RESERVED_USERNAME", "该登录帐号前缀为系统机器人保留")
+		}
+	}
+	return nil
+}
 
 func loginScopeForAgent(db *gorm.DB, agentID uint64) (string, *uint64, error) {
 	var agent user.User
@@ -26,8 +42,14 @@ func loginScopeForAgent(db *gorm.DB, agentID uint64) (string, *uint64, error) {
 }
 
 func ensureUsernameInScope(db *gorm.DB, scope, username string, excludeID uint64) error {
+	if err := validateHumanUsername(username); err != nil {
+		return err
+	}
 	var count int64
-	query := db.Model(&user.User{}).Where("login_scope = ? AND LOWER(username) = LOWER(?)", scope, strings.TrimSpace(username))
+	// Login is account + password only. Account names are therefore globally
+	// unique; workspace ownership is resolved after authentication and is never
+	// accepted from a public login form.
+	query := db.Model(&user.User{}).Where("LOWER(username) = LOWER(?)", strings.TrimSpace(username))
 	if excludeID > 0 {
 		query = query.Where("user_id <> ?", excludeID)
 	}
@@ -35,7 +57,7 @@ func ensureUsernameInScope(db *gorm.DB, scope, username string, excludeID uint64
 		return err
 	}
 	if count > 0 {
-		return apperrors.NewBusinessError("USERNAME_EXISTS", "该租户或代理下已存在相同登录帐号")
+		return apperrors.NewBusinessError("USERNAME_EXISTS", "登录帐号已存在")
 	}
 	return nil
 }
@@ -50,9 +72,29 @@ func loginScopeForWorkspace(db *gorm.DB, username, workspace string, memberPorta
 	}
 	if workspace != "" {
 		if memberPortal {
+			value := strings.ToLower(workspace)
+			var room workspacemodel.Workspace
+			if err := db.Where("type IN ? AND status = ? AND LOWER(room_code) = ?", []string{workspacemodel.TypeTenant, workspacemodel.TypeAgent}, 1, value).First(&room).Error; err == nil {
+				return room.Scope, nil
+			} else if err != gorm.ErrRecordNotFound {
+				return "", err
+			}
+			var rooms []workspacemodel.Workspace
+			if err := db.Select("scope").Where("type IN ? AND status = ? AND LOWER(name) = ?", []string{workspacemodel.TypeTenant, workspacemodel.TypeAgent}, 1, value).Limit(2).Find(&rooms).Error; err != nil {
+				return "", err
+			}
+			if len(rooms) == 1 {
+				return rooms[0].Scope, nil
+			}
+			if len(rooms) > 1 {
+				return "", apperrors.NewBusinessError("AMBIGUOUS_WORKSPACE", "房间名称重复，请使用房间号")
+			}
+
+			// Compatibility for historic bookmarks that used the agent account or
+			// nickname instead of the public room number. Room identity itself is
+			// always resolved from workspaces above and never from the legacy shadow.
 			var agents []user.User
-			like := strings.ToLower(workspace)
-			if err := db.Select("user_id").Where("role = ? AND status = ? AND (LOWER(agent_room_code) = ? OR LOWER(username) = ? OR LOWER(nickname) = ?)", "agent", 1, like, like, like).Limit(2).Find(&agents).Error; err != nil {
+			if err := db.Select("user_id").Where("role = ? AND status = ? AND (LOWER(username) = ? OR LOWER(nickname) = ?)", "agent", 1, value, value).Limit(2).Find(&agents).Error; err != nil {
 				return "", err
 			}
 			if len(agents) == 1 {

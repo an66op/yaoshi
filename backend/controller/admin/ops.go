@@ -19,6 +19,7 @@ import (
 )
 
 type OpsHandler struct {
+	db            *gorm.DB
 	activities    *services.ActivityAdminService
 	special       *services.SpecialAdminService
 	entertainment *services.EntertainmentAdminService
@@ -29,6 +30,7 @@ type OpsHandler struct {
 
 func NewOpsHandler(db *gorm.DB) *OpsHandler {
 	return &OpsHandler{
+		db:            db,
 		activities:    services.NewActivityAdminService(db),
 		special:       services.NewSpecialAdminService(db),
 		entertainment: services.NewEntertainmentAdminService(db),
@@ -67,6 +69,39 @@ func (h *OpsHandler) ListChatMessages(c *gin.Context) {
 	constants.SendSuccess(c, http.StatusOK, "ok", result)
 }
 
+func (h *OpsHandler) ChatUnread(c *gin.Context) {
+	operatorID, _ := c.Get("user_id")
+	userID, _ := operatorID.(uint64)
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "30"))
+	result, err := h.chat.UnreadServiceMessages(userID, "", limit)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "读取客服未读消息失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+func (h *OpsHandler) MarkChatRead(c *gin.Context) {
+	operatorID, _ := c.Get("user_id")
+	userID, _ := operatorID.(uint64)
+	var request struct {
+		Scope            string `json:"scope" binding:"required"`
+		RoomScope        string `json:"room_scope" binding:"required"`
+		GameID           string `json:"game_id"`
+		ThroughMessageID uint64 `json:"through_message_id"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "已读参数不正确", err)
+		return
+	}
+	result, err := h.chat.MarkServiceConversationRead(userID, "", request.Scope, request.RoomScope, request.GameID, request.ThroughMessageID)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "更新客服已读状态失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "客服会话已读", result)
+}
+
 func (h *OpsHandler) ReplyChat(c *gin.Context) {
 	var request struct {
 		Scope     string `json:"scope" binding:"required"`
@@ -90,6 +125,7 @@ func (h *OpsHandler) ReplyChat(c *gin.Context) {
 
 func (h *OpsHandler) SendChatRedPacket(c *gin.Context) {
 	var request struct {
+		RequestID        string  `json:"request_id" binding:"max=96"`
 		Scope            string  `json:"scope" binding:"required"`
 		RoomScope        string  `json:"room_scope"`
 		GameID           string  `json:"game_id"`
@@ -105,7 +141,7 @@ func (h *OpsHandler) SendChatRedPacket(c *gin.Context) {
 	}
 	operator, _ := c.Get("username")
 	result, err := h.chat.SendRedPacket(request.Scope, request.RoomScope, request.GameID, services.ChatRedPacketInput{
-		Count: request.Count, TotalAmount: request.TotalAmount, MinDailyTurnover: request.MinDailyTurnover, Greeting: request.Greeting, Cover: request.Cover,
+		RequestID: request.RequestID, Count: request.Count, TotalAmount: request.TotalAmount, MinDailyTurnover: request.MinDailyTurnover, Greeting: request.Greeting, Cover: request.Cover,
 	}, operatorName(operator))
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "发送红包失败", err)
@@ -150,6 +186,27 @@ func (h *OpsHandler) SetChatMute(c *gin.Context) {
 	constants.SendSuccess(c, http.StatusOK, "禁言状态已更新", gin.H{"user_id": result.UserID, "muted_until": result.MutedUntil, "mute_reason": result.MuteReason})
 }
 
+func (h *OpsHandler) SetRoomGroupChat(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("agentID"), 10, 64)
+	if err != nil || id == 0 {
+		constants.SendError(c, http.StatusBadRequest, "房间 ID 不正确", err)
+		return
+	}
+	var request struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "群聊设置不正确", err)
+		return
+	}
+	result, err := h.chat.SetRoomGroupChatEnabled(id, request.Enabled)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "更新群聊设置失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "群聊设置已更新", gin.H{"agent_id": result.UserID, "group_chat_enabled": result.GroupChatEnabled})
+}
+
 func (h *OpsHandler) SetChatAnnouncement(c *gin.Context) {
 	var request struct {
 		Content string `json:"content"`
@@ -172,7 +229,12 @@ func operatorName(value any) string {
 }
 
 func (h *OpsHandler) ListActivities(c *gin.Context) {
-	result, err := h.activities.List(c.Query("status"))
+	workspaceID, workspaceErr := resolveAdminWorkspaceID(c, h.db)
+	if workspaceErr != nil {
+		constants.SendError(c, http.StatusBadRequest, "工作区不正确", workspaceErr)
+		return
+	}
+	result, err := h.activities.ListForWorkspace(workspaceID, c.Query("status"))
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取活动失败", err)
 		return
@@ -260,12 +322,17 @@ func (h *OpsHandler) UploadActivityImage(c *gin.Context) {
 }
 
 func (h *OpsHandler) CreateActivity(c *gin.Context) {
+	workspaceID, workspaceErr := resolveAdminWorkspaceID(c, h.db)
+	if workspaceErr != nil {
+		constants.SendError(c, http.StatusBadRequest, "工作区不正确", workspaceErr)
+		return
+	}
 	var request services.ActivityPayload
 	if err := c.ShouldBindJSON(&request); err != nil {
 		constants.SendError(c, http.StatusBadRequest, "活动参数不正确", err)
 		return
 	}
-	result, err := h.activities.Create(request)
+	result, err := h.activities.CreateForWorkspace(workspaceID, request)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "创建活动失败", err)
 		return
@@ -274,6 +341,11 @@ func (h *OpsHandler) CreateActivity(c *gin.Context) {
 }
 
 func (h *OpsHandler) UpdateActivity(c *gin.Context) {
+	workspaceID, workspaceErr := resolveAdminWorkspaceID(c, h.db)
+	if workspaceErr != nil {
+		constants.SendError(c, http.StatusBadRequest, "工作区不正确", workspaceErr)
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "活动 ID 不正确", err)
@@ -284,7 +356,7 @@ func (h *OpsHandler) UpdateActivity(c *gin.Context) {
 		constants.SendError(c, http.StatusBadRequest, "活动参数不正确", err)
 		return
 	}
-	result, err := h.activities.Update(id, request)
+	result, err := h.activities.UpdateForWorkspace(workspaceID, id, request)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "更新活动失败", err)
 		return
@@ -293,6 +365,11 @@ func (h *OpsHandler) UpdateActivity(c *gin.Context) {
 }
 
 func (h *OpsHandler) SetActivityStatus(c *gin.Context) {
+	workspaceID, workspaceErr := resolveAdminWorkspaceID(c, h.db)
+	if workspaceErr != nil {
+		constants.SendError(c, http.StatusBadRequest, "工作区不正确", workspaceErr)
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "活动 ID 不正确", err)
@@ -305,7 +382,7 @@ func (h *OpsHandler) SetActivityStatus(c *gin.Context) {
 		constants.SendError(c, http.StatusBadRequest, "请提供活动状态", err)
 		return
 	}
-	result, err := h.activities.SetStatus(id, request.Status)
+	result, err := h.activities.SetStatusForWorkspace(workspaceID, id, request.Status)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "更新活动状态失败", err)
 		return
@@ -314,12 +391,17 @@ func (h *OpsHandler) SetActivityStatus(c *gin.Context) {
 }
 
 func (h *OpsHandler) DeleteActivity(c *gin.Context) {
+	workspaceID, workspaceErr := resolveAdminWorkspaceID(c, h.db)
+	if workspaceErr != nil {
+		constants.SendError(c, http.StatusBadRequest, "工作区不正确", workspaceErr)
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "活动 ID 不正确", err)
 		return
 	}
-	if err := h.activities.Delete(id); err != nil {
+	if err := h.activities.DeleteForWorkspace(workspaceID, id); err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "删除活动失败", err)
 		return
 	}
@@ -456,8 +538,13 @@ func (h *OpsHandler) SetEntertainmentStatus(c *gin.Context) {
 }
 
 func (h *OpsHandler) ListNotifications(c *gin.Context) {
+	workspaceID, workspaceErr := resolveAdminWorkspaceID(c, h.db)
+	if workspaceErr != nil {
+		constants.SendError(c, http.StatusBadRequest, "工作区不正确", workspaceErr)
+		return
+	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	result, err := h.notify.List(limit)
+	result, err := h.notify.ListForWorkspace(workspaceID, limit)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取通知失败", err)
 		return
@@ -466,12 +553,17 @@ func (h *OpsHandler) ListNotifications(c *gin.Context) {
 }
 
 func (h *OpsHandler) MarkNotificationRead(c *gin.Context) {
+	workspaceID, workspaceErr := resolveAdminWorkspaceID(c, h.db)
+	if workspaceErr != nil {
+		constants.SendError(c, http.StatusBadRequest, "工作区不正确", workspaceErr)
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "通知 ID 不正确", err)
 		return
 	}
-	if err := h.notify.MarkRead(id); err != nil {
+	if err := h.notify.MarkReadForWorkspace(workspaceID, id); err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "标记已读失败", err)
 		return
 	}
@@ -479,7 +571,12 @@ func (h *OpsHandler) MarkNotificationRead(c *gin.Context) {
 }
 
 func (h *OpsHandler) MarkAllNotificationsRead(c *gin.Context) {
-	if err := h.notify.MarkAllRead(); err != nil {
+	workspaceID, workspaceErr := resolveAdminWorkspaceID(c, h.db)
+	if workspaceErr != nil {
+		constants.SendError(c, http.StatusBadRequest, "工作区不正确", workspaceErr)
+		return
+	}
+	if err := h.notify.MarkAllReadForWorkspace(workspaceID); err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "标记已读失败", err)
 		return
 	}
@@ -487,7 +584,12 @@ func (h *OpsHandler) MarkAllNotificationsRead(c *gin.Context) {
 }
 
 func (h *OpsHandler) RebatePreview(c *gin.Context) {
-	result, err := h.rebates.PreviewToday()
+	workspaceID, workspaceErr := resolveAdminWorkspaceID(c, h.db)
+	if workspaceErr != nil {
+		constants.SendError(c, http.StatusBadRequest, "工作区不正确", workspaceErr)
+		return
+	}
+	result, err := h.rebates.PreviewTodayForWorkspace(workspaceID)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取回水预览失败", err)
 		return
@@ -496,9 +598,14 @@ func (h *OpsHandler) RebatePreview(c *gin.Context) {
 }
 
 func (h *OpsHandler) RunRebate(c *gin.Context) {
+	workspaceID, workspaceErr := resolveAdminWorkspaceID(c, h.db)
+	if workspaceErr != nil {
+		constants.SendError(c, http.StatusBadRequest, "工作区不正确", workspaceErr)
+		return
+	}
 	operator, _ := c.Get("username")
 	operatorName, _ := operator.(string)
-	result, err := h.rebates.RunToday(operatorName)
+	result, err := h.rebates.RunTodayForWorkspace(workspaceID, operatorName)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "回水结算失败", err)
 		return

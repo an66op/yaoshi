@@ -5,7 +5,9 @@
 package accesscontrol
 
 import (
+	"backend/data/models/settings"
 	"backend/data/models/user"
+	workspacemodel "backend/data/models/workspace"
 	"strings"
 
 	"gorm.io/gorm"
@@ -42,6 +44,35 @@ func AccountRoomActive(db *gorm.DB, account user.User) (bool, error) {
 			return false, nil
 		}
 		return AgentHierarchyActive(db, account)
+	}
+	if account.WorkspaceID > 0 {
+		var workspace workspacemodel.Workspace
+		if err := db.First(&workspace, account.WorkspaceID).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return false, nil
+			}
+			return false, err
+		}
+		if workspace.Status != 1 {
+			return false, nil
+		}
+		// Room owners keep management access while their room is closed. Only
+		// member-facing access is governed by the operational room switch.
+		if account.Role == "member" {
+			var config settings.SystemConfig
+			if err := db.Select("room_enabled").Where("workspace_id = ?", workspace.ID).First(&config).Error; err == nil && !config.RoomEnabled {
+				return false, nil
+			} else if err != nil && err != gorm.ErrRecordNotFound {
+				return false, err
+			}
+		}
+		if workspace.Type == workspacemodel.TypeTenant {
+			var ownerCount int64
+			if err := db.Model(&user.User{}).Where("user_id = ? AND role = ? AND status = ?", workspace.OwnerUserID, "tenant", 1).Count(&ownerCount).Error; err != nil {
+				return false, err
+			}
+			return ownerCount == 1, nil
+		}
 	}
 	if account.ParentAgentID == nil {
 		return true, nil

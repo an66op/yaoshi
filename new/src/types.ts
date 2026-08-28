@@ -6,6 +6,7 @@ export type Game = {
   title: string
   tag: string
   category: string
+  lobbyCategory: string
   online: string
   period: string
   due: string

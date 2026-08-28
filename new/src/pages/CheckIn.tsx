@@ -7,8 +7,6 @@ type Props = {
   onComplete?: () => void
 }
 
-const defaultRewards = [5, 8, 12, 18, 25, 35, 50]
-
 /** 每日签到：接后端活动 API */
 export function CheckIn({ onBack, onComplete }: Props) {
   const [activityId, setActivityId] = useState<number | null>(null)
@@ -57,7 +55,9 @@ export function CheckIn({ onBack, onComplete }: Props) {
 
   const streak = status?.streak ?? 0
   const checkedIn = status?.checked_in ?? false
-  const rewards = defaultRewards
+  const configuredDays = Number(status?.config?.days)
+  const days = Number.isInteger(configuredDays) && configuredDays > 0 ? Math.min(configuredDays, 31) : 7
+  const daySlots = Array.from({ length: days }, (_, index) => index)
 
   return (
     <main className="check-in-page">
@@ -68,29 +68,29 @@ export function CheckIn({ onBack, onComplete }: Props) {
       <section className="check-in-hero">
         <small>DAILY REWARD</small>
         <h1>{status?.title ?? '好运每日相伴'}</h1>
-        <p>{loading ? '加载中…' : '连续签到可领取更多奖励'}</p>
+        <p>{loading ? '加载中…' : activityId ? '完成签到后奖励自动入账' : '当前没有进行中的签到活动'}</p>
         <div><span>已连续签到</span><b>{streak} <small>天</small></b></div>
       </section>
       <section className="check-in-card">
         <header>
-          <div><small>本周签到</small><b>连续签到，奖励加倍</b></div>
+          <div><small>签到记录</small><b>每日签到，奖励自动入账</b></div>
           <em>{checkedIn ? '今日已签到' : '待签到'}</em>
         </header>
-        <div className="check-in-days">
-          {rewards.map((reward, index) => {
+        {activityId ? <div className="check-in-days">
+          {daySlots.map((index) => {
             const completed = index < streak || (checkedIn && index === streak - 1)
             const today = !checkedIn && index === streak
             return (
-              <article className={`${completed ? 'completed' : ''} ${today ? 'today' : ''}`} key={reward}>
+              <article className={`${completed ? 'completed' : ''} ${today ? 'today' : ''}`} key={index}>
                 <small>第 {index + 1} 天</small>
-                <b>{completed ? '✓' : `+${reward}`}</b>
-                <span>{completed ? '已领取' : `${reward} 奖励`}</span>
+                <b>{completed ? '✓' : '待领'}</b>
+                <span>{completed ? '已领取' : '签到奖励'}</span>
               </article>
             )
           })}
-        </div>
+        </div> : !loading ? <p className="check-in-note">当前房间暂无签到活动</p> : null}
         <button className={`check-in-claim ${checkedIn ? 'claimed' : ''}`} disabled={checkedIn || submitting || !activityId} onClick={() => void claim()}>
-          {submitting ? '提交中…' : checkedIn ? '今日已签到，明日再来' : `立即签到领取奖励`}
+          {submitting ? '提交中…' : checkedIn ? '今日已签到，明日再来' : '立即签到'}
         </button>
         {message && <p className="check-in-note">{message}</p>}
       </section>

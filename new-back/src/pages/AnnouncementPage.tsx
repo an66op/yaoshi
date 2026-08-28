@@ -7,6 +7,7 @@ import PushPinRounded from '@mui/icons-material/PushPinRounded'
 import { useEffect, useMemo, useState } from 'react'
 import { adminApi, type SystemSettings } from '../api'
 import { useFeedback } from '../components/feedback'
+import { PlanManagementPanel } from '../components/PlanManagementPanel'
 
 type Announcement = SystemSettings['announcements'][number]
 
@@ -142,6 +143,7 @@ export function AnnouncementPage() {
           {!loading && !announcements.length && <Box textAlign="center" py={5}><CampaignRounded sx={{ fontSize: 38, color: 'text.disabled' }} /><Typography color="text.secondary" fontSize={12}>暂无公告，点击右上角新增</Typography></Box>}
         </Stack>
       </Card>
+      <PlanManagementPanel />
     </Stack>
   </Box>
 }

@@ -10,9 +10,9 @@
   display: flex;
   align-items: center;
   justify-self: center;
-  gap: 7px;
-  min-height: 30px;
-  padding: 4px 7px;
+  gap: 6px;
+  min-height: 34px;
+  padding: 2px 7px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -21,10 +21,13 @@
 .room-cluster:active { background: #ffffff13; }
 .room-cluster svg:first-child { width: 15px; height: 15px; color: #c9f5ef; opacity: .95; }
 .room-cluster svg:last-child { width: 12px; height: 12px; opacity: .7; transform: rotate(90deg); }
-.room-cluster b { font: 700 19px "Rajdhani", "Noto Sans SC", sans-serif; letter-spacing: .12em; }
+.room-cluster-copy { display: grid; min-width: 0; max-width: 126px; justify-items: center; gap: 0; line-height: 1; }
+.room-cluster b { overflow: hidden; width: 100%; font: 700 clamp(15px, 4.5vw, 18px) "Rajdhani", "Noto Sans SC", sans-serif; letter-spacing: .1em; line-height: 1; white-space: nowrap; text-align: center; text-overflow: ellipsis; }
+.room-cluster small { overflow: hidden; width: 100%; margin-top: 3px; color: #c9f5ef; font-size: 8px; font-weight: 600; line-height: 1; letter-spacing: .04em; white-space: nowrap; text-align: center; text-overflow: ellipsis; opacity: .78; }
 .theme-day .room-cluster { color: #155f78; }
 .theme-day .room-cluster:active { background: #26889b12; }
 .theme-day .room-cluster svg:first-child { color: #2d8191; }
+.theme-day .room-cluster small { color: #4c7c8b; }
 .room-switcher-layer {
   position: fixed;
   z-index: 1100;
@@ -36,25 +39,27 @@
   backdrop-filter: blur(5px);
 }
 .room-switcher {
-  width: min(356px, 100%);
-  max-height: min(78dvh, 580px);
+  width: min(372px, 100%);
+  max-height: min(82dvh, 620px);
   overflow-y: auto;
-  padding: 15px;
+  padding: 17px;
   border: 1px solid #a8dce1;
-  border-radius: 15px;
-  background: #f9ffff;
-  box-shadow: 0 14px 28px #10496252;
+  border-radius: 21px;
+  background: linear-gradient(155deg,#fbffff,#f0fafb);
+  box-shadow: 0 22px 54px #0a3b555c, inset 0 1px #fff;
   color: #214e60;
 }
-.room-switcher > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; }
+.room-switcher > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; padding: 0 2px; }
 .room-switcher > header div { display: grid; gap: 2px; }
 .room-switcher > header small { color: #52909b; font: 700 9px "DM Mono", monospace; letter-spacing: .13em; }
-.room-switcher > header b { font-size: 17px; }
+.room-switcher > header b { color:#173f52; font-size: 19px; line-height:1.2; }
+.room-switcher > header em { overflow:hidden; max-width:245px; color:#6f929f; font-size:9px; font-style:normal; font-weight:600; white-space:nowrap; text-overflow:ellipsis; }
 .room-switcher > header > button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 10px; background: #e5f4f5; color: #357582; font-size: 21px; line-height: 1; }
 .room-switcher-current { display: flex; align-items: center; gap: 9px; padding: 12px; border: 1px solid #74d2d1; border-radius: 14px; background: radial-gradient(circle at 95% 10%, #baf6ed 0, transparent 27%), linear-gradient(100deg, #dff8f7, #f6fcfc); box-shadow: inset 0 1px #fff; }
 .room-switcher-current-icon { display: grid!important; place-items: center; flex: none; width: 39px; height: 39px; border-radius: 12px; background: linear-gradient(135deg, #177e9e, #31bcae); color: #fff; box-shadow: 0 5px 12px #17899a44; }
 .room-switcher-current-icon svg { width: 20px; height: 20px; }
 .room-switcher-current > span { display: grid; min-width: 0; gap: 1px; }
+.room-switcher-current > span:not(.room-switcher-current-icon) { flex: 1; }
 .room-switcher-current small { color: #6d94a0; font-size: 9px; }
 .room-switcher-current b { overflow: hidden; color: #24586a; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
 .room-switcher-current em { color: #57909d; font: 600 10px "DM Mono", monospace; font-style: normal; letter-spacing: .04em; }
@@ -65,32 +70,44 @@
 .room-switcher-recent-title small { color: #8ba6ae; font-size: 9px; }
 .room-switcher-recent-title > em { color: #67a1aa; font: 600 9px "DM Mono", monospace; font-style: normal; }
 .room-switcher-list { display: grid; gap: 7px; }
-.room-switcher-list > button { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 51px; padding: 8px 10px; border: 1px solid #d6e9eb; border-radius: 12px; background: #f4fbfb; color: #315c6c; text-align: left; }
+.room-switcher-list > button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 55px; padding: 8px 10px; border: 1px solid #d6e9eb; border-radius: 13px; background: #f9fdfd; box-shadow:0 3px 9px #2b77800d; color: #315c6c; text-align: left; transition:border-color .16s, background .16s, transform .16s; }
 .room-switcher-list > button:hover:not(:disabled) { border-color: #50bfc1; background: #e9f8f7; }
-.room-switcher-list > button:disabled { opacity: .72; }
+.room-switcher-list > button:active:not(:disabled) { transform:scale(.992); }
+.room-switcher-list > button:disabled { cursor:not-allowed; opacity: .62; }
+.room-switcher-list > .room-switcher-list-current { border-color:#53c9c7; background:radial-gradient(circle at 98% 5%,#baf5eb 0,transparent 30%),linear-gradient(105deg,#e0f8f7,#f7fdfd); box-shadow:inset 0 1px #fff,0 5px 13px #24999d1c; }
+.room-switcher-list > .room-switcher-list-current:disabled { cursor:default; opacity:1; }
+.room-switcher-list > .room-switcher-list-pending { border-color:#e7cf9d; background:#fffbf2; }
+.room-switcher-list > .room-switcher-list-disabled { background:#f3f7f7; }
 .room-switcher-list > button > span { display: grid; flex: 1; min-width: 0; gap: 2px; }
-.room-switcher-list > button > .room-switcher-list-icon { display: grid; place-items: center; flex: none; width: 27px; height: 27px; border-radius: 9px; background: #ddf2f2; color: #278d94; font: 700 11px "DM Mono", monospace; }
+.room-switcher-list > button > .room-switcher-list-icon { display: grid; place-items: center; flex: none; width: 34px; height: 34px; overflow:hidden; border-radius: 10px; background: linear-gradient(135deg,#d8f3f3,#ecfafa); color: #278d94; box-shadow:inset 0 0 0 1px #fff9; font: 700 11px "DM Mono", monospace; }
+.room-switcher-list-icon.has-image { background:#fff!important; }
+.room-switcher-list-icon img { width:100%; height:100%; object-fit:contain; }
+.room-switcher-list-icon svg { width:17px!important; height:17px!important; }
 .room-switcher-list b { overflow: hidden; color: #255565; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
 .room-switcher-list small { color: #83a0a8; font: 600 10px "DM Mono", monospace; letter-spacing: .04em; }
 .room-switcher-list em { padding: 3px 6px; border-radius: 7px; background: #d9f4f1; color: #188e8a; font-size: 9px; font-style: normal; font-weight: 700; }
+.room-switcher-list .room-switcher-status-pending { background:#fff0ca; color:#aa721d; }
+.room-switcher-list .room-switcher-status-disabled { background:#e3e9ea; color:#71858c; }
 .room-switcher-list svg, .room-switcher-entry svg { flex: none; width: 15px; height: 15px; color: #58a2aa; }
 .room-switcher-empty { display: grid; justify-items: center; gap: 3px; padding: 15px 10px 17px; border: 1px dashed #b9dfe1; border-radius: 12px; background: #f6fbfb; color: #7c9da5; text-align: center; }
 .room-switcher-empty span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: #e0f4f4; color: #299da2; font-size: 17px; }
 .room-switcher-empty p { margin: 3px 0 0; color: #527783; font-size: 11px; font-weight: 700; }
 .room-switcher-empty small { font-size: 9px; }
 .room-switcher-error { display: block; margin: 8px 2px 0; color: #d66558; font-size: 10px; line-height: 1.45; }
-.room-switcher-entry { display: grid; gap: 6px; width: 100%; margin-top: 11px; padding: 10px 2px 1px; border: 0; border-top: 1px solid #dbecee; color: #147f91; font-size: 11px; font-weight: 700; text-align: left; }
-.room-switcher-entry-first { margin-top: 0; padding-top: 0; border-top: 0; }
+.room-switcher-entry { display: grid; gap: 7px; width: 100%; margin-top: 4px; padding: 11px; border: 1px solid #d8eaec; border-radius:14px; background:#f6fbfb; color: #147f91; font-size: 11px; font-weight: 700; text-align: left; }
+.room-switcher-entry-first { margin-top: 11px; padding-top: 10px; border-top: 1px solid #dbecee; }
 .room-switcher-entry > div { display: flex; align-items: center; gap: 7px; }
-.room-switcher-entry input { flex: 1; min-width: 0; height: 37px; padding: 0 11px; border: 1px solid #b9dde1; border-radius: 10px; outline: 0; background: #f5fbfb; color: #24586a; font: 700 13px "DM Mono", monospace; letter-spacing: .08em; }
+.room-switcher-entry input { flex: 1; min-width: 0; height: 39px; padding: 0 11px; border: 1px solid #b9dde1; border-radius: 11px; outline: 0; background: #fff; color: #24586a; font: 700 13px "DM Mono", monospace; letter-spacing: .08em; }
 .room-switcher-entry input:focus { border-color: #34bbb8; box-shadow: 0 0 0 3px #34bbb824; }
 .room-switcher-entry input::placeholder { color: #98b0b6; font-family: "Noto Sans SC", sans-serif; font-weight: 500; letter-spacing: 0; }
-.room-switcher-entry button { display: grid; flex: none; place-items: center; width: 37px; height: 37px; padding: 0; border: 0; border-radius: 10px; background: linear-gradient(135deg, #168ca6, #29b9a8); color: #fff; }
+.room-switcher-entry button { display: grid; flex: none; place-items: center; width: 39px; height: 39px; padding: 0; border: 0; border-radius: 11px; background: linear-gradient(135deg, #168ca6, #29b9a8); box-shadow:0 5px 11px #168ea133; color: #fff; }
 .room-switcher-entry button:disabled { opacity: .6; }
 .theme-night .room-switch-trigger { border-color: #a5ffff40; background: #0b456666; color: #a8f8f4; }
-.theme-night .room-switcher-layer { background: #020d1ccc; }
+.room-switcher-layer.theme-night { background: #020d1ccc; }
 .theme-night .room-switcher { border-color: #4bd4dc46; background: #0a2c48f5; box-shadow: 0 18px 38px #000a; color: #e0f8fa; }
 .theme-night .room-switcher > header small, .theme-night .room-switcher-list small, .theme-night .room-switcher-recent-title small { color: #8dbcc5; }
+.theme-night .room-switcher > header b { color:#e3f9fb; }
+.theme-night .room-switcher > header em { color:#86b4bf; }
 .theme-night .room-switcher > header > button { background: #143f59; color: #a3e6e7; }
 .theme-night .room-switcher-current { border-color: #4dd6ca70; background: radial-gradient(circle at 95% 10%, #237872 0, transparent 28%), linear-gradient(110deg, #114752, #123c58); }
 .theme-night .room-switcher-current small, .theme-night .room-switcher-current em { color: #8dbcc5; }
@@ -98,17 +115,34 @@
 .theme-night .room-switcher-current > i { background: #16545b; color: #a3fff7; }
 .theme-night .room-switcher-list > button { border-color: #4bd4dc2f; background: #103a56; color: #dbf4f6; }
 .theme-night .room-switcher-list > button:hover:not(:disabled) { border-color: #58d0ca; background: #164d60; }
+.theme-night .room-switcher-list > .room-switcher-list-current { border-color:#44c9c1; background:radial-gradient(circle at 98% 5%,#237872 0,transparent 30%),linear-gradient(105deg,#114752,#123c58); }
+.theme-night .room-switcher-list > .room-switcher-list-pending { border-color:#8a6d3b; background:#493d25; }
+.theme-night .room-switcher-list > .room-switcher-list-disabled { background:#153144; }
 .theme-night .room-switcher-list b { color: #e6fbfc; }
 .theme-night .room-switcher-list em { background: #16545b; color: #a3fff7; }
 .theme-night .room-switcher-list > button > .room-switcher-list-icon { background: #16545b; color: #a3fff7; }
+.theme-night .room-switcher-list .room-switcher-status-pending { background:#684f23; color:#ffd987; }
+.theme-night .room-switcher-list .room-switcher-status-disabled { background:#29404e; color:#93aab2; }
 .theme-night .room-switcher-recent-title b { color: #d8f3f5; }
 .theme-night .room-switcher-recent-title > em { color: #8dbcc5; }
 .theme-night .room-switcher-empty { border-color: #4bd4dc46; background: #103a56; color: #8dbcc5; }
 .theme-night .room-switcher-empty span { background: #16545b; color: #a3fff7; }
 .theme-night .room-switcher-empty p { color: #d8f3f5; }
-.theme-night .room-switcher-entry { border-top-color: #4bd4dc2a; color: #92ede7; }
+.theme-night .room-switcher-entry { border-color: #4bd4dc2a; background:#0d3550; color: #92ede7; }
 .theme-night .room-switcher-entry input { border-color: #4bd4dc3d; background: #103a56; color: #e1fbfd; }
 .theme-night .room-switcher-entry input::placeholder { color: #8dbcc5; }
+
+@media (max-width: 480px) {
+  .room-switcher-layer {
+    align-items: end;
+    padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+  }
+  .room-switcher {
+    width: 100%;
+    max-height: min(76dvh, 580px);
+    border-radius: 18px;
+  }
+}
 
 /* 大厅分类轨道：简洁分段、字号清楚，贴近游戏列表。 */
 .app-content:has(.lobby-hero) .lobby-body { padding-top: 10px; }

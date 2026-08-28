@@ -1,3 +1,5 @@
+import { clearMemberBusinessStorage } from '../utils/businessStorage'
+
 // A phone on the development LAN must call this computer's backend, not its
 // own localhost. Production is served through Nginx on the same origin, where
 // `/api` is proxied to the Go service. Keep the result absolute because the
@@ -22,25 +24,6 @@ export class AuthError extends Error {
   }
 }
 
-const TOKEN_KEY = 'yaotu-member-token'
-
-export function getToken() {
-  return window.localStorage.getItem(TOKEN_KEY)
-}
-
-export function setToken(token: string) {
-  window.localStorage.setItem(TOKEN_KEY, token)
-}
-
-export function clearToken() {
-  window.localStorage.removeItem(TOKEN_KEY)
-}
-
-function authHeaders(): Record<string, string> {
-  const token = getToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = init?.signal ? undefined : new AbortController()
   const timeout = controller ? window.setTimeout(() => controller.abort(), 15_000) : undefined
@@ -48,8 +31,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${apiBase}${path}`, {
       ...init,
+	  credentials: 'include',
       signal: init?.signal ?? controller?.signal,
-      headers: { 'Content-Type': 'application/json', ...authHeaders(), ...init?.headers },
+      headers: { 'Content-Type': 'application/json', ...init?.headers },
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw new Error('请求超时，请稍后重试')
@@ -59,9 +43,18 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   const raw = await response.text()
   let body: ApiResponse<T>
-  try { body = JSON.parse(raw) as ApiResponse<T> } catch { throw new Error('服务返回了无效响应') }
+  try {
+    body = JSON.parse(raw) as ApiResponse<T>
+  } catch {
+    if (response.status === 401) {
+      clearMemberBusinessStorage()
+      window.dispatchEvent(new CustomEvent('yaotu-member-auth-expired'))
+      throw new AuthError('登录状态已失效，请重新登录')
+    }
+    throw new Error('服务返回了无效响应')
+  }
   if (response.status === 401) {
-    clearToken()
+    clearMemberBusinessStorage()
     window.dispatchEvent(new CustomEvent('yaotu-member-auth-expired'))
     throw new AuthError(body.message || '请先登录')
   }
@@ -76,6 +69,7 @@ export async function publicRequest<T>(path: string, init?: RequestInit): Promis
   try {
     response = await fetch(`${apiBase}${path}`, {
       ...init,
+	  credentials: 'include',
       signal: init?.signal ?? controller?.signal,
       headers: { 'Content-Type': 'application/json', ...init?.headers },
     })

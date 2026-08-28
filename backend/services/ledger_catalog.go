@@ -3,17 +3,23 @@ package services
 import "strings"
 
 var ledgerCategories = map[string]string{
-	"manual":             "finance",
-	"application_credit": "finance",
-	"application_debit":  "finance",
-	"bet":                "betting",
-	"bet_cancel":         "betting",
-	"settlement":         "betting",
-	"rebate":             "welfare",
-	"checkin":            "welfare",
-	"redpacket":          "welfare",
-	"invite":             "welfare",
-	"agent_share":        "share",
+	"manual":                "finance",
+	"application_credit":    "finance",
+	"application_debit":     "finance",
+	"system_topup":          "finance",
+	"opening_balance":       "finance",
+	"seed_reconciliation":   "finance",
+	"bet":                   "betting",
+	"bet_cancel":            "betting",
+	"reconciliation_refund": "betting",
+	"settlement":            "betting",
+	"rebate":                "welfare",
+	"checkin":               "welfare",
+	"redpacket":             "welfare",
+	"redpacket_reserve":     "finance",
+	"redpacket_refund":      "finance",
+	"invite":                "welfare",
+	"agent_share":           "share",
 }
 
 func ledgerCategory(ledgerType string) string {

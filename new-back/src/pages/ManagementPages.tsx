@@ -16,22 +16,80 @@ import {
   Paper,
   Stack,
   Switch,
+  Tab,
+  Tabs,
   TextField,
   Typography,
 } from '@mui/material'
 import AddRounded from '@mui/icons-material/AddRounded'
 import CloudUploadRounded from '@mui/icons-material/CloudUploadRounded'
 import DeleteOutlineRounded from '@mui/icons-material/DeleteOutlineRounded'
-import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import SportsEsportsRounded from '@mui/icons-material/SportsEsportsRounded'
 import InboxRounded from '@mui/icons-material/InboxRounded'
 import SendRounded from '@mui/icons-material/SendRounded'
 import { useCallback, useEffect, useState } from 'react'
-import { adminApi, resolveApiAsset, type AdminGame, type AdminUser, type EntertainmentPlatform, type OpsActivity, type SpecialOverview } from '../api'
+import { adminApi, resolveApiAsset, type AdminGame, type AdminUser, type EntertainmentPlatform, type GameCategory, type OpsActivity, type SpecialOverview } from '../api'
+import { gameLogoPaths } from '../gameLogos'
 import { PageHeader } from '../components/PageHeader'
 import { useFeedback } from '../components/feedback'
 
 const typeLabel: Record<string, string> = { checkin: '签到', banner: '轮播', promotion: '推广活动', invite: '邀请', redpacket: '红包' }
+
+function GameLogo({ gameId, name, enabled }: { gameId: string; name: string; enabled: boolean }) {
+  const src = gameLogoPaths[gameId]
+  if (src) {
+    return (
+      <Box
+        sx={{
+          width: 32,
+          height: 32,
+          flex: '0 0 32px',
+          display: 'grid',
+          placeItems: 'center',
+          overflow: 'hidden',
+          border: 1,
+          borderColor: enabled ? 'divider' : 'action.disabledBackground',
+          borderRadius: '50%',
+          bgcolor: 'background.paper',
+          boxShadow: enabled ? '0 2px 7px rgba(24,83,109,.12)' : 'none',
+          opacity: enabled ? 1 : 0.55,
+        }}
+      >
+        <Box
+          component="img"
+          src={src}
+          alt={`${name} Logo`}
+          sx={{
+            width: '100%',
+            height: '100%',
+            display: 'block',
+            objectFit: 'contain',
+            transformOrigin: 'center',
+          }}
+        />
+      </Box>
+    )
+  }
+  return (
+    <Box
+      sx={{
+        width: 32,
+        height: 32,
+        flex: '0 0 32px',
+        display: 'grid',
+        placeItems: 'center',
+        borderRadius: '50%',
+        color: 'white',
+        fontSize: 10.5,
+        fontWeight: 800,
+        background: enabled ? 'linear-gradient(145deg,#1684ad,#29bdb0)' : 'linear-gradient(145deg,#77838d,#a3acb3)',
+      }}
+    >
+      {name.slice(0, 2)}
+    </Box>
+  )
+}
+
 const statusColor = (status: string): 'default' | 'success' | 'warning' | 'error' => {
   if (status === 'active' || status === 'enabled' || status === 'available') return 'success'
   if (status === 'maintenance' || status === 'draft' || status === 'reserved') return 'warning'
@@ -158,10 +216,9 @@ function ActivitiesPage() {
       <PageHeader
         eyebrow="游戏运营 / 活动"
         title="活动管理"
-        description="管理签到、轮播、推广海报、邀请和红包活动；推广海报可配置封面与点击跳转。"
+        description=""
         actions={
           <>
-            <Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)} disabled={loading}>刷新</Button>
             <Button variant="contained" startIcon={<AddRounded />} onClick={openCreate}>新增活动</Button>
           </>
         }
@@ -260,12 +317,21 @@ function ActivitiesPage() {
 function EntertainmentPage() {
   const [items, setItems] = useState<EntertainmentPlatform[]>([])
   const [games, setGames] = useState<AdminGame[]>([])
-  const [gameFilter, setGameFilter] = useState<'all' | 'enabled' | 'disabled'>('all')
+  const [categories, setCategories] = useState<GameCategory[]>([])
+  const [section, setSection] = useState<'lottery' | 'extension'>('lottery')
+  const [gameCategory, setGameCategory] = useState('彩票')
+  const [gameFilter, setGameFilter] = useState<'all' | 'enabled' | 'disabled'>('enabled')
   const [gameQuery, setGameQuery] = useState('')
   const [pendingGame, setPendingGame] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [open, setOpen] = useState(false)
+  const [categoryOpen, setCategoryOpen] = useState(false)
+  const [categoryDrafts, setCategoryDrafts] = useState<GameCategory[]>([])
+  const [newCategory, setNewCategory] = useState({ name: '', sort_order: 50 })
+  const [assignGame, setAssignGame] = useState<AdminGame | null>(null)
+  const [assignCategory, setAssignCategory] = useState('')
+  const [assignSortOrder, setAssignSortOrder] = useState(0)
   const [form, setForm] = useState({ code: '', name: '', category: '其他', merchant_no: '', api_base: '', launch_path: '/portal', secret_key: '', status: 'disabled', remark: '', sort_order: 0 })
   const [saving, setSaving] = useState(false)
   const { showMessage } = useFeedback()
@@ -274,10 +340,12 @@ function EntertainmentPage() {
     setLoading(true)
     setError('')
     try {
-      const [platforms, lotteryGames] = await Promise.all([adminApi.entertainment(), adminApi.games()])
+      const [platforms, lotteryGames, lobbyCategories] = await Promise.all([adminApi.entertainment(), adminApi.games(), adminApi.gameCategories()])
       setItems(platforms)
       setGames(lotteryGames)
-      if (notify) showMessage('游戏与彩种已刷新')
+      setCategories(lobbyCategories)
+      setGameCategory(current => current === '未分类' || lobbyCategories.some(category => category.name === current) ? current : lobbyCategories[0]?.name || '未分类')
+      if (notify) showMessage('游戏列表已刷新')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '读取娱乐平台失败')
     } finally {
@@ -288,15 +356,13 @@ function EntertainmentPage() {
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load])
 
   const visibleGames = games.filter(game => {
+    if (gameCategory === '未分类' ? Boolean(game.lobby_category) : game.lobby_category !== gameCategory) return false
     if (gameFilter === 'enabled' && !game.enabled) return false
     if (gameFilter === 'disabled' && game.enabled) return false
     const query = gameQuery.trim().toLowerCase()
-    return !query || game.name.toLowerCase().includes(query) || game.id.toLowerCase().includes(query) || game.category.toLowerCase().includes(query)
+    return !query || game.name.toLowerCase().includes(query) || game.id.toLowerCase().includes(query) || game.category.toLowerCase().includes(query) || game.lobby_category.toLowerCase().includes(query)
   })
-  const groupedGames = Array.from(visibleGames.reduce((map, game) => {
-    map.set(game.category, [...(map.get(game.category) ?? []), game])
-    return map
-  }, new Map<string, AdminGame[]>()).entries()).sort(([left], [right]) => left.localeCompare(right, 'zh-CN'))
+  const extensionCategories = Array.from(new Set(items.map(item => item.category)))
 
   const toggleGame = async (game: AdminGame, enabled: boolean) => {
     setPendingGame(game.id)
@@ -309,6 +375,86 @@ function EntertainmentPage() {
       setError(reason instanceof Error ? reason.message : '更新彩种状态失败')
     } finally {
       setPendingGame('')
+    }
+  }
+
+  const openCategoryManager = () => {
+    setCategoryDrafts(categories.map(category => ({ ...category })))
+    setNewCategory({ name: '', sort_order: (categories.at(-1)?.sort_order ?? 40) + 10 })
+    setCategoryOpen(true)
+  }
+
+  const saveCategory = async (category: GameCategory) => {
+    setSaving(true)
+    setError('')
+    try {
+      await adminApi.updateGameCategory(category.id, { name: category.name, sort_order: category.sort_order })
+      showMessage('分类已保存')
+      await load()
+      setCategoryDrafts(current => current.map(item => item.id === category.id ? { ...item, name: category.name, sort_order: category.sort_order } : item))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '保存分类失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const createCategory = async () => {
+    if (!newCategory.name.trim()) {
+      setError('请输入分类名称')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await adminApi.createGameCategory({ name: newCategory.name.trim(), sort_order: newCategory.sort_order })
+      showMessage('分类已新增')
+      await load()
+      setCategoryOpen(false)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '新增分类失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const deleteCategory = async (category: GameCategory) => {
+    if (!window.confirm(`删除“${category.name}”后，其中彩种会转入未分类并自动停用。确定继续吗？`)) return
+    setSaving(true)
+    setError('')
+    try {
+      await adminApi.deleteGameCategory(category.id)
+      showMessage('分类已删除')
+      setCategoryOpen(false)
+      setGameCategory('未分类')
+      setGameFilter('all')
+      await load()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '删除分类失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const openAssignment = (game: AdminGame) => {
+    setAssignGame(game)
+    setAssignCategory(game.lobby_category)
+    setAssignSortOrder(game.lobby_sort_order || 0)
+  }
+
+  const saveAssignment = async () => {
+    if (!assignGame) return
+    setSaving(true)
+    setError('')
+    try {
+      await adminApi.assignGameCategory(assignGame.id, { category: assignCategory, sort_order: assignSortOrder })
+      showMessage(assignCategory ? `${assignGame.name}已归入${assignCategory}` : `${assignGame.name}已转入未分类并停用`)
+      setAssignGame(null)
+      await load()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '彩种归类失败')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -334,73 +480,126 @@ function EntertainmentPage() {
     <Box p={{ xs: 2, lg: 2.5 }}>
       <PageHeader
         eyebrow="彩票运营 / 游戏中心"
-        title="游戏与彩种"
-        description="所有已接入、已停用和维护中的游戏统一在这里管理；停用彩种仍会保留，随时可以重新开放。"
+        title="游戏列表"
+        description=""
         actions={
           <>
-            <Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)}>刷新</Button>
+            <Button variant="outlined" onClick={openCategoryManager}>分类管理</Button>
             <Button variant="contained" startIcon={<SportsEsportsRounded />} onClick={() => { setForm({ code: '', name: '', category: '其他', merchant_no: '', api_base: '', launch_path: '/portal', secret_key: '', status: 'disabled', remark: '', sort_order: items.length + 1 }); setOpen(true) }}>接入扩展游戏</Button>
           </>
         }
       />
-      {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
-      {loading && <Box mt={2}><CircularProgress size={20} /></Box>}
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2,minmax(0,1fr))', md: 'repeat(4,minmax(0,1fr))' }, gap: 1.2, mt: 2 }}>
-        {[['全部彩种', games.length, 'primary.main'], ['正常开放', games.filter(game => game.enabled).length, 'success.main'], ['已停用', games.filter(game => !game.enabled).length, 'text.secondary'], ['彩票分类', new Set(games.map(game => game.category)).size, 'warning.main']].map(([label, value, color]) => <Card key={String(label)}><CardContent sx={{ p: '14px !important' }}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography fontSize={{ xs: 21, md: 26 }} fontWeight={900} color={String(color)}>{value}</Typography></CardContent></Card>)}
-      </Box>
-      <Paper variant="outlined" sx={{ mt: 1.5, p: 1.35 }}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} alignItems={{ sm: 'center' }}>
-          <TextField size="small" placeholder="搜索彩种名称、编号或分类" value={gameQuery} onChange={event => setGameQuery(event.target.value)} sx={{ flex: 1, minWidth: 220 }} />
-          <Stack direction="row" gap={.75}>{(['all', 'enabled', 'disabled'] as const).map(filter => <Button key={filter} size="small" variant={gameFilter === filter ? 'contained' : 'outlined'} onClick={() => setGameFilter(filter)}>{filter === 'all' ? `全部 ${games.length}` : filter === 'enabled' ? `已启用 ${games.filter(game => game.enabled).length}` : `已停用 ${games.filter(game => !game.enabled).length}`}</Button>)}</Stack>
-        </Stack>
-      </Paper>
-      <Stack gap={1.5} mt={1.5}>
-        {groupedGames.map(([category, categoryGames]) => <Paper key={category} variant="outlined" sx={{ overflow: 'hidden' }}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between" px={1.6} py={1.2} bgcolor="action.hover">
-            <Box><Typography fontWeight={850}>{category}</Typography><Typography variant="caption" color="text.secondary">{categoryGames.length} 个彩种 · {categoryGames.filter(game => game.enabled).length} 个开放</Typography></Box>
-            <Chip size="small" color={categoryGames.some(game => game.enabled) ? 'primary' : 'default'} label={categoryGames.some(game => game.enabled) ? '分类已开放' : '分类已停用'} />
-          </Stack>
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,minmax(0,1fr))', xl: 'repeat(3,minmax(0,1fr))' }, gap: 1, p: 1.2 }}>
-            {categoryGames.map(game => <Card key={game.id} variant="outlined" sx={{ boxShadow: 'none', opacity: game.enabled ? 1 : .68 }}>
-              <CardContent sx={{ p: '13px !important' }}>
-                <Stack direction="row" alignItems="flex-start" gap={1.1}>
-                  <Box sx={{ width: 40, height: 40, flex: '0 0 40px', display: 'grid', placeItems: 'center', borderRadius: 2.2, color: 'white', fontSize: 12, fontWeight: 900, background: game.enabled ? 'linear-gradient(145deg,#1684ad,#29bdb0)' : 'linear-gradient(145deg,#77838d,#a3acb3)' }}>{game.name.slice(0, 2)}</Box>
-                  <Box flex={1} minWidth={0}><Typography fontSize={13} fontWeight={850} noWrap>{game.name}</Typography><Typography fontSize={9} color="text.secondary" noWrap>{game.id}</Typography><Stack direction="row" gap={.5} mt={.7} flexWrap="wrap"><Chip size="small" variant="outlined" label={game.source_kind === 'official' ? '官方源' : game.source_kind === 'external' ? '外部源' : '平台彩'} sx={{ height: 20, fontSize: 9 }} /><Chip size="small" label={game.enabled ? '已启用' : '已停用'} color={game.enabled ? 'success' : 'default'} sx={{ height: 20, fontSize: 9 }} /></Stack></Box>
-                  <Switch size="small" checked={game.enabled} disabled={pendingGame === game.id} onChange={event => void toggleGame(game, event.target.checked)} inputProps={{ 'aria-label': `${game.name}状态` }} />
-                </Stack>
-                {game.source_kind !== 'platform' && <Typography mt={1} fontSize={9} color={game.sync_status === 'error' ? 'error.main' : 'text.secondary'} noWrap>{game.sync_status === 'error' ? game.last_sync_error || '开奖源异常' : game.last_sync_at ? `最近同步 ${new Date(game.last_sync_at).toLocaleString('zh-CN', { hour12: false })}` : game.source_name || '等待首次同步'}</Typography>}
-              </CardContent>
-            </Card>)}
+      {error && <Alert severity="error" sx={{ mt: 1.5 }}>{error}</Alert>}
+      {loading && <Box mt={1.5}><CircularProgress size={18} /></Box>}
+      <Paper variant="outlined" sx={{ mt: 1.5, borderRadius: 3, overflow: 'hidden' }}>
+        <Tabs value={section} onChange={(_, value: 'lottery' | 'extension') => setSection(value)} sx={{ px: 1, minHeight: 48, borderBottom: 1, borderColor: 'divider', '& .MuiTab-root': { minHeight: 48, fontWeight: 850 } }}>
+          <Tab value="lottery" label={`彩票彩种 · ${games.filter(game => game.enabled).length}/${games.length}`} />
+          <Tab value="extension" label={`扩展游戏 · ${items.length}`} />
+        </Tabs>
+        {section === 'lottery' ? <Box p={{ xs: 1.2, sm: 1.6 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2,minmax(0,1fr))', md: 'repeat(5,minmax(0,1fr))' }, gap: .8 }}>
+            {[...categories.map(category => category.name), '未分类'].map(category => {
+              const categoryGames = games.filter(game => category === '未分类' ? !game.lobby_category : game.lobby_category === category)
+              const enabledCount = categoryGames.filter(game => game.enabled).length
+              return <Button key={category} color={category === '未分类' ? 'warning' : 'primary'} variant={gameCategory === category ? 'contained' : 'outlined'} onClick={() => { setGameCategory(category); if (category === '未分类') setGameFilter('all') }} sx={{ minHeight: 54, justifyContent: 'space-between', px: 1.4, borderRadius: 2.2 }}><Box textAlign="left"><Typography fontSize={14} fontWeight={900}>{category}</Typography><Typography fontSize={10} sx={{ opacity: .76 }}>{enabledCount} 开放{categoryGames.length > enabledCount ? ` · ${categoryGames.length - enabledCount} 停用` : ''}</Typography></Box><Typography fontSize={19} fontWeight={900}>{categoryGames.length}</Typography></Button>
+            })}
           </Box>
-        </Paper>)}
-        {!loading && groupedGames.length === 0 && <Paper variant="outlined"><EmptyState message="没有符合条件的彩种" description="可切换“全部”或清除搜索条件" /></Paper>}
-      </Stack>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" mt={3} mb={1.2}><Box><Typography fontSize={17} fontWeight={900}>扩展娱乐服务</Typography><Typography variant="caption" color="text.secondary">捕鱼、体育、真人、电子和电竞等第三方服务；未配置的项目保持停用。</Typography></Box><Chip size="small" label={`${items.length} 个平台`} /></Stack>
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'repeat(2,1fr)' }, gap: 1.5 }}>
-        {items.map(item => (
-          <Card key={item.id}>
-            <CardContent>
-              <Stack direction="row" gap={1.5}>
-                <Box sx={{ width: 50, height: 50, display: 'grid', placeItems: 'center', borderRadius: 3, color: '#fff', bgcolor: 'primary.main', fontWeight: 800 }}>{item.name.slice(0, 1)}</Box>
-                <Box flex={1} minWidth={0}>
-                  <Typography variant="caption" color="primary">{item.category}</Typography>
-                  <Typography fontWeight={750}>{item.name}</Typography>
-                  <Typography variant="caption" color="text.secondary">{item.remark || item.merchant_no || '尚未填写商户信息'} · {item.has_secret ? '密钥已配置' : '密钥未配置'}</Typography>
-                </Box>
-                <Chip size="small" color={statusColor(item.status)} label={statusLabel(item.status)} />
+          <Stack direction={{ xs: 'column', md: 'row' }} gap={1} alignItems={{ md: 'center' }} mt={1.4}>
+            <TextField size="small" placeholder={`搜索${gameCategory}名称或编号`} value={gameQuery} onChange={event => setGameQuery(event.target.value)} sx={{ flex: 1, minWidth: 220 }} />
+            <Stack direction="row" gap={.65}>
+              {(['all', 'enabled', 'disabled'] as const).map(filter => {
+                const categoryGames = games.filter(game => gameCategory === '未分类' ? !game.lobby_category : game.lobby_category === gameCategory)
+                const count = filter === 'all' ? categoryGames.length : categoryGames.filter(game => filter === 'enabled' ? game.enabled : !game.enabled).length
+                return <Button key={filter} size="small" variant={gameFilter === filter ? 'contained' : 'text'} onClick={() => setGameFilter(filter)}>{filter === 'all' ? '全部' : filter === 'enabled' ? '已开放' : '已停用'} {count}</Button>
+              })}
+            </Stack>
+          </Stack>
+          <Box mt={1.25} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,minmax(0,1fr))', xl: 'repeat(3,minmax(0,1fr))' }, gap: 1 }}>
+            {visibleGames.map(game => {
+              const sourceLabel = game.source_kind === 'official' ? '官方源' : game.source_kind === 'external' ? '外部源' : '平台彩'
+              const sourceDetail = game.sync_status === 'error'
+                ? game.last_sync_error || '开奖源异常'
+                : game.last_sync_at
+                  ? new Date(game.last_sync_at).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+                  : '等待同步'
+              return <Paper key={game.id} variant="outlined" sx={{ p: 1.2, borderRadius: 2.4, opacity: game.enabled ? 1 : .68, transition: '150ms ease', '&:hover': { borderColor: 'primary.light', boxShadow: '0 8px 22px rgba(17,91,122,.09)', transform: 'translateY(-1px)' } }}>
+                <Stack direction="row" alignItems="center" gap={1.1}>
+                  <Box sx={{ '& > *': { width: 42, height: 42, flexBasis: 42 } }}><GameLogo gameId={game.id} name={game.name} enabled={game.enabled} /></Box>
+                  <Box flex={1} minWidth={0}>
+                    <Stack direction="row" alignItems="center" gap={.55} minWidth={0}><Typography fontSize={14} fontWeight={850} noWrap>{game.name}</Typography>{!game.enabled && <Chip label="停用" size="small" sx={{ height: 18, fontSize: 9 }} />}</Stack>
+                    <Typography fontSize={10.5} color="text.secondary" noWrap>{game.category} · {sourceLabel}</Typography>
+                  </Box>
+                  <Stack alignItems="flex-end" gap={.2}>
+                    <Switch size="small" checked={game.enabled} disabled={pendingGame === game.id} onChange={event => void toggleGame(game, event.target.checked)} inputProps={{ 'aria-label': `${game.name}状态` }} />
+                    <Button size="small" onClick={() => openAssignment(game)} sx={{ minWidth: 0, px: .7, fontSize: 10 }}>归类</Button>
+                  </Stack>
+                </Stack>
+                <Divider sx={{ my: .9 }} />
+                <Stack direction="row" justifyContent="space-between" gap={1}><Typography fontSize={10} color={game.sync_status === 'error' ? 'error.main' : 'text.secondary'} noWrap title={sourceDetail}>{sourceDetail}</Typography><Typography fontSize={10} color="text.secondary" noWrap>{game.lobby_category || '未分类'} · {game.lobby_sort_order || '—'}</Typography></Stack>
+              </Paper>
+            })}
+          </Box>
+          {!loading && visibleGames.length === 0 && <EmptyState message={`没有符合条件的${gameCategory}彩种`} description="可清除搜索条件或切换状态" />}
+        </Box> : <Box p={{ xs: 1.2, sm: 1.6 }}>
+          <Stack direction="row" gap={.7} flexWrap="wrap" mb={1.2}>{extensionCategories.map(category => <Chip key={category} variant="outlined" label={`${category} ${items.filter(item => item.category === category).length}`} />)}</Stack>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)', xl: 'repeat(3,1fr)' }, gap: 1 }}>
+            {items.map(item => (
+              <Paper key={item.id} variant="outlined" sx={{ p: 1.2, borderRadius: 2.4 }}>
+                <Stack direction="row" gap={1} alignItems="center">
+                  <Box sx={{ width: 38, height: 38, flex: '0 0 38px', display: 'grid', placeItems: 'center', borderRadius: 2, color: '#fff', background: 'linear-gradient(145deg,#1684ad,#29bdb0)', fontWeight: 900, fontSize: 14 }}>{item.name.slice(0, 1)}</Box>
+                  <Box flex={1} minWidth={0}><Typography fontSize={13.5} fontWeight={800} noWrap>{item.name}</Typography><Typography fontSize={10} color="text.secondary" noWrap>{item.category} · {item.has_secret ? '密钥已配置' : '密钥未配置'}</Typography></Box>
+                  <Chip size="small" color={statusColor(item.status)} label={statusLabel(item.status)} sx={{ height: 22, fontSize: 9.5 }} />
+                </Stack>
+                <Stack direction="row" justifyContent="flex-end" gap={.5} mt={1}>
+                  <Button size="small" variant="outlined" onClick={() => { setForm({ code: item.code, name: item.name, category: item.category, merchant_no: item.merchant_no, api_base: item.api_base, launch_path: item.launch_path ?? '/portal', secret_key: '', status: item.status, remark: item.remark, sort_order: item.sort_order }); setOpen(true) }}>配置</Button>
+                  {item.status !== 'enabled' && <Button size="small" variant="contained" onClick={() => void adminApi.setEntertainmentStatus(item.id, 'enabled').then(() => load()).then(() => showMessage('已启用'))}>启用</Button>}
+                  {item.status === 'enabled' && <Button size="small" onClick={() => void adminApi.setEntertainmentStatus(item.id, 'maintenance').then(() => load()).then(() => showMessage('已设为维护'))}>维护</Button>}
+                  {item.status !== 'disabled' && <Button size="small" color="inherit" onClick={() => void adminApi.setEntertainmentStatus(item.id, 'disabled').then(() => load()).then(() => showMessage('已停用'))}>停用</Button>}
+                </Stack>
+              </Paper>
+            ))}
+            {!loading && items.length === 0 && <EmptyState message="暂无扩展游戏" description="可在右上角接入捕鱼、体育或真人平台" />}
+          </Box>
+        </Box>}
+      </Paper>
+      <Dialog open={categoryOpen} onClose={() => !saving && setCategoryOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>前台分类管理</DialogTitle>
+        <DialogContent>
+          <Stack gap={1.1} mt={.8}>
+            {categoryDrafts.map((category, index) => <Paper key={category.id} variant="outlined" sx={{ p: 1, borderRadius: 2 }}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} gap={.8} alignItems={{ sm: 'center' }}>
+                <TextField size="small" label="分类名称" value={category.name} onChange={event => setCategoryDrafts(current => current.map(item => item.id === category.id ? { ...item, name: event.target.value } : item))} sx={{ flex: 1 }} />
+                <TextField size="small" type="number" label="顺序" value={category.sort_order} onChange={event => setCategoryDrafts(current => current.map(item => item.id === category.id ? { ...item, sort_order: Number(event.target.value) } : item))} sx={{ width: { sm: 92 } }} />
+                <Stack direction="row" gap={.4}>
+                  <Button size="small" variant="contained" disabled={saving} onClick={() => void saveCategory(category)}>保存</Button>
+                  <Button size="small" color="error" disabled={saving || categoryDrafts.length <= 1} onClick={() => void deleteCategory(category)}><DeleteOutlineRounded fontSize="small" /></Button>
+                </Stack>
               </Stack>
-              <Divider sx={{ my: 2 }} />
-              <Stack direction="row" justifyContent="flex-end" gap={1} flexWrap="wrap">
-                <Button size="small" variant="outlined" onClick={() => { setForm({ code: item.code, name: item.name, category: item.category, merchant_no: item.merchant_no, api_base: item.api_base, launch_path: item.launch_path ?? '/portal', secret_key: '', status: item.status, remark: item.remark, sort_order: item.sort_order }); setOpen(true) }}>编辑配置</Button>
-                {item.status !== 'enabled' && <Button size="small" variant="contained" onClick={() => void adminApi.setEntertainmentStatus(item.id, 'enabled').then(() => load()).then(() => showMessage('已启用'))}>启用</Button>}
-                {item.status === 'enabled' && <Button size="small" onClick={() => void adminApi.setEntertainmentStatus(item.id, 'maintenance').then(() => load()).then(() => showMessage('已设为维护'))}>维护</Button>}
-                {item.status !== 'disabled' && <Button size="small" color="inherit" onClick={() => void adminApi.setEntertainmentStatus(item.id, 'disabled').then(() => load()).then(() => showMessage('已停用'))}>停用</Button>}
-              </Stack>
-            </CardContent>
-          </Card>
-        ))}
-        {!loading && items.length === 0 && <Paper variant="outlined"><EmptyState message="暂无扩展娱乐平台" description="彩票彩种不受影响；需要时可在右上角接入捕鱼、体育或真人平台" /></Paper>}
-      </Box>
+              <Typography mt={.55} fontSize={10.5} color="text.secondary">{category.game_count} 个彩种 · {category.enabled_game_count} 个已开放 · 菜单第 {index + 1} 位</Typography>
+            </Paper>)}
+            <Divider>新增分类</Divider>
+            <Stack direction={{ xs: 'column', sm: 'row' }} gap={.8}>
+              <TextField size="small" label="分类名称" placeholder="例如 高频彩" value={newCategory.name} onChange={event => setNewCategory(current => ({ ...current, name: event.target.value }))} sx={{ flex: 1 }} />
+              <TextField size="small" type="number" label="顺序" value={newCategory.sort_order} onChange={event => setNewCategory(current => ({ ...current, sort_order: Number(event.target.value) }))} sx={{ width: { sm: 92 } }} />
+              <Button variant="outlined" startIcon={<AddRounded />} disabled={saving} onClick={() => void createCategory()}>新增</Button>
+            </Stack>
+          </Stack>
+        </DialogContent>
+        <DialogActions><Button onClick={() => setCategoryOpen(false)}>完成</Button></DialogActions>
+      </Dialog>
+      <Dialog open={Boolean(assignGame)} onClose={() => !saving && setAssignGame(null)} fullWidth maxWidth="xs">
+        <DialogTitle>{assignGame ? `归类 · ${assignGame.name}` : '彩种归类'}</DialogTitle>
+        <DialogContent>
+          <Stack gap={1.4} mt={1}>
+            <TextField select label="前台分类" value={assignCategory} onChange={event => setAssignCategory(event.target.value)}>
+              <MenuItem value=""><em>未分类（同时停用）</em></MenuItem>
+              {categories.map(category => <MenuItem key={category.id} value={category.name}>{category.name}</MenuItem>)}
+            </TextField>
+            <TextField type="number" label="分类内排序" value={assignSortOrder} onChange={event => setAssignSortOrder(Number(event.target.value))} inputProps={{ min: 0 }} />
+          </Stack>
+        </DialogContent>
+        <DialogActions><Button onClick={() => setAssignGame(null)}>取消</Button><Button variant="contained" disabled={saving} onClick={() => void saveAssignment()}>保存归类</Button></DialogActions>
+      </Dialog>
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>娱乐平台配置</DialogTitle>
         <DialogContent>
@@ -466,7 +665,7 @@ function SpecialPage() {
     setError('')
     try {
       const result = await adminApi.users({ role: 'member', status: 'active', page: 1, pageSize: 100 })
-      setCandidates(result.items)
+      setCandidates(Array.isArray(result?.items) ? result.items : [])
       setAssignResourceID(availableResources[0]?.id ?? 0)
       setAssignUserID(result.items[0]?.id ?? 0)
       setAssignOpen(true)
@@ -495,8 +694,8 @@ function SpecialPage() {
       <PageHeader
         eyebrow="扩展服务 / 房间号"
         title="房间靓号"
-        description="靓号即代理房间号。用户输入该号进入对应代理房间；发放时用户自动升为代理。"
-        actions={<><Button variant="contained" startIcon={<SendRounded />} disabled={!availableResources.length} onClick={() => void openAssign()}>发放给代理</Button><Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)}>刷新</Button></>}
+        description=""
+        actions={<Button variant="contained" startIcon={<SendRounded />} disabled={!availableResources.length} onClick={() => void openAssign()}>发放给代理</Button>}
       />
       {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
       {loading && <Box mt={2}><CircularProgress size={20} /></Box>}
@@ -525,7 +724,7 @@ function SpecialPage() {
             <Typography fontWeight={750} mb={1}>房间号资源</Typography>
             {(data?.resources ?? []).length === 0 ? <EmptyState message="尚未添加房间号" /> : (
               <Stack gap={1} maxHeight={280} overflow="auto">
-                {data?.resources.map(item => (
+                {(data?.resources ?? []).map(item => (
                   <Stack key={item.id} direction="row" justifyContent="space-between" alignItems="center">
                     <Box>
                       <Typography fontWeight={700}>{item.number}</Typography>

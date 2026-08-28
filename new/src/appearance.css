@@ -1,0 +1,12 @@
+/* “简洁模式”保留白天配色，只移除页面级背景图片。 */
+html[data-member-display="simple"] .theme-day,
+html[data-member-display="simple"] .theme-day .app-content {
+  background-image: none !important;
+}
+
+html[data-member-display="simple"] .theme-day.mobile-app,
+html[data-member-display="simple"] .theme-day.game-room,
+html[data-member-display="simple"] .theme-day.room-entry-page,
+html[data-member-display="simple"] .theme-day .app-content {
+  background-color: #eaf6f8;
+}

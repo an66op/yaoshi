@@ -1,11 +1,15 @@
 import {
   Alert,
-  Avatar,
   Box,
   Button,
   Card,
   CardContent,
   CircularProgress,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Divider,
   FormControlLabel,
   IconButton,
@@ -18,15 +22,13 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import SaveRounded from '@mui/icons-material/SaveRounded'
 import AddRounded from '@mui/icons-material/AddRounded'
 import DeleteRounded from '@mui/icons-material/DeleteRounded'
-import PhotoCameraRounded from '@mui/icons-material/PhotoCameraRounded'
-import DeleteOutlineRounded from '@mui/icons-material/DeleteOutlineRounded'
 import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
-import { adminApi, type AuditLogPage, type RebatePreview, type ReconciliationSummary, type RoomActivityStatus, type SystemSettings } from '../api'
+import { adminApi, type AuditLogPage, type RebatePreview, type ReconciliationSummary, type SystemSettings } from '../api'
 import { PageHeader } from '../components/PageHeader'
+import { RoomLogoPicker } from '../components/RoomLogoPicker'
 import { useFeedback } from '../components/feedback'
 import { prepareRoomLogo } from '../utils/roomLogo'
 
@@ -38,6 +40,7 @@ const emptySettings = (): SystemSettings => ({
   min_chat_score: 0,
   min_credit_amount: 0,
   min_debit_amount: 0,
+  room_enabled: true,
   require_join_review: true,
   sound_enabled: true,
   show_odds: true,
@@ -53,7 +56,7 @@ const emptySettings = (): SystemSettings => ({
     max_open_games: 8,
     room_activity_enabled: true,
     room_activity_interval_secs: 10,
-    room_activity_bots_per_room: 6,
+    room_activity_bots_per_room: 10,
     room_activity_bets_per_cycle: 2,
     room_activity_chat_chance_percent: 0,
     show_member_turnover: true,
@@ -97,26 +100,24 @@ const roomDisplayToggles: Array<{ key: keyof SystemSettings['game']; label: stri
 ]
 
 const money = (value: number) => new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
-const activityTime = (value?: string) => value ? new Intl.DateTimeFormat('zh-CN', {
-  month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-}).format(new Date(value)) : '尚未执行'
 
 export function SystemPage() {
   const [tab, setTab] = useState(0)
   const [settings, setSettings] = useState<SystemSettings>(emptySettings)
   const [rebatePreview, setRebatePreview] = useState<RebatePreview | null>(null)
-  const [roomActivity, setRoomActivity] = useState<RoomActivityStatus | null>(null)
   const [auditLogs, setAuditLogs] = useState<AuditLogPage | null>(null)
   const [reconciliation, setReconciliation] = useState<ReconciliationSummary | null>(null)
-  const [activityRunning, setActivityRunning] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [refundTarget, setRefundTarget] = useState<ReconciliationSummary['abnormal_bets'][number] | null>(null)
+  const [refunding, setRefunding] = useState(false)
   const [error, setError] = useState('')
   const { showMessage } = useFeedback()
 
   const reconciliationErrorTotal = reconciliation ? [
     reconciliation.issue_error_count,
     reconciliation.abnormal_bet_count,
+    reconciliation.unresolved_bet_count,
     reconciliation.pending_on_closed_count,
     reconciliation.negative_balance_count,
     reconciliation.orphan_ledger_count,
@@ -136,8 +137,8 @@ export function SystemPage() {
     setLoading(true)
     setError('')
     try {
-      const [result, preview, activity, logs, check] = await Promise.all([
-        adminApi.settings(), adminApi.rebatePreview(), adminApi.roomActivityStatus(), adminApi.auditLogs(), adminApi.reconciliation(),
+      const [result, preview, logs, check] = await Promise.all([
+        adminApi.settings(), adminApi.rebatePreview(), adminApi.auditLogs(), adminApi.reconciliation(),
       ])
       setSettings({
         ...emptySettings(),
@@ -147,7 +148,6 @@ export function SystemPage() {
         rebate: { ...emptySettings().rebate, ...(result.rebate ?? {}) },
       })
       setRebatePreview(preview)
-      setRoomActivity(activity)
       setAuditLogs(logs)
       setReconciliation(check)
       if (notify) showMessage('系统设置已刷新')
@@ -159,13 +159,6 @@ export function SystemPage() {
   }, [showMessage])
 
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load])
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void adminApi.roomActivityStatus().then(setRoomActivity).catch(() => undefined)
-    }, 5000)
-    return () => window.clearInterval(timer)
-  }, [])
 
   const save = async () => {
     setSaving(true)
@@ -180,7 +173,6 @@ export function SystemPage() {
         rebate: { ...emptySettings().rebate, ...(result.rebate ?? {}) },
       })
       setRebatePreview(await adminApi.rebatePreview())
-      setRoomActivity(await adminApi.roomActivityStatus())
       showMessage('系统设置已保存')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '保存系统设置失败')
@@ -201,20 +193,6 @@ export function SystemPage() {
     }
   }
 
-  const runRoomActivity = async () => {
-    setActivityRunning(true)
-    setError('')
-    try {
-      const status = await adminApi.runRoomActivityOnce()
-      setRoomActivity(status)
-      showMessage('房间活跃已执行一轮')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '执行房间活跃失败')
-    } finally {
-      setActivityRunning(false)
-    }
-  }
-
   const runRebate = async () => {
     setSaving(true)
     try {
@@ -228,15 +206,32 @@ export function SystemPage() {
     }
   }
 
+  const refundAbnormalBet = async () => {
+    if (!refundTarget?.refundable) return
+    setRefunding(true)
+    setError('')
+    try {
+      const result = await adminApi.refundAbnormalBet(refundTarget.id)
+      setRefundTarget(null)
+      showMessage(result.already_refunded ? '该注单此前已退款关闭，本次未重复加分' : `已退款 ${money(result.amount_cents / 100)} 并关闭注单`)
+      const [check, logs] = await Promise.all([adminApi.reconciliation(), adminApi.auditLogs()])
+      setReconciliation(check)
+      setAuditLogs(logs)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '异常注单退款失败')
+    } finally {
+      setRefunding(false)
+    }
+  }
+
   return (
     <Box p={{ xs: 2, lg: 2.5 }}>
       <PageHeader
         eyebrow="系统 / 配置"
         title="系统设置"
-        description="管理平台规则、快捷回复与回水参数。"
+        description=""
         actions={
           <>
-            <Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)} disabled={loading || saving}>刷新</Button>
             <Button variant="contained" startIcon={<SaveRounded />} onClick={() => void save()} disabled={loading || saving}>{saving ? '保存中…' : '保存设置'}</Button>
           </>
         }
@@ -257,19 +252,16 @@ export function SystemPage() {
             <Stack gap={2}>
               <Paper variant="outlined" sx={{ p: 2 }}>
                 <Typography fontWeight={850} mb={.4}>账户与聊天室</Typography>
-                <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} gap={1.5} my={2}>
-                  <Avatar src={settings.room_logo || undefined} variant="rounded" sx={{ width: 72, height: 72, bgcolor: 'primary.main', fontSize: 28, fontWeight: 900 }}>
-                    {(settings.room_name || '王').slice(0, 1)}
-                  </Avatar>
-                  <Stack direction="row" gap={1} flexWrap="wrap">
-                    <Button component="label" variant="outlined" startIcon={<PhotoCameraRounded />}>
-                      {settings.room_logo ? '更换 Logo' : '选择 Logo'}
-                      <input hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={chooseRoomLogo} />
-                    </Button>
-                    {settings.room_logo && <Button color="error" variant="text" startIcon={<DeleteOutlineRounded />} onClick={() => setSettings(current => ({ ...current, room_logo: '' }))}>移除</Button>}
-                  </Stack>
-                  <Typography variant="caption" color="text.secondary">未进入专属房间时使用；代理房间可单独覆盖名称和 Logo。</Typography>
-                </Stack>
+                <Box my={2}>
+                  <RoomLogoPicker
+                    value={settings.room_logo}
+                    fallback={settings.room_name || '王'}
+                    description="未进入专属房间时使用；代理房间可单独覆盖名称和 Logo。"
+                    previewSize={72}
+                    onChange={room_logo => setSettings(current => ({ ...current, room_logo }))}
+                    onUpload={chooseRoomLogo}
+                  />
+                </Box>
                 <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)', xl: 'repeat(3,1fr)' }, gap: 2 }}>
                   <TextField label="默认大厅名称" value={settings.room_name} onChange={event => setSettings(current => ({ ...current, room_name: event.target.value }))} inputProps={{ maxLength: 30 }} />
                   <TextField label="客服与助手昵称" value={settings.chat_nickname} onChange={event => setSettings(current => ({ ...current, chat_nickname: event.target.value }))} />
@@ -331,54 +323,7 @@ export function SystemPage() {
                   />
                 </Paper>
               </Box>
-              <Paper variant="outlined" sx={{ p: 2, borderColor: 'primary.main', bgcolor: 'action.hover' }}>
-                <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} gap={1} mb={2}>
-                  <Box>
-                    <Typography fontWeight={800}>房间自动活跃</Typography>
-                    <Typography variant="body2" color="text.secondary">为每个启用房间创建独立虚拟会员，自动产生真实注单与持久化群聊；客户端不显示机器人标识。</Typography>
-                  </Box>
-                  <FormControlLabel
-                    control={<Switch checked={Boolean(settings.game.room_activity_enabled)} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, room_activity_enabled: e.target.checked } }))} />}
-                    label={settings.game.room_activity_enabled ? '已启用' : '已关闭'}
-                  />
-                </Stack>
-                <Alert
-                  severity={roomActivity?.last_error ? 'error' : roomActivity?.running && roomActivity?.enabled ? 'success' : 'warning'}
-                  action={
-                    <Button color="inherit" size="small" disabled={activityRunning || !roomActivity?.running} onClick={() => void runRoomActivity()}>
-                      {activityRunning ? '执行中…' : '立即执行一轮'}
-                    </Button>
-                  }
-                  sx={{ mb: 2 }}
-                >
-                  <Typography variant="body2" fontWeight={750}>
-                    {roomActivity?.last_error
-                      ? roomActivity.last_error
-                      : roomActivity?.running
-                        ? roomActivity.enabled ? '服务运行中' : '服务在线，自动执行已关闭'
-                        : '服务未运行'}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {roomActivity
-                      ? `${roomActivity.target_rooms} 个房间 · ${roomActivity.bot_accounts} 个活跃账号 · ${roomActivity.enabled_games} 个彩种 · 最近执行 ${activityTime(roomActivity.last_run_at)}`
-                      : '正在读取运行状态…'}
-                  </Typography>
-                </Alert>
-                {roomActivity && (
-                  <Stack direction="row" gap={3} mb={2} flexWrap="wrap">
-                    <Box><Typography variant="caption" color="text.secondary">累计轮次</Typography><Typography fontWeight={800}>{roomActivity.cycles}</Typography></Box>
-                    <Box><Typography variant="caption" color="text.secondary">真实注单</Typography><Typography fontWeight={800}>{roomActivity.bets_placed}</Typography></Box>
-                  </Stack>
-                )}
-                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)' }, gap: 2 }}>
-                  <TextField type="number" label="执行间隔（秒）" inputProps={{ min: 5, max: 120 }} value={settings.game.room_activity_interval_secs ?? 10} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, room_activity_interval_secs: Number(e.target.value) } }))} helperText="5–120 秒；保存后自动生效" />
-                  <TextField type="number" label="每个房间机器人数量" inputProps={{ min: 1, max: 16 }} value={settings.game.room_activity_bots_per_room ?? 6} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, room_activity_bots_per_room: Number(e.target.value) } }))} helperText="1–16 个，账户和昵称互相独立" />
-                  <TextField type="number" label="每轮每房间注单数" inputProps={{ min: 1, max: 8 }} value={settings.game.room_activity_bets_per_cycle ?? 2} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, room_activity_bets_per_cycle: Number(e.target.value) } }))} helperText="随机分布到启用彩种" />
-                  <Alert severity="info" sx={{ gridColumn: '1 / -1' }}>
-                    活跃账号只生成真实注单动态，不在游戏房间发送随机闲聊。
-                  </Alert>
-                </Box>
-              </Paper>
+              <Alert severity="info">自动下注账号、运行时段和安全限额统一在“机器人管理”中按房间配置。</Alert>
             </Stack>
           ) : tab === 2 ? (
             <Stack gap={1.5}>
@@ -436,7 +381,9 @@ export function SystemPage() {
               <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2,1fr)', md: 'repeat(4,1fr)' }, gap: 1.5 }}>
                 {[
                   ['开奖源异常', reconciliation?.issue_error_count ?? 0],
-                  ['待人工注单', reconciliation?.abnormal_bet_count ?? 0],
+                  ['待人工退款注单', reconciliation?.abnormal_bet_count ?? 0],
+                  ['历史异常标记', reconciliation?.historical_abnormal_bet_count ?? 0],
+                  ['当前未解决注单', reconciliation?.unresolved_bet_count ?? 0],
                   ['封闭期未结算', reconciliation?.pending_on_closed_count ?? 0],
                   ['负余额账户', reconciliation?.negative_balance_count ?? 0],
                   ['孤儿流水', reconciliation?.orphan_ledger_count ?? 0],
@@ -460,9 +407,18 @@ export function SystemPage() {
                   </Stack>
                 </Paper>
                 <Paper variant="outlined" sx={{ p: 2 }}>
-                  <Typography fontWeight={800} mb={1}>待人工核对注单</Typography>
+                  <Typography fontWeight={800} mb={1}>异常注单记录</Typography>
                   <Stack divider={<Divider flexItem />}>
-                    {reconciliation?.abnormal_bets.length ? reconciliation.abnormal_bets.slice(0, 10).map(item => <Box py={1} key={item.id}><Typography fontWeight={700}>#{item.id} · {item.game_id} · {item.username}</Typography><Typography variant="caption" color="text.secondary">第 {item.issue} 期 · {item.reconciliation_note || '等待人工核对'}</Typography></Box>) : <Typography color="text.secondary">暂无待核对注单</Typography>}
+                    {reconciliation?.abnormal_bets.length ? reconciliation.abnormal_bets.slice(0, 10).map(item => <Stack py={1} key={item.id} direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} justifyContent="space-between" gap={1}>
+                      <Box minWidth={0}>
+                        <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
+                          <Typography fontWeight={700}>#{item.id} · {item.game_id} · {item.username}</Typography>
+                          <Chip size="small" color={item.refundable ? 'warning' : 'default'} variant="outlined" label={item.refundable ? '可退款关闭' : item.status} />
+                        </Stack>
+                        <Typography variant="caption" color="text.secondary">第 {item.issue} 期 · 金额 {money((item.amount_cents ?? 0) / 100)} · {item.reconciliation_note || '等待人工核对'}</Typography>
+                      </Box>
+                      {item.refundable && <Button size="small" color="warning" variant="outlined" onClick={() => setRefundTarget(item)}>退款关闭</Button>}
+                    </Stack>) : <Typography color="text.secondary">暂无异常注单</Typography>}
                   </Stack>
                 </Paper>
               </Box>
@@ -476,6 +432,19 @@ export function SystemPage() {
           )}
         </CardContent>
       </Card>
+      <Dialog open={Boolean(refundTarget)} onClose={() => !refunding && setRefundTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>确认退款并关闭注单</DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mt: .5, mb: 2 }}>此操作只适用于无法继续结算的异常待开奖注单。系统会退回原投注金额、追加一条不可重复的余额流水，并保留原注单和完整审计记录。</Alert>
+          <Typography fontWeight={800}>注单 #{refundTarget?.id} · {refundTarget?.game_id}</Typography>
+          <Typography color="text.secondary" mt={.5}>第 {refundTarget?.issue} 期 · {refundTarget?.username}</Typography>
+          <Typography fontSize={28} fontWeight={900} mt={2}>{money((refundTarget?.amount_cents ?? 0) / 100)}</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRefundTarget(null)} disabled={refunding}>取消</Button>
+          <Button color="warning" variant="contained" onClick={() => void refundAbnormalBet()} disabled={refunding}>{refunding ? '处理中…' : '确认退款关闭'}</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

@@ -3,6 +3,33 @@ import type { DrawResult } from '../api/lottery'
 import type { Game } from '../types'
 
 const racingColors = ['#a8afb4', '#f3c51f', '#1d83d2', '#33383e', '#f07b20', '#35c2c4', '#6144cc', '#b8bec2', '#e33b31', '#921f1d', '#23a74e']
+const racingCarsSrc = '/images/draw-cards/speed-racing-trio.png'
+
+let cachedRacingCars: HTMLImageElement | null = null
+let racingCarsRequest: Promise<HTMLImageElement> | null = null
+
+function supportsRacingArtwork(game: Game) {
+  return game.title.includes('赛车')
+}
+
+function loadRacingCars() {
+  if (cachedRacingCars) return Promise.resolve(cachedRacingCars)
+  if (racingCarsRequest) return racingCarsRequest
+  racingCarsRequest = new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image()
+    image.decoding = 'async'
+    image.onload = () => {
+      cachedRacingCars = image
+      resolve(image)
+    }
+    image.onerror = () => {
+      racingCarsRequest = null
+      reject(new Error('赛车素材加载失败'))
+    }
+    image.src = racingCarsSrc
+  })
+  return racingCarsRequest
+}
 
 function drawBall(ctx: CanvasRenderingContext2D, value: number, x: number, y: number, size: number) {
   ctx.fillStyle = racingColors[value] ?? '#1596a7'
@@ -39,15 +66,34 @@ function prepareCanvas(canvas: HTMLCanvasElement, width: number, height: number)
   return ctx
 }
 
-function paintCurrent(canvas: HTMLCanvasElement, game: Game, draw: DrawResult) {
+function drawPodiumMarker(ctx: CanvasRenderingContext2D, value: number, x: number, y: number, rank: string, champion: boolean) {
+  ctx.save()
+  ctx.shadowColor = champion ? 'rgba(255,214,80,.6)' : 'rgba(50,207,221,.38)'
+  ctx.shadowBlur = champion ? 18 : 11
+  ctx.fillStyle = champion ? 'rgba(255,207,60,.94)' : 'rgba(7,48,69,.9)'
+  ctx.strokeStyle = champion ? '#fff1a8' : '#8fe7ea'
+  ctx.lineWidth = 2
+  ctx.beginPath(); ctx.arc(x, y, champion ? 22 : 19, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+  ctx.shadowBlur = 0
+  ctx.fillStyle = champion ? '#173345' : '#fff'
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+  ctx.font = `900 ${champion ? 21 : 18}px Arial, sans-serif`
+  ctx.fillText(String(value), x, y + 1)
+  ctx.fillStyle = champion ? '#ffe47b' : '#c8f2f3'
+  ctx.font = '800 13px Arial, sans-serif'
+  ctx.fillText(rank, x, y - 31)
+  ctx.restore()
+}
+
+function paintCurrent(canvas: HTMLCanvasElement, game: Game, draw: DrawResult, racingCars: HTMLImageElement | null) {
   const width = 720
-  const height = 420
+  const height = 450
   const ctx = prepareCanvas(canvas, width, height)
   if (!ctx) return
   const background = ctx.createLinearGradient(0, 0, width, height)
-  background.addColorStop(0, '#09203b')
-  background.addColorStop(.52, '#0a6c8e')
-  background.addColorStop(1, '#0dd3c0')
+  background.addColorStop(0, '#102f48')
+  background.addColorStop(.55, '#176b7f')
+  background.addColorStop(1, '#3baca6')
   ctx.fillStyle = background
   ctx.fillRect(0, 0, width, height)
   ctx.fillStyle = 'rgba(255,255,255,.09)'
@@ -79,38 +125,52 @@ function paintCurrent(canvas: HTMLCanvasElement, game: Game, draw: DrawResult) {
   })
 
   const podium = balls.slice(0, 3)
-  const podiumLayout = [{ x: 360, y: 224, rank: '1st', size: 82 }, { x: 190, y: 250, rank: '2nd', size: 67 }, { x: 530, y: 258, rank: '3rd', size: 62 }]
-  podium.forEach((ball, index) => {
-    const slot = podiumLayout[index]
-    if (!slot) return
-    const glow = ctx.createRadialGradient(slot.x, slot.y, 8, slot.x, slot.y, slot.size)
-    glow.addColorStop(0, index === 0 ? 'rgba(255,220,87,.75)' : 'rgba(255,255,255,.42)')
-    glow.addColorStop(1, 'rgba(255,255,255,0)')
-    ctx.fillStyle = glow
-    ctx.beginPath(); ctx.arc(slot.x, slot.y, slot.size, 0, Math.PI * 2); ctx.fill()
-    ctx.fillStyle = '#fff'
-    ctx.textAlign = 'center'
-    ctx.font = `900 ${index === 0 ? 48 : 35}px Arial, sans-serif`
-    ctx.fillText(String(ball), slot.x, slot.y + 8)
-    ctx.fillStyle = index === 0 ? '#ffe374' : '#d7f7fa'
-    ctx.font = '800 17px Arial, sans-serif'
-    ctx.fillText(slot.rank, slot.x, slot.y - (index === 0 ? 56 : 45))
-  })
+  if (racingCars && supportsRacingArtwork(game)) {
+    ctx.save()
+    ctx.globalAlpha = .94
+    ctx.shadowColor = 'rgba(1,25,43,.42)'
+    ctx.shadowBlur = 18
+    ctx.drawImage(racingCars, 160, 148, 400, 227)
+    ctx.restore()
+    const markers = [{ x: 360, y: 302, rank: '1st' }, { x: 225, y: 278, rank: '2nd' }, { x: 495, y: 280, rank: '3rd' }]
+    podium.forEach((ball, index) => {
+      const marker = markers[index]
+      if (marker) drawPodiumMarker(ctx, ball, marker.x, marker.y, marker.rank, index === 0)
+    })
+  } else {
+    const podiumLayout = [{ x: 360, y: 244, rank: '1st', size: 82 }, { x: 190, y: 270, rank: '2nd', size: 67 }, { x: 530, y: 278, rank: '3rd', size: 62 }]
+    podium.forEach((ball, index) => {
+      const slot = podiumLayout[index]
+      if (!slot) return
+      const glow = ctx.createRadialGradient(slot.x, slot.y, 8, slot.x, slot.y, slot.size)
+      glow.addColorStop(0, index === 0 ? 'rgba(255,220,87,.75)' : 'rgba(255,255,255,.42)')
+      glow.addColorStop(1, 'rgba(255,255,255,0)')
+      ctx.fillStyle = glow
+      ctx.beginPath(); ctx.arc(slot.x, slot.y, slot.size, 0, Math.PI * 2); ctx.fill()
+      ctx.fillStyle = '#fff'
+      ctx.textAlign = 'center'
+      ctx.font = `900 ${index === 0 ? 48 : 35}px Arial, sans-serif`
+      ctx.fillText(String(ball), slot.x, slot.y + 8)
+      ctx.fillStyle = index === 0 ? '#ffe374' : '#d7f7fa'
+      ctx.font = '800 17px Arial, sans-serif'
+      ctx.fillText(slot.rank, slot.x, slot.y - (index === 0 ? 56 : 45))
+    })
+  }
 
   const meta = racingMeta(balls)
   ctx.fillStyle = 'rgba(4,25,43,.72)'
-  ctx.beginPath(); ctx.roundRect(18, 346, width - 36, 56, 12); ctx.fill()
+  ctx.beginPath(); ctx.roundRect(18, 382, width - 36, 50, 12); ctx.fill()
   ctx.fillStyle = '#8bdfe7'
   ctx.textAlign = 'left'; ctx.font = '600 14px Arial, sans-serif'
-  ctx.fillText('冠亚和', 40, 369)
+  ctx.fillText('冠亚和', 40, 402)
   ctx.fillStyle = '#fff'; ctx.font = '800 17px Arial, sans-serif'
-  ctx.fillText(meta.sum, 40, 391)
+  ctx.fillText(meta.sum, 40, 423)
   ctx.fillStyle = '#8bdfe7'; ctx.font = '600 14px Arial, sans-serif'
-  ctx.fillText('1–5 龙虎', 300, 369)
+  ctx.fillText('1–5 龙虎', 300, 402)
   ctx.fillStyle = '#fff'; ctx.font = '800 17px Arial, sans-serif'
-  ctx.fillText(meta.dragon, 300, 391)
+  ctx.fillText(meta.dragon, 300, 423)
   ctx.fillStyle = '#b8d8df'; ctx.textAlign = 'right'; ctx.font = '600 13px Arial, sans-serif'
-  ctx.fillText(new Date(draw.draw_at).toLocaleString('zh-CN', { hour12: false }), 680, 382)
+  ctx.fillText(new Date(draw.draw_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }), 680, 417)
 }
 
 function paintRange(canvas: HTMLCanvasElement, game: Game, draws: DrawResult[]) {
@@ -145,11 +205,22 @@ function paintRange(canvas: HTMLCanvasElement, game: Game, draws: DrawResult[]) 
 export function DrawResultCards({ game, draw, draws }: { game: Game; draw: DrawResult; draws: DrawResult[] }) {
   const currentRef = useRef<HTMLCanvasElement>(null)
   const rangeRef = useRef<HTMLCanvasElement>(null)
+  const [racingCars, setRacingCars] = useState<HTMLImageElement | null>(cachedRacingCars)
   const [preview, setPreview] = useState<{ src: string; title: string; filename: string } | null>(null)
+
   useEffect(() => {
-    if (currentRef.current) paintCurrent(currentRef.current, game, draw)
+    if (!supportsRacingArtwork(game) || racingCars) return
+    let active = true
+    void loadRacingCars().then((image) => {
+      if (active) setRacingCars(image)
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [game, racingCars])
+
+  useEffect(() => {
+    if (currentRef.current) paintCurrent(currentRef.current, game, draw, racingCars)
     if (rangeRef.current) paintRange(rangeRef.current, game, draws)
-  }, [draw, draws, game])
+  }, [draw, draws, game, racingCars])
 
   useEffect(() => {
     if (!preview) return

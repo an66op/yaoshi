@@ -1,13 +1,18 @@
 import { publicRequest, request } from './client'
+import { createRequestId } from '../utils/requestId'
 
 export type LoginResult = {
-  token: string
+	token?: string
   user: {
     id: number
     public_id: number
     username: string
     email: string
     nickname: string
+    avatar?: string
+    public_title?: string
+    badge?: string
+    room_logo?: string
     role: string
     status: number
   }
@@ -19,6 +24,7 @@ export type MemberProfile = LoginResult['user'] & {
   parent_agent_id?: number | null
   room_code?: string
   room_name?: string
+  room_logo?: string
 }
 
 export type WsTicket = {
@@ -32,6 +38,15 @@ export type RoomResolve = {
   room_logo?: string
   status: 'joined' | 'pending'
   application_id?: number
+}
+
+export type MemberRoomHistoryItem = {
+  room_code: string
+  room_name: string
+  room_logo?: string
+  status: 'current' | 'available' | 'pending' | 'disabled'
+  current: boolean
+  last_entered_at: string
 }
 
 export type MemberApplication = {
@@ -118,6 +133,8 @@ export type InviteInfo = {
   title: string
   reward: number
   share_text: string
+  invited_count: number
+  total_reward: number
 }
 
 export type EntertainmentPlatform = {
@@ -142,12 +159,15 @@ export type EntertainmentLaunch = {
 export const memberApi = {
   login: (username: string, password: string, workspace = '') =>
     request<LoginResult>('/member/login', { method: 'POST', body: JSON.stringify({ username, password, workspace }) }),
-  register: (payload: { username: string; password: string; nickname?: string; invite_code?: string; room_code?: string }) =>
+  register: (payload: { username: string; password: string; invite_code?: string; room_code?: string }) =>
     request<LoginResult>('/member/register', { method: 'POST', body: JSON.stringify(payload) }),
+	logout: () => request<null>('/member/logout', { method: 'POST' }),
+	refreshSession: () => request<{ expires_in: number }>('/member/session/refresh', { method: 'POST' }),
   me: () => request<MemberProfile>('/member/me'),
   wsTicket: () => request<WsTicket>('/member/ws-ticket', { method: 'POST' }),
-  joinRoom: (room_code: string) =>
-    request<RoomResolve>('/member/room/join', { method: 'POST', body: JSON.stringify({ room_code }) }),
+  joinRoom: (room_code: string, request_id = `join-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) =>
+    request<RoomResolve>('/member/room/join', { method: 'POST', body: JSON.stringify({ room_code, request_id }) }),
+  roomHistory: (limit = 8) => request<MemberRoomHistoryItem[]>(`/member/room/history?limit=${Math.min(10, Math.max(1, limit))}`),
   resolveRoom: (code: string) => publicRequest<RoomResolve>(`/public/rooms/${encodeURIComponent(code)}`),
   applications: (params?: { status?: string; request_type?: string; page?: number }) => {
     const query = new URLSearchParams({
@@ -158,8 +178,8 @@ export const memberApi = {
     })
     return request<ApplicationListResponse>(`/member/applications?${query}`)
   },
-  createApplication: (payload: { request_type: 'credit' | 'debit'; amount: number; payment_type?: string; payment_account_id?: number; remark?: string }) =>
-    request<MemberApplication>('/member/applications', { method: 'POST', body: JSON.stringify(payload) }),
+  createApplication: (payload: { request_type: 'credit' | 'debit'; amount: number; payment_type?: string; payment_account_id?: number; remark?: string; request_id?: string }) =>
+    request<MemberApplication>('/member/applications', { method: 'POST', body: JSON.stringify({ ...payload, request_id: payload.request_id ?? createRequestId() }) }),
   balanceHistory: (limit = 30, beforeID?: number) => {
     const query = new URLSearchParams({ limit: String(limit) })
     if (beforeID) query.set('before_id', String(beforeID))
@@ -180,4 +200,6 @@ export const memberApi = {
     request<null>('/member/password', { method: 'POST', body: JSON.stringify({ old_password, new_password }) }),
   updateNickname: (nickname: string) =>
     request<MemberProfile>('/member/nickname', { method: 'PATCH', body: JSON.stringify({ nickname }) }),
+  updateAvatar: (avatar: string) =>
+    request<MemberProfile>('/member/avatar', { method: 'PATCH', body: JSON.stringify({ avatar }) }),
 }

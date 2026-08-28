@@ -1,11 +1,13 @@
 package services
 
 import (
+	"backend/data/models/special"
 	"backend/data/models/user"
+	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
 	"backend/utils"
+	"backend/ws"
 	"strings"
-	"unicode"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -23,6 +25,7 @@ type AgentView struct {
 	RoomCode        string  `json:"room_code"`
 	RoomName        string  `json:"room_name"`
 	RoomLogo        string  `json:"room_logo"`
+	WorkspaceID     uint64  `json:"workspace_id"`
 	Balance         float64 `json:"balance"`
 	Status          int     `json:"status"`
 	MemberCount     int64   `json:"member_count"`
@@ -118,9 +121,13 @@ func (s *AgentAdminService) list(query string, page, pageSize int, tenantID *uin
 	for _, row := range rows {
 		var members int64
 		_ = s.db.Model(&user.User{}).Where("parent_agent_id = ?", row.UserID).Count(&members).Error
+		roomCode, roomName, roomLogo, workspaceID := row.AgentRoomCode, agentRoomDisplayName(row), row.AgentRoomLogo, row.WorkspaceID
+		if workspace, err := WorkspaceForAccount(s.db, row); err == nil {
+			roomCode, roomName, roomLogo, workspaceID = workspace.RoomCode, workspace.Name, workspace.Logo, workspace.ID
+		}
 		view := AgentView{
 			ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone,
-			RoomCode: row.AgentRoomCode, RoomName: agentRoomDisplayName(row), RoomLogo: row.AgentRoomLogo, Balance: centsToAmount(row.BalanceCents), Status: row.Status,
+			RoomCode: roomCode, RoomName: roomName, RoomLogo: roomLogo, WorkspaceID: workspaceID, Balance: centsToAmount(row.BalanceCents), Status: row.Status,
 			MemberCount: members, RebateRate: row.RoomRebateRate, ProfitShareRate: row.RoomProfitShareRate, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount, TenantID: row.ParentTenantID,
 		}
 		if row.ParentTenantID != nil {
@@ -192,6 +199,9 @@ func (s *AgentAdminService) Create(input CreateAgentInput) (*AgentView, error) {
 	}
 	row := user.User{Username: input.Username, LoginScope: loginScope, Password: hash, Email: input.Email, Nickname: strings.TrimSpace(input.Nickname), Phone: strings.TrimSpace(input.Phone), Role: "agent", AgentRoomCode: input.RoomCode, AgentRoomName: input.RoomName, AgentRoomLogo: input.RoomLogo, RoomRebateRate: input.RebateRate, RoomProfitShareRate: input.ProfitShareRate, Remark: strings.TrimSpace(input.Remark), RiskLevel: "normal", Status: normalizeAgentStatus(input.Status), ParentTenantID: input.TenantID}
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockPublicRoomCodeRegistry(tx); err != nil {
+			return err
+		}
 		if row.ParentTenantID != nil {
 			var tenant user.User
 			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).
@@ -218,7 +228,10 @@ func (s *AgentAdminService) Create(input CreateAgentInput) (*AgentView, error) {
 		if err := ensureRoomCodeAvailable(tx, row.AgentRoomCode, 0); err != nil {
 			return err
 		}
-		return tx.Create(&row).Error
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+		return EnsureWorkspaceHierarchy(tx)
 	}); err != nil {
 		return nil, err
 	}
@@ -251,6 +264,9 @@ func (s *AgentAdminService) update(id uint64, input UpdateAgentInput, ownerTenan
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "代理分成比例需在 0-100 之间")
 	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockPublicRoomCodeRegistry(tx); err != nil {
+			return err
+		}
 		var row user.User
 		owned := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ? AND role = ?", id, "agent")
 		if ownerTenantID != nil {
@@ -286,11 +302,26 @@ func (s *AgentAdminService) update(id uint64, input UpdateAgentInput, ownerTenan
 				return err
 			}
 		}
-		return tx.Model(&row).Updates(updates).Error
+		if err := tx.Model(&row).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := EnsureWorkspaceHierarchy(tx); err != nil {
+			return err
+		}
+		if err := tx.Where("user_id = ? AND role = ?", id, "agent").First(&row).Error; err != nil {
+			return err
+		}
+		workspace, err := WorkspaceForAccount(tx, row)
+		if err != nil {
+			return err
+		}
+		_, err = NewSettingsAdminService(tx).UpdateRoomIdentityForWorkspace(workspace.ID, input.RoomCode, input.RoomName, input.RoomLogo)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
+	ws.DisconnectUser(id)
 	return s.view(id)
 }
 
@@ -317,13 +348,14 @@ func (s *AgentAdminService) resetPassword(id uint64, password string, ownerTenan
 	if ownerTenantID != nil {
 		query = query.Where("parent_tenant_id = ?", *ownerTenantID)
 	}
-	result := query.Update("password", hash)
+	result := query.Updates(passwordSessionUpdate(hash))
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
 		return apperrors.NewBusinessError("USER_NOT_FOUND", "代理不存在或不属于当前租户")
 	}
+	ws.DisconnectUser(id)
 	return nil
 }
 
@@ -340,7 +372,11 @@ func (s *AgentAdminService) view(id uint64) (*AgentView, error) {
 	if err := s.db.Model(&user.User{}).Where("parent_agent_id = ?", id).Count(&members).Error; err != nil {
 		return nil, err
 	}
-	view := AgentView{ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone, RoomCode: row.AgentRoomCode, RoomName: agentRoomDisplayName(row), RoomLogo: row.AgentRoomLogo, Balance: centsToAmount(row.BalanceCents), Status: row.Status, MemberCount: members, RebateRate: row.RoomRebateRate, ProfitShareRate: row.RoomProfitShareRate, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount, TenantID: row.ParentTenantID}
+	roomCode, roomName, roomLogo, workspaceID := row.AgentRoomCode, agentRoomDisplayName(row), row.AgentRoomLogo, row.WorkspaceID
+	if workspace, err := WorkspaceForAccount(s.db, row); err == nil {
+		roomCode, roomName, roomLogo, workspaceID = workspace.RoomCode, workspace.Name, workspace.Logo, workspace.ID
+	}
+	view := AgentView{ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone, RoomCode: roomCode, RoomName: roomName, RoomLogo: roomLogo, WorkspaceID: workspaceID, Balance: centsToAmount(row.BalanceCents), Status: row.Status, MemberCount: members, RebateRate: row.RoomRebateRate, ProfitShareRate: row.RoomProfitShareRate, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount, TenantID: row.ParentTenantID}
 	if row.ParentTenantID != nil {
 		var tenant user.User
 		if s.db.Select("username", "nickname").First(&tenant, *row.ParentTenantID).Error == nil {
@@ -355,12 +391,13 @@ func (s *AgentAdminService) view(id uint64) (*AgentView, error) {
 
 func (s *AgentAdminService) Promote(userID uint64, roomCode string) (*AgentView, error) {
 	roomCode = strings.TrimSpace(roomCode)
-	if roomCode != "" {
-		if err := validateAgentRoomCode(roomCode); err != nil {
-			return nil, err
-		}
+	if err := validateAgentRoomCode(roomCode); err != nil {
+		return nil, err
 	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockPublicRoomCodeRegistry(tx); err != nil {
+			return err
+		}
 		var account user.User
 		if err := tx.First(&account, userID).Error; err != nil {
 			return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
@@ -368,18 +405,13 @@ func (s *AgentAdminService) Promote(userID uint64, roomCode string) (*AgentView,
 		if account.Role == "admin" || account.Role == "tenant" {
 			return apperrors.NewBusinessError("INVALID_REQUEST", "管理员不能设置为代理")
 		}
-		updates := map[string]any{"role": "agent"}
-		if roomCode != "" {
-			var occupied int64
-			if err := tx.Model(&user.User{}).Where("agent_room_code = ? AND user_id <> ?", roomCode, userID).Count(&occupied).Error; err != nil {
-				return err
-			}
-			if occupied > 0 {
-				return apperrors.NewBusinessError("INVALID_REQUEST", "房间号已被占用")
-			}
-			updates["agent_room_code"] = roomCode
+		if err := ensureRoomCodeAvailable(tx, roomCode, userID); err != nil {
+			return err
 		}
-		return tx.Model(&account).Updates(updates).Error
+		if err := tx.Model(&account).Updates(map[string]any{"role": "agent", "agent_room_code": roomCode, "parent_agent_id": nil}).Error; err != nil {
+			return err
+		}
+		return EnsureWorkspaceHierarchy(tx)
 	})
 	if err != nil {
 		return nil, err
@@ -400,10 +432,23 @@ func validateAgentRoomName(value string) error {
 	return nil
 }
 
+var builtInRoomLogos = map[string]struct{}{
+	"/images/wangzhe-header-logo.png":       {},
+	"/images/room-logos/crown-crystal.webp": {},
+	"/images/room-logos/crown-shield.webp":  {},
+	"/images/room-logos/crown-laurel.webp":  {},
+}
+
 func normalizeRoomLogo(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", nil
+	}
+	// Built-in room marks are served by both the member and management apps.
+	// Keep this as an exact allowlist: arbitrary paths and remote URLs must not
+	// become stored room identities.
+	if _, ok := builtInRoomLogos[value]; ok {
+		return value, nil
 	}
 	if len(value) > 500000 {
 		return "", apperrors.NewBusinessError("INVALID_REQUEST", "房间 Logo 文件过大")
@@ -414,7 +459,7 @@ func normalizeRoomLogo(value string) (string, error) {
 			return value, nil
 		}
 	}
-	return "", apperrors.NewBusinessError("INVALID_REQUEST", "房间 Logo 仅支持 PNG、JPG 或 WebP 图片")
+	return "", apperrors.NewBusinessError("INVALID_REQUEST", "房间 Logo 仅支持内置样式或 PNG、JPG、WebP 图片")
 }
 
 func agentRoomDisplayName(agent user.User) string {
@@ -425,11 +470,11 @@ func agentRoomDisplayName(agent user.User) string {
 }
 
 func validateAgentRoomCode(value string) error {
-	if len(value) < 4 || len(value) > 12 {
-		return apperrors.NewBusinessError("INVALID_ROOM_CODE", "房间号须为 4–12 位数字")
+	if len(value) < 5 || len(value) > 12 {
+		return apperrors.NewBusinessError("INVALID_ROOM_CODE", "房间号须为 5–12 位数字")
 	}
 	for _, char := range value {
-		if !unicode.IsDigit(char) {
+		if char < '0' || char > '9' {
 			return apperrors.NewBusinessError("INVALID_ROOM_CODE", "房间号只能使用数字")
 		}
 	}
@@ -437,12 +482,49 @@ func validateAgentRoomCode(value string) error {
 }
 
 func ensureRoomCodeAvailable(db *gorm.DB, roomCode string, excludeID uint64) error {
+	return ensureRoomCodeAvailableForResource(db, roomCode, excludeID, 0)
+}
+
+func ensureRoomCodeAvailableForResource(db *gorm.DB, roomCode string, excludeID, excludeResourceID uint64) error {
+	if err := ensureRoomCodeIdentityAvailable(db, roomCode, excludeID); err != nil {
+		return err
+	}
+	resourceQuery := db.Model(&special.NumberResource{}).Where("number = ?", roomCode)
+	if excludeResourceID > 0 {
+		resourceQuery = resourceQuery.Where("id <> ?", excludeResourceID)
+	}
+	// Once a resource has been granted it is the current owner's compatibility
+	// shadow and must not prevent that owner from editing the room name/logo.
+	if excludeID > 0 {
+		resourceQuery = resourceQuery.Where("owner_user_id IS NULL OR owner_user_id <> ?", excludeID)
+	}
+	var occupied int64
+	if err := resourceQuery.Count(&occupied).Error; err != nil {
+		return err
+	}
+	if occupied > 0 {
+		return apperrors.NewBusinessError("ROOM_CODE_RESERVED", "房间号已在靓号库中预留")
+	}
+	return nil
+}
+
+func ensureRoomCodeIdentityAvailable(db *gorm.DB, roomCode string, excludeID uint64) error {
 	query := db.Model(&user.User{}).Where("agent_room_code = ?", roomCode)
 	if excludeID > 0 {
 		query = query.Where("user_id <> ?", excludeID)
 	}
 	var occupied int64
 	if err := query.Count(&occupied).Error; err != nil {
+		return err
+	}
+	if occupied > 0 {
+		return apperrors.NewBusinessError("ROOM_CODE_EXISTS", "房间号已被占用")
+	}
+	workspaceQuery := db.Model(&workspacemodel.Workspace{}).Where("room_code = ?", roomCode)
+	if excludeID > 0 {
+		workspaceQuery = workspaceQuery.Where("owner_user_id <> ?", excludeID)
+	}
+	if err := workspaceQuery.Count(&occupied).Error; err != nil {
 		return err
 	}
 	if occupied > 0 {

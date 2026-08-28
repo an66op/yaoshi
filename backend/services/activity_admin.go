@@ -14,6 +14,7 @@ type ActivityAdminService struct{ db *gorm.DB }
 
 type ActivityView struct {
 	ID            uint64     `json:"id"`
+	WorkspaceID   uint64     `json:"workspace_id"`
 	Type          string     `json:"type"`
 	Title         string     `json:"title"`
 	Subtitle      string     `json:"subtitle"`
@@ -46,10 +47,21 @@ var activityTypes = map[string]string{"checkin": "签到", "banner": "轮播", "
 func NewActivityAdminService(db *gorm.DB) *ActivityAdminService { return &ActivityAdminService{db: db} }
 
 func (s *ActivityAdminService) List(status string) ([]ActivityView, error) {
-	if err := s.ensureDefaults(); err != nil {
-		return nil, err
+	return s.ListForWorkspace(0, status)
+}
+
+func (s *ActivityAdminService) ListForWorkspace(workspaceID uint64, status string) ([]ActivityView, error) {
+	if workspaceID > 0 {
+		if err := s.ensureDefaultsForWorkspace(workspaceID); err != nil {
+			return nil, err
+		}
 	}
 	query := s.db.Model(&activity.Activity{}).Order("sort_order asc, id desc")
+	if workspaceID > 0 {
+		query = query.Where("workspace_id = ?", workspaceID)
+	} else {
+		query = query.Where("workspace_id > 0")
+	}
 	if st := strings.TrimSpace(status); st != "" && st != "all" {
 		query = query.Where("status = ?", st)
 	}
@@ -64,11 +76,15 @@ func (s *ActivityAdminService) List(status string) ([]ActivityView, error) {
 	return items, nil
 }
 
-func (s *ActivityAdminService) Create(input ActivityPayload) (*ActivityView, error) {
+func (s *ActivityAdminService) CreateForWorkspace(workspaceID uint64, input ActivityPayload) (*ActivityView, error) {
+	if workspaceID == 0 {
+		return nil, apperrors.NewBusinessError("WORKSPACE_REQUIRED", "请选择活动所属房间")
+	}
 	row, err := validateActivity(input)
 	if err != nil {
 		return nil, err
 	}
+	row.WorkspaceID = workspaceID
 	applyActivityPool(row)
 	if err := s.db.Create(row).Error; err != nil {
 		return nil, apperrors.NewSystemError("ACTIVITY_CREATE_FAILED", "创建活动失败", err)
@@ -77,9 +93,9 @@ func (s *ActivityAdminService) Create(input ActivityPayload) (*ActivityView, err
 	return &view, nil
 }
 
-func (s *ActivityAdminService) Update(id uint64, input ActivityPayload) (*ActivityView, error) {
+func (s *ActivityAdminService) UpdateForWorkspace(workspaceID, id uint64, input ActivityPayload) (*ActivityView, error) {
 	var row activity.Activity
-	if err := s.db.First(&row, id).Error; err != nil {
+	if err := s.db.Where("id = ? AND workspace_id = ?", id, workspaceID).First(&row).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, apperrors.NewBusinessError("NOT_FOUND", "活动不存在")
 		}
@@ -99,13 +115,13 @@ func (s *ActivityAdminService) Update(id uint64, input ActivityPayload) (*Activi
 	return &view, nil
 }
 
-func (s *ActivityAdminService) SetStatus(id uint64, status string) (*ActivityView, error) {
+func (s *ActivityAdminService) SetStatusForWorkspace(workspaceID, id uint64, status string) (*ActivityView, error) {
 	status = strings.TrimSpace(status)
 	if status != "draft" && status != "active" && status != "ended" {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "活动状态不正确")
 	}
 	var row activity.Activity
-	if err := s.db.First(&row, id).Error; err != nil {
+	if err := s.db.Where("id = ? AND workspace_id = ?", id, workspaceID).First(&row).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, apperrors.NewBusinessError("NOT_FOUND", "活动不存在")
 		}
@@ -119,8 +135,8 @@ func (s *ActivityAdminService) SetStatus(id uint64, status string) (*ActivityVie
 	return &view, nil
 }
 
-func (s *ActivityAdminService) Delete(id uint64) error {
-	result := s.db.Delete(&activity.Activity{}, id)
+func (s *ActivityAdminService) DeleteForWorkspace(workspaceID, id uint64) error {
+	result := s.db.Where("workspace_id = ?", workspaceID).Delete(&activity.Activity{}, id)
 	if result.Error != nil {
 		return apperrors.NewSystemError("ACTIVITY_DELETE_FAILED", "删除活动失败", result.Error)
 	}
@@ -130,7 +146,57 @@ func (s *ActivityAdminService) Delete(id uint64) error {
 	return nil
 }
 
-func (s *ActivityAdminService) ensureDefaults() error {
+func (s *ActivityAdminService) legacyWorkspaceID() (uint64, error) {
+	var row struct{ ID uint64 }
+	if err := s.db.Table("workspaces").Select("id").Where("type = ?", "platform").First(&row).Error; err != nil {
+		return 0, err
+	}
+	return row.ID, nil
+}
+
+func (s *ActivityAdminService) Create(input ActivityPayload) (*ActivityView, error) {
+	workspaceID, err := s.legacyWorkspaceID()
+	if err != nil {
+		return nil, err
+	}
+	return s.CreateForWorkspace(workspaceID, input)
+}
+
+func (s *ActivityAdminService) Update(id uint64, input ActivityPayload) (*ActivityView, error) {
+	workspaceID, err := s.legacyWorkspaceID()
+	if err != nil {
+		return nil, err
+	}
+	return s.UpdateForWorkspace(workspaceID, id, input)
+}
+
+func (s *ActivityAdminService) SetStatus(id uint64, status string) (*ActivityView, error) {
+	workspaceID, err := s.legacyWorkspaceID()
+	if err != nil {
+		return nil, err
+	}
+	return s.SetStatusForWorkspace(workspaceID, id, status)
+}
+
+func (s *ActivityAdminService) Delete(id uint64) error {
+	workspaceID, err := s.legacyWorkspaceID()
+	if err != nil {
+		return err
+	}
+	return s.DeleteForWorkspace(workspaceID, id)
+}
+
+// EnsureDefaultsForWorkspace materializes the room-owned activity catalog.
+// It is exported for the centralized bootstrap; API reads no longer need to be
+// the first operation which happens to create required base records.
+func (s *ActivityAdminService) EnsureDefaultsForWorkspace(workspaceID uint64) error {
+	if workspaceID == 0 {
+		return apperrors.NewBusinessError("WORKSPACE_REQUIRED", "请选择活动所属房间")
+	}
+	return s.ensureDefaultsForWorkspace(workspaceID)
+}
+
+func (s *ActivityAdminService) ensureDefaultsForWorkspace(workspaceID uint64) error {
 	defaults := []activity.Activity{
 		{Type: "checkin", Title: "每日签到", Subtitle: "连续签到领取积分", Status: "active", RewardCents: 100, Participants: 128, SortOrder: 1, ConfigJSON: `{"days":7}`},
 		{Type: "banner", Title: "首页轮播", Subtitle: "运营位轮播图", Status: "active", SortOrder: 2, ConfigJSON: `{"slides":[]}`},
@@ -148,7 +214,8 @@ func (s *ActivityAdminService) ensureDefaults() error {
 	}
 	for index := range defaults {
 		row := defaults[index]
-		if err := s.db.Where("type = ? AND title = ?", row.Type, row.Title).FirstOrCreate(&row).Error; err != nil {
+		row.WorkspaceID = workspaceID
+		if err := s.db.Where("workspace_id = ? AND type = ? AND title = ?", workspaceID, row.Type, row.Title).FirstOrCreate(&row).Error; err != nil {
 			return err
 		}
 	}
@@ -203,7 +270,7 @@ func toActivityView(row activity.Activity) ActivityView {
 	var cfg any
 	_ = json.Unmarshal([]byte(defaultJSON(row.ConfigJSON, "{}")), &cfg)
 	view := ActivityView{
-		ID: row.ID, Type: row.Type, Title: row.Title, Subtitle: row.Subtitle, Status: row.Status,
+		ID: row.ID, WorkspaceID: row.WorkspaceID, Type: row.Type, Title: row.Title, Subtitle: row.Subtitle, Status: row.Status,
 		Cover: row.Cover, Reward: centsToAmount(row.RewardCents), Config: cfg, Participants: row.Participants,
 		SortOrder: row.SortOrder, StartsAt: row.StartsAt, EndsAt: row.EndsAt, CreatedAt: row.CreatedAt,
 	}

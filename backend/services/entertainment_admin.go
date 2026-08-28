@@ -316,12 +316,19 @@ func toPlatformView(row entertainment.Platform) PlatformView {
 	}
 }
 
+// EnsureDefaults materializes the provider catalog without requiring a first
+// admin-page read. All bundled providers stay unavailable until an operator
+// supplies real credentials and explicitly enables them.
+func (s *EntertainmentAdminService) EnsureDefaults() error {
+	return s.ensureDefaults()
+}
+
 func (s *EntertainmentAdminService) ensureDefaults() error {
 	defaults := []entertainment.Platform{
 		{Code: "kaiyuan", Name: "开元棋牌", Category: "棋牌", Status: "maintenance", SortOrder: 1, Remark: "等待配置供应商接口"},
-		{Code: "pg", Name: "PG电子", Category: "电子", MerchantNo: "DEMO002", LaunchPath: "/portal", SecretKey: "demo", Status: "maintenance", SortOrder: 2, Remark: "维护中"},
-		{Code: "ag", Name: "AG真人", Category: "真人", MerchantNo: "DEMO003", LaunchPath: "/portal", SecretKey: "demo", Status: "disabled", SortOrder: 3},
-		{Code: "im", Name: "IM电竞", Category: "电竞", MerchantNo: "DEMO004", LaunchPath: "/portal", SecretKey: "demo", Status: "disabled", SortOrder: 4},
+		{Code: "pg", Name: "PG电子", Category: "电子", Status: "maintenance", SortOrder: 2, Remark: "等待配置供应商接口"},
+		{Code: "ag", Name: "AG真人", Category: "真人", Status: "disabled", SortOrder: 3, Remark: "等待配置供应商接口"},
+		{Code: "im", Name: "IM电竞", Category: "电竞", Status: "disabled", SortOrder: 4, Remark: "等待配置供应商接口"},
 		{Code: "fish-lobby", Name: "捕鱼大厅", Category: "捕鱼", Status: "maintenance", SortOrder: 101, Remark: "第三方捕鱼线路接入中"},
 		{Code: "fish-king-3d", Name: "捕鱼王3D", Category: "捕鱼", Status: "maintenance", SortOrder: 102, Remark: "第三方捕鱼线路接入中"},
 		{Code: "fb-sports", Name: "FB体育", Category: "体育", Status: "maintenance", SortOrder: 201, Remark: "等待配置现有 FB 体育接口"},

@@ -3,10 +3,20 @@ package services
 import (
 	"backend/data/models/chat"
 	"backend/data/models/user"
+	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
 	"backend/utils"
+	"backend/ws"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	pseudorand "math/rand"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,38 +27,51 @@ import (
 type UserAdminService struct{ db *gorm.DB }
 
 type AdminUser struct {
-	ID             uint64     `json:"id"`
-	PublicID       uint64     `json:"public_id"`
-	Username       string     `json:"username"`
-	Email          string     `json:"email"`
-	Nickname       string     `json:"nickname"`
-	Phone          string     `json:"phone"`
-	Role           string     `json:"role"`
-	Remark         string     `json:"remark"`
-	RiskLevel      string     `json:"risk_level"`
-	Balance        float64    `json:"balance"`
-	FlyMode        string     `json:"fly_mode"`
-	FlyRate        float64    `json:"fly_rate"`
-	AgentRoomCode  string     `json:"agent_room_code"`
-	ParentAgentID  *uint64    `json:"parent_agent_id"`
-	ParentTenantID *uint64    `json:"parent_tenant_id"`
-	AgentName      string     `json:"agent_name"`
-	TenantName     string     `json:"tenant_name"`
-	LoginIdentity  string     `json:"login_identity"`
-	Status         int        `json:"status"`
-	LastLoginAt    *time.Time `json:"last_login_at"`
-	LoginCount     int        `json:"login_count"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID               uint64     `json:"id"`
+	PublicID         uint64     `json:"public_id"`
+	Username         string     `json:"username"`
+	Email            string     `json:"email"`
+	Nickname         string     `json:"nickname"`
+	Avatar           string     `json:"avatar,omitempty"`
+	PublicTitle      string     `json:"public_title,omitempty"`
+	PublicBadge      string     `json:"badge,omitempty"`
+	Phone            string     `json:"phone"`
+	Role             string     `json:"role"`
+	Remark           string     `json:"remark"`
+	RiskLevel        string     `json:"risk_level"`
+	Balance          float64    `json:"balance"`
+	FlyMode          string     `json:"fly_mode"`
+	FlyRate          float64    `json:"fly_rate"`
+	AgentRoomCode    string     `json:"agent_room_code"`
+	RoomCode         string     `json:"room_code"`
+	ParentAgentID    *uint64    `json:"parent_agent_id"`
+	ParentTenantID   *uint64    `json:"parent_tenant_id"`
+	AgentName        string     `json:"agent_name"`
+	TenantName       string     `json:"tenant_name"`
+	LoginIdentity    string     `json:"login_identity"`
+	Status           int        `json:"status"`
+	LastLoginAt      *time.Time `json:"last_login_at"`
+	LoginCount       int        `json:"login_count"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	IsRobot          bool       `json:"is_robot"`
+	RobotGameIDs     []string   `json:"robot_game_ids"`
+	RobotActiveStart string     `json:"robot_active_start"`
+	RobotActiveEnd   string     `json:"robot_active_end"`
+	RobotMinBet      float64    `json:"robot_min_bet"`
+	RobotMaxBet      float64    `json:"robot_max_bet"`
+	RobotAvatar      string     `json:"robot_avatar"`
+	WorkspaceID      uint64     `json:"workspace_id"`
 }
 
 type UserListFilter struct {
-	Query    string
-	Status   string
-	Role     string
-	Kind     string
-	Page     int
-	PageSize int
+	Query       string
+	Status      string
+	Role        string
+	Kind        string
+	Page        int
+	PageSize    int
+	WorkspaceID uint64
 }
 
 type UserList struct {
@@ -90,6 +113,62 @@ type UpdateAdminUserInput struct {
 	Status    int
 }
 
+type UpdateRobotInput struct {
+	Nickname    string
+	Status      int
+	GameIDs     []string
+	ActiveStart string
+	ActiveEnd   string
+	MinBet      float64
+	MaxBet      float64
+	Avatar      string
+}
+
+type ResetWorkspaceRobotsInput struct {
+	WorkspaceID    uint64  `json:"workspace_id"`
+	RequestID      string  `json:"request_id"`
+	Mode           string  `json:"mode"`
+	NicknamePrefix string  `json:"nickname_prefix"`
+	Balance        float64 `json:"balance"`
+	BalanceMin     float64 `json:"balance_min"`
+	BalanceMax     float64 `json:"balance_max"`
+}
+
+type ResetWorkspaceRobotsResult struct {
+	RequestID string      `json:"request_id"`
+	Mode      string      `json:"mode"`
+	Count     int         `json:"count"`
+	Duplicate bool        `json:"duplicate"`
+	Items     []AdminUser `json:"items"`
+}
+
+type RobotWorkspaceOption struct {
+	WorkspaceID uint64 `json:"workspace_id"`
+	Type        string `json:"type"`
+	Name        string `json:"name"`
+	RoomCode    string `json:"room_code"`
+	Status      int    `json:"status"`
+	RobotCount  int64  `json:"robot_count"`
+}
+
+type normalizedRobotReset struct {
+	requestID      string
+	mode           string
+	nicknamePrefix string
+	balanceMin     int64
+	balanceMax     int64
+	payloadHash    string
+}
+
+type robotResetPlan struct {
+	nickname     string
+	balanceCents int64
+}
+
+var robotResetRequestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{8,96}$`)
+
+const maxRobotResetBalanceCents int64 = 10_000_000_000
+
 type BalanceRecord struct {
 	ID        uint64    `json:"id"`
 	UserID    uint64    `json:"user_id"`
@@ -111,6 +190,44 @@ type BalanceHistoryPage struct {
 
 func NewUserAdminService(db *gorm.DB) *UserAdminService { return &UserAdminService{db: db} }
 
+func (s *UserAdminService) RobotWorkspaces() ([]RobotWorkspaceOption, error) {
+	var workspaces []workspacemodel.Workspace
+	if err := s.db.Where("status = ? AND type IN ?", 1, robotWorkspaceTypes()).
+		Order("CASE type WHEN 'platform' THEN 0 WHEN 'tenant' THEN 1 ELSE 2 END, id ASC").Find(&workspaces).Error; err != nil {
+		return nil, err
+	}
+	workspaceIDs := make([]uint64, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		workspaceIDs = append(workspaceIDs, workspace.ID)
+	}
+	type workspaceRobotCount struct {
+		WorkspaceID uint64
+		Count       int64
+	}
+	countsByWorkspace := make(map[uint64]int64, len(workspaces))
+	if len(workspaceIDs) > 0 {
+		var counts []workspaceRobotCount
+		if err := s.db.Table("workspace_robot_profiles AS profile").
+			Select("profile.workspace_id, COUNT(*) AS count").
+			Joins(`JOIN "user" AS account ON account.user_id = profile.user_id`).
+			Where("profile.workspace_id IN ? AND account.workspace_id = profile.workspace_id AND account.role = ? AND account.deleted_at IS NULL", workspaceIDs, "member").
+			Group("profile.workspace_id").Find(&counts).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range counts {
+			countsByWorkspace[row.WorkspaceID] = row.Count
+		}
+	}
+	result := make([]RobotWorkspaceOption, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		result = append(result, RobotWorkspaceOption{
+			WorkspaceID: workspace.ID, Type: workspace.Type, Name: workspace.Name,
+			RoomCode: workspace.RoomCode, Status: workspace.Status, RobotCount: countsByWorkspace[workspace.ID],
+		})
+	}
+	return result, nil
+}
+
 func (s *UserAdminService) List(filter UserListFilter) (*UserList, error) {
 	if filter.Page < 1 {
 		filter.Page = 1
@@ -119,6 +236,9 @@ func (s *UserAdminService) List(filter UserListFilter) (*UserList, error) {
 		filter.PageSize = 20
 	}
 	query := s.db.Model(&user.User{})
+	if filter.WorkspaceID > 0 {
+		query = query.Where(`"user".workspace_id = ?`, filter.WorkspaceID)
+	}
 	if keyword := strings.TrimSpace(filter.Query); keyword != "" {
 		like := "%" + strings.ToLower(keyword) + "%"
 		query = query.Where("LOWER(username) LIKE ? OR LOWER(nickname) LIKE ? OR LOWER(email) LIKE ? OR LOWER(phone) LIKE ? OR LOWER(remark) LIKE ?", like, like, like, like, like)
@@ -135,6 +255,12 @@ func (s *UserAdminService) List(filter UserListFilter) (*UserList, error) {
 	switch strings.TrimSpace(filter.Kind) {
 	case "member":
 		query = query.Where("role = ? AND COALESCE(remark, '') <> ? AND COALESCE(remark, '') NOT LIKE ?", "member", roomActivityRemark, "测试机器人专用账号%")
+	case "robot":
+		if filter.WorkspaceID == 0 {
+			return nil, apperrors.NewBusinessError("WORKSPACE_REQUIRED", "请选择要查看的机器人工作区")
+		}
+		query = query.Select(`"user".*`).Joins(`JOIN workspace_robot_profiles AS robot_profile ON robot_profile.user_id = "user".user_id`).
+			Where(`"user".role = ? AND robot_profile.workspace_id = ?`, "member", filter.WorkspaceID)
 	case "account":
 		query = query.Where("role IN ?", []string{"admin", "tenant", "agent"})
 	}
@@ -153,6 +279,9 @@ func (s *UserAdminService) List(filter UserListFilter) (*UserList, error) {
 	if err := s.enrichOwnership(items); err != nil {
 		return nil, err
 	}
+	if err := s.enrichRobotProfiles(items); err != nil {
+		return nil, err
+	}
 	return &UserList{Items: items, Total: total, Page: filter.Page, PageSize: filter.PageSize}, nil
 }
 
@@ -163,6 +292,8 @@ func (s *UserAdminService) Stats(kind string) (*UserStats, error) {
 		switch strings.TrimSpace(kind) {
 		case "member":
 			return query.Where("role = ? AND COALESCE(remark, '') <> ? AND COALESCE(remark, '') NOT LIKE ?", "member", roomActivityRemark, "测试机器人专用账号%")
+		case "robot":
+			return query.Where("role = ? AND remark = ?", "member", roomActivityRemark)
 		case "account":
 			return query.Where("role IN ?", []string{"admin", "tenant", "agent"})
 		default:
@@ -205,7 +336,425 @@ func (s *UserAdminService) Get(id uint64) (*AdminUser, error) {
 	if err := s.enrichOwnership(items); err != nil {
 		return nil, err
 	}
+	if err := s.enrichRobotProfiles(items); err != nil {
+		return nil, err
+	}
 	return &items[0], nil
+}
+
+// UpdateRobot edits only room-activity accounts. It intentionally keeps the
+// account as a normal member so bets use the same balance, odds and settlement
+// path as any other member.
+func (s *UserAdminService) UpdateRobot(id uint64, input UpdateRobotInput) (*AdminUser, error) {
+	return s.updateRobot(id, nil, input)
+}
+
+func (s *UserAdminService) UpdateRobotForWorkspace(id, workspaceID uint64, input UpdateRobotInput) (*AdminUser, error) {
+	if workspaceID == 0 {
+		return nil, apperrors.NewBusinessError("WORKSPACE_REQUIRED", "机器人所属房间不存在")
+	}
+	return s.updateRobot(id, &workspaceID, input)
+}
+
+// ResetRobotsForWorkspace replaces every robot nickname and target balance in
+// one locked workspace transaction. The caller must derive or authorize the
+// workspace before calling this service. A durable receipt, independent from
+// archivable balance history, prevents a retry from applying the reset twice.
+func (s *UserAdminService) ResetRobotsForWorkspace(workspaceID uint64, input ResetWorkspaceRobotsInput, operator string) (*ResetWorkspaceRobotsResult, error) {
+	if workspaceID == 0 {
+		return nil, apperrors.NewBusinessError("WORKSPACE_REQUIRED", "机器人所属房间不存在")
+	}
+	config, err := normalizeRobotResetInput(input)
+	if err != nil {
+		return nil, err
+	}
+	duplicate := false
+	resetCount := 0
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if _, err := EnabledRobotWorkspace(tx.Clauses(clause.Locking{Strength: "UPDATE"}), workspaceID); err != nil {
+			return err
+		}
+		requestIDHash := robotResetRequestIDHash(config.requestID)
+		var receipt workspacemodel.RobotResetReceipt
+		receiptErr := tx.Where("workspace_id = ? AND request_id_hash = ?", workspaceID, requestIDHash).First(&receipt).Error
+		if receiptErr == nil {
+			if receipt.PayloadHash != config.payloadHash || receipt.Mode != config.mode {
+				return apperrors.NewBusinessError("REQUEST_ID_REUSED", "request_id 已被其他机器人重置参数使用")
+			}
+			duplicate = true
+			resetCount = receipt.RobotCount
+			return nil
+		}
+		if !errors.Is(receiptErr, gorm.ErrRecordNotFound) {
+			return receiptErr
+		}
+		var accounts []user.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Model(&user.User{}).
+			Select(`"user".*`).
+			Joins(`JOIN workspace_robot_profiles AS robot_profile ON robot_profile.user_id = "user".user_id`).
+			Where(`"user".workspace_id = ? AND robot_profile.workspace_id = ? AND "user".role = ?`, workspaceID, workspaceID, "member").
+			Order(`"user".user_id ASC`).Find(&accounts).Error; err != nil {
+			return err
+		}
+		if len(accounts) == 0 {
+			return apperrors.NewBusinessError("ROBOTS_NOT_FOUND", "当前房间暂无可重置的机器人")
+		}
+		resetCount = len(accounts)
+		plans, err := buildRobotResetPlans(config, workspaceID, len(accounts))
+		if err != nil {
+			return err
+		}
+		_, reference := robotResetReferences(workspaceID, config)
+
+		operator = defaultString(strings.TrimSpace(operator), "后台管理员")
+		for index := range accounts {
+			account := &accounts[index]
+			plan := plans[index]
+			update := tx.Model(&user.User{}).
+				Where("user_id = ? AND workspace_id = ? AND role = ?", account.UserID, workspaceID, "member").
+				Updates(map[string]any{"nickname": plan.nickname, "balance_cents": plan.balanceCents})
+			if update.Error != nil {
+				return update.Error
+			}
+			if update.RowsAffected != 1 {
+				return apperrors.NewBusinessError("ROBOT_SCOPE_MISMATCH", "机器人账号房间归属发生变化，请刷新后重试")
+			}
+			if err := tx.Model(&chat.Message{}).
+				Where("workspace_id = ? AND user_id = ?", workspaceID, account.UserID).
+				Update("nickname", plan.nickname).Error; err != nil {
+				return err
+			}
+			record := user.BalanceTransaction{
+				WorkspaceID: workspaceID, UserID: account.UserID, Reference: reference,
+				AmountCents: plan.balanceCents - account.BalanceCents,
+				BeforeCents: account.BalanceCents, AfterCents: plan.balanceCents,
+				Type: "robot_reset", Remark: "机器人批量重置（" + robotResetModeLabel(config.mode) + "）", Operator: operator,
+			}
+			if err := tx.Create(&record).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Create(&workspacemodel.RobotResetReceipt{
+			WorkspaceID: workspaceID, RequestIDHash: requestIDHash, PayloadHash: config.payloadHash,
+			Mode: config.mode, RobotCount: resetCount,
+		}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.List(UserListFilter{WorkspaceID: workspaceID, Kind: "robot", Page: 1, PageSize: 100})
+	if err != nil {
+		return nil, err
+	}
+	return &ResetWorkspaceRobotsResult{
+		RequestID: config.requestID, Mode: config.mode, Count: resetCount, Duplicate: duplicate, Items: rows.Items,
+	}, nil
+}
+
+func robotWorkspaceTypes() []string {
+	return []string{workspacemodel.TypePlatform, workspacemodel.TypeTenant, workspacemodel.TypeAgent}
+}
+
+func EnabledRobotWorkspace(db *gorm.DB, workspaceID uint64) (workspacemodel.Workspace, error) {
+	var workspace workspacemodel.Workspace
+	if workspaceID == 0 {
+		return workspace, apperrors.NewBusinessError("INVALID_WORKSPACE", "目标机器人工作区不存在或已停用")
+	}
+	err := db.Where("id = ? AND status = ? AND type IN ?", workspaceID, 1, robotWorkspaceTypes()).First(&workspace).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return workspace, apperrors.NewBusinessError("INVALID_WORKSPACE", "目标机器人工作区不存在或已停用")
+	}
+	return workspace, err
+}
+
+func normalizeRobotResetInput(input ResetWorkspaceRobotsInput) (normalizedRobotReset, error) {
+	result := normalizedRobotReset{
+		requestID: strings.TrimSpace(input.RequestID), mode: strings.ToLower(strings.TrimSpace(input.Mode)),
+		nicknamePrefix: strings.TrimSpace(input.NicknamePrefix),
+	}
+	if !robotResetRequestIDPattern.MatchString(result.requestID) {
+		return result, apperrors.NewBusinessError("INVALID_REQUEST_ID", "request_id 需要 8–96 位字母、数字或 . _ : -")
+	}
+	switch result.mode {
+	case "random":
+		minimum, err := robotResetAmountCents(input.BalanceMin)
+		if err != nil {
+			return result, err
+		}
+		maximum, err := robotResetAmountCents(input.BalanceMax)
+		if err != nil {
+			return result, err
+		}
+		if minimum > maximum {
+			return result, apperrors.NewBusinessError("INVALID_BALANCE_RANGE", "随机余额下限不能大于上限")
+		}
+		result.balanceMin, result.balanceMax = minimum, maximum
+	case "custom":
+		if result.nicknamePrefix == "" || len([]rune(result.nicknamePrefix)) > 44 {
+			return result, apperrors.NewBusinessError("INVALID_NICKNAME_PREFIX", "自定义昵称前缀应为 1–44 个字符")
+		}
+		balance, err := robotResetAmountCents(input.Balance)
+		if err != nil {
+			return result, err
+		}
+		result.balanceMin, result.balanceMax = balance, balance
+	default:
+		return result, apperrors.NewBusinessError("INVALID_RESET_MODE", "重置方式只能是 random 或 custom")
+	}
+	payload := fmt.Sprintf("%s\x00%s\x00%d\x00%d", result.mode, result.nicknamePrefix, result.balanceMin, result.balanceMax)
+	digest := sha256.Sum256([]byte(payload))
+	result.payloadHash = hex.EncodeToString(digest[:16])
+	return result, nil
+}
+
+func robotResetAmountCents(value float64) (int64, error) {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > float64(maxRobotResetBalanceCents)/100 {
+		return 0, apperrors.NewBusinessError("INVALID_BALANCE", "机器人目标余额应在 0–100000000 之间")
+	}
+	return int64(math.Round(value * 100)), nil
+}
+
+func buildRobotResetPlans(config normalizedRobotReset, workspaceID uint64, count int) ([]robotResetPlan, error) {
+	if count < 1 {
+		return nil, apperrors.NewBusinessError("ROBOTS_NOT_FOUND", "当前房间暂无可重置的机器人")
+	}
+	plans := make([]robotResetPlan, count)
+	if config.mode == "custom" {
+		width := len(strconv.Itoa(count))
+		if width < 2 {
+			width = 2
+		}
+		for index := range plans {
+			plans[index] = robotResetPlan{
+				nickname: config.nicknamePrefix + fmt.Sprintf("%0*d", width, index+1), balanceCents: config.balanceMin,
+			}
+		}
+	} else {
+		seedInput := fmt.Sprintf("%d\x00%s\x00%s", workspaceID, config.requestID, config.payloadHash)
+		digest := sha256.Sum256([]byte(seedInput))
+		seed := int64(binary.BigEndian.Uint64(digest[:8]) & uint64(^uint64(0)>>1))
+		random := pseudorand.New(pseudorand.NewSource(seed))
+		order := random.Perm(len(roomActivityAliases))
+		for index := range plans {
+			name := roomActivityAliases[order[index%len(order)]]
+			if cycle := index / len(order); cycle > 0 {
+				name += fmt.Sprintf("-%02d", cycle+1)
+			}
+			balance := config.balanceMin
+			if config.balanceMax > config.balanceMin {
+				balance += random.Int63n(config.balanceMax - config.balanceMin + 1)
+			}
+			plans[index] = robotResetPlan{nickname: name, balanceCents: balance}
+		}
+	}
+	seen := make(map[string]struct{}, len(plans))
+	for _, plan := range plans {
+		if strings.TrimSpace(plan.nickname) == "" || len([]rune(plan.nickname)) > 50 {
+			return nil, apperrors.NewBusinessError("INVALID_NICKNAME", "生成的机器人昵称应为 1–50 个字符")
+		}
+		if _, exists := seen[plan.nickname]; exists {
+			return nil, apperrors.NewBusinessError("DUPLICATE_NICKNAME", "生成的机器人昵称不能重复")
+		}
+		seen[plan.nickname] = struct{}{}
+	}
+	return plans, nil
+}
+
+func robotResetReferences(workspaceID uint64, config normalizedRobotReset) (string, string) {
+	requestIDHash := robotResetRequestIDHash(config.requestID)
+	prefix := fmt.Sprintf("robot-reset:%d:%s:", workspaceID, requestIDHash[:32])
+	return prefix, prefix + config.payloadHash
+}
+
+func robotResetRequestIDHash(requestID string) string {
+	digest := sha256.Sum256([]byte(requestID))
+	return hex.EncodeToString(digest[:])
+}
+
+func robotResetModeLabel(mode string) string {
+	if mode == "custom" {
+		return "自定义"
+	}
+	return "随机"
+}
+
+func (s *UserAdminService) updateRobot(id uint64, ownerWorkspaceID *uint64, input UpdateRobotInput) (*AdminUser, error) {
+	nickname := strings.TrimSpace(input.Nickname)
+	if nickname == "" || len([]rune(nickname)) > 50 {
+		return nil, apperrors.NewBusinessError("INVALID_NICKNAME", "机器人昵称应为 1–50 个字符")
+	}
+	activeStart := strings.TrimSpace(input.ActiveStart)
+	activeEnd := strings.TrimSpace(input.ActiveEnd)
+	if (activeStart == "") != (activeEnd == "") {
+		return nil, apperrors.NewBusinessError("INVALID_SCHEDULE", "运行开始和结束时间需要同时填写")
+	}
+	if activeStart != "" {
+		if _, err := time.Parse("15:04", activeStart); err != nil {
+			return nil, apperrors.NewBusinessError("INVALID_SCHEDULE", "运行开始时间格式不正确")
+		}
+		if _, err := time.Parse("15:04", activeEnd); err != nil {
+			return nil, apperrors.NewBusinessError("INVALID_SCHEDULE", "运行结束时间格式不正确")
+		}
+	}
+	if math.IsNaN(input.MinBet) || math.IsInf(input.MinBet, 0) || math.IsNaN(input.MaxBet) || math.IsInf(input.MaxBet, 0) || input.MinBet < 0 || input.MaxBet < 0 || input.MaxBet > 1000000 {
+		return nil, apperrors.NewBusinessError("INVALID_BET_RANGE", "单注金额范围不正确")
+	}
+	if (input.MinBet == 0) != (input.MaxBet == 0) {
+		return nil, apperrors.NewBusinessError("INVALID_BET_RANGE", "最小和最大单注需要同时填写")
+	}
+	if input.MinBet > 0 && input.MaxBet > 0 && input.MinBet > input.MaxBet {
+		return nil, apperrors.NewBusinessError("INVALID_BET_RANGE", "最小单注不能大于最大单注")
+	}
+	minBetCents := int64(math.Round(input.MinBet * 100))
+	maxBetCents := int64(math.Round(input.MaxBet * 100))
+	cleanIDs := make([]string, 0, len(input.GameIDs))
+	seen := map[string]struct{}{}
+	for _, raw := range input.GameIDs {
+		gameID := strings.TrimSpace(raw)
+		if gameID == "" {
+			continue
+		}
+		if _, exists := seen[gameID]; exists {
+			continue
+		}
+		seen[gameID] = struct{}{}
+		cleanIDs = append(cleanIDs, gameID)
+	}
+	avatar := strings.TrimSpace(input.Avatar)
+	if avatar != "" && !strings.HasPrefix(avatar, "/images/avatars/") {
+		return nil, apperrors.NewBusinessError("INVALID_AVATAR", "请选择头像库中的机器人头像")
+	}
+	encoded, err := json.Marshal(cleanIDs)
+	if err != nil {
+		return nil, err
+	}
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var account user.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, id).Error; err != nil {
+			return err
+		}
+		var profile workspacemodel.RobotProfile
+		profileQuery := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", id)
+		if ownerWorkspaceID != nil {
+			profileQuery = profileQuery.Where("workspace_id = ?", *ownerWorkspaceID)
+		}
+		if err := profileQuery.First(&profile).Error; err != nil {
+			return apperrors.NewBusinessError("NOT_ROBOT", "该账号不是独立机器人")
+		}
+		if account.WorkspaceID != profile.WorkspaceID {
+			return apperrors.NewBusinessError("ROBOT_SCOPE_MISMATCH", "机器人账号房间归属异常")
+		}
+		if account.Role != "member" {
+			return apperrors.NewBusinessError("NOT_ROBOT", "该账号不是房间机器人")
+		}
+		if err := validateRobotGameIDsForWorkspace(tx, profile.WorkspaceID, cleanIDs); err != nil {
+			return err
+		}
+		if err := tx.Model(&account).Updates(map[string]any{
+			"nickname": nickname, "status": normalizeStatus(input.Status), "robot_game_ids_json": string(encoded),
+			"robot_active_start": activeStart, "robot_active_end": activeEnd,
+			"robot_min_bet_cents": minBetCents, "robot_max_bet_cents": maxBetCents,
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&profile).Updates(map[string]any{
+			"avatar": avatar, "enabled": normalizeStatus(input.Status) == 1,
+			"active_start": activeStart, "active_end": activeEnd,
+			"min_bet_cents": minBetCents, "max_bet_cents": maxBetCents,
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("robot_id = ?", profile.ID).Delete(&workspacemodel.RobotGame{}).Error; err != nil {
+			return err
+		}
+		for _, gameID := range cleanIDs {
+			if err := tx.Create(&workspacemodel.RobotGame{RobotID: profile.ID, GameID: gameID}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(&chat.Message{}).Where("workspace_id = ? AND user_id = ?", profile.WorkspaceID, id).Update("nickname", nickname).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if ownerWorkspaceID != nil && result.WorkspaceID != *ownerWorkspaceID {
+		return nil, apperrors.NewBusinessError("FORBIDDEN", "该机器人不属于当前房间")
+	}
+	return result, nil
+}
+
+func validateRobotGameIDsForWorkspace(db *gorm.DB, workspaceID uint64, gameIDs []string) error {
+	if len(gameIDs) == 0 {
+		return nil
+	}
+	views, err := NewWorkspaceGameService(db).List(workspaceID)
+	if err != nil {
+		return err
+	}
+	enabled := make(map[string]struct{}, len(views))
+	for _, view := range views {
+		if view.Enabled {
+			enabled[view.ID] = struct{}{}
+		}
+	}
+	for _, gameID := range gameIDs {
+		if _, ok := enabled[gameID]; !ok {
+			return apperrors.NewBusinessError("INVALID_GAME", "参与彩种不存在或未在当前房间开放")
+		}
+	}
+	return nil
+}
+
+func (s *UserAdminService) enrichRobotProfiles(items []AdminUser) error {
+	ids := make([]uint64, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	var profiles []workspacemodel.RobotProfile
+	if err := s.db.Where("user_id IN ?", ids).Find(&profiles).Error; err != nil {
+		return err
+	}
+	byUser := make(map[uint64]workspacemodel.RobotProfile, len(profiles))
+	profileIDs := make([]uint64, 0, len(profiles))
+	for _, profile := range profiles {
+		byUser[profile.UserID] = profile
+		profileIDs = append(profileIDs, profile.ID)
+	}
+	gamesByRobot := map[uint64][]string{}
+	if len(profileIDs) > 0 {
+		var rows []workspacemodel.RobotGame
+		if err := s.db.Where("robot_id IN ?", profileIDs).Order("id ASC").Find(&rows).Error; err != nil {
+			return err
+		}
+		for _, row := range rows {
+			gamesByRobot[row.RobotID] = append(gamesByRobot[row.RobotID], row.GameID)
+		}
+	}
+	for index := range items {
+		profile, ok := byUser[items[index].ID]
+		if !ok {
+			continue
+		}
+		items[index].IsRobot = true
+		items[index].WorkspaceID = profile.WorkspaceID
+		items[index].RobotAvatar = profile.Avatar
+		if strings.TrimSpace(items[index].Avatar) == "" {
+			items[index].Avatar = profile.Avatar
+		}
+		items[index].RobotGameIDs = gamesByRobot[profile.ID]
+		items[index].RobotActiveStart = profile.ActiveStart
+		items[index].RobotActiveEnd = profile.ActiveEnd
+		items[index].RobotMinBet = centsToAmount(profile.MinBetCents)
+		items[index].RobotMaxBet = centsToAmount(profile.MaxBetCents)
+	}
+	return nil
 }
 
 func (s *UserAdminService) enrichOwnership(items []AdminUser) error {
@@ -213,7 +762,11 @@ func (s *UserAdminService) enrichOwnership(items []AdminUser) error {
 		return nil
 	}
 	ids := make([]uint64, 0, len(items)*2)
+	workspaceIDs := make([]uint64, 0, len(items))
 	for _, item := range items {
+		if item.WorkspaceID > 0 {
+			workspaceIDs = append(workspaceIDs, item.WorkspaceID)
+		}
 		if item.ParentAgentID != nil {
 			ids = append(ids, *item.ParentAgentID)
 		}
@@ -236,19 +789,48 @@ func (s *UserAdminService) enrichOwnership(items []AdminUser) error {
 			}
 		}
 		var more []user.User
-		if err := s.db.Select("user_id", "username", "nickname").Where("user_id IN ?", ids).Find(&more).Error; err != nil {
+		if err := s.db.Select("user_id", "username", "nickname", "agent_room_code", "parent_tenant_id").Where("user_id IN ?", ids).Find(&more).Error; err != nil {
 			return err
 		}
 		for _, row := range more {
 			owners[row.UserID] = row
 		}
 	}
+	workspacesByID := map[uint64]workspacemodel.Workspace{}
+	workspacesByOwner := map[uint64]workspacemodel.Workspace{}
+	workspaceQuery := s.db.Model(&workspacemodel.Workspace{})
+	switch {
+	case len(workspaceIDs) > 0 && len(ids) > 0:
+		workspaceQuery = workspaceQuery.Where("id IN ? OR owner_user_id IN ?", workspaceIDs, ids)
+	case len(workspaceIDs) > 0:
+		workspaceQuery = workspaceQuery.Where("id IN ?", workspaceIDs)
+	case len(ids) > 0:
+		workspaceQuery = workspaceQuery.Where("owner_user_id IN ?", ids)
+	default:
+		workspaceQuery = nil
+	}
+	if workspaceQuery != nil {
+		var rows []workspacemodel.Workspace
+		if err := workspaceQuery.Find(&rows).Error; err != nil {
+			return err
+		}
+		for _, row := range rows {
+			workspacesByID[row.ID] = row
+			workspacesByOwner[row.OwnerUserID] = row
+		}
+	}
 	for index := range items {
 		item := &items[index]
 		prefix := "平台"
+		if workspace, ok := workspacesByID[item.WorkspaceID]; ok && workspace.Type != workspacemodel.TypePlatform {
+			item.RoomCode = workspace.RoomCode
+		}
 		if item.Role == "tenant" {
 			prefix = defaultString(item.Nickname, item.Username)
 			item.TenantName = prefix
+			if workspace, ok := workspacesByOwner[item.ID]; ok {
+				item.RoomCode = workspace.RoomCode
+			}
 		}
 		if item.ParentTenantID != nil {
 			if tenant, ok := owners[*item.ParentTenantID]; ok {
@@ -259,6 +841,9 @@ func (s *UserAdminService) enrichOwnership(items []AdminUser) error {
 		if item.ParentAgentID != nil {
 			if agent, ok := owners[*item.ParentAgentID]; ok {
 				item.AgentName = defaultString(agent.Nickname, agent.Username)
+				if workspace, exists := workspacesByOwner[agent.UserID]; exists {
+					item.RoomCode = workspace.RoomCode
+				}
 				prefix = item.AgentName
 				if agent.ParentTenantID != nil {
 					if tenant, ok := owners[*agent.ParentTenantID]; ok {
@@ -343,6 +928,7 @@ func (s *UserAdminService) Update(id uint64, input UpdateAdminUserInput) (*Admin
 	}); err != nil {
 		return nil, err
 	}
+	ws.DisconnectUser(id)
 	return s.Get(id)
 }
 
@@ -355,6 +941,24 @@ func (s *UserAdminService) SetStatus(id uint64, status int) (*AdminUser, error) 
 // concurrently reassigned that member to another room.
 func (s *UserAdminService) SetStatusOwned(id, ownerAgentID uint64, status int) (*AdminUser, error) {
 	return s.setStatus(id, status, &ownerAgentID)
+}
+
+func (s *UserAdminService) SetStatusInWorkspace(id, workspaceID uint64, status int) (*AdminUser, error) {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var row user.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, id).Error; err != nil {
+			return err
+		}
+		if row.WorkspaceID != workspaceID || row.Role != "member" {
+			return apperrors.NewBusinessError("FORBIDDEN", "该用户不属于当前房间")
+		}
+		return tx.Model(&row).Update("status", normalizeStatus(status)).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	ws.DisconnectUser(id)
+	return s.Get(id)
 }
 
 func (s *UserAdminService) setStatus(id uint64, status int, ownerAgentID *uint64) (*AdminUser, error) {
@@ -371,6 +975,7 @@ func (s *UserAdminService) setStatus(id uint64, status int, ownerAgentID *uint64
 	if err != nil {
 		return nil, err
 	}
+	ws.DisconnectUser(id)
 	return s.Get(id)
 }
 
@@ -382,13 +987,14 @@ func (s *UserAdminService) ResetPassword(id uint64, password string) error {
 	if err != nil {
 		return err
 	}
-	result := s.db.Model(&user.User{}).Where("user_id = ?", id).Update("password", hash)
+	result := s.db.Model(&user.User{}).Where("user_id = ?", id).Updates(passwordSessionUpdate(hash))
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
 		return gorm.ErrRecordNotFound
 	}
+	ws.DisconnectUser(id)
 	return nil
 }
 
@@ -400,6 +1006,34 @@ func (s *UserAdminService) AdjustBalance(id uint64, amount float64, remark, oper
 // change and ledger insert are deliberately one locked transaction.
 func (s *UserAdminService) AdjustBalanceOwned(id, ownerAgentID uint64, amount float64, remark, operator string) (*AdminUser, error) {
 	return s.adjustBalance(id, amount, remark, operator, &ownerAgentID)
+}
+
+func (s *UserAdminService) AdjustBalanceInWorkspace(id, workspaceID uint64, amount float64, remark, operator string) (*AdminUser, error) {
+	amountCents := int64(math.Round(amount * 100))
+	if amountCents == 0 || math.Abs(amount) > 100000000 {
+		return nil, apperrors.NewBusinessError("INVALID_AMOUNT", "调整金额不正确")
+	}
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var row user.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, id).Error; err != nil {
+			return err
+		}
+		if row.WorkspaceID != workspaceID || row.Role != "member" {
+			return apperrors.NewBusinessError("FORBIDDEN", "该用户不属于当前房间")
+		}
+		after, record := manualBalanceRecord(row, workspaceID, amountCents, remark, operator)
+		if after < 0 {
+			return apperrors.NewBusinessError("INSUFFICIENT_BALANCE", "扣减金额不能超过当前余额")
+		}
+		if err := tx.Model(&row).Update("balance_cents", after).Error; err != nil {
+			return err
+		}
+		return tx.Create(&record).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.Get(id)
 }
 
 func (s *UserAdminService) adjustBalance(id uint64, amount float64, remark, operator string, ownerAgentID *uint64) (*AdminUser, error) {
@@ -418,20 +1052,37 @@ func (s *UserAdminService) adjustBalance(id uint64, amount float64, remark, oper
 		if err := requireRoomOwnership(row, ownerAgentID); err != nil {
 			return err
 		}
-		after := row.BalanceCents + amountCents
+		after, record := manualBalanceRecord(row, row.WorkspaceID, amountCents, remark, operator)
 		if after < 0 {
 			return apperrors.NewBusinessError("INSUFFICIENT_BALANCE", "扣减金额不能超过当前余额")
 		}
 		if err := tx.Model(&row).Update("balance_cents", after).Error; err != nil {
 			return err
 		}
-		record := user.BalanceTransaction{UserID: id, AmountCents: amountCents, BeforeCents: row.BalanceCents, AfterCents: after, Type: "manual", Remark: strings.TrimSpace(remark), Operator: strings.TrimSpace(operator)}
 		return tx.Create(&record).Error
 	})
 	if err != nil {
 		return nil, err
 	}
 	return s.Get(id)
+}
+
+// manualBalanceRecord freezes the ledger snapshot before GORM updates the
+// loaded account struct in memory. Building the row after Model(&account).Update
+// would make before_cents equal after_cents and violate the financial invariant.
+func manualBalanceRecord(row user.User, workspaceID uint64, amountCents int64, remark, operator string) (int64, user.BalanceTransaction) {
+	before := row.BalanceCents
+	after := before + amountCents
+	return after, user.BalanceTransaction{
+		WorkspaceID: workspaceID,
+		UserID:      row.UserID,
+		AmountCents: amountCents,
+		BeforeCents: before,
+		AfterCents:  after,
+		Type:        "manual",
+		Remark:      strings.TrimSpace(remark),
+		Operator:    strings.TrimSpace(operator),
+	}
 }
 
 func requireRoomOwnership(account user.User, ownerAgentID *uint64) error {
@@ -539,12 +1190,19 @@ func normalizeStatus(value int) int {
 }
 
 func adminUser(row user.User) AdminUser {
+	gameIDs := []string{}
+	_ = json.Unmarshal([]byte(defaultString(row.RobotGameIDsJSON, "[]")), &gameIDs)
 	return AdminUser{
-		ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone,
+		ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname,
+		Avatar: row.Avatar, PublicTitle: row.PublicTitle, PublicBadge: row.PublicBadge, Phone: row.Phone,
 		Role: defaultString(row.Role, "member"), Remark: row.Remark, RiskLevel: defaultString(row.RiskLevel, "normal"),
 		Balance: centsToAmount(row.BalanceCents), FlyMode: defaultString(row.FlyMode, "inherit"), FlyRate: row.FlyRate,
 		AgentRoomCode: row.AgentRoomCode, ParentAgentID: row.ParentAgentID, ParentTenantID: row.ParentTenantID,
 		Status: row.Status, LastLoginAt: row.LastLoginAt, LoginCount: row.LoginCount, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		IsRobot: row.Role == "member" && row.Remark == roomActivityRemark, RobotGameIDs: gameIDs,
+		RobotActiveStart: row.RobotActiveStart, RobotActiveEnd: row.RobotActiveEnd,
+		RobotMinBet: centsToAmount(row.RobotMinBetCents), RobotMaxBet: centsToAmount(row.RobotMaxBetCents),
+		WorkspaceID: row.WorkspaceID,
 	}
 }
 

@@ -35,58 +35,334 @@ body:has(.theme-night),
     linear-gradient(180deg, #071d35, #092842);
 }
 
-.theme-night .chat-list {
-  background:
-    radial-gradient(circle at 88% 6%, #16728a42, transparent 30%),
-    linear-gradient(180deg, #071d35, #092842);
-  color: #e5f7fa;
+.theme-night .chat-list,
+.theme-night .chat-room,
+.theme-night .notification-page,
+.theme-night .plan-page {
+  --message-canvas: #061725;
+  --message-panel: #0d2a3b;
+  --message-panel-raised: #113246;
+  --message-border: #6bd1d526;
+  --message-text: #deedf0;
+  --message-muted: #8faab3;
+  --message-accent: #64d2cf;
+  --card: var(--message-panel);
+  --muted: var(--message-muted);
 }
 
-.theme-night .app-content:has(.chat-list) { background: #071d35; }
+.theme-night .chat-list {
+  background:
+    radial-gradient(circle at 92% 4%, #1462773d, transparent 28%),
+    linear-gradient(180deg, #061725, #081e2e 72%, #071b2b);
+  color: var(--message-text);
+}
+
+.theme-night .app-content:has(.chat-list),
+.theme-night .app-content:has(.chat-room),
+.theme-night .app-content:has(.notification-page),
+.theme-night .app-content:has(.plan-page) {
+  background:
+    radial-gradient(circle at 90% 3%, #14627730, transparent 30%),
+    linear-gradient(180deg, #061725, #081e2e);
+}
 
 .theme-night .chat-list .blue-header {
-  border-bottom: 1px solid #56cbd535;
-  background: linear-gradient(115deg, #0a385d, #0d6979 58%, #118b87);
-  box-shadow: 0 5px 17px #0004;
-  color: #edffff;
+  border-bottom: 1px solid #62d2d43b;
+  background: linear-gradient(115deg, #082b48, #0b5060 58%, #0d716c);
+  box-shadow: 0 7px 20px #020b1599;
+  color: #e8f5f6;
 }
 
 .theme-night .chat-subhead {
-  color: #d5eef2;
+  color: #d2e4e8;
 }
 
 .theme-night .chat-subhead button {
-  color: #91bec8;
+  color: #88abb4;
 }
 
-.theme-night .chat-row {
+.theme-night .chat-list .chat-row {
   width: calc(100% - 24px);
   margin: 9px 12px;
-  border: 1px solid #63d3dc29;
+  border: 1px solid var(--message-border);
   border-radius: 15px;
-  border-bottom-color: #63d3dc24;
-  background: #0d2d49;
-  color: #e7f8fa;
-  box-shadow: 0 8px 18px #0003;
+  background: linear-gradient(135deg, #0f2d40, #0b2538);
+  color: var(--message-text);
+  box-shadow: inset 0 1px #b7ffff0a, 0 9px 20px #020b1566;
 }
 
-.theme-night .chat-row b {
-  color: #f0fdff;
+.theme-night .chat-list .chat-row b {
+  color: var(--message-text);
 }
 
-.theme-night .chat-row small,
-.theme-night .chat-row time {
-  color: #9dc3cc;
+.theme-night .chat-list .chat-row small,
+.theme-night .chat-list .chat-row time {
+  color: var(--message-muted);
 }
 
-.theme-night .chat-row-pinned {
-  border-color: #e4b45b48;
-  background: linear-gradient(110deg, #183d52, #12324e);
+.theme-night .chat-list .chat-row-pinned {
+  border-color: #d8ac5940;
+  background: linear-gradient(110deg, #153648, #0c273b 72%);
 }
 
-.theme-night .chat-row-pinned::before {
-  color: #f0c86a;
+.theme-night .chat-list .chat-row-pinned::before {
+  color: #e7bd68;
 }
+
+.theme-night .chat-list .message-logo i { border-color: #0d293d; }
+
+/* Messages sub-pages use a true dark surface hierarchy instead of pale cards. */
+.theme-night .chat-room,
+.theme-night .notification-page,
+.theme-night .system-notice-page,
+.theme-night .activity-notice-page,
+.theme-night .plan-page {
+  background:
+    radial-gradient(circle at 88% 5%, #155e7130, transparent 29%),
+    linear-gradient(180deg, var(--message-canvas), #081e2e);
+  color: var(--message-text);
+}
+
+.theme-night .chat-room > .blue-header,
+.theme-night .notification-page > .blue-header,
+.theme-night .plan-page > .blue-header {
+  border-bottom: 1px solid #62d2d435;
+  background: linear-gradient(115deg, #082b48, #0b5060 58%, #0d716c);
+  color: #e8f5f6;
+  box-shadow: 0 7px 20px #020b1599;
+}
+
+.theme-night .chat-room .chat-history {
+  background:
+    radial-gradient(circle at 83% 10%, #13556b2e, transparent 31%),
+    var(--message-canvas);
+}
+
+.theme-night .chat-room .room-notice {
+  border-bottom: 1px solid #d7a95626;
+  background: #2e2d24;
+  color: #d7c38e;
+}
+
+.theme-night .chat-room .system-pill {
+  background: #173447;
+  color: #9fb8c0;
+}
+
+.theme-night .chat-room .service-bubble {
+  border: 1px solid #75cdd11f;
+  background: #102d40;
+  color: #dbe9ec;
+  box-shadow: 0 5px 14px #020b1570;
+}
+
+.theme-night .chat-room .service-message.outgoing .service-bubble {
+  border-color: #75d7d333;
+  background: linear-gradient(135deg, #15545a, #12484f);
+  color: #e6f5f4;
+}
+
+.theme-night .chat-room .chat-history .service-bubble > small,
+.theme-night .chat-room .message-bubble-time {
+  color: #88a8b1;
+}
+
+.theme-night .chat-room .service-message.outgoing .message-bubble-time {
+  color: #a2ceca;
+}
+
+.theme-night .chat-room .chat-input {
+  border-top-color: #68cdd128;
+  background: #081c2d;
+}
+
+.theme-night .chat-room .chat-input input,
+.theme-night .chat-room .chat-input .chat-muted-placeholder,
+.theme-night .chat-room .service-replies button,
+.theme-night .chat-room .chat-load-history {
+  border-color: #62cacb38;
+  background: #102f43;
+  color: #c7dadd;
+}
+
+.theme-night .chat-room .chat-input input::placeholder { color: #7896a1; }
+
+.theme-night .chat-inline-retry,
+.theme-night .chat-retry-state {
+  border-color: #d09d4738;
+  background: #2b2b25;
+  color: #ceb985;
+  box-shadow: none;
+}
+
+.theme-night .chat-inline-retry button,
+.theme-night .chat-retry-state button { color: #72d8d3; }
+
+.theme-night .notification-thread-list,
+.theme-night .notification-thread,
+.theme-night .notification-messages > button {
+  border-color: var(--message-border);
+  background: var(--message-panel);
+  color: var(--message-text);
+  box-shadow: 0 8px 18px #020b1552;
+}
+
+.theme-night .notification-thread p,
+.theme-night .notification-messages p,
+.theme-night .notification-thread time,
+.theme-night .notification-messages time,
+.theme-night .notification-pinned-title {
+  color: var(--message-muted);
+}
+
+.theme-night .system-notice-intro,
+.theme-night .system-notice-card {
+  border-color: var(--message-border);
+  background: linear-gradient(145deg, var(--message-panel-raised), var(--message-panel));
+  color: var(--message-text);
+  box-shadow: 0 9px 20px #020b155c;
+}
+
+.theme-night .system-notice-card.is-unread {
+  border-color: #63d1cf6b;
+  box-shadow: inset 3px 0 #52c8c5, 0 9px 20px #020b155c;
+}
+
+.theme-night .system-notice-intro h1,
+.theme-night .system-notice-card b,
+.theme-night .draw-notice-heading b,
+.theme-night .draw-notice-stats b,
+.theme-night .draw-bet-list h3,
+.theme-night .draw-bet-list section b {
+  color: var(--message-text);
+}
+
+.theme-night .system-notice-intro p,
+.theme-night .system-notice-card p,
+.theme-night .draw-notice-heading small,
+.theme-night .draw-notice-summary > time,
+.theme-night .draw-notice-detail > time,
+.theme-night .draw-bet-list section p,
+.theme-night .empty-notice {
+  color: var(--message-muted);
+}
+
+.theme-night .draw-notice-card {
+  border-color: #62c8cc35;
+  background: linear-gradient(145deg, #102f43, #0b2638);
+}
+
+.theme-night .draw-notice-game > span {
+  border-color: #6cc7ca2f;
+  background: #16394a;
+  box-shadow: 0 4px 10px #020b1570;
+}
+
+.theme-night .draw-notice-stats > span,
+.theme-night .draw-bet-list section {
+  border-color: #66cbd126;
+  background: #0b2536;
+}
+
+.theme-night .draw-notice-stats small,
+.theme-night .draw-notice-stats em,
+.theme-night .draw-bet-list section small { color: #88a5ae; }
+
+.theme-night .draw-notice-stats .has-prize {
+  background: #302b25;
+}
+
+.theme-night .draw-notice-stats .has-prize b,
+.theme-night .draw-notice-stats .has-prize em { color: #eda06e; }
+
+.theme-night .activity-notice-card.has-cover {
+  border-color: var(--message-border);
+  background: var(--message-panel);
+  box-shadow: 0 9px 20px #020b1566;
+}
+
+.theme-night .plan-lobby-overview,
+.theme-night .plan-game-card,
+.theme-night .plan-current,
+.theme-night .plan-master-tabs button,
+.theme-night .plan-mode-tabs button,
+.theme-night .plan-recommendation,
+.theme-night .plan-history {
+  border-color: var(--message-border);
+  background: var(--message-panel);
+  color: var(--message-text);
+  box-shadow: 0 9px 20px #020b155c;
+}
+
+.theme-night .plan-game-main {
+  background: linear-gradient(120deg, #113247, #0d2a3b);
+}
+
+.theme-night .plan-game-card footer,
+.theme-night .plan-history-head {
+  border-color: #67cbd124;
+  background: #091f30;
+}
+
+.theme-night .plan-lobby-overview b,
+.theme-night .plan-game-main > div b,
+.theme-night .plan-recommendation header b,
+.theme-night .plan-history > header b,
+.theme-night .plan-history-row span b {
+  color: var(--message-text);
+}
+
+.theme-night .plan-lobby-overview span,
+.theme-night .plan-overview-masters em,
+.theme-night .plan-game-main > div small,
+.theme-night .plan-game-main > em,
+.theme-night .plan-game-card footer > span,
+.theme-night .plan-current > div small,
+.theme-night .plan-current > time,
+.theme-night .plan-master-tabs button small,
+.theme-night .plan-mode-tabs button,
+.theme-night .plan-recommendation header em,
+.theme-night .plan-recommendation > p,
+.theme-night .plan-history-head,
+.theme-night .plan-history-row span small,
+.theme-night .plan-history-loading,
+.theme-night .plan-empty,
+.theme-night .plan-canada-result i {
+  color: var(--message-muted);
+}
+
+.theme-night .plan-lobby-overview small,
+.theme-night .plan-current > div b,
+.theme-night .plan-recommendation header small,
+.theme-night .plan-history > header span,
+.theme-night .plan-history-pick > small b {
+  color: var(--message-accent);
+}
+
+.theme-night .plan-game-logo,
+.theme-night .plan-current-logo {
+  border-color: #244b5b;
+  box-shadow: 0 4px 10px #020b1570;
+}
+
+.theme-night .plan-master-tabs button.active,
+.theme-night .plan-mode-tabs button.active {
+  border-color: #58cfcd78;
+  background: linear-gradient(135deg, #15485a, #145851);
+  color: #e4f3f3;
+  box-shadow: inset 0 0 0 1px #62d7d421;
+}
+
+.theme-night .plan-history-row,
+.theme-night .plan-history > header {
+  border-color: #67cbd124;
+}
+
+.theme-night .plan-history-row { color: #b8cbd0; }
+.theme-night .plan-history-pick > small { color: #91aab2; }
+.theme-night .plan-history-pick > small em { color: #6f8993; }
+.theme-night .plan-history-row > em.hit { background: #153a33; color: #79d7b8; }
+.theme-night .plan-history-row > em.miss { background: #3d292d; color: #ee9a92; }
 
 .theme-night.game-room .game-info,
 .theme-night.game-room .last-draw {

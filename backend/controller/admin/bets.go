@@ -3,6 +3,8 @@ package admin
 import (
 	"backend/constants"
 	"backend/services"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -76,7 +78,10 @@ func (h *BetHandler) PublishDraw(c *gin.Context) {
 		Issue   string `json:"issue"`
 		Numbers []int  `json:"numbers"`
 	}
-	_ = c.ShouldBindJSON(&request)
+	if err := c.ShouldBindJSON(&request); err != nil && !errors.Is(err, io.EOF) {
+		constants.SendError(c, http.StatusBadRequest, "开奖参数不正确", err)
+		return
+	}
 	operator, _ := c.Get("username")
 	operatorName, _ := operator.(string)
 	result, err := h.bets.PublishDraw(c.Param("id"), request.Issue, request.Numbers, operatorName)

@@ -1,0 +1,20 @@
+/*
+ * 用户端的最终字体保护层。
+ *
+ * 部分弹窗通过 createPortal 挂在 document.body 下，不属于 .mobile-app，
+ * 因而会绕过 App.css 里的字体规则并回落到带斜线 0 的等宽字体。
+ * 这里放在所有业务样式之后，统一使用普通 0 字形，同时保留数字等宽对齐。
+ */
+:root {
+  --member-ui-font: Arial, "Noto Sans SC", system-ui, sans-serif;
+}
+
+body,
+#root,
+#root *,
+body > [role="presentation"],
+body > [role="presentation"] * {
+  font-family: var(--member-ui-font) !important;
+  font-feature-settings: "zero" 0 !important;
+  font-variant-numeric: tabular-nums;
+}

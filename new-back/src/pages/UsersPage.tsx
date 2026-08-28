@@ -32,7 +32,6 @@ import {
 } from '@mui/material'
 import AddRounded from '@mui/icons-material/AddRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
-import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import DownloadRounded from '@mui/icons-material/DownloadRounded'
 import EditRounded from '@mui/icons-material/EditRounded'
 import KeyRounded from '@mui/icons-material/KeyRounded'
@@ -45,6 +44,7 @@ import AdminPanelSettingsRounded from '@mui/icons-material/AdminPanelSettingsRou
 import CloseRounded from '@mui/icons-material/CloseRounded'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { adminApi, type AdminGame, type AdminUser, type AgentItem, type BalanceRecord, type UserPayload, type UserStats, type UserTradingConfig } from '../api'
+import { GameOddsNavigation, OddsOverrideGrid } from '../components/OddsEditors'
 import { PageHeader } from '../components/PageHeader'
 import { useFeedback } from '../components/feedback'
 
@@ -83,6 +83,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
   const [trading, setTrading] = useState<UserTradingConfig | null>(null)
   const [tradingGameId, setTradingGameId] = useState('')
   const [tradingSaving, setTradingSaving] = useState(false)
+  const [tradingDirty, setTradingDirty] = useState(false)
   const { showMessage } = useFeedback()
 
   const load = useCallback(async (notify = false) => {
@@ -93,7 +94,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
         adminApi.users({ ...applied, kind: memberView ? 'member' : 'account', page: page + 1, pageSize }),
         adminApi.userStats(memberView ? 'member' : 'account'),
       ])
-      setUsers(list.items)
+      setUsers(Array.isArray(list?.items) ? list.items : [])
       setTotal(list.total)
       setStats(nextStats)
       if (notify) showMessage('用户数据已刷新')
@@ -113,8 +114,9 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
     if (memberView && agents.length === 0) {
       try {
         const result = await adminApi.agents({ page: 1, pageSize: 100 })
-        setAgents(result.items)
-        if (result.items.length) setForm(current => ({ ...current, parent_agent_id: result.items[0].id }))
+        const nextAgents = Array.isArray(result?.items) ? result.items : []
+        setAgents(nextAgents)
+        if (nextAgents.length) setForm(current => ({ ...current, parent_agent_id: nextAgents[0].id }))
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : '读取代理房间失败')
       }
@@ -203,6 +205,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
     setDetailUser(user)
     setHistory([])
     setTrading(null)
+    setTradingDirty(false)
     try {
       const [nextHistory, dashboard, nextTrading] = await Promise.all([
         adminApi.userBalanceHistory(user.id),
@@ -213,6 +216,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
       setGames(dashboard.games ?? [])
       setTrading(nextTrading)
       setTradingGameId(nextTrading.game_id)
+      setTradingDirty(false)
     } catch {
       setHistory([])
     }
@@ -223,6 +227,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
       const next = await adminApi.userTrading(userId, gameId)
       setTrading(next)
       setTradingGameId(next.game_id)
+      setTradingDirty(false)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '读取飞单与赔率失败')
     }
@@ -230,9 +235,15 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
 
   const saveTrading = async () => {
     if (!detailUser || !trading) return
+    const oddsMultiplier = Number(trading.odds_multiplier ?? 1)
+    if (!Number.isFinite(oddsMultiplier) || oddsMultiplier < 0.5 || oddsMultiplier > 1.5) {
+      setError('会员赔率倍率必须在 0.50–1.50 之间')
+      return
+    }
     setTradingSaving(true)
     try {
       const next = await adminApi.updateUserTrading(detailUser.id, {
+        odds_multiplier: oddsMultiplier,
         fly_mode: trading.fly.mode,
         fly_rate: trading.fly.rate,
         rebate_mode: trading.rebate.mode,
@@ -241,6 +252,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
         odds: trading.odds.map(item => ({ play_code: item.play_code, override: item.has_override ? item.override : null })),
       })
       setTrading(next)
+      setTradingDirty(false)
       setDetailUser(current => current ? { ...current, fly_mode: next.fly.mode, fly_rate: next.fly.rate } : current)
       setUsers(current => current.map(item => item.id === detailUser.id ? { ...item, fly_mode: next.fly.mode, fly_rate: next.fly.rate } : item))
       showMessage('飞单、返水与单独赔率已保存')
@@ -273,7 +285,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
   ] as const, [memberView, stats])
 
   return <Box p={{ xs: 2, lg: 2.5 }}>
-    <PageHeader eyebrow={memberView ? '内容与服务 / 会员' : '组织与账号 / 用户'} title={memberView ? '会员管理' : '用户管理'} description={memberView ? '管理会员资料、所属租户与代理、风控和账户余额。' : '管理平台、租户和代理的后台登录账号。'} actions={<><Button variant="outlined" startIcon={<DownloadRounded />} disabled={!users.length} onClick={exportCsv}>导出当前页</Button><Button variant="outlined" startIcon={loading ? <CircularProgress size={16} /> : <RefreshRounded />} disabled={loading} onClick={() => void load(true)}>刷新</Button><Button variant="contained" startIcon={<AddRounded />} onClick={() => void openCreate()}>{memberView ? '新增会员' : '新增后台用户'}</Button></>} />
+    <PageHeader eyebrow={memberView ? '内容与服务 / 会员' : '组织与账号 / 用户'} title={memberView ? '会员管理' : '用户管理'} description="" actions={<><Button variant="outlined" startIcon={<DownloadRounded />} disabled={!users.length} onClick={exportCsv}>导出当前页</Button><Button variant="contained" startIcon={<AddRounded />} onClick={() => void openCreate()}>{memberView ? '新增会员' : '新增后台用户'}</Button></>} />
     {error && <Alert severity="error" onClose={() => setError('')} sx={{ mt: 2 }}>{error}</Alert>}
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2,1fr)', lg: 'repeat(4,1fr)' }, gap: 1.25, mt: 2.5 }}>{statCards.map(([label, value, Icon, color]) => <Card key={label}><CardContent sx={{ p: '15px !important' }}><Stack direction="row" alignItems="center" justifyContent="space-between"><Box><Typography variant="caption" color="text.secondary">{label}</Typography><Typography fontSize={{ xs: 20, sm: 24 }} fontWeight={850} mt={.4}>{value}</Typography></Box><Box sx={{ width: 40, height: 40, borderRadius: 2.5, display: 'grid', placeItems: 'center', color: '#fff', bgcolor: color }}><Icon fontSize="small" /></Box></Stack></CardContent></Card>)}</Box>
     <Paper variant="outlined" sx={{ p: 1.5, mt: 1.5 }}><Stack direction={{ xs: 'column', md: 'row' }} gap={1}><TextField placeholder={memberView ? '搜索会员账号、昵称、代理或联系方式' : '搜索登录账号、租户、代理或联系方式'} value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') applyFilters() }} sx={{ flex: 1, minWidth: { md: 280 } }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRounded fontSize="small" /></InputAdornment> } }} /><TextField select label="账号状态" value={status} onChange={event => setStatus(event.target.value)} sx={{ minWidth: 140 }}><MenuItem value="all">全部状态</MenuItem><MenuItem value="active">正常</MenuItem><MenuItem value="disabled">已停用</MenuItem></TextField>{!memberView && <TextField select label="账号角色" value={role} onChange={event => setRole(event.target.value)} sx={{ minWidth: 140 }}><MenuItem value="all">全部角色</MenuItem><MenuItem value="tenant">租户</MenuItem><MenuItem value="agent">代理</MenuItem><MenuItem value="admin">管理员</MenuItem></TextField>}<Button variant="contained" onClick={applyFilters}>查询</Button><Button variant="text" onClick={resetFilters}>重置</Button></Stack></Paper>
@@ -285,7 +297,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
 
     <Dialog open={Boolean(balanceUser)} onClose={() => !saving && setBalanceUser(null)} fullWidth maxWidth="xs"><DialogTitle>调整用户余额</DialogTitle><DialogContent><Alert severity="info" sx={{ mb: 2 }}>当前余额：{money(balanceUser?.balance ?? 0)}。正数增加，负数扣减，操作会写入审计流水。</Alert><Stack gap={2}><TextField autoFocus type="number" label="调整金额" placeholder="例如 100 或 -50" value={balanceAmount} onChange={event => setBalanceAmount(event.target.value)} /><TextField required multiline minRows={3} label="调整原因" value={balanceRemark} onChange={event => setBalanceRemark(event.target.value)} /></Stack></DialogContent><DialogActions><Button onClick={() => setBalanceUser(null)}>取消</Button><Button variant="contained" disabled={saving} onClick={() => void submitBalance()}>确认调整</Button></DialogActions></Dialog>
 
-    <Drawer anchor="right" open={Boolean(detailUser)} onClose={() => setDetailUser(null)} slotProps={{ paper: { sx: { width: { xs: '100%', sm: 480 }, p: 2.5 } } }}>
+    <Drawer anchor="right" open={Boolean(detailUser)} onClose={() => setDetailUser(null)} slotProps={{ paper: { sx: { width: { xs: '100%', sm: 720, lg: 860 }, p: { xs: 1.5, sm: 2.5 } } } }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Box>
           <Typography variant="overline" color="primary">用户详情</Typography>
@@ -324,97 +336,121 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
                 <Typography variant="caption" color="text.secondary">加载交易配置中…</Typography>
               ) : (
                 <Stack gap={1.5}>
-                  <Alert severity="info" sx={{ py: 0.5 }}>配置优先级：用户单独设置 → 房间设置 → 平台默认。该用户可单独覆盖赔率与返水。</Alert>
-                  <TextField
-                    select
-                    size="small"
-                    label="飞单模式"
-                    value={trading.fly.mode}
-                    onChange={event => setTrading(current => current ? { ...current, fly: { ...current.fly, mode: event.target.value } } : current)}
-                  >
-                    <MenuItem value="inherit">跟随房间（当前 {trading.room_fly_rate}%）</MenuItem>
-                    <MenuItem value="custom">单独比例</MenuItem>
-                    <MenuItem value="off">不飞单</MenuItem>
-                  </TextField>
-                  <TextField
-                    size="small"
-                    type="number"
-                    label="单独飞单比例 %"
-                    disabled={trading.fly.mode !== 'custom'}
-                    value={trading.fly.rate}
-                    onChange={event => setTrading(current => current ? { ...current, fly: { ...current.fly, rate: Number(event.target.value) } } : current)}
-                  />
-                  <Stack direction={{ xs: 'column', sm: 'row' }} gap={1}>
-                    <TextField select fullWidth size="small" label="返水模式" value={trading.rebate.mode} onChange={event => setTrading(current => current ? { ...current, rebate: { ...current.rebate, mode: event.target.value } } : current)}>
-                      <MenuItem value="inherit">跟随房间（当前 {trading.room_rebate_rate}%）</MenuItem>
-                      <MenuItem value="custom">用户单独返水</MenuItem>
-                      <MenuItem value="off">关闭返水</MenuItem>
-                    </TextField>
-                    <TextField fullWidth size="small" type="number" label="用户返水比例 %" disabled={trading.rebate.mode !== 'custom'} value={trading.rebate.rate} onChange={event => setTrading(current => current ? { ...current, rebate: { ...current.rebate, rate: Number(event.target.value) } } : current)} inputProps={{ min: 0, max: 100, step: 0.01 }} />
-                  </Stack>
-                  <TextField
-                    select
-                    size="small"
-                    label="彩种（单独赔率）"
-                    value={tradingGameId}
-                    onChange={event => {
-                      const next = event.target.value
+                  <Alert severity="info" sx={{ py: 0.5 }}>
+                    赔率优先级：会员单独赔率 → 当前房间赔率 × 会员倍率 → 平台默认赔率 × 会员倍率。会员进入其他房间后，只使用新房间内的会员配置。
+                  </Alert>
+
+                  <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2.2 }}>
+                    <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1.2} alignItems={{ md: 'center' }}>
+                      <Box>
+                        <Typography fontSize={12.5} fontWeight={900}>会员赔率倍率</Typography>
+                        <Typography fontSize={10} color="text.secondary">作用于该会员继承的房间赔率；玩法单独赔率仍然优先。</Typography>
+                      </Box>
+                      <TextField
+                        size="small"
+                        type="number"
+                        label="倍率"
+                        value={trading.odds_multiplier ?? 1}
+                        onChange={event => {
+                          const raw = event.target.value
+                          setTrading(current => current ? { ...current, odds_multiplier: raw === '' ? undefined : Number(raw) } : current)
+                          setTradingDirty(true)
+                        }}
+                        inputProps={{ min: 0.5, max: 1.5, step: 0.01 }}
+                        sx={{ width: { xs: '100%', md: 130 } }}
+                      />
+                    </Stack>
+                    <Stack direction="row" gap={.65} mt={1} sx={{ overflowX: 'auto', pb: .25 }}>
+                      {[0.8, 0.9, 1, 1.1, 1.2].map(value => <Button
+                        key={value}
+                        size="small"
+                        variant={Math.abs((trading.odds_multiplier ?? 1) - value) < 0.0001 ? 'contained' : 'outlined'}
+                        onClick={() => {
+                          setTrading(current => current ? { ...current, odds_multiplier: value } : current)
+                          setTradingDirty(true)
+                        }}
+                        sx={{ minWidth: 66, flex: '0 0 auto' }}
+                      >{value.toFixed(2)} 倍</Button>)}
+                    </Stack>
+                  </Paper>
+
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2,minmax(0,1fr))' }, gap: 1 }}>
+                    <Paper variant="outlined" sx={{ p: 1.15, borderRadius: 2.2 }}>
+                      <Typography fontSize={12} fontWeight={900} mb={1}>飞单设置</Typography>
+                      <Stack gap={1}>
+                        <TextField
+                          select
+                          size="small"
+                          label="飞单模式"
+                          value={trading.fly.mode}
+                          onChange={event => {
+                            setTrading(current => current ? { ...current, fly: { ...current.fly, mode: event.target.value } } : current)
+                            setTradingDirty(true)
+                          }}
+                        >
+                          <MenuItem value="inherit">跟随房间（当前 {trading.room_fly_rate}%）</MenuItem>
+                          <MenuItem value="custom">单独比例</MenuItem>
+                          <MenuItem value="off">不飞单</MenuItem>
+                        </TextField>
+                        <TextField
+                          size="small"
+                          type="number"
+                          label="单独飞单比例 %"
+                          disabled={trading.fly.mode !== 'custom'}
+                          value={trading.fly.rate}
+                          onChange={event => {
+                            setTrading(current => current ? { ...current, fly: { ...current.fly, rate: Number(event.target.value) } } : current)
+                            setTradingDirty(true)
+                          }}
+                          inputProps={{ min: 0, max: 100, step: 0.01 }}
+                        />
+                      </Stack>
+                    </Paper>
+                    <Paper variant="outlined" sx={{ p: 1.15, borderRadius: 2.2 }}>
+                      <Typography fontSize={12} fontWeight={900} mb={1}>返水设置</Typography>
+                      <Stack gap={1}>
+                        <TextField select size="small" label="返水模式" value={trading.rebate.mode} onChange={event => {
+                          setTrading(current => current ? { ...current, rebate: { ...current.rebate, mode: event.target.value } } : current)
+                          setTradingDirty(true)
+                        }}>
+                          <MenuItem value="inherit">跟随房间（当前 {trading.room_rebate_rate}%）</MenuItem>
+                          <MenuItem value="custom">用户单独返水</MenuItem>
+                          <MenuItem value="off">关闭返水</MenuItem>
+                        </TextField>
+                        <TextField size="small" type="number" label="用户返水比例 %" disabled={trading.rebate.mode !== 'custom'} value={trading.rebate.rate} onChange={event => {
+                          setTrading(current => current ? { ...current, rebate: { ...current.rebate, rate: Number(event.target.value) } } : current)
+                          setTradingDirty(true)
+                        }} inputProps={{ min: 0, max: 100, step: 0.01 }} />
+                      </Stack>
+                    </Paper>
+                  </Box>
+
+                  <GameOddsNavigation
+                    games={games.map(game => ({ ...game, enabled: true }))}
+                    gameId={tradingGameId}
+                    onSelect={next => {
+                      if (tradingDirty) {
+                        showMessage('当前游戏有未保存修改，请先保存再切换', 'warning')
+                        return
+                      }
                       setTradingGameId(next)
                       void loadTrading(detailUser.id, next)
                     }}
-                  >
-                    {games.map(game => <MenuItem key={game.id} value={game.id}>{game.name}</MenuItem>)}
-                    {!games.find(game => game.id === trading.game_id) && <MenuItem value={trading.game_id}>{trading.game_name || trading.game_id}</MenuItem>}
-                  </TextField>
-                  <TableContainer>
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell>玩法</TableCell>
-                          <TableCell align="right">平台</TableCell>
-                          <TableCell align="right">房间</TableCell>
-                          <TableCell align="right">单独</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {trading.odds.map((item, index) => (
-                          <TableRow key={item.play_code}>
-                            <TableCell>
-                              <Typography fontSize={11} fontWeight={700}>{item.play_name}</Typography>
-                              <Typography fontSize={9} color="text.secondary">{item.play_code}</Typography>
-                            </TableCell>
-                            <TableCell align="right">{item.base_odds}</TableCell>
-                            <TableCell align="right">{item.room_odds}</TableCell>
-                            <TableCell align="right">
-                              <TextField
-                                size="small"
-                                type="number"
-                                placeholder="继承"
-                                value={item.has_override ? (item.override ?? '') : ''}
-                                onChange={event => {
-                                  const raw = event.target.value
-                                  setTrading(current => {
-                                    if (!current) return current
-                                    const odds = [...current.odds]
-                                    if (!raw.trim()) {
-                                      odds[index] = { ...odds[index], override: null, has_override: false, effective: odds[index].room_odds }
-                                    } else {
-                                      const value = Number(raw)
-                                      odds[index] = { ...odds[index], override: value, has_override: true, effective: value }
-                                    }
-                                    return { ...current, odds }
-                                  })
-                                }}
-                                sx={{ width: 96 }}
-                                inputProps={{ step: 0.001, min: 1.001 }}
-                              />
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </TableContainer>
-                  <Button variant="contained" disabled={tradingSaving} onClick={() => void saveTrading()}>{tradingSaving ? '保存中…' : '保存用户交易配置'}</Button>
+                  />
+                  <OddsOverrideGrid
+                    items={trading.odds}
+                    level="member"
+                    onChange={odds => {
+                      setTrading(current => current ? {
+                        ...current,
+                        odds: odds.map(item => ({ ...item, room_odds: item.room_odds ?? item.base_odds })),
+                      } : current)
+                      setTradingDirty(true)
+                    }}
+                  />
+                  <Stack direction="row" justifyContent="flex-end">
+                    <Button variant="contained" disabled={tradingSaving || !tradingDirty} onClick={() => void saveTrading()}>{tradingSaving ? '保存中…' : tradingDirty ? '保存会员交易配置' : '已保存'}</Button>
+                  </Stack>
                 </Stack>
               )}
             </CardContent>

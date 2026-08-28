@@ -214,6 +214,23 @@
 }
 .login-success { color: #2eaf7b; }
 .register-back { margin-top: 12px; }
+.register-page {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.register-page .login-card {
+  flex: 0 0 auto;
+  margin: auto 0;
+}
+@media (max-height: 620px) {
+  .register-page { padding-block: 14px; }
+  .register-page .login-card { margin-block: 0; }
+}
 .login-status {
   display: flex;
   align-items: center;

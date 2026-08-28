@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs><linearGradient id="bg" x1="75" y1="48" x2="439" y2="468" gradientUnits="userSpaceOnUse"><stop stop-color="#1D8FDC"/><stop offset=".5" stop-color="#2850A7"/><stop offset="1" stop-color="#24196F"/></linearGradient></defs>
+  <circle cx="256" cy="256" r="250" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="224" fill="none" stroke="#9BD6FF" stroke-width="18" opacity=".88"/>
+  <g fill="#FFE66A"><path d="m256 65 13 39h41l-33 24 13 39-34-24-34 24 13-39-33-24h41z"/><path d="m111 172 8 24h25l-20 15 8 24-21-15-20 15 8-24-20-15h25z"/><path d="m401 172 8 24h25l-20 15 8 24-21-15-20 15 8-24-20-15h25z"/></g>
+  <text x="256" y="199" text-anchor="middle" fill="#DDF1FF" font-family="PingFang SC,Microsoft YaHei,sans-serif" font-size="54" font-weight="800">中国体彩</text>
+  <text x="179" y="362" text-anchor="middle" fill="#FFE663" font-family="Arial Black,Arial,sans-serif" font-size="180" font-weight="900" stroke="#1B1769" stroke-width="7" paint-order="stroke">7</text>
+  <text x="337" y="342" text-anchor="middle" fill="#fff" font-family="PingFang SC,Microsoft YaHei,sans-serif" font-size="92" font-weight="900" stroke="#1B1769" stroke-width="6" paint-order="stroke">星彩</text>
+</svg>

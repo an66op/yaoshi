@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -42,7 +43,7 @@ func (h *DashboardHandler) overview() (gin.H, error) {
 		{"agent_count", h.db.Model(&user.User{}).Where("role = ?", "agent")},
 		{"active_agent_count", h.db.Model(&user.User{}).Where("role = ? AND status = ?", "agent", 1)},
 		{"tenant_count", h.db.Model(&user.User{}).Where("role = ?", "tenant")},
-		{"pending_application_count", h.db.Model(&application.Application{}).Where("status = ?", "pending")},
+		{"pending_application_count", platformPendingApplicationQuery(h.db)},
 		{"service_conversation_count", h.db.Model(&chat.Message{}).Where("room_type = ? AND deleted_at IS NULL", "service").Distinct("scope")},
 		{"source_error_count", h.db.Model(&lottery.Game{}).Where("enabled = ? AND sync_status = ?", true, "error")},
 	}
@@ -65,6 +66,11 @@ func (h *DashboardHandler) overview() (gin.H, error) {
 	return counts, nil
 }
 
+func platformPendingApplicationQuery(db *gorm.DB) *gorm.DB {
+	return db.Model(&application.Application{}).
+		Where("status = ? AND request_type <> ?", "pending", "join")
+}
+
 func (h *DashboardHandler) SyncOfficialSources(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 75*time.Second)
 	defer cancel()
@@ -80,6 +86,31 @@ func (h *DashboardHandler) SyncOfficialSources(c *gin.Context) {
 		message = "部分官方数据源同步失败"
 	}
 	constants.SendSuccess(c, http.StatusOK, message, gin.H{"results": results, "failed": failed})
+}
+
+// TestOfficialSource runs the same bounded, provider-locked import used by the
+// scheduler, but only for one allowlisted source group. The route is mounted
+// exclusively on the platform-admin surface.
+func (h *DashboardHandler) TestOfficialSource(c *gin.Context) {
+	group := strings.TrimSpace(c.Param("group"))
+	if !services.IsOfficialSourceGroup(group) {
+		constants.SendError(c, http.StatusBadRequest, "未知官方数据源线路", nil)
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 50*time.Second)
+	defer cancel()
+	results := h.lottery.SyncOfficialGroup(ctx, group)
+	failed := 0
+	for _, result := range results {
+		if result.Status != "ok" {
+			failed++
+		}
+	}
+	message := "数据源线路测试完成"
+	if failed > 0 {
+		message = "数据源线路测试发现异常"
+	}
+	constants.SendSuccess(c, http.StatusOK, message, gin.H{"group": group, "results": results, "failed": failed})
 }
 
 func (h *DashboardHandler) Dashboard(c *gin.Context) {
@@ -149,6 +180,75 @@ func (h *DashboardHandler) Games(c *gin.Context) {
 	constants.SendSuccess(c, http.StatusOK, "ok", games)
 }
 
+func (h *DashboardHandler) GameCategories(c *gin.Context) {
+	categories, err := h.lottery.ListLobbyCategories()
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取分类失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", categories)
+}
+
+func (h *DashboardHandler) CreateGameCategory(c *gin.Context) {
+	h.saveGameCategory(c, 0)
+}
+
+func (h *DashboardHandler) UpdateGameCategory(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "分类编号不正确", err)
+		return
+	}
+	h.saveGameCategory(c, id)
+}
+
+func (h *DashboardHandler) saveGameCategory(c *gin.Context, id uint64) {
+	var request struct {
+		Name      string `json:"name"`
+		SortOrder int    `json:"sort_order"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "请求参数不正确", err)
+		return
+	}
+	category, err := h.lottery.SaveLobbyCategory(id, request.Name, request.SortOrder)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "保存分类失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "分类已保存", category)
+}
+
+func (h *DashboardHandler) DeleteGameCategory(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "分类编号不正确", err)
+		return
+	}
+	if err := h.lottery.DeleteLobbyCategory(id); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "删除分类失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "分类已删除，原有彩种已转入未分类", gin.H{"id": id})
+}
+
+func (h *DashboardHandler) AssignGameCategory(c *gin.Context) {
+	var request struct {
+		Category  string `json:"category"`
+		SortOrder int    `json:"sort_order"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "请求参数不正确", err)
+		return
+	}
+	game, err := h.lottery.AssignLobbyCategory(c.Param("id"), request.Category, request.SortOrder)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "彩种归类失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "彩种分类已更新", game)
+}
+
 func (h *DashboardHandler) Draws(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	draws, err := h.lottery.ListDraws(c.Param("id"), limit)
@@ -169,7 +269,7 @@ func (h *DashboardHandler) UpdateGameStatus(c *gin.Context) {
 	}
 	game, err := h.lottery.SetEnabled(c.Param("id"), request.Enabled)
 	if err != nil {
-		constants.SendError(c, http.StatusNotFound, "游戏不存在", err)
+		constants.SendError(c, http.StatusBadRequest, "游戏状态更新失败", err)
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "游戏状态已更新", game)

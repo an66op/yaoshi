@@ -11,12 +11,14 @@ import (
 )
 
 type UserAdminHandler struct {
+	db      *gorm.DB
 	users   *services.UserAdminService
 	trading *services.TradingAdminService
 }
 
 func NewUserAdminHandler(db *gorm.DB) *UserAdminHandler {
 	return &UserAdminHandler{
+		db:      db,
 		users:   services.NewUserAdminService(db),
 		trading: services.NewTradingAdminService(db),
 	}
@@ -25,9 +27,41 @@ func NewUserAdminHandler(db *gorm.DB) *UserAdminHandler {
 func (h *UserAdminHandler) List(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	result, err := h.users.List(services.UserListFilter{Query: c.Query("query"), Status: c.DefaultQuery("status", "all"), Role: c.DefaultQuery("role", "all"), Kind: c.Query("kind"), Page: page, PageSize: pageSize})
+	workspaceID, _ := strconv.ParseUint(c.DefaultQuery("workspace_id", "0"), 10, 64)
+	if c.Query("kind") == "robot" && workspaceID == 0 {
+		constants.SendError(c, http.StatusBadRequest, "请选择要查看的机器人工作区", nil)
+		return
+	}
+	result, err := h.users.List(services.UserListFilter{Query: c.Query("query"), Status: c.DefaultQuery("status", "all"), Role: c.DefaultQuery("role", "all"), Kind: c.Query("kind"), Page: page, PageSize: pageSize, WorkspaceID: workspaceID})
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取用户列表失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+func (h *UserAdminHandler) RobotWorkspaces(c *gin.Context) {
+	result, err := h.users.RobotWorkspaces()
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取机器人工作区失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+func (h *UserAdminHandler) RobotWorkspaceGames(c *gin.Context) {
+	workspaceID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || workspaceID == 0 {
+		constants.SendError(c, http.StatusBadRequest, "机器人工作区不正确", err)
+		return
+	}
+	if _, err := services.EnabledRobotWorkspace(h.db, workspaceID); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "机器人工作区不存在或已停用", err)
+		return
+	}
+	result, err := services.NewWorkspaceGameService(h.db).List(workspaceID)
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取工作区彩种失败", err)
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "ok", result)
@@ -106,6 +140,59 @@ func (h *UserAdminHandler) Update(c *gin.Context) {
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "用户资料已更新", result)
+}
+
+func (h *UserAdminHandler) UpdateRobot(c *gin.Context) {
+	id, err := services.ParseUserID(c.Param("id"))
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "机器人编号不正确", err)
+		return
+	}
+	var request struct {
+		Nickname    string   `json:"nickname" binding:"required,max=50"`
+		Status      int      `json:"status" binding:"oneof=0 1"`
+		GameIDs     []string `json:"game_ids"`
+		ActiveStart string   `json:"active_start"`
+		ActiveEnd   string   `json:"active_end"`
+		MinBet      float64  `json:"min_bet"`
+		MaxBet      float64  `json:"max_bet"`
+		Avatar      string   `json:"avatar"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "机器人配置不正确", err)
+		return
+	}
+	result, err := h.users.UpdateRobot(id, services.UpdateRobotInput{Nickname: request.Nickname, Status: request.Status, GameIDs: request.GameIDs, ActiveStart: request.ActiveStart, ActiveEnd: request.ActiveEnd, MinBet: request.MinBet, MaxBet: request.MaxBet, Avatar: request.Avatar})
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "保存机器人配置失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "机器人配置已保存", result)
+}
+
+func (h *UserAdminHandler) ResetRobots(c *gin.Context) {
+	var request services.ResetWorkspaceRobotsInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "机器人批量重置参数不正确", err)
+		return
+	}
+	operator := "后台管理员"
+	if username, exists := c.Get("username"); exists {
+		if value, typeOK := username.(string); typeOK && value != "" {
+			operator += " " + value
+		}
+	}
+	if request.WorkspaceID == 0 {
+		constants.SendError(c, http.StatusBadRequest, "请选择要重置的机器人工作区", nil)
+		return
+	}
+	c.Set("target_workspace_id", request.WorkspaceID)
+	result, err := h.users.ResetRobotsForWorkspace(request.WorkspaceID, request, operator)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "批量重置机器人失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "机器人昵称和余额已重置", result)
 }
 
 func (h *UserAdminHandler) SetStatus(c *gin.Context) {

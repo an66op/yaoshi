@@ -30,6 +30,15 @@ var officialGroupLocks = map[string]*sync.Mutex{
 	"168-bingo":      {},
 }
 
+// IsOfficialSourceGroup keeps the administrator test endpoint constrained to
+// the same fixed provider allowlist used by the scheduler. It intentionally
+// does not accept a URL from the request, so the endpoint cannot become an
+// arbitrary server-side request primitive.
+func IsOfficialSourceGroup(group string) bool {
+	_, ok := officialGroupLocks[strings.TrimSpace(group)]
+	return ok
+}
+
 type SourceSyncResult struct {
 	GameID      string `json:"game_id"`
 	SourceName  string `json:"source_name"`
@@ -60,6 +69,7 @@ func (s *LotteryService) SyncOfficialSources(ctx context.Context) []SourceSyncRe
 // groups independent allows the high-frequency Bingo feed to run without
 // waiting for the slower daily lottery websites.
 func (s *LotteryService) SyncOfficialGroup(ctx context.Context, group string) []SourceSyncResult {
+	group = strings.TrimSpace(group)
 	lock, ok := officialGroupLocks[group]
 	if !ok {
 		return []SourceSyncResult{{Status: "error", Error: "未知官方数据源分组: " + group}}
@@ -141,6 +151,14 @@ func (s *LotteryService) syncOfficialGame(ctx context.Context, gameID string, fe
 	if err != nil {
 		return s.recordSyncError(gameID, err)
 	}
+	// Validate the complete upstream batch before writing any row. Racing,
+	// flying and Lucky 10 results are permutations of 1..10; accepting a
+	// partial, duplicated or out-of-range result would make the immutable draw
+	// impossible to settle correctly. Doing this before the insert loop also
+	// prevents a response whose later row is malformed from being half-imported.
+	if err := validateOfficialDraws(game, draws); err != nil {
+		return s.recordSyncError(gameID, err)
+	}
 	imported := 0
 	latestDraw := sourceDraw{}
 	for _, item := range draws {
@@ -186,6 +204,40 @@ func (s *LotteryService) syncOfficialGame(ctx context.Context, gameID string, fe
 	return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "ok", Imported: imported, LatestIssue: latestIssue}
 }
 
+func validateOfficialDraws(game lottery.Game, draws []sourceDraw) error {
+	if !requiresTenUniqueDrawNumbers(game) {
+		return nil
+	}
+	for _, draw := range draws {
+		if len(draw.Numbers) != 10 {
+			return fmt.Errorf("%s 第 %s 期开奖数据无效：赛车类必须包含恰好 10 个号码，实际为 %d 个", game.Name, sourceIssueLabel(draw.Issue), len(draw.Numbers))
+		}
+		seen := make(map[int]struct{}, 10)
+		for _, number := range draw.Numbers {
+			if number < 1 || number > 10 {
+				return fmt.Errorf("%s 第 %s 期开奖数据无效：号码 %d 超出 1~10", game.Name, sourceIssueLabel(draw.Issue), number)
+			}
+			if _, exists := seen[number]; exists {
+				return fmt.Errorf("%s 第 %s 期开奖数据无效：号码 %d 重复", game.Name, sourceIssueLabel(draw.Issue), number)
+			}
+			seen[number] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func requiresTenUniqueDrawNumbers(game lottery.Game) bool {
+	identity := game.Name + " " + game.Category
+	return strings.Contains(identity, "赛车") || strings.Contains(identity, "飞艇") || strings.Contains(identity, "幸运10")
+}
+
+func sourceIssueLabel(issue string) string {
+	if issue = strings.TrimSpace(issue); issue != "" {
+		return issue
+	}
+	return "未知期号"
+}
+
 func (s *LotteryService) enabledOfficialGames(gameIDs []string) (map[string]bool, error) {
 	type gameRow struct {
 		ID string
@@ -205,10 +257,7 @@ func (s *LotteryService) enabledOfficialGames(gameIDs []string) (map[string]bool
 }
 
 func (s *LotteryService) recordSyncError(gameID string, syncErr error) SourceSyncResult {
-	message := syncErr.Error()
-	if len(message) > 480 {
-		message = message[:480]
-	}
+	message := limitDBText(syncErr.Error(), 480)
 	var game lottery.Game
 	_ = s.db.First(&game, "id = ?", gameID).Error
 	_ = s.db.Model(&lottery.Game{}).Where("id = ?", gameID).Updates(map[string]any{"sync_status": "error", "last_sync_error": message}).Error

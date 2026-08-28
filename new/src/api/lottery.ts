@@ -1,10 +1,12 @@
-import { publicRequest } from './client'
+import { publicRequest, request } from './client'
 
 export type LotteryGame = {
   id: string
   code: string
   name: string
   category: string
+  lobby_category: string
+  lobby_sort_order: number
   badge: string
   badge_color: string
   enabled: boolean
@@ -30,7 +32,7 @@ export type ServerClock = {
 }
 
 export const lotteryApi = {
-  enabledGames: () => publicRequest<LotteryGame[]>('/public/lottery/games/enabled'),
+  enabledGames: () => request<LotteryGame[]>('/member/games'),
   clock: () => publicRequest<ServerClock>('/public/clock'),
   draws: (gameId: string, limit = 30) => publicRequest<DrawResult[]>(`/public/lottery/games/${encodeURIComponent(gameId)}/draws?limit=${limit}`),
 }

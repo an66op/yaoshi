@@ -21,6 +21,7 @@ export type RoomSettings = {
   min_debit_amount: number
   min_chat_score: number
   chat_nickname?: string
+  chat_avatar?: string
   game: Record<string, unknown>
   quick_replies: string[] | Record<string, unknown>
 }

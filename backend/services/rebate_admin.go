@@ -5,6 +5,7 @@ import (
 	"backend/data/models/rebate"
 	"backend/data/models/settings"
 	"backend/data/models/user"
+	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
 	"encoding/json"
 	"fmt"
@@ -45,7 +46,11 @@ type RebatePreview struct {
 func NewRebateAdminService(db *gorm.DB) *RebateAdminService { return &RebateAdminService{db: db} }
 
 func (s *RebateAdminService) PreviewToday() (*RebatePreview, error) {
-	cfg, err := s.loadConfig()
+	return s.PreviewTodayForWorkspace(0)
+}
+
+func (s *RebateAdminService) PreviewTodayForWorkspace(workspaceID uint64) (*RebatePreview, error) {
+	cfg, err := s.loadConfig(workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -57,10 +62,15 @@ func (s *RebateAdminService) PreviewToday() (*RebatePreview, error) {
 		RebateCents int64
 	}
 	var rows []previewRow
-	if err := s.db.Model(&bet.Bet{}).
+	betQuery := s.db.Model(&bet.Bet{}).
 		Select("user_id, COALESCE(SUM(amount_cents),0) AS turnover, COALESCE(SUM(rebate_cents),0) AS rebate_cents").
-		Where("COALESCE(settled_at,updated_at,created_at) >= ? AND status IN ?", start, []string{"won", "lost"}).
-		Group("user_id").Scan(&rows).Error; err != nil {
+		Where("COALESCE(settled_at,updated_at,created_at) >= ? AND status IN ?", start, []string{"won", "lost"})
+	if workspaceID > 0 {
+		betQuery = betQuery.Where("workspace_id = ?", workspaceID)
+	} else {
+		betQuery = betQuery.Where("workspace_id > 0")
+	}
+	if err := betQuery.Group("user_id").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	estimated := 0.0
@@ -73,7 +83,13 @@ func (s *RebateAdminService) PreviewToday() (*RebatePreview, error) {
 		}
 	}
 	var credited int64
-	_ = s.db.Model(&rebate.DailyRecord{}).Where("biz_date = ?", bizDate).Select("COALESCE(SUM(amount_cents),0)").Scan(&credited).Error
+	recordQuery := s.db.Model(&rebate.DailyRecord{}).Where("biz_date = ?", bizDate)
+	if workspaceID > 0 {
+		recordQuery = recordQuery.Where("workspace_id = ?", workspaceID)
+	} else {
+		recordQuery = recordQuery.Where("workspace_id > 0")
+	}
+	_ = recordQuery.Select("COALESCE(SUM(amount_cents),0)").Scan(&credited).Error
 	pending := estimated - centsToAmount(credited)
 	if pending < 0 {
 		pending = 0
@@ -93,7 +109,14 @@ func (s *RebateAdminService) TodayAmount() (float64, error) {
 }
 
 func (s *RebateAdminService) RunToday(operator string) (*RebateRunResult, error) {
-	cfg, err := s.loadConfig()
+	return s.RunTodayForWorkspace(0, operator)
+}
+
+func (s *RebateAdminService) RunTodayForWorkspace(workspaceID uint64, operator string) (*RebateRunResult, error) {
+	if workspaceID == 0 {
+		return nil, apperrors.NewBusinessError("WORKSPACE_REQUIRED", "请选择需要结算回水的房间")
+	}
+	cfg, err := s.loadConfig(workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +134,7 @@ func (s *RebateAdminService) RunToday(operator string) (*RebateRunResult, error)
 	var rows []row
 	if err := s.db.Model(&bet.Bet{}).
 		Select("user_id, MAX(username) as username, COALESCE(SUM(amount_cents),0) as turnover, COALESCE(SUM(rebate_cents),0) as rebate_cents").
-		Where("COALESCE(settled_at,updated_at,created_at) >= ? AND status IN ?", start, []string{"won", "lost"}).
+		Where("workspace_id = ? AND COALESCE(settled_at,updated_at,created_at) >= ? AND status IN ?", workspaceID, start, []string{"won", "lost"}).
 		Group("user_id").Having("COALESCE(SUM(amount_cents),0) > 0").
 		Scan(&rows).Error; err != nil {
 		return nil, apperrors.NewSystemError("REBATE_READ_FAILED", "统计回水流水失败", err)
@@ -125,7 +148,7 @@ func (s *RebateAdminService) RunToday(operator string) (*RebateRunResult, error)
 				continue
 			}
 			var exists int64
-			if err := tx.Model(&rebate.DailyRecord{}).Where("biz_date = ? AND user_id = ?", bizDate, item.UserID).Count(&exists).Error; err != nil {
+			if err := tx.Model(&rebate.DailyRecord{}).Where("workspace_id = ? AND biz_date = ? AND user_id = ?", workspaceID, bizDate, item.UserID).Count(&exists).Error; err != nil {
 				return err
 			}
 			if exists > 0 {
@@ -138,23 +161,24 @@ func (s *RebateAdminService) RunToday(operator string) (*RebateRunResult, error)
 				continue
 			}
 			var account user.User
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, item.UserID).Error; err != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ? AND workspace_id = ?", item.UserID, workspaceID).First(&account).Error; err != nil {
 				return apperrors.NewBusinessError("USER_NOT_FOUND", fmt.Sprintf("用户 %d 不存在", item.UserID))
 			}
-			after := account.BalanceCents + amount
+			before := account.BalanceCents
+			after := before + amount
 			if err := tx.Model(&account).Update("balance_cents", after).Error; err != nil {
 				return err
 			}
 			if err := tx.Create(&user.BalanceTransaction{
-				UserID: account.UserID, Reference: "rebate:" + bizDate,
-				AmountCents: amount, BeforeCents: account.BalanceCents, AfterCents: after,
+				WorkspaceID: workspaceID, UserID: account.UserID, Reference: fmt.Sprintf("rebate:%d:%s", workspaceID, bizDate),
+				AmountCents: amount, BeforeCents: before, AfterCents: after,
 				Type: "rebate", Remark: "每日回水 " + bizDate, Operator: defaultString(operator, "系统"),
 			}).Error; err != nil {
 				return err
 			}
 			rate := roundMoney(float64(amount) / float64(item.Turnover) * 100)
 			if err := tx.Create(&rebate.DailyRecord{
-				BizDate: bizDate, UserID: item.UserID, Username: item.Username,
+				WorkspaceID: workspaceID, BizDate: bizDate, UserID: item.UserID, Username: item.Username,
 				TurnoverCents: item.Turnover, RatePercent: rate, AmountCents: amount,
 				Status: "credited", Operator: defaultString(operator, "系统"),
 			}).Error; err != nil {
@@ -172,10 +196,21 @@ func (s *RebateAdminService) RunToday(operator string) (*RebateRunResult, error)
 	return result, nil
 }
 
-func (s *RebateAdminService) loadConfig() (*RebateConfig, error) {
+func (s *RebateAdminService) loadConfig(workspaceID uint64) (*RebateConfig, error) {
 	var row settings.SystemConfig
 	cfg := &RebateConfig{Enabled: true, RatePercent: 0.5, MinTurnover: 0, SettleMode: "daily", AutoCredit: false}
-	if err := s.db.First(&row, 1).Error; err != nil {
+	query := s.db.Model(&settings.SystemConfig{})
+	if workspaceID > 0 {
+		query = query.Where("workspace_id = ?", workspaceID)
+	} else {
+		var platform workspacemodel.Workspace
+		if err := s.db.Select("id").Where("type = ?", workspacemodel.TypePlatform).First(&platform).Error; err == nil {
+			query = query.Where("workspace_id = ?", platform.ID)
+		} else {
+			query = query.Where("workspace_id = 0").Order("id ASC")
+		}
+	}
+	if err := query.First(&row).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return cfg, nil
 		}

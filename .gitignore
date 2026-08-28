@@ -4,6 +4,10 @@ dist/
 dist-ssr/
 .vite/
 coverage/
+release/
+.backups/
+.local-logs/
+backend/uploads/
 
 # Runtime files and local development settings
 *.log

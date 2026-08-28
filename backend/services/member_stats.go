@@ -1,6 +1,7 @@
 package services
 
 import (
+	"backend/data/models/activity"
 	"backend/data/models/bet"
 	membernotify "backend/data/models/notify"
 	"backend/data/models/rebate"
@@ -89,7 +90,11 @@ type MemberRebatePreview struct {
 }
 
 func (s *MemberPortalService) RebatePreview(userID uint64) (*MemberRebatePreview, error) {
-	cfg, err := s.loadRebateConfig()
+	var account user.User
+	if err := s.db.Select("workspace_id").First(&account, userID).Error; err != nil {
+		return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+	}
+	cfg, err := s.loadRebateConfig(account.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +115,7 @@ func (s *MemberPortalService) RebatePreview(userID uint64) (*MemberRebatePreview
 		estimated = roundMoney(turnoverAmount * rate / 100)
 	}
 	var credited int64
-	_ = s.db.Model(&rebate.DailyRecord{}).Where("biz_date = ? AND user_id = ?", bizDate, userID).
+	_ = s.db.Model(&rebate.DailyRecord{}).Where("workspace_id = ? AND biz_date = ? AND user_id = ?", account.WorkspaceID, bizDate, userID).
 		Select("COALESCE(SUM(amount_cents),0)").Scan(&credited).Error
 	pending := estimated - centsToAmount(credited)
 	if pending < 0 {
@@ -123,10 +128,10 @@ func (s *MemberPortalService) RebatePreview(userID uint64) (*MemberRebatePreview
 	}, nil
 }
 
-func (s *MemberPortalService) loadRebateConfig() (RebateConfig, error) {
+func (s *MemberPortalService) loadRebateConfig(workspaceID uint64) (RebateConfig, error) {
 	var row settings.SystemConfig
 	cfg := RebateConfig{Enabled: true, RatePercent: 0.5, MinTurnover: 0, SettleMode: "daily"}
-	if err := s.db.First(&row, 1).Error; err != nil {
+	if err := s.db.Where("workspace_id = ?", workspaceID).First(&row).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return cfg, nil
 		}
@@ -145,7 +150,7 @@ func (s *MemberPortalService) GameFeed(userID uint64, gameID, issue string, limi
 		limit = 20
 	}
 	var account user.User
-	if err := s.db.Select("user_id", "role", "parent_agent_id").First(&account, userID).Error; err != nil {
+	if err := s.db.Select("user_id", "workspace_id", "role", "parent_agent_id").First(&account, userID).Error; err != nil {
 		return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
 	}
 	gameID = strings.TrimSpace(gameID)
@@ -153,7 +158,7 @@ func (s *MemberPortalService) GameFeed(userID uint64, gameID, issue string, limi
 	// feed contains other members' accepted wagers only, preventing duplicate
 	// self cards and keeping another member's parsing details private.
 	query := s.db.Model(&bet.Bet{}).
-		Where("room_scope = ? AND game_id = ?", betRoomScope(account), gameID).
+		Where("workspace_id = ? AND room_scope = ? AND game_id = ?", account.WorkspaceID, betRoomScope(account), gameID).
 		Where("user_id <> ?", userID)
 	if issue = strings.TrimSpace(issue); issue != "" {
 		query = query.Where("issue = ?", issue)
@@ -218,7 +223,7 @@ func notifyMemberApplication(db *gorm.DB, item *applicationReviewNotify) {
 		title = "申请未通过"
 	}
 	notice := membernotify.MemberNotification{
-		UserID: item.UserID, Title: title, Content: content,
+		WorkspaceID: item.WorkspaceID, UserID: item.UserID, Title: title, Content: content,
 		Level: level, Category: "account",
 	}
 	if err := db.Create(&notice).Error; err != nil {
@@ -226,7 +231,7 @@ func notifyMemberApplication(db *gorm.DB, item *applicationReviewNotify) {
 	}
 	ws.NotifyUser(item.UserID, "notification", map[string]any{
 		"id": notice.ID, "title": title, "content": content,
-		"level": level, "category": "account", "created_at": notice.CreatedAt,
+		"workspace_id": item.WorkspaceID, "level": level, "category": "account", "created_at": notice.CreatedAt,
 	})
 
 	if strings.TrimSpace(item.RoomScope) == "" || strings.TrimSpace(item.GameID) == "" {
@@ -254,6 +259,7 @@ func notifyMemberApplication(db *gorm.DB, item *applicationReviewNotify) {
 }
 
 type applicationReviewNotify struct {
+	WorkspaceID     uint64
 	UserID          uint64
 	Decision        string
 	Remark          string
@@ -266,12 +272,24 @@ type applicationReviewNotify struct {
 }
 
 type MemberInviteInfo struct {
-	InviteCode string  `json:"invite_code"`
-	Username   string  `json:"username"`
-	RoomCode   string  `json:"room_code"`
-	Title      string  `json:"title"`
-	Reward     float64 `json:"reward"`
-	ShareText  string  `json:"share_text"`
+	InviteCode   string  `json:"invite_code"`
+	Username     string  `json:"username"`
+	RoomCode     string  `json:"room_code"`
+	Title        string  `json:"title"`
+	Reward       float64 `json:"reward"`
+	InvitedCount int64   `json:"invited_count"`
+	TotalReward  float64 `json:"total_reward"`
+	ShareText    string  `json:"share_text"`
+}
+
+type memberInviteRewardSummary struct {
+	InvitedCount     int64
+	TotalRewardCents int64
+}
+
+func memberInviteRewardSummaryQuery(db *gorm.DB, userID uint64) *gorm.DB {
+	return db.Model(&activity.Participation{}).
+		Where("user_id = ? AND action = ?", userID, "invite_referral")
 }
 
 // Keep four numeric characters after the U prefix so generated invite codes
@@ -291,7 +309,15 @@ func (s *MemberPortalService) InviteInfo(userID uint64) (*MemberInviteInfo, erro
 		RoomCode:   profile.RoomCode,
 		ShareText:  fmt.Sprintf("我在王者娱乐，邀请码 %s", formatInviteCode(userID)),
 	}
-	activities, err := s.ListActivities("invite")
+	var summary memberInviteRewardSummary
+	if err := memberInviteRewardSummaryQuery(s.db, userID).
+		Select("COUNT(*) AS invited_count, COALESCE(SUM(reward_cents), 0) AS total_reward_cents").
+		Scan(&summary).Error; err != nil {
+		return nil, err
+	}
+	info.InvitedCount = summary.InvitedCount
+	info.TotalReward = centsToAmount(summary.TotalRewardCents)
+	activities, err := s.ListActivities(userID, "invite")
 	if err == nil {
 		for _, item := range activities {
 			if item.Status == "active" {

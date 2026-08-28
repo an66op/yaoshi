@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { apiBase, getToken } from '../api/client'
+import { apiBase } from '../api/client'
 import { memberApi } from '../api/member'
 
 export type WsEvent = {
@@ -43,7 +43,7 @@ export function useWebSocket(onEvent: (event: WsEvent) => void, enabled = true) 
   handlerRef.current = onEvent
 
   useEffect(() => {
-    if (!enabled || !getToken()) return
+    if (!enabled) return
     let ws: WebSocket | null = null
     let retryTimer = 0
     let closed = false
@@ -57,7 +57,7 @@ export function useWebSocket(onEvent: (event: WsEvent) => void, enabled = true) 
       if (!closed) retryTimer = window.setTimeout(() => { void connect() }, 3000)
     }
     const connect = async () => {
-      if (closed || !getToken()) return
+      if (closed) return
       try {
         const { ticket } = await memberApi.wsTicket()
         if (closed) return

@@ -5,6 +5,7 @@ import (
 	"backend/data/models/bet"
 	"backend/data/models/lottery"
 	"backend/data/models/user"
+	"context"
 	"time"
 
 	"gorm.io/gorm"
@@ -13,6 +14,10 @@ import (
 type SystemAuditService struct{ db *gorm.DB }
 
 func NewSystemAuditService(db *gorm.DB) *SystemAuditService { return &SystemAuditService{db: db} }
+
+func (s *SystemAuditService) RecoverSettlement(ctx context.Context, limit int, operator string) (SettlementRecoveryResult, error) {
+	return NewBetAdminService(s.db).RecoverSettlementBacklog(ctx, limit, operator)
+}
 
 type AuditLogPage struct {
 	Items      []audit.Log `json:"items"`
@@ -44,40 +49,78 @@ func (s *SystemAuditService) Logs(beforeID uint64, limit int) (AuditLogPage, err
 }
 
 type ReconciliationSummary struct {
-	GeneratedAt                   time.Time       `json:"generated_at"`
-	IssueErrors                   []lottery.Issue `json:"issue_errors"`
-	AbnormalBets                  []bet.Bet       `json:"abnormal_bets"`
-	IssueErrorCount               int64           `json:"issue_error_count"`
-	AbnormalBetCount              int64           `json:"abnormal_bet_count"`
-	PendingOnClosedCount          int64           `json:"pending_on_closed_count"`
-	NegativeBalanceCount          int64           `json:"negative_balance_count"`
-	OrphanLedgerCount             int64           `json:"orphan_ledger_count"`
-	DuplicateLedgerReferenceCount int64           `json:"duplicate_ledger_reference_count"`
-	LedgerChainGapCount           int             `json:"ledger_chain_gap_count"`
-	LedgerArithmeticCount         int64           `json:"ledger_arithmetic_error_count"`
-	LatestBalanceGapCount         int             `json:"latest_balance_gap_count"`
-	UntrackedBalanceUsers         int             `json:"untracked_balance_user_count"`
-	PaymentAccountErrorCount      int64           `json:"payment_account_error_count"`
-	PaymentChannelErrorCount      int64           `json:"payment_channel_error_count"`
-	NotificationFinancialErrors   int64           `json:"notification_financial_error_count"`
-	RebateFinancialErrors         int64           `json:"rebate_financial_error_count"`
-	ProfitShareFinancialErrors    int64           `json:"profit_share_financial_error_count"`
+	GeneratedAt time.Time       `json:"generated_at"`
+	IssueErrors []lottery.Issue `json:"issue_errors"`
+	// AbnormalBets contains only rows that can actually use the manual refund
+	// action: an unresolved pending bet explicitly marked abnormal. Historical
+	// settled abnormalities remain visible through HistoricalAbnormalBetCount,
+	// but are never presented as refundable work.
+	AbnormalBets                  []ReconciliationBetView `json:"abnormal_bets"`
+	IssueErrorCount               int64                   `json:"issue_error_count"`
+	AbnormalBetCount              int64                   `json:"abnormal_bet_count"`
+	HistoricalAbnormalBetCount    int64                   `json:"historical_abnormal_bet_count"`
+	PendingOnClosedCount          int64                   `json:"pending_on_closed_count"`
+	UnresolvedBetCount            int64                   `json:"unresolved_bet_count"`
+	RecoverableBetCount           int64                   `json:"recoverable_bet_count"`
+	UnrecoverableBetCount         int64                   `json:"unrecoverable_bet_count"`
+	MissingIssueBetCount          int64                   `json:"missing_issue_bet_count"`
+	DisabledGamePendingCount      int64                   `json:"disabled_game_pending_count"`
+	StaleIssueCount               int64                   `json:"stale_issue_count"`
+	StalePendingIssueCount        int64                   `json:"stale_pending_issue_count"`
+	StaleAwaitingIssueCount       int64                   `json:"stale_awaiting_issue_count"`
+	StaleSettlingIssueCount       int64                   `json:"stale_settling_issue_count"`
+	SourceErrorGameCount          int64                   `json:"source_error_game_count"`
+	NegativeBalanceCount          int64                   `json:"negative_balance_count"`
+	OrphanLedgerCount             int64                   `json:"orphan_ledger_count"`
+	DuplicateLedgerReferenceCount int64                   `json:"duplicate_ledger_reference_count"`
+	LedgerChainGapCount           int                     `json:"ledger_chain_gap_count"`
+	LedgerArithmeticCount         int64                   `json:"ledger_arithmetic_error_count"`
+	LatestBalanceGapCount         int                     `json:"latest_balance_gap_count"`
+	UntrackedBalanceUsers         int                     `json:"untracked_balance_user_count"`
+	PaymentAccountErrorCount      int64                   `json:"payment_account_error_count"`
+	PaymentChannelErrorCount      int64                   `json:"payment_channel_error_count"`
+	NotificationFinancialErrors   int64                   `json:"notification_financial_error_count"`
+	RebateFinancialErrors         int64                   `json:"rebate_financial_error_count"`
+	ProfitShareFinancialErrors    int64                   `json:"profit_share_financial_error_count"`
 }
 
 func (s *SystemAuditService) Reconciliation() (ReconciliationSummary, error) {
 	result := ReconciliationSummary{GeneratedAt: time.Now().UTC()}
 	realUserIDs := s.db.Model(&user.User{}).Select("user_id").Where("remark IS NULL OR remark <> ?", roomActivityRemark)
+	health, err := NewBetAdminService(s.db).SettlementHealth(result.GeneratedAt)
+	if err != nil {
+		return result, err
+	}
+	result.UnresolvedBetCount = health.UnresolvedBetCount
+	result.RecoverableBetCount = health.RecoverableBetCount
+	result.UnrecoverableBetCount = health.UnrecoverableBetCount
+	result.MissingIssueBetCount = health.MissingIssueBetCount
+	result.DisabledGamePendingCount = health.DisabledGamePendingCount
+	result.StaleIssueCount = health.StaleIssueCount
+	result.StalePendingIssueCount = health.StalePendingIssueCount
+	result.StaleAwaitingIssueCount = health.StaleAwaitingIssueCount
+	result.StaleSettlingIssueCount = health.StaleSettlingIssueCount
+	result.SourceErrorGameCount = health.SourceErrorGameCount
 	if err := s.db.Model(&lottery.Issue{}).Where("status = ?", lottery.IssueStatusError).Count(&result.IssueErrorCount).Error; err != nil {
 		return result, err
 	}
 	if err := s.db.Where("status = ?", lottery.IssueStatusError).Order("updated_at desc").Limit(50).Find(&result.IssueErrors).Error; err != nil {
 		return result, err
 	}
-	if err := s.db.Model(&bet.Bet{}).Where("reconciliation_status = ?", "abnormal").Count(&result.AbnormalBetCount).Error; err != nil {
+	if err := s.db.Model(&bet.Bet{}).Where("reconciliation_status = ?", "abnormal").Count(&result.HistoricalAbnormalBetCount).Error; err != nil {
 		return result, err
 	}
-	if err := s.db.Where("reconciliation_status = ?", "abnormal").Order("id desc").Limit(50).Find(&result.AbnormalBets).Error; err != nil {
+	abnormalQuery := s.db.Model(&bet.Bet{}).Where("status = ? AND reconciliation_status = ?", "pending", "abnormal")
+	if err := abnormalQuery.Session(&gorm.Session{}).Count(&result.AbnormalBetCount).Error; err != nil {
 		return result, err
+	}
+	var refundableRows []bet.Bet
+	if err := abnormalQuery.Session(&gorm.Session{}).Order("id desc").Limit(50).Find(&refundableRows).Error; err != nil {
+		return result, err
+	}
+	result.AbnormalBets = make([]ReconciliationBetView, 0, len(refundableRows))
+	for _, row := range refundableRows {
+		result.AbnormalBets = append(result.AbnormalBets, toReconciliationBetView(row))
 	}
 	if err := s.db.Model(&bet.Bet{}).Joins("JOIN lottery_issues ON lottery_issues.game_id = lottery_bets.game_id AND lottery_issues.issue = lottery_bets.issue").
 		Where("lottery_bets.status = ? AND lottery_issues.status IN ?", "pending", []string{lottery.IssueStatusSettled, lottery.IssueStatusError}).

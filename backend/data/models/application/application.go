@@ -7,6 +7,8 @@ import "time"
 // exact and auditable.
 type Application struct {
 	ID                  uint64 `gorm:"primaryKey" json:"id"`
+	RequestID           string `gorm:"size:96;not null;default:'';index" json:"request_id,omitempty"`
+	WorkspaceID         uint64 `gorm:"not null;default:0;index" json:"workspace_id"`
 	UserID              uint64 `gorm:"not null;index" json:"user_id"`
 	Username            string `gorm:"size:50;not null;index" json:"username"`
 	AccountType         string `gorm:"size:20;not null" json:"account_type"`
@@ -22,18 +24,21 @@ type Application struct {
 	// TargetRoomCode preserves the room number shown to the member when an
 	// entry request is created. Room numbers may be renamed later, so reviews
 	// must retain the original request snapshot instead of reconstructing it.
-	TargetRoomCode string     `gorm:"size:40;not null;default:'';index" json:"target_room_code,omitempty"`
-	GameID         string     `gorm:"size:40;not null;default:'';index" json:"-"`
-	ChatMessageID  uint64     `gorm:"not null;default:0;index" json:"-"`
-	RequestedCents int64      `gorm:"not null;default:0" json:"-"`
-	ReceivedCents  int64      `gorm:"not null;default:0" json:"-"`
-	Remark         string     `gorm:"size:500" json:"remark"`
-	Status         string     `gorm:"size:20;not null;default:pending;index" json:"status"`
-	Operator       string     `gorm:"size:80" json:"operator"`
-	ReviewRemark   string     `gorm:"size:500" json:"review_remark"`
-	ReviewedAt     *time.Time `json:"reviewed_at"`
-	CreatedAt      time.Time  `gorm:"index" json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	TargetRoomCode string `gorm:"size:40;not null;default:'';index" json:"target_room_code,omitempty"`
+	GameID         string `gorm:"size:40;not null;default:'';index" json:"-"`
+	ChatMessageID  uint64 `gorm:"not null;default:0;index" json:"-"`
+	RequestedCents int64  `gorm:"not null;default:0" json:"-"`
+	ReceivedCents  int64  `gorm:"not null;default:0" json:"-"`
+	Remark         string `gorm:"size:500" json:"remark"`
+	Status         string `gorm:"size:20;not null;default:pending;index" json:"status"`
+	Operator       string `gorm:"size:80" json:"operator"`
+	ReviewRemark   string `gorm:"size:500" json:"review_remark"`
+	// ReviewOddsMultiplier is the immutable value selected when a join request
+	// is approved. The live setting is stored on workspace_memberships.
+	ReviewOddsMultiplier float64    `gorm:"not null;default:1" json:"odds_multiplier"`
+	ReviewedAt           *time.Time `json:"reviewed_at"`
+	CreatedAt            time.Time  `gorm:"index" json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
 func (Application) TableName() string { return "user_applications" }

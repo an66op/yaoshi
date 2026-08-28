@@ -155,5 +155,11 @@ export function useAppRouter() {
     setPathname(path);
   }, []);
 
-  return { route: parseRoute(pathname), pathname, navigate };
+  const replace = useCallback((path: string) => {
+    if (path === currentPath()) return;
+    window.history.replaceState(window.history.state, "", path);
+    setPathname(path);
+  }, []);
+
+  return { route: parseRoute(pathname), pathname, navigate, replace };
 }

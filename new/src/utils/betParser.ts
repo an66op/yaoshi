@@ -4,7 +4,6 @@ export type BetPayload = {
   amount: number
   play_code?: string
   play_name?: string
-  odds?: number
 }
 
 export type ParsedBet = { content: string; lines: string[]; total: number; payloads: BetPayload[] }
@@ -22,20 +21,42 @@ const dualLabels: Record<string, { position: number; selection: string }> = {
   亚军大: { position: 2, selection: '大' }, 亚军小: { position: 2, selection: '小' },
   亚军单: { position: 2, selection: '单' }, 亚军双: { position: 2, selection: '双' },
   冠亚和大: { position: 6, selection: '大' }, 冠亚和小: { position: 6, selection: '小' },
+  冠亚和单: { position: 6, selection: '单' }, 冠亚和双: { position: 6, selection: '双' },
 }
 
-function splitAmount(amount: number, count: number) {
-  const cents = Math.round(amount * 100)
-  const base = Math.floor(cents / count)
-  const remainder = cents % count
-  return Array.from({ length: count }, (_, index) => (base + (index < remainder ? 1 : 0)) / 100)
+function racingPositions(value: string): number[] | null {
+  if (value === '10' || value === '0') return [10]
+  if (!/^\d+$/.test(value)) return null
+  return [...value].map((digit) => digit === '0' ? 10 : Number(digit))
+}
+
+function positionedSelections(positions: number[], selections: string, amount: number): BetPayload[] {
+  return positions.flatMap((position) => [...selections].map((selection) => {
+    const play_code = /^\d$/.test(selection)
+      ? 'ball_1_5'
+      : ['大', '小', '单', '双'].includes(selection)
+        ? 'two_sided'
+        : 'dragon_tiger'
+    const play_name = play_code === 'ball_1_5'
+      ? `第${position}名号码`
+      : play_code === 'two_sided'
+        ? `第${position}名两面`
+        : '龙虎'
+    // 快捷输入沿用 0 表示号码 10；发给接口时统一为真实开奖号码 10。
+    const canonicalSelection = play_code === 'ball_1_5' && selection === '0' ? '10' : selection
+    return { position, selection: canonicalSelection, amount, play_code, play_name }
+  }))
 }
 
 function segmentPayload(play: string, amount: number): BetPayload[] {
-  const compactPlay = play.replace(/^冠亚和\//, '冠亚和')
+  const compactPlay = play.replace(/^冠亚(?:和)?\//, '冠亚和').replace(/^冠亚(?=[大小单双\d])/, '冠亚和')
   if (dualLabels[compactPlay]) {
     const item = dualLabels[compactPlay]
     return [{ position: item.position, selection: item.selection, amount, play_code: compactPlay.startsWith('冠亚和') ? 'sum' : undefined, play_name: compactPlay }]
+  }
+  const crownSum = compactPlay.match(/^冠亚和(1[0-9]|[3-9])$/)
+  if (crownSum) {
+    return [{ position: 6, selection: crownSum[1], amount, play_code: 'sum', play_name: '冠亚和' }]
   }
   for (const [rank, pos] of Object.entries(rankMap)) {
     if (play.startsWith(rank)) {
@@ -51,26 +72,23 @@ function segmentPayload(play: string, amount: number): BetPayload[] {
   if (positionedSide) {
     return [{ position: Number(positionedSide[1]), selection: positionedSide[2], amount, play_code: ['大', '小', '单', '双'].includes(positionedSide[2]) ? 'two_sided' : 'dragon_tiger', play_name: `第${positionedSide[1]}名${positionedSide[2]}` }]
   }
-  const posNum = play.match(/^(10|[1-9])\/(\d+)$/)
-  if (posNum) {
-    const amounts = splitAmount(amount, posNum[2].length)
-    return [...posNum[2]].map((digit, index) => ({ position: Number(posNum[1]), selection: digit, amount: amounts[index], play_code: 'ball_1_5', play_name: `第${posNum[1]}名号码` }))
+  const positioned = play.match(/^([0-9]+)\/([0-9大小单双龙虎]+)$/)
+  if (positioned) {
+    const positions = racingPositions(positioned[1])
+    if (positions) return positionedSelections(positions, positioned[2], amount)
   }
-  if (/^\d+$/.test(play) && play.length > 1) {
-    const each = Math.round((amount / play.length) * 100) / 100
-    return [...play].map((digit, index) => ({
-      position: index + 1, selection: digit, amount: each, play_name: `第${index + 1}名号码`,
-    }))
-  }
-  if (/^\d$/.test(play)) {
-    return [{ position: 1, selection: play, amount, play_name: '号码' }]
+  if (/^\d+$/.test(play)) {
+    // 与后端开奖助手保持一致：省略名次时默认冠军，末尾金额是
+    // 每一个号码的金额，而不是整组号码平分的总金额。赛车中 0 代表 10。
+    return positionedSelections([1], play, amount)
   }
   return [{ position: 1, selection: play, amount, play_name: play }]
 }
 
 function describePayload(payload: BetPayload): string {
   const position = positionNames[payload.position - 1] ?? String(payload.position)
-  return `第${position}名[${payload.selection}/${payload.amount}]`
+  const selection = payload.play_code === 'ball_1_5' && payload.selection === '0' ? '10' : payload.selection
+  return `第${position}名[${selection}/${payload.amount}]`
 }
 
 function inferPlayCode(payload: BetPayload): string {

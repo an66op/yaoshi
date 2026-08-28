@@ -19,9 +19,17 @@ var upgrader = websocket.Upgrader{
 // the authenticated ticket endpoint.
 func HandleConnect(c *gin.Context) {
 	ticket := strings.TrimSpace(c.Query("ticket"))
-	userID, ok := wsTickets.consume(ticket)
+	identity, ok, consumeErr := wsTickets.consume(ticket)
+	if consumeErr != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "实时连接服务暂不可用，请稍后重试"})
+		return
+	}
 	if ticket == "" || !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"message": "实时连接凭据已失效"})
+		return
+	}
+	if !defaultHub.hasSessionValidator() || !defaultHub.validate(identity) {
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "登录或房间状态已变化，请重新连接"})
 		return
 	}
 
@@ -30,10 +38,10 @@ func HandleConnect(c *gin.Context) {
 		return
 	}
 
-	client := &client{userID: userID, send: make(chan []byte, 16)}
+	client := &client{identity: identity, send: make(chan []byte, 16), done: make(chan struct{})}
 	defaultHub.register(client)
 
-	go writePump(conn, client)
+	go writePump(conn, client, defaultHub)
 	readPump(conn, client)
 }
 
@@ -54,7 +62,7 @@ func readPump(conn *websocket.Conn, client *client) {
 	}
 }
 
-func writePump(conn *websocket.Conn, client *client) {
+func writePump(conn *websocket.Conn, client *client, hub *Hub) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
 		ticker.Stop()
@@ -62,18 +70,32 @@ func writePump(conn *websocket.Conn, client *client) {
 	}()
 	for {
 		select {
-		case payload, ok := <-client.send:
-			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if !ok {
-				_ = conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		case <-client.done:
+			_ = conn.WriteControl(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "登录状态已变化"), time.Now().Add(time.Second))
+			return
+		case payload := <-client.send:
+			open, err := client.writeIfOpen(func() error {
+				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				return conn.WriteMessage(websocket.TextMessage, payload)
+			})
+			if !open || err != nil {
 				return
 			}
 		case <-ticker.C:
-			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			if hub == nil || !hub.validate(client.identity) {
+				if hub != nil {
+					hub.unregister(client)
+				}
+				_ = conn.WriteControl(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "登录状态已变化"), time.Now().Add(time.Second))
+				return
+			}
+			open, err := client.writeIfOpen(func() error {
+				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				return conn.WriteMessage(websocket.PingMessage, nil)
+			})
+			if !open || err != nil {
 				return
 			}
 		}

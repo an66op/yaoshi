@@ -1,5 +1,8 @@
-const TOKEN_KEY = 'yaotu-admin-token'
-const USER_KEY = 'yaotu-admin-user'
+export const LEGACY_ADMIN_TOKEN_KEY = 'yaotu-admin-token'
+export const LEGACY_ADMIN_USER_KEY = 'yaotu-admin-user'
+export const ADMIN_AUTH_EVENT_KEY = 'yaotu-admin-auth-event'
+
+type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 
 export type AuthUser = {
   id: number
@@ -10,38 +13,30 @@ export type AuthUser = {
   status: number
 }
 
-export type AuthSession = {
-  token: string
-  user: AuthUser
+// The authenticated profile is deliberately process-local. Authorization is
+// carried by the HttpOnly cookie and revalidated through /api/session after
+// every reload; storing this object in localStorage would let stale role data
+// survive logout or an account permission change.
+let currentUser: AuthUser | null = null
+
+export function setCurrentUser(user: AuthUser | null) {
+  currentUser = user
 }
 
-export function getToken() {
-  return window.localStorage.getItem(TOKEN_KEY) ?? ''
+/** @deprecated Name retained for existing panels; this never reads storage. */
+export function getStoredUser() {
+  return currentUser
 }
 
-export function getStoredUser(): AuthUser | null {
-  const raw = window.localStorage.getItem(USER_KEY)
-  if (!raw) return null
-  try {
-    return JSON.parse(raw) as AuthUser
-  } catch {
-    return null
-  }
+/** Remove credentials left by pre-cookie versions without touching UI prefs. */
+export function clearLegacyAdminSession(storage: StorageLike = window.localStorage) {
+  storage.removeItem(LEGACY_ADMIN_TOKEN_KEY)
+  storage.removeItem(LEGACY_ADMIN_USER_KEY)
 }
 
-export function saveSession(session: AuthSession) {
-  window.localStorage.setItem(TOKEN_KEY, session.token)
-  window.localStorage.setItem(USER_KEY, JSON.stringify(session.user))
-}
-
-export function clearSession() {
-  window.localStorage.removeItem(TOKEN_KEY)
-  window.localStorage.removeItem(USER_KEY)
-}
-
-export function readSession(): AuthSession | null {
-  const token = getToken()
-  const user = getStoredUser()
-  if (!token || !user) return null
-  return { token, user }
+/** A timestamp-only event synchronizes logout across tabs; it grants no access. */
+export function broadcastAdminLogout(storage: StorageLike = window.localStorage) {
+  setCurrentUser(null)
+  clearLegacyAdminSession(storage)
+  storage.setItem(ADMIN_AUTH_EVENT_KEY, JSON.stringify({ type: 'logout', at: Date.now() }))
 }

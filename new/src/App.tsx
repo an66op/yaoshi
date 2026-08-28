@@ -17,6 +17,8 @@ import './room-entry.css'
 import './avatar.css'
 import './wallet.css'
 import './night-polish.css'
+import './appearance.css'
+import './typography.css'
 import { BottomNav } from './components/BottomNav'
 import { GameRoom } from './pages/GameRoom'
 import { DrawResults } from './pages/DrawResults'
@@ -34,10 +36,17 @@ import { useLotteryGames } from './hooks/useLotteryGames'
 import { usePersistentState } from './hooks/usePersistentState'
 import { useMemberPreferences } from './hooks/useMemberPreferences'
 import { useFontScale } from './hooks/useFontScale'
-import { useWebSocket } from './hooks/useWebSocket'
-import { clearToken, getToken } from './api/client'
+import { useWebSocket, useWebSocketConnected } from './hooks/useWebSocket'
+import { AuthError } from './api/client'
 import { memberApi } from './api/member'
 import { portalApi } from './api/portal'
+import { clearLoginAnnouncementMarkers, clearMemberBusinessStorage, MEMBER_SESSION_KEY } from './utils/businessStorage'
+import {
+  activePromotionTitles,
+  configuredHiddenMessageRows,
+  serverCountedUnreadNotificationCount,
+  visibleUnreadNotificationCount,
+} from './utils/notificationVisibility'
 
 type DemoState = {
   theme: Theme
@@ -49,72 +58,116 @@ type Session = {
   account: string
   nickname: string
   publicId?: number
+  avatar?: string
+  publicTitle?: string
+  badge?: string
   room: string
   roomName: string
+  roomLogo?: string
   balance: number
 }
 
 type RoomHistoryEntry = {
   code: string
   name: string
+  logo?: string
+  status: 'current' | 'available' | 'pending' | 'disabled'
   lastUsedAt: number
 }
 
-type RoomHistoryByAccount = Record<string, RoomHistoryEntry[]>
-
 const initialDemoState: DemoState = { theme: 'day', checkedIn: false, chatUnread: 0 }
+
+async function loadNotificationSnapshot(expectedUnread: number) {
+  let page = await portalApi.notifications(50)
+  const items = [...page.items]
+  let countedUnread = serverCountedUnreadNotificationCount(items)
+
+  // The unread count endpoint has no visibility/category context. Page until
+  // every item included in that count has been observed, including unread rows
+  // that may sit behind a long run of already-read history.
+  while (page.has_more && countedUnread < expectedUnread) {
+    const beforeID = page.next_before_id ?? page.items.at(-1)?.id
+    if (!beforeID) break
+    page = await portalApi.notifications(50, { before_id: beforeID })
+    if (!page.items.length) break
+    items.push(...page.items)
+    countedUnread += serverCountedUnreadNotificationCount(page.items)
+  }
+  return items
+}
 
 function App() {
   const [session, setSession] = usePersistentState<Session | null>('seven-star-session', null)
-  const [roomHistoryByAccount, setRoomHistoryByAccount] = usePersistentState<RoomHistoryByAccount>('seven-star-room-history', {})
+  const [roomHistory, setRoomHistory] = useState<RoomHistoryEntry[]>([])
   const [pendingAccount, setPendingAccount] = useState<{ account: string; nickname: string } | null>(null)
   const [demo, setDemo] = usePersistentState<DemoState>('seven-star-demo-state', initialDemoState)
-  const [booting, setBooting] = useState(Boolean(getToken() && session))
-  const { route, pathname, navigate } = useAppRouter()
-  const { fontScale } = useMemberPreferences()
+  // Unread state belongs to the authenticated inbox, not to display
+  // preferences. Keeping it out of localStorage prevents a failed refresh from
+  // resurrecting yesterday's badge after login or a room switch.
+  const [chatUnread, setChatUnread] = useState(0)
+  const [authenticated, setAuthenticated] = useState(false)
+  const [booting, setBooting] = useState(true)
+  const [bootError, setBootError] = useState('')
+  const websocketConnected = useWebSocketConnected()
+  const { route, pathname, navigate, replace } = useAppRouter()
+  const { fontScale, displayStyle } = useMemberPreferences()
+  useLayoutEffect(() => {
+    document.documentElement.dataset.memberDisplay = displayStyle
+    return () => { delete document.documentElement.dataset.memberDisplay }
+  }, [displayStyle])
   // Every route creates a different page root (game room vs. regular app).
   // Rebind the text scaler as soon as that root is mounted.
   // A direct refresh first renders the loading shell and then replaces it
   // with the actual game room without changing the URL. Include boot state so
   // the scaler rebinds to the newly mounted game root as well.
   useFontScale(fontScale, `${pathname}:${booting ? 'booting' : 'ready'}`)
-  const { games: liveGames, live: gamesLive, error: gamesError, loading: gamesLoading } = useLotteryGames()
-  const appContentRef = useRef<HTMLDivElement>(null)
-
   const activeSession = session && session.account && session.room ? session : null
+  const { games: liveGames, live: gamesLive, error: gamesError, loading: gamesLoading } = useLotteryGames(Boolean(authenticated && activeSession), activeSession?.room ?? '')
+  const appContentRef = useRef<HTMLDivElement>(null)
+  const unreadRefreshIDRef = useRef(0)
+
   const displayName = activeSession?.nickname || activeSession?.account || ''
-  const rememberRoom = useCallback((account: string, code: string, name: string) => {
-    if (!account || !code) return
-    setRoomHistoryByAccount((current) => {
-      const previous = current[account] ?? []
-      const next = [
-        { code, name: name || code, lastUsedAt: Date.now() },
-        ...previous.filter((item) => item.code !== code),
-      ].slice(0, 6)
-      return { ...current, [account]: next }
-    })
-  }, [setRoomHistoryByAccount])
+  const historyAccount = activeSession?.account ?? ''
+  const historyRoom = activeSession?.room ?? ''
 
   useEffect(() => {
-    if (!activeSession) return
-    rememberRoom(activeSession.account, activeSession.room, activeSession.roomName)
-  }, [activeSession, rememberRoom])
-
-  useEffect(() => {
-    if (!getToken()) {
-      setBooting(false)
+    if (!authenticated || !historyAccount || !historyRoom) {
+      setRoomHistory([])
       return
     }
     let cancelled = false
+    void memberApi.roomHistory().then((items) => {
+      if (cancelled) return
+      setRoomHistory(items.map((item) => ({
+        code: item.room_code,
+        name: item.room_name || item.room_code,
+        logo: item.room_logo,
+        status: item.status,
+        lastUsedAt: Date.parse(item.last_entered_at) || 0,
+      })))
+    }).catch(() => {
+      if (!cancelled) setRoomHistory([])
+    })
+    return () => { cancelled = true }
+  }, [authenticated, historyAccount, historyRoom])
+
+  useEffect(() => {
+    let cancelled = false
     void memberApi.me().then((profile) => {
       if (cancelled) return
+	  setAuthenticated(true)
+      setBootError('')
       if (profile.room_code) {
         setSession({
           account: profile.username,
           nickname: profile.nickname || profile.username,
           publicId: profile.public_id,
+          avatar: profile.avatar,
+          publicTitle: profile.public_title,
+          badge: profile.badge,
           room: profile.room_code,
           roomName: profile.room_name || profile.room_code,
+          roomLogo: profile.room_logo,
           balance: profile.balance,
         })
       } else if (session?.room) {
@@ -123,13 +176,31 @@ function App() {
           account: profile.username,
           nickname: profile.nickname || profile.username,
           publicId: profile.public_id,
+          avatar: profile.avatar,
+          publicTitle: profile.public_title,
+          badge: profile.badge,
+          roomLogo: profile.room_logo || session.roomLogo,
           balance: profile.balance,
         })
       }
       setPendingAccount({ account: profile.username, nickname: profile.nickname || profile.username })
-    }).catch(() => {
-      clearToken()
-      setSession(null)
+	  void memberApi.refreshSession().catch(() => undefined)
+    }).catch((reason) => {
+      // request() already emits the auth-expired event for a genuine 401.
+      // A timeout or temporary 5xx must not destroy an otherwise valid local
+      // session and force the member through login and room selection again.
+      if (reason instanceof AuthError) {
+		setAuthenticated(false)
+        setChatUnread(0)
+        clearMemberBusinessStorage()
+        setSession(null)
+        setRoomHistory([])
+        setDemo((current) => ({ ...current, checkedIn: false, chatUnread: 0 }))
+      } else if (!cancelled) {
+        // The persisted session is only a navigation aid. Never render its
+        // cached balance/room as current business data when verification fails.
+        setBootError(reason instanceof Error ? reason.message : '账号信息暂时无法读取')
+      }
     }).finally(() => {
       if (!cancelled) setBooting(false)
     })
@@ -138,13 +209,36 @@ function App() {
 
   useEffect(() => {
     const onExpired = () => {
+	  setAuthenticated(false)
+      setChatUnread(0)
+      clearMemberBusinessStorage()
       setSession(null)
+      setRoomHistory([])
       setPendingAccount(null)
+      setDemo((current) => ({ ...current, checkedIn: false, chatUnread: 0 }))
       navigate(pathForLogin())
     }
     window.addEventListener('yaotu-member-auth-expired', onExpired)
     return () => window.removeEventListener('yaotu-member-auth-expired', onExpired)
-  }, [navigate, setSession])
+  }, [navigate, setDemo, setSession])
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+	  // The HttpOnly cookie cannot be read from JavaScript. The non-sensitive
+	  // room-session key is only a cross-tab logout signal, never authority.
+	  if (event.key !== MEMBER_SESSION_KEY || event.newValue !== null && event.newValue !== 'null') return
+	  setAuthenticated(false)
+      setChatUnread(0)
+      clearMemberBusinessStorage()
+      setSession(null)
+      setRoomHistory([])
+      setPendingAccount(null)
+      setDemo((current) => ({ ...current, checkedIn: false, chatUnread: 0 }))
+      navigate(pathForLogin())
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [navigate, setDemo, setSession])
 
   // All route changes represent a fresh page in this single-page app. Reset
   // the actual scrolling container, not only window, before the new view paints.
@@ -155,21 +249,46 @@ function App() {
   }, [pathname])
 
   const refreshUnread = useCallback(async () => {
-    if (!getToken()) return
-    try {
-      const { unread } = await portalApi.unreadCount()
-      setDemo((current) => ({ ...current, chatUnread: unread }))
-    } catch {
-      /* ignore */
+	if (!authenticated) {
+      setChatUnread(0)
+      return
     }
-  }, [setDemo])
+    const refreshID = ++unreadRefreshIDRef.current
+    try {
+      const [{ unread }, settingsResult, activitiesResult] = await Promise.all([
+        portalApi.unreadCount(),
+        portalApi.roomSettings().then((value) => ({ ok: true as const, value })).catch(() => ({ ok: false as const })),
+        portalApi.activities().then((value) => ({ ok: true as const, value })).catch(() => ({ ok: false as const })),
+      ])
+      if (refreshID !== unreadRefreshIDRef.current) return
+      if (unread <= 0) {
+        setChatUnread(0)
+        return
+      }
+
+      const notifications = await loadNotificationSnapshot(unread)
+      if (refreshID !== unreadRefreshIDRef.current) return
+      const hiddenRows = configuredHiddenMessageRows(settingsResult.ok ? settingsResult.value.game : undefined)
+      const promotionTitles = activePromotionTitles(activitiesResult.ok ? activitiesResult.value : [])
+      setChatUnread(visibleUnreadNotificationCount(notifications, hiddenRows, promotionTitles))
+    } catch {
+      // Keep the last verified in-memory value during a transient failure. It
+      // is reset separately whenever the account or room context changes.
+    }
+	}, [authenticated])
 
   useEffect(() => {
-    if (!getToken()) return
+    unreadRefreshIDRef.current += 1
+    setChatUnread(0)
+  }, [activeSession?.account, activeSession?.room])
+
+  useEffect(() => {
+	if (!authenticated) return
     void refreshUnread()
+    if (websocketConnected) return
     const timer = window.setInterval(() => void refreshUnread(), 30_000)
     return () => window.clearInterval(timer)
-  }, [activeSession?.account, refreshUnread])
+	}, [activeSession?.account, authenticated, refreshUnread, websocketConnected])
 
   const activeGameId = route.kind === 'game' ? route.gameId : null
   const activeGame = useMemo(() => liveGames.find((game) => game.id === activeGameId), [activeGameId, liveGames])
@@ -183,7 +302,10 @@ function App() {
     }
   }, [activeGame, gamesLive, gamesLoading, navigate, route.kind])
   const toggleTheme = () => setDemo((current) => ({ ...current, theme: current.theme === 'day' ? 'night' : 'day' }))
-  const resetDemo = () => setDemo(initialDemoState)
+  const resetDemo = () => {
+    setDemo(initialDemoState)
+    setChatUnread(0)
+  }
 
   const refreshBalance = async () => {
     try {
@@ -193,6 +315,12 @@ function App() {
         account: profile.username,
         nickname: profile.nickname || profile.username,
         publicId: profile.public_id,
+        avatar: profile.avatar,
+        publicTitle: profile.public_title,
+        badge: profile.badge,
+        room: profile.room_code || current.room,
+        roomName: profile.room_name || current.roomName,
+        roomLogo: profile.room_logo || current.roomLogo,
         balance: profile.balance,
       } : null)
     } catch {
@@ -203,36 +331,53 @@ function App() {
   const switchRoom = async (roomCode: string) => {
     const result = await memberApi.joinRoom(roomCode)
     if (result.status === 'pending') {
+      setRoomHistory((current) => [
+        { code: result.room_code, name: result.room_name || result.room_code, logo: result.room_logo, status: 'pending' as const, lastUsedAt: Date.now() },
+        ...current.filter((item) => item.code !== result.room_code),
+      ].slice(0, 8))
       throw new Error(`入房申请已提交（编号 ${result.application_id ?? '—'}），请等待审核`)
     }
     const roomName = result.room_name || result.room_code
-    setSession((current) => current ? { ...current, room: result.room_code, roomName } : current)
-    if (activeSession) rememberRoom(activeSession.account, result.room_code, roomName)
+    setSession((current) => current ? { ...current, room: result.room_code, roomName, roomLogo: result.room_logo } : current)
+    setRoomHistory((current) => [
+      { code: result.room_code, name: roomName, logo: result.room_logo, status: 'current' as const, lastUsedAt: Date.now() },
+      ...current.filter((item) => item.code !== result.room_code).map((item) => item.status === 'current' ? { ...item, status: 'available' as const } : item),
+    ].slice(0, 8))
     void refreshBalance()
   }
 
   useWebSocket((event) => {
     if (event.type === 'notification') void refreshUnread()
     if (event.type === 'balance') void refreshBalance()
-  }, Boolean(activeSession && getToken()))
+	}, Boolean(activeSession && authenticated))
 
   // A manual login always asks for a room code. Existing room bindings are
   // retained as history, but must not silently decide which room to enter.
   const continueLogin = async (account: string, nickname: string) => {
-    sessionStorage.removeItem('wangzhe-login-announcements-shown')
+	setAuthenticated(true)
+    clearLoginAnnouncementMarkers()
     setPendingAccount({ account, nickname })
     navigate(pathForRoom())
   }
 
   const logout = () => {
-    clearToken()
+	setAuthenticated(false)
+    setChatUnread(0)
+    clearMemberBusinessStorage()
     setSession(null)
+    setRoomHistory([])
     setPendingAccount(null)
+    setDemo((current) => ({ ...current, checkedIn: false, chatUnread: 0 }))
     navigate(pathForLogin())
+	void memberApi.logout().catch(() => undefined)
   }
 
   if (booting) {
     return <main className={`mobile-app font-scale-${fontScale}`}><div className="app-content"><p className="app-loading">加载中…</p></div></main>
+  }
+
+	if (bootError && session) {
+    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div className="app-content"><div className="app-loading"><p>{bootError}</p><button className="room-entry-back" onClick={() => window.location.reload()}>重新读取账号</button><button className="room-entry-back" onClick={logout}>退出登录</button></div></div></main>
   }
 
   if (route.kind === 'login') return <Login theme={demo.theme} onContinue={(account, nickname) => void continueLogin(account, nickname)} onRegister={() => navigate(pathForRegister())} />
@@ -246,7 +391,7 @@ function App() {
   )
 
   if (route.kind === 'room') {
-    if (!getToken()) return <Login theme={demo.theme} onContinue={continueLogin} />
+	if (!authenticated) return <Login theme={demo.theme} onContinue={continueLogin} />
     const account = pendingAccount?.account ?? activeSession?.account
     if (!account) return <Login theme={demo.theme} onContinue={continueLogin} />
     return (
@@ -258,9 +403,7 @@ function App() {
             navigate(pathForTab('lobby'))
             return
           }
-          clearToken()
-          setPendingAccount(null)
-          navigate(pathForLogin())
+		  logout()
         }}
         onEnter={(room, roomName) => {
           void memberApi.me().then((profile) => {
@@ -268,8 +411,12 @@ function App() {
               account: profile.username,
               nickname: profile.nickname || profile.username,
               publicId: profile.public_id,
+              avatar: profile.avatar,
+              publicTitle: profile.public_title,
+              badge: profile.badge,
               room,
               roomName,
+              roomLogo: profile.room_logo,
               balance: profile.balance,
             })
             setPendingAccount(null)
@@ -280,11 +427,11 @@ function App() {
     )
   }
 
-  if (!activeSession || !getToken()) return <Login theme={demo.theme} onContinue={continueLogin} />
+	if (!activeSession || !authenticated) return <Login theme={demo.theme} onContinue={continueLogin} />
 
   if (route.kind === 'results') {
     const returnPath = route.returnGameId ? pathForGame(route.returnGameId) : pathForTab('lobby')
-    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div ref={appContentRef} className="app-content"><DrawResults games={liveGames} initialGameId={route.gameId} onBack={() => navigate(returnPath)} /></div></main>
+    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div ref={appContentRef} className="app-content"><DrawResults games={liveGames} initialGameId={route.gameId} onBack={() => navigate(returnPath)} onSelectGame={(gameId) => replace(pathForResults(gameId, route.returnGameId))} /></div></main>
   }
 
   if (activeGame) {
@@ -314,20 +461,23 @@ function App() {
   const walletReturnGameId = route.kind === 'tab' && route.tab === 'shop' ? route.returnGameId : undefined
   const showBottomNav = (route.kind !== 'chat' || route.view === 'list') && !walletAction
   const content = route.kind === 'chat'
-    ? <Chats key={`${activeSession.room}:${route.view}:${route.planGameId ?? ''}`} view={route.view} unreadCount={demo.chatUnread} onMarkAllRead={async () => { await portalApi.markAllRead(); await refreshUnread() }} onNavigate={(view) => navigate(pathForChat(view))} onServiceBack={route.returnGameId ? () => navigate(pathForGame(route.returnGameId!)) : undefined} onRefreshUnread={() => void refreshUnread()} games={liveGames} planGameId={route.planGameId} onOpenPlanGame={(gameId) => navigate(pathForPlanGame(gameId))} />
+    ? <Chats key={`${activeSession.room}:${route.view}:${route.planGameId ?? ''}`} view={route.view} unreadCount={chatUnread} onMarkAllRead={async () => { await portalApi.markAllRead(); await refreshUnread() }} onNavigate={(view) => navigate(pathForChat(view))} onServiceBack={route.returnGameId ? () => navigate(pathForGame(route.returnGameId!)) : undefined} onRefreshUnread={refreshUnread} games={liveGames} planGameId={route.planGameId} onOpenPlanGame={(gameId) => navigate(pathForPlanGame(gameId))} />
     : activeTab === 'lobby'
-      ? <Lobby room={activeSession.room} roomHistory={roomHistoryByAccount[activeSession.account] ?? []} games={liveGames} theme={demo.theme} gamesLive={gamesLive} gamesError={gamesError} onToggleTheme={toggleTheme} onOpenGame={(gameId) => navigate(pathForGame(gameId))} onSwitchRoom={switchRoom} />
+      ? <Lobby room={activeSession.room} roomName={activeSession.roomName} roomLogo={activeSession.roomLogo} roomHistory={roomHistory} games={liveGames} theme={demo.theme} gamesLive={gamesLive} gamesError={gamesError} onToggleTheme={toggleTheme} onOpenGame={(gameId) => navigate(pathForGame(gameId))} onSwitchRoom={switchRoom} />
       : activeTab === 'shop'
         ? <Wallet balance={activeSession.balance} walletAction={walletAction} returnGameId={walletReturnGameId} onBackToGame={walletReturnGameId ? () => navigate(pathForGame(walletReturnGameId, true)) : undefined} onRefresh={() => void refreshBalance()} onNavigate={navigate} />
-        : <Profile account={displayName} publicId={activeSession.publicId} balance={activeSession.balance} theme={demo.theme} onLogout={logout} onResetDemo={resetDemo} onToggleTheme={toggleTheme} onChangeNickname={async (nickname) => {
+        : <Profile account={displayName} publicId={activeSession.publicId} balance={activeSession.balance} avatarUrl={activeSession.avatar} publicTitle={activeSession.publicTitle} badge={activeSession.badge} theme={demo.theme} onLogout={logout} onResetDemo={resetDemo} onToggleTheme={toggleTheme} onChangeAvatar={async (avatar) => {
+          const profile = await memberApi.updateAvatar(avatar)
+          setSession((current) => current ? { ...current, avatar: profile.avatar || avatar, publicTitle: profile.public_title, badge: profile.badge, publicId: profile.public_id, balance: profile.balance } : current)
+        }} onChangeNickname={async (nickname) => {
           const profile = await memberApi.updateNickname(nickname)
-          setSession((current) => current ? { ...current, nickname: profile.nickname || nickname, publicId: profile.public_id, balance: profile.balance } : current)
+          setSession((current) => current ? { ...current, nickname: profile.nickname || nickname, avatar: profile.avatar || current.avatar, publicTitle: profile.public_title, badge: profile.badge, publicId: profile.public_id, balance: profile.balance } : current)
         }} />
 
   return (
     <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale} ${showBottomNav ? 'has-bottom-nav' : ''}`}>
       <div ref={appContentRef} className="app-content">{content}</div>
-      {showBottomNav && <BottomNav activeTab={activeTab} theme={demo.theme} unreadCount={demo.chatUnread} onSelect={(tab) => navigate(tab === 'shop' ? pathForWallet() : pathForTab(tab))} />}
+      {showBottomNav && <BottomNav activeTab={activeTab} theme={demo.theme} unreadCount={chatUnread} onSelect={(tab) => navigate(tab === 'shop' ? pathForWallet() : pathForTab(tab))} />}
     </main>
   )
 }

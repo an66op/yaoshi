@@ -1,1 +1,23 @@
 html,body,#root{min-width:0;min-height:100%;margin:0}body{min-height:100dvh;background:#f5f7fb}
+.app-fatal-error {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #17324a;
+  background: #eef8fb;
+}
+
+.app-fatal-error section {
+  width: min(100%, 420px);
+  padding: 28px;
+  border: 1px solid rgba(29, 147, 164, .2);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(23, 50, 74, .12);
+  text-align: center;
+}
+
+.app-fatal-error b { font-size: 20px; }
+.app-fatal-error p { margin: 10px 0 20px; color: #64748b; }
+.app-fatal-error button { border: 0; border-radius: 10px; padding: 10px 20px; background: #1599a3; color: #fff; font: inherit; font-weight: 800; cursor: pointer; }

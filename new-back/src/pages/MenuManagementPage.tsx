@@ -1,21 +1,26 @@
 import {
   Alert, Box, Button, Card, CardContent, Chip, CircularProgress, IconButton, MenuItem, Paper, Stack, Switch,
-  TextField, Tooltip, Typography,
+  Tab, Tabs, TextField, Tooltip, Typography,
 } from '@mui/material'
 import ArrowDownwardRounded from '@mui/icons-material/ArrowDownwardRounded'
 import ArrowUpwardRounded from '@mui/icons-material/ArrowUpwardRounded'
-import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import RestartAltRounded from '@mui/icons-material/RestartAltRounded'
 import SaveRounded from '@mui/icons-material/SaveRounded'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ADMIN_MENU_GROUPS, normalizeAdminMenu, resetAdminMenu, type AdminMenuItemConfig } from '../adminMenu'
+import {
+  ADMIN_MENU_GROUPS, DEFAULT_AGENT_MENU, DEFAULT_TENANT_MENU, normalizeAdminMenu, normalizeRoleMenu,
+  resetAdminMenu, resetRoleMenu, type AdminMenuItemConfig,
+} from '../adminMenu'
 import { adminApi, type SystemSettings } from '../api'
 import { PageHeader } from '../components/PageHeader'
 import { useFeedback } from '../components/feedback'
 
 export function MenuManagementPage() {
   const [settings, setSettings] = useState<SystemSettings | null>(null)
-  const [items, setItems] = useState<AdminMenuItemConfig[]>(() => resetAdminMenu())
+  const [template, setTemplate] = useState<'platform' | 'tenant' | 'agent'>('platform')
+  const [templates, setTemplates] = useState<Record<'platform' | 'tenant' | 'agent', AdminMenuItemConfig[]>>(() => ({
+    platform: resetAdminMenu(), tenant: resetRoleMenu('tenant'), agent: resetRoleMenu('agent'),
+  }))
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -27,7 +32,11 @@ export function MenuManagementPage() {
     try {
       const current = await adminApi.settings()
       setSettings(current)
-      setItems(normalizeAdminMenu(current.game?.admin_menu))
+      setTemplates({
+        platform: normalizeAdminMenu(current.game?.admin_menu),
+        tenant: normalizeRoleMenu('tenant', current.game?.tenant_menu),
+        agent: normalizeRoleMenu('agent', current.game?.agent_menu),
+      })
       if (notify) showMessage('菜单配置已刷新')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '读取菜单配置失败')
@@ -38,6 +47,8 @@ export function MenuManagementPage() {
 
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load])
 
+  const items = templates[template]
+  const setItems = (updater: (current: AdminMenuItemConfig[]) => AdminMenuItemConfig[]) => setTemplates(current => ({ ...current, [template]: updater(current[template]) }))
   const grouped = useMemo(() => {
     const map = new Map<string, AdminMenuItemConfig[]>()
     items.slice().sort((a, b) => a.order - b.order).forEach(item => map.set(item.group, [...(map.get(item.group) ?? []), item]))
@@ -60,10 +71,18 @@ export function MenuManagementPage() {
     setSaving(true)
     setError('')
     try {
-      const normalized = normalizeAdminMenu(items)
-      const saved = await adminApi.updateSettings({ ...settings, game: { ...settings.game, admin_menu: normalized } })
+      const normalized = {
+        platform: normalizeAdminMenu(templates.platform),
+        tenant: normalizeRoleMenu('tenant', templates.tenant),
+        agent: normalizeRoleMenu('agent', templates.agent),
+      }
+      const saved = await adminApi.updateSettings({ ...settings, game: { ...settings.game, admin_menu: normalized.platform, tenant_menu: normalized.tenant, agent_menu: normalized.agent } })
       setSettings(saved)
-      setItems(normalizeAdminMenu(saved.game?.admin_menu))
+      setTemplates({
+        platform: normalizeAdminMenu(saved.game?.admin_menu),
+        tenant: normalizeRoleMenu('tenant', saved.game?.tenant_menu),
+        agent: normalizeRoleMenu('agent', saved.game?.agent_menu),
+      })
       window.dispatchEvent(new Event('yaotu-admin-menu-updated'))
       showMessage('菜单名称、分组、顺序和显示状态已保存')
     } catch (reason) {
@@ -77,10 +96,11 @@ export function MenuManagementPage() {
     <PageHeader
       eyebrow="系统管理 / 导航"
       title="菜单管理"
-      description="总管理员可统一调整后台菜单的名称、分组、排序和显示状态，保存后侧栏立即更新。"
-      actions={<><Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)} disabled={loading}>刷新</Button><Button variant="contained" startIcon={saving ? <CircularProgress color="inherit" size={16} /> : <SaveRounded />} onClick={() => void save()} disabled={saving || loading}>保存菜单</Button></>}
+      description=""
+      actions={<Button variant="contained" startIcon={saving ? <CircularProgress color="inherit" size={16} /> : <SaveRounded />} onClick={() => void save()} disabled={saving || loading}>保存菜单</Button>}
     />
     {error && <Alert severity="error" sx={{ mt: 2 }} onClose={() => setError('')}>{error}</Alert>}
+    <Paper variant="outlined" sx={{ mt: 2, overflow: 'hidden' }}><Tabs value={template} onChange={(_, value: 'platform' | 'tenant' | 'agent') => setTemplate(value)} variant="fullWidth"><Tab value="platform" label="平台菜单" /><Tab value="tenant" label="租户菜单" /><Tab value="agent" label="代理菜单" /></Tabs></Paper>
     <Stack direction={{ xs: 'column', md: 'row' }} gap={1.2} mt={2}>
       <Card sx={{ flex: 1 }}><CardContent><Typography variant="caption" color="text.secondary">后台页面</Typography><Typography fontSize={25} fontWeight={900}>{items.length}</Typography><Typography variant="caption" color="text.secondary">所有可管理的固定功能入口</Typography></CardContent></Card>
       <Card sx={{ flex: 1 }}><CardContent><Typography variant="caption" color="text.secondary">当前显示</Typography><Typography fontSize={25} fontWeight={900} color="success.main">{items.filter(item => item.visible).length}</Typography><Typography variant="caption" color="text.secondary">隐藏只影响侧栏，不删除页面</Typography></CardContent></Card>
@@ -95,7 +115,7 @@ export function MenuManagementPage() {
         <Stack divider={<Box sx={{ borderTop: 1, borderColor: 'divider' }} />}>
           {entries.map((item, index) => <Box key={item.path} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr auto', md: 'minmax(180px,1.35fr) minmax(160px,1fr) 150px 100px 96px' }, gap: 1.2, alignItems: 'center', px: 1.6, py: 1.1, opacity: item.visible ? 1 : .65 }}>
             <TextField size="small" label="菜单名称" value={item.label} onChange={event => update(item.path, { label: event.target.value })} />
-            <TextField size="small" select label="所属分组" value={item.group} onChange={event => update(item.path, { group: event.target.value })} sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }}>{ADMIN_MENU_GROUPS.map(option => <MenuItem key={option} value={option}>{option}</MenuItem>)}</TextField>
+            {template === 'platform' ? <TextField size="small" select label="所属分组" value={item.group} onChange={event => update(item.path, { group: event.target.value })} sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }}>{ADMIN_MENU_GROUPS.map(option => <MenuItem key={option} value={option}>{option}</MenuItem>)}</TextField> : <TextField size="small" label="所属分组" value={item.group} onChange={event => update(item.path, { group: event.target.value })} sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }} inputProps={{ maxLength: 18 }} />}
             <Box sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }}><Typography fontSize={10} color="text.secondary">页面地址</Typography><Typography fontSize={12} fontFamily="ui-monospace,monospace" noWrap>{item.path}</Typography></Box>
             <Stack direction="row" alignItems="center"><Switch size="small" checked={item.visible} disabled={item.path === '/menu-management'} onChange={event => update(item.path, { visible: event.target.checked })} /><Typography fontSize={11}>{item.visible ? '显示' : '隐藏'}</Typography></Stack>
             <Stack direction="row" justifyContent="flex-end">
@@ -106,6 +126,6 @@ export function MenuManagementPage() {
         </Stack>
       </Paper>)}
     </Stack>
-    <Stack direction="row" justifyContent="flex-end" mt={1.5}><Button color="inherit" startIcon={<RestartAltRounded />} onClick={() => setItems(resetAdminMenu())}>恢复默认分组与名称</Button></Stack>
+    <Stack direction="row" justifyContent="flex-end" mt={1.5}><Button color="inherit" startIcon={<RestartAltRounded />} onClick={() => setItems(() => template === 'platform' ? resetAdminMenu() : template === 'tenant' ? DEFAULT_TENANT_MENU.map(item => ({ ...item })) : DEFAULT_AGENT_MENU.map(item => ({ ...item })))}>恢复当前模板默认值</Button></Stack>
   </Box>
 }

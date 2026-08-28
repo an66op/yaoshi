@@ -6,7 +6,7 @@ import (
 )
 
 func TestStandaloneAgentHierarchy(t *testing.T) {
-	agent := user.User{UserID: 9, Role: "agent", Status: 1, AgentRoomCode: "8801"}
+	agent := user.User{UserID: 9, Role: "agent", Status: 1, AgentRoomCode: "88001"}
 	active, err := AgentHierarchyActive(nil, agent)
 	if err != nil || !active {
 		t.Fatalf("standalone active agent should be valid: active=%v err=%v", active, err)

@@ -28,6 +28,7 @@ type Configuration struct {
 
 // ServerConfig 服务器配置
 type ServerConfig struct {
+	Bind           string   `mapstructure:"bind"`
 	Port           int      `mapstructure:"port"`
 	Mode           string   `mapstructure:"mode"`
 	AllowedOrigins []string `mapstructure:"allowed_origins"`
@@ -49,12 +50,15 @@ type RedisConfig struct {
 	Addr     string `mapstructure:"addr"`
 	Password string `mapstructure:"password"`
 	DB       int    `mapstructure:"db"`
+	TLS      bool   `mapstructure:"tls"`
+	Prefix   string `mapstructure:"prefix"`
 }
 
 // JWTConfig JWT配置
 type JWTConfig struct {
 	Secret string `mapstructure:"secret"`
-	Expire int    `mapstructure:"expire"`
+	// Expire is the token lifetime in seconds.
+	Expire int `mapstructure:"expire"`
 }
 
 type SecurityConfig struct {
@@ -98,8 +102,11 @@ func LoadConfig() {
 		log.Fatal(constants.ErrParseConfigFailed, ":", err)
 	}
 
-	// 从环境变量覆盖配置（如果存在）
-	loadFromEnv()
+	// 从环境变量覆盖配置（如果存在）。无效的显式值必须让进程停止，
+	// 不能悄悄回退到配置文件中的开发端口或过期时间。
+	if err := loadFromEnv(); err != nil {
+		log.Fatalf("环境变量配置无效: %v", err)
+	}
 
 	// 验证配置
 	if err := validateConfig(Config); err != nil {
@@ -108,12 +115,17 @@ func LoadConfig() {
 }
 
 // loadFromEnv 从环境变量加载配置
-func loadFromEnv() {
+func loadFromEnv() error {
 	// Server配置
+	if bind := os.Getenv("BACKEND_SERVER_BIND"); bind != "" {
+		Config.Server.Bind = strings.TrimSpace(bind)
+	}
 	if port := os.Getenv("BACKEND_SERVER_PORT"); port != "" {
-		if p, err := strconv.Atoi(port); err == nil {
-			Config.Server.Port = p
+		p, err := strconv.Atoi(port)
+		if err != nil {
+			return fmt.Errorf("BACKEND_SERVER_PORT 必须是整数")
 		}
+		Config.Server.Port = p
 	}
 	if mode := os.Getenv("BACKEND_SERVER_MODE"); mode != "" {
 		Config.Server.Mode = mode
@@ -130,9 +142,11 @@ func loadFromEnv() {
 		Config.Database.Host = host
 	}
 	if port := os.Getenv("BACKEND_DATABASE_PORT"); port != "" {
-		if p, err := strconv.Atoi(port); err == nil {
-			Config.Database.Port = p
+		p, err := strconv.Atoi(port)
+		if err != nil {
+			return fmt.Errorf("BACKEND_DATABASE_PORT 必须是整数")
 		}
+		Config.Database.Port = p
 	}
 	if user := os.Getenv("BACKEND_DATABASE_USER"); user != "" {
 		Config.Database.User = user
@@ -155,9 +169,21 @@ func loadFromEnv() {
 		Config.Redis.Password = password
 	}
 	if db := os.Getenv("BACKEND_REDIS_DB"); db != "" {
-		if d, err := strconv.Atoi(db); err == nil {
-			Config.Redis.DB = d
+		d, err := strconv.Atoi(db)
+		if err != nil {
+			return fmt.Errorf("BACKEND_REDIS_DB 必须是整数")
 		}
+		Config.Redis.DB = d
+	}
+	if tlsValue := os.Getenv("BACKEND_REDIS_TLS"); tlsValue != "" {
+		enabled, err := strconv.ParseBool(tlsValue)
+		if err != nil {
+			return fmt.Errorf("BACKEND_REDIS_TLS 必须是 true 或 false")
+		}
+		Config.Redis.TLS = enabled
+	}
+	if prefix := os.Getenv("BACKEND_REDIS_PREFIX"); prefix != "" {
+		Config.Redis.Prefix = strings.TrimSpace(prefix)
 	}
 
 	// JWT配置
@@ -165,13 +191,16 @@ func loadFromEnv() {
 		Config.JWT.Secret = secret
 	}
 	if expire := os.Getenv("BACKEND_JWT_EXPIRE"); expire != "" {
-		if e, err := strconv.Atoi(expire); err == nil {
-			Config.JWT.Expire = e
+		e, err := strconv.Atoi(expire)
+		if err != nil {
+			return fmt.Errorf("BACKEND_JWT_EXPIRE 必须是整数秒")
 		}
+		Config.JWT.Expire = e
 	}
 	if key := os.Getenv("BACKEND_SECURITY_DATA_ENCRYPTION_KEY"); key != "" {
 		Config.Security.DataEncryptionKey = key
 	}
+	return nil
 }
 
 func splitCSV(value string) []string {
@@ -235,12 +264,14 @@ func normalizeOrigin(raw string) string {
 // validateConfig 验证配置
 func validateConfig(cfg *Configuration) error {
 	// 验证Server配置
+	if net.ParseIP(strings.TrimSpace(cfg.Server.Bind)) == nil {
+		return fmt.Errorf("服务器监听地址必须是明确的 IP，当前值: %q", cfg.Server.Bind)
+	}
 	if cfg.Server.Port <= 0 || cfg.Server.Port > 65535 {
 		return fmt.Errorf("服务器端口必须在1-65535之间，当前值: %d", cfg.Server.Port)
 	}
 	if cfg.Server.Mode != "debug" && cfg.Server.Mode != "release" && cfg.Server.Mode != "test" {
-		log.Printf("Warning: 服务器模式应该是 debug/release/test，当前值: %s，将使用默认值", cfg.Server.Mode)
-		cfg.Server.Mode = "debug"
+		return fmt.Errorf("服务器模式必须是 debug/release/test，当前值: %s", cfg.Server.Mode)
 	}
 
 	// 根据模式设置 Gin 模式
@@ -268,9 +299,18 @@ func validateConfig(cfg *Configuration) error {
 	if cfg.Database.DBName == "" {
 		return fmt.Errorf("数据库名称不能为空")
 	}
+	validSSLModes := map[string]bool{"disable": true, "allow": true, "prefer": true, "require": true, "verify-ca": true, "verify-full": true}
+	if !validSSLModes[cfg.Database.SSLMode] {
+		return fmt.Errorf("数据库 sslmode 无效: %q", cfg.Database.SSLMode)
+	}
 	for _, origin := range cfg.Server.AllowedOrigins {
 		if normalizeOrigin(origin) == "" {
 			return fmt.Errorf("无效的 CORS 来源: %q", origin)
+		}
+	}
+	for _, proxy := range cfg.Server.TrustedProxies {
+		if !validTrustedProxy(proxy) {
+			return fmt.Errorf("无效或过宽的受信任代理: %q", proxy)
 		}
 	}
 
@@ -285,6 +325,9 @@ func validateConfig(cfg *Configuration) error {
 		return fmt.Errorf("数据加密密钥长度至少16个字符，当前长度: %d", len(cfg.Security.DataEncryptionKey))
 	}
 	if cfg.Server.Mode == "release" {
+		if strings.TrimSpace(cfg.Redis.Addr) == "" {
+			return fmt.Errorf("release 模式必须配置 Redis，用于多实例票据、限流、推送与调度锁")
+		}
 		if len(cfg.Server.AllowedOrigins) == 0 {
 			return fmt.Errorf("release 模式必须显式配置 allowed_origins")
 		}
@@ -297,9 +340,44 @@ func validateConfig(cfg *Configuration) error {
 		if len(cfg.Security.DataEncryptionKey) < 32 || isPlaceholderSecret(cfg.Security.DataEncryptionKey) {
 			return fmt.Errorf("release 模式必须配置至少32位的随机数据加密密钥")
 		}
+		if cfg.JWT.Secret == cfg.Security.DataEncryptionKey {
+			return fmt.Errorf("JWT 密钥与数据加密密钥必须独立生成")
+		}
+		if len(cfg.Server.TrustedProxies) == 0 {
+			return fmt.Errorf("release 模式必须显式配置 trusted_proxies")
+		}
+		for _, origin := range cfg.Server.AllowedOrigins {
+			if !strings.HasPrefix(normalizeOrigin(origin), "https://") {
+				return fmt.Errorf("release 模式只允许 HTTPS CORS 来源: %q", origin)
+			}
+		}
+		if !isLocalDatabaseHost(cfg.Database.Host) && cfg.Database.SSLMode != "verify-ca" && cfg.Database.SSLMode != "verify-full" {
+			return fmt.Errorf("远程生产数据库必须使用 sslmode=verify-ca 或 verify-full")
+		}
 	}
 
 	return nil
+}
+
+func validTrustedProxy(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "0.0.0.0/0" || value == "::/0" {
+		return false
+	}
+	if net.ParseIP(value) != nil {
+		return true
+	}
+	_, _, err := net.ParseCIDR(value)
+	return err == nil
+}
+
+func isLocalDatabaseHost(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "localhost" || strings.HasPrefix(value, "/") {
+		return true
+	}
+	ip := net.ParseIP(value)
+	return ip != nil && ip.IsLoopback()
 }
 
 func isPlaceholderSecret(value string) bool {

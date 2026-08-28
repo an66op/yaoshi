@@ -38,8 +38,12 @@ func NewMemberPaymentAccountService(db *gorm.DB) *MemberPaymentAccountService {
 }
 
 func (s *MemberPaymentAccountService) List(userID uint64) ([]MemberPaymentAccountView, error) {
+	var owner modeluser.User
+	if err := s.db.Select("workspace_id").First(&owner, userID).Error; err != nil {
+		return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+	}
 	var rows []wallet.MemberPaymentAccount
-	if err := s.db.Where("user_id = ?", userID).Order("is_default desc, id desc").Find(&rows).Error; err != nil {
+	if err := s.db.Where("workspace_id = ? AND user_id = ?", owner.WorkspaceID, userID).Order("is_default desc, id desc").Find(&rows).Error; err != nil {
 		return nil, apperrors.NewSystemError("PAYMENT_ACCOUNT_READ_FAILED", "读取收款方式失败", err)
 	}
 	items := make([]MemberPaymentAccountView, 0, len(rows))
@@ -68,24 +72,24 @@ func (s *MemberPaymentAccountService) Create(userID uint64, input CreateMemberPa
 		// lock two concurrent "first account" requests can both observe count=0
 		// and leave two defaults behind.
 		var owner modeluser.User
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("user_id").First(&owner, userID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("user_id", "workspace_id").First(&owner, userID).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
 			}
 			return err
 		}
 		var count int64
-		if err := tx.Model(&wallet.MemberPaymentAccount{}).Where("user_id = ?", userID).Count(&count).Error; err != nil {
+		if err := tx.Model(&wallet.MemberPaymentAccount{}).Where("workspace_id = ? AND user_id = ?", owner.WorkspaceID, userID).Count(&count).Error; err != nil {
 			return err
 		}
 		isDefault := input.IsDefault || count == 0
 		if isDefault {
-			if err := tx.Model(&wallet.MemberPaymentAccount{}).Where("user_id = ?", userID).Update("is_default", false).Error; err != nil {
+			if err := tx.Model(&wallet.MemberPaymentAccount{}).Where("workspace_id = ? AND user_id = ?", owner.WorkspaceID, userID).Update("is_default", false).Error; err != nil {
 				return err
 			}
 		}
 		created = wallet.MemberPaymentAccount{
-			UserID: userID, AccountType: accountType, Label: label, AccountName: accountName,
+			WorkspaceID: owner.WorkspaceID, UserID: userID, AccountType: accountType, Label: label, AccountName: accountName,
 			AccountNo: encryptedAccountNo, HolderName: holderName, IsDefault: isDefault,
 		}
 		return tx.Create(&created).Error
@@ -103,29 +107,38 @@ func (s *MemberPaymentAccountService) Create(userID uint64, input CreateMemberPa
 func (s *MemberPaymentAccountService) Delete(userID, id uint64) error {
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var owner modeluser.User
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("user_id").First(&owner, userID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("user_id", "workspace_id").First(&owner, userID).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
 			}
 			return err
 		}
 		var row wallet.MemberPaymentAccount
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", id, userID).First(&row).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND workspace_id = ? AND user_id = ?", id, owner.WorkspaceID, userID).First(&row).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return apperrors.NewBusinessError("PAYMENT_ACCOUNT_NOT_FOUND", "收款方式不存在")
 			}
 			return err
 		}
+		wasDefault := row.IsDefault
+		// A deleted account stays available to historic application audits. Clear
+		// the active-list default flag before GORM soft-deletes the row so the
+		// partial unique index can immediately accept a replacement default.
+		if wasDefault {
+			if err := tx.Model(&row).Update("is_default", false).Error; err != nil {
+				return err
+			}
+		}
 		if err := tx.Delete(&row).Error; err != nil {
 			return err
 		}
-		if !row.IsDefault {
+		if !wasDefault {
 			return nil
 		}
 		// Keep the product invariant "accounts exist => one default" after a
 		// member removes the current default.
 		var replacement wallet.MemberPaymentAccount
-		if err := tx.Where("user_id = ?", userID).Order("id DESC").First(&replacement).Error; err != nil {
+		if err := tx.Where("workspace_id = ? AND user_id = ?", owner.WorkspaceID, userID).Order("id DESC").First(&replacement).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return nil
 			}
@@ -146,8 +159,12 @@ func (s *MemberPaymentAccountService) GetOwned(userID, id uint64) (*wallet.Membe
 	if id == 0 {
 		return nil, apperrors.NewBusinessError("PAYMENT_ACCOUNT_REQUIRED", "请先选择收款方式")
 	}
+	var owner modeluser.User
+	if err := s.db.Select("workspace_id").First(&owner, userID).Error; err != nil {
+		return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+	}
 	var row wallet.MemberPaymentAccount
-	if err := s.db.Where("id = ? AND user_id = ?", id, userID).First(&row).Error; err != nil {
+	if err := s.db.Where("id = ? AND workspace_id = ? AND user_id = ?", id, owner.WorkspaceID, userID).First(&row).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, apperrors.NewBusinessError("PAYMENT_ACCOUNT_NOT_FOUND", "收款方式不存在或不属于当前账号")
 		}

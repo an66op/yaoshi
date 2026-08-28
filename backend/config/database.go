@@ -11,15 +11,22 @@ import (
 	"backend/data/models/lottery"
 	"backend/data/models/notify"
 	"backend/data/models/odds"
+	"backend/data/models/plan"
 	"backend/data/models/profitshare"
 	"backend/data/models/rebate"
 	"backend/data/models/settings"
 	"backend/data/models/special"
 	"backend/data/models/user"
 	"backend/data/models/wallet"
+	workspacemodel "backend/data/models/workspace"
+	"backend/migrations"
 	"backend/utils"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -27,16 +34,31 @@ import (
 )
 
 func ConnectDB() (*gorm.DB, error) {
+	db, err := OpenDatabase()
+	if err != nil {
+		return nil, err
+	}
+
+	// Application startup is migration-only. In particular, production must
+	// never infer schema changes from the current Go models: every change is an
+	// immutable SQL file with a checksum in schema_migrations.
+	if err := migrations.Run(db); err != nil {
+		return nil, fmt.Errorf("%s: %w", constants.ErrDatabaseMigrationFailed, err)
+	}
+
+	log.Println(constants.DatabaseConnectionSuccess)
+	return db, nil
+}
+
+// OpenDatabase opens and configures the PostgreSQL connection without making
+// any schema changes. Normal application code should use ConnectDB. It is
+// exported for the explicit legacy-bootstrap command only.
+func OpenDatabase() (*gorm.DB, error) {
 	config := GetConfig()
-	dsn := fmt.Sprintf(
-		"host=%s user=%s password=%s dbname=%s port=%d sslmode=%s",
-		config.Database.Host,
-		config.Database.User,
-		config.Database.Password,
-		config.Database.DBName,
-		config.Database.Port,
-		config.Database.SSLMode,
-	)
+	dsn, err := BuildPostgresDSN(config.Database)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", constants.ErrDatabaseConnectionFailed, err)
+	}
 
 	// 连接数据库
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
@@ -55,23 +77,64 @@ func ConnectDB() (*gorm.DB, error) {
 	sqlDB.SetMaxOpenConns(100)          // 最大打开连接数
 	sqlDB.SetConnMaxLifetime(time.Hour) // 连接最大生存时间
 
-	if err := autoMigrate(db); err != nil {
-		return nil, fmt.Errorf("%s: %w", constants.ErrDatabaseMigrationFailed, err)
-	}
-
-	log.Println(constants.DatabaseConnectionSuccess)
 	return db, nil
 }
 
-func autoMigrate(db *gorm.DB) error {
+// BuildPostgresDSN returns a pgx-compatible URL. Building a keyword DSN with
+// fmt.Sprintf is unsafe because spaces, quotes, backslashes and equal signs in
+// a generated password can change how pgx parses the following fields.
+// url.UserPassword and url.Values preserve every credential byte without
+// logging the resulting secret-bearing URL.
+func BuildPostgresDSN(cfg DatabaseConfig) (string, error) {
+	host := strings.TrimSpace(cfg.Host)
+	username := cfg.User
+	database := cfg.DBName
+	sslMode := strings.TrimSpace(cfg.SSLMode)
+	if host == "" || strings.TrimSpace(username) == "" || strings.TrimSpace(database) == "" {
+		return "", fmt.Errorf("数据库主机、用户和库名不能为空")
+	}
+	if cfg.Port <= 0 || cfg.Port > 65535 {
+		return "", fmt.Errorf("数据库端口必须在1-65535之间")
+	}
+
+	connectionURL := &url.URL{
+		Scheme: "postgresql",
+		User:   url.UserPassword(username, cfg.Password),
+		Path:   "/" + database,
+	}
+	// Keep every application connection pinned to the versioned application
+	// schema. This prevents an account-level or role-level search_path from
+	// redirecting the migration runner or an unqualified legacy query into a stale copy.
+	query := url.Values{
+		"sslmode":     []string{sslMode},
+		"search_path": []string{"public"},
+	}
+	if strings.HasPrefix(host, "/") {
+		// PostgreSQL Unix sockets are represented as an escaped query value;
+		// putting an absolute path in URL.Host would produce an invalid URL.
+		query.Set("host", host)
+		query.Set("port", strconv.Itoa(cfg.Port))
+	} else {
+		connectionURL.Host = net.JoinHostPort(host, strconv.Itoa(cfg.Port))
+	}
+	connectionURL.RawQuery = query.Encode()
+	return connectionURL.String(), nil
+}
+
+// BootstrapLegacySchema upgrades an installation created before the versioned
+// core-schema baseline. It intentionally remains separate from ConnectDB and
+// is only invoked by cmd/db-bootstrap after an explicit confirmation token.
+// Do not call this from a server startup path and do not add new schema changes
+// here; all future changes belong in migrations/*.sql.
+func BootstrapLegacySchema(db *gorm.DB) error {
 	// A fresh database does not have the legacy user table yet, but the
-	// PublicID column default still needs its sequence before AutoMigrate emits
+	// PublicID column default still needs its allocator before AutoMigrate emits
 	// CREATE TABLE. Existing databases continue through the full backfill path.
 	if db.Migrator().HasTable(&user.User{}) {
 		if err := prepareLegacySchema(db); err != nil {
 			return err
 		}
-	} else if err := db.Exec(`CREATE SEQUENCE IF NOT EXISTS member_public_id_seq START WITH 1000000`).Error; err != nil {
+	} else if err := installLegacyMemberPublicIDAllocator(db); err != nil {
 		return err
 	}
 	if err := db.AutoMigrate(
@@ -79,12 +142,20 @@ func autoMigrate(db *gorm.DB) error {
 		&user.BalanceTransaction{},
 		&application.Application{},
 		&lottery.Game{},
+		&lottery.LobbyCategory{},
 		&lottery.Draw{},
 		&lottery.Issue{},
 		&settings.SystemConfig{},
+		&workspacemodel.Workspace{},
+		&workspacemodel.Membership{},
+		&workspacemodel.RobotProfile{},
+		&workspacemodel.RobotGame{},
+		&workspacemodel.RobotSetting{},
+		&workspacemodel.RobotResetReceipt{},
 		&odds.PlayLimit{},
 		&odds.UserPlayOdds{},
 		&odds.RoomPlayOdds{},
+		&plan.Recommendation{},
 		&wallet.PaymentChannel{},
 		&wallet.MemberPaymentAccount{},
 		&bet.Bet{},
@@ -99,6 +170,7 @@ func autoMigrate(db *gorm.DB) error {
 		&notify.Notification{},
 		&notify.MemberNotification{},
 		&chat.Message{},
+		&chat.ReadCursor{},
 		&chat.RedPacket{},
 		&chat.RedPacketClaim{},
 		&chat.RoomGameSetting{},
@@ -145,7 +217,25 @@ func autoMigrate(db *gorm.DB) error {
 	}
 	if err := db.Exec(`
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_participation_daily_unique
-		ON activity_participations (user_id, activity_id, action, biz_date, reference)
+		ON activity_participations (workspace_id, user_id, activity_id, action, biz_date, reference)
+	`).Error; err != nil {
+		return err
+	}
+	if err := db.Exec(`DROP INDEX IF EXISTS idx_rebate_user_day`).Error; err != nil {
+		return err
+	}
+	if err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_rebate_user_day
+		ON rebate_daily_records (workspace_id, biz_date, user_id)
+	`).Error; err != nil {
+		return err
+	}
+	if err := db.Exec(`DROP INDEX IF EXISTS idx_profit_share_agent_day`).Error; err != nil {
+		return err
+	}
+	if err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_profit_share_agent_day
+		ON agent_profit_share_records (workspace_id, biz_date, agent_id)
 	`).Error; err != nil {
 		return err
 	}
@@ -528,11 +618,13 @@ func hardenRemainingFinancialRecords(db *gorm.DB) error {
 				SELECT id,
 					ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY is_default DESC, id DESC) AS position
 				FROM member_payment_accounts
+				WHERE deleted_at IS NULL
 			)
 			UPDATE member_payment_accounts AS account
 			SET is_default = (ranked.position = 1)
 			FROM ranked
 			WHERE account.id = ranked.id
+				AND account.deleted_at IS NULL
 				AND account.is_default IS DISTINCT FROM (ranked.position = 1)
 		`).Error; err != nil {
 			return fmt.Errorf("修复默认收款账户失败: %w", err)
@@ -598,12 +690,12 @@ func hardenRemainingFinancialRecords(db *gorm.DB) error {
 			`DO $$ BEGIN
 				IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_member_payment_account_user' AND conrelid = 'member_payment_accounts'::regclass) THEN
 					ALTER TABLE member_payment_accounts ADD CONSTRAINT fk_member_payment_account_user
-					FOREIGN KEY (user_id) REFERENCES "user" (user_id) ON DELETE CASCADE NOT VALID;
+					FOREIGN KEY (user_id) REFERENCES "user" (user_id) ON DELETE RESTRICT NOT VALID;
 				END IF;
 			END $$`,
 			`ALTER TABLE member_payment_accounts VALIDATE CONSTRAINT fk_member_payment_account_user`,
 			`CREATE UNIQUE INDEX IF NOT EXISTS idx_member_payment_account_one_default
-				ON member_payment_accounts (user_id) WHERE is_default`,
+				ON member_payment_accounts (user_id) WHERE is_default AND deleted_at IS NULL`,
 			`DO $$ BEGIN
 				IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_wallet_payment_channel_financials' AND conrelid = 'wallet_payment_channels'::regclass) THEN
 					ALTER TABLE wallet_payment_channels ADD CONSTRAINT chk_wallet_payment_channel_financials CHECK (
@@ -679,7 +771,7 @@ func hardenRemainingFinancialRecords(db *gorm.DB) error {
 			`DO $$ BEGIN
 				IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_member_notification_user' AND conrelid = 'member_notifications'::regclass) THEN
 					ALTER TABLE member_notifications ADD CONSTRAINT fk_member_notification_user
-					FOREIGN KEY (user_id) REFERENCES "user" (user_id) ON DELETE CASCADE NOT VALID;
+					FOREIGN KEY (user_id) REFERENCES "user" (user_id) ON DELETE RESTRICT NOT VALID;
 				END IF;
 			END $$`,
 			`ALTER TABLE member_notifications VALIDATE CONSTRAINT fk_member_notification_user`,
@@ -839,6 +931,7 @@ func prepareLegacySchema(db *gorm.DB) error {
 		SET login_scope = CASE
 			WHEN role = 'agent' AND parent_tenant_id IS NOT NULL THEN 'tenant:' || parent_tenant_id::text
 			WHEN role = 'member' AND parent_agent_id IS NOT NULL THEN 'agent:' || parent_agent_id::text
+			WHEN role = 'member' AND parent_tenant_id IS NOT NULL THEN 'tenant:' || parent_tenant_id::text
 			ELSE 'platform'
 		END
 		WHERE login_scope IS NULL OR login_scope = '' OR login_scope = 'platform'
@@ -877,9 +970,12 @@ func prepareLegacySchema(db *gorm.DB) error {
 	`).Error; err != nil {
 		return err
 	}
+	if err := installLegacyMemberPublicIDAllocator(db); err != nil {
+		return err
+	}
 	if err := db.Exec(`
 		ALTER TABLE "user"
-		ALTER COLUMN public_id SET DEFAULT nextval('member_public_id_seq'),
+		ALTER COLUMN public_id SET DEFAULT public.next_member_public_id(),
 		ALTER COLUMN public_id SET NOT NULL
 	`).Error; err != nil {
 		return err
@@ -933,6 +1029,37 @@ func prepareLegacySchema(db *gorm.DB) error {
 				ELSE GREATEST(COALESCE((config_json::jsonb->>'pool')::numeric, 88), 1) * 100
 			END
 		WHERE type = 'redpacket' AND (pool_total_cents = 0 OR pool_remaining_cents = 0)
+	`).Error
+}
+
+// installLegacyMemberPublicIDAllocator only keeps the explicit, development-
+// only AutoMigrate bridge compatible with the versioned schema. Production
+// installs the same allocator through migrations/202608280008_random_public_ids.sql.
+func installLegacyMemberPublicIDAllocator(db *gorm.DB) error {
+	return db.Exec(`
+		CREATE OR REPLACE FUNCTION public.next_member_public_id()
+		RETURNS bigint
+		LANGUAGE plpgsql
+		VOLATILE
+		SET search_path = pg_catalog, public
+		AS $$
+		DECLARE
+			candidate bigint;
+		BEGIN
+			PERFORM pg_advisory_xact_lock(24587624048118084);
+			FOR attempt IN 1..256 LOOP
+				candidate := 1000000 + floor(random() * 9000000)::bigint;
+				IF NOT EXISTS (
+					SELECT 1 FROM public."user" AS account
+					WHERE account.public_id = candidate
+				) THEN
+					RETURN candidate;
+				END IF;
+			END LOOP;
+			RAISE EXCEPTION 'unable to allocate a unique seven-digit member public ID after 256 attempts'
+				USING ERRCODE = '54000';
+		END;
+		$$
 	`).Error
 }
 

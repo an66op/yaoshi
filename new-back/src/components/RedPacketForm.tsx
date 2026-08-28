@@ -24,6 +24,10 @@ export function AdminRedPacketCard({
   greeting,
   cover,
   minTurnover = 0,
+  status = 'active',
+  claimedCount = 0,
+  refunded = 0,
+  closeReason,
   time,
   action,
   preview = false,
@@ -33,12 +37,17 @@ export function AdminRedPacketCard({
   greeting?: string
   cover?: string
   minTurnover?: number
+  status?: string
+  claimedCount?: number
+  refunded?: number
+  closeReason?: string
   time?: string
   action?: ReactNode
   preview?: boolean
 }) {
   const tone = normalizedCover(cover)
   const amount = Number.isFinite(total) ? Math.max(0, total) : 0
+  const statusLabel = status === 'empty' ? '已领完' : status === 'expired' ? '已过期' : status === 'closed' ? '已关闭' : ''
   return <Box
     aria-label={`${greeting || '恭喜发财'}，${count || 1} 个红包，总金额 ${amount.toFixed(2)}`}
     sx={{
@@ -59,13 +68,14 @@ export function AdminRedPacketCard({
       }}><CardGiftcardRounded sx={{ fontSize: 24 }} /></Box>
       <Box minWidth={0} flex={1}>
         <Typography fontSize={14} fontWeight={850} noWrap>{greeting?.trim() || '恭喜发财'}</Typography>
-        <Typography fontSize={10.5} sx={{ opacity: .88 }}>{Math.max(1, count || 1)} 个红包 · 点击领取</Typography>
+        <Typography fontSize={10.5} sx={{ opacity: .88 }}>{statusLabel || `${Math.max(1, count || 1)} 个红包 · 点击领取`}</Typography>
       </Box>
     </Stack>
     <Stack direction="row" alignItems="center" gap={.75} px={1.45} py={.78} sx={{ bgcolor: 'rgba(76,22,21,.16)', borderTop: '1px solid rgba(255,255,255,.2)' }}>
-      <Typography fontSize={9.5} fontWeight={750} sx={{ opacity: .9 }}>王者奖励</Typography>
+      <Typography fontSize={9.5} fontWeight={750} sx={{ opacity: .9 }}>{statusLabel && closeReason ? closeReason : '王者奖励'}</Typography>
       {minTurnover > 0 && <Typography fontSize={9.2} sx={{ opacity: .9 }}>流水满 ¥ {minTurnover.toFixed(2)}</Typography>}
-      <Typography ml="auto" fontSize={9.5} sx={{ opacity: .82 }}>{Math.max(1, count || 1)} 个 · ¥ {amount.toFixed(2)}</Typography>
+      <Typography ml="auto" fontSize={9.5} sx={{ opacity: .82 }}>{Math.max(0, claimedCount)}/{Math.max(1, count || 1)} 已领取 · ¥ {amount.toFixed(2)}</Typography>
+      {refunded > 0 && <Typography fontSize={9.2} sx={{ opacity: .86 }}>退回 ¥ {refunded.toFixed(2)}</Typography>}
       {time && <Typography fontSize={9} sx={{ opacity: .68 }}>{time}</Typography>}
       {action}
     </Stack>

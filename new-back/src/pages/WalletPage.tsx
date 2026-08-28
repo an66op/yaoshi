@@ -28,7 +28,6 @@ import {
 import AddRounded from '@mui/icons-material/AddRounded'
 import DeleteRounded from '@mui/icons-material/DeleteRounded'
 import EditRounded from '@mui/icons-material/EditRounded'
-import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
 import InboxRounded from '@mui/icons-material/InboxRounded'
 import { useCallback, useEffect, useState } from 'react'
@@ -172,11 +171,10 @@ export function WalletPage() {
       <PageHeader
         eyebrow="业务管理 / 钱包"
         title="钱包配置"
-        description="统一管理人工收款与 API 支付网关。网关密钥加密保存，后台只显示是否已配置。"
+        description=""
         actions={
           <>
             <Button variant="contained" startIcon={<AddRounded />} onClick={openCreate}>新增收款方式</Button>
-            <Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => void load(true)} disabled={loading}>刷新</Button>
           </>
         }
       />

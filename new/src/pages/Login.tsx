@@ -1,17 +1,15 @@
 import { useState } from 'react'
 import { Icon } from '../components/Icon'
 import { memberApi } from '../api/member'
-import { setToken } from '../api/client'
-import { BRAND_NAME, DEMO_ACCOUNT, DEMO_PASSWORD, DEMO_ROOM } from '../data/brand'
+import { BRAND_NAME, DEMO_ACCOUNT, DEMO_PASSWORD } from '../data/brand'
 import type { Theme } from '../types'
 
 type Props = { onContinue: (account: string, nickname: string) => void; onRegister?: () => void; theme?: Theme }
 
 /** 会员登录：调用后端 /api/member/login */
 export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
-  const [account, setAccount] = useState(DEMO_ACCOUNT)
-  const [password, setPassword] = useState(DEMO_PASSWORD)
-  const [workspace, setWorkspace] = useState(DEMO_ROOM)
+  const [account, setAccount] = useState(() => import.meta.env.DEV ? DEMO_ACCOUNT : '')
+  const [password, setPassword] = useState(() => import.meta.env.DEV ? DEMO_PASSWORD : '')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -22,8 +20,7 @@ export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
     setLoading(true)
     setError('')
     try {
-      const result = await memberApi.login(value, password, workspace.trim())
-      setToken(result.token)
+      const result = await memberApi.login(value, password)
       onContinue(result.user.username, result.user.nickname || result.user.username)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '登录失败')
@@ -47,19 +44,6 @@ export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
           <h1>欢迎回来</h1>
           <p>验证帐号后，继续进入你的专属彩种空间。</p>
         </div>
-        <label className="login-field">
-          <span>房间号 / 代理</span>
-          <div>
-            <i>◈</i>
-            <input
-              autoComplete="organization"
-              maxLength={40}
-              onChange={(event) => { setWorkspace(event.target.value.replace(/\s/g, '')); setError('') }}
-              placeholder="输入所属房间号"
-              value={workspace}
-            />
-          </div>
-        </label>
         <label className="login-field">
           <span>帐号</span>
           <div>

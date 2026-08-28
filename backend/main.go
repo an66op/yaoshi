@@ -2,18 +2,20 @@ package main
 
 import (
 	"backend/api"
+	"backend/cluster"
 	"backend/config"
 	"backend/constants"
-	"backend/data/models/user"
 	"backend/lotteryfeed"
+	"backend/middleware"
 	"backend/services"
 	"backend/utils"
+	"backend/ws"
 	"context"
 	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,9 +29,27 @@ func main() {
 	// 初始化配置
 	config.LoadConfig()
 	cfg := config.GetConfig()
+	rootContext, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if err := cluster.Init(rootContext, cluster.Options{
+		Addr: cfg.Redis.Addr, Password: cfg.Redis.Password, DB: cfg.Redis.DB,
+		TLS: cfg.Redis.TLS, Prefix: cfg.Redis.Prefix, Required: cfg.Server.Mode == "release",
+	}); err != nil {
+		log.Fatalf("初始化 Redis 共享运行时失败: %v", err)
+	}
+	defer func() {
+		if err := cluster.Close(); err != nil {
+			log.Printf("关闭 Redis 连接失败: %v", err)
+		}
+	}()
+	if cluster.Enabled() {
+		log.Printf("Redis 共享运行时已连接，实例 %s", cluster.InstanceID())
+	} else {
+		log.Printf("Redis 不可用：当前为开发环境单实例回退模式")
+	}
 
 	// 初始化JWT
-	utils.InitJWT(cfg.JWT.Secret)
+	utils.InitJWT(cfg.JWT.Secret, cfg.JWT.Expire)
 	if err := utils.InitFieldEncryption(cfg.Security.DataEncryptionKey); err != nil {
 		log.Fatalf("初始化敏感字段加密失败: %v", err)
 	}
@@ -39,13 +59,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("%s: %v", constants.ErrDatabaseConnectionFailed, err)
 	}
-	// 初始化依赖
-	if err := InitDependencies(db); err != nil {
+	// 集中初始化：正式环境不会落入本地账号、模拟历史开奖或计划数据。
+	if err := services.Bootstrap(db, services.BootstrapOptions{Mode: cfg.Server.Mode}); err != nil {
 		log.Fatalf("%s: %v", constants.ErrInitDependenciesFailed, err)
 	}
 
-	rootContext, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	lotteryService := services.NewLotteryService(db)
 	scheduler := lotteryfeed.NewScheduler(lotteryfeed.DefaultJobs(), func(ctx context.Context, group string) []lotteryfeed.SyncResult {
 		results := lotteryService.SyncOfficialGroup(ctx, group)
@@ -55,10 +73,7 @@ func main() {
 		}
 		return mapped
 	})
-	scheduler.Start(rootContext)
-	services.StartSimulatedDrawLoop(rootContext, db)
-	services.StartRoomActivity(rootContext.Done(), db)
-
+	gin.SetMode(cfg.Server.Mode)
 	r := gin.Default()
 	if err := r.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
 		log.Fatalf("受信任代理配置错误: %v", err)
@@ -68,14 +83,37 @@ func main() {
 	if uploadRoot == "" {
 		uploadRoot = "uploads"
 	}
-	if err := os.MkdirAll(filepath.Join(uploadRoot, "activities"), 0o755); err != nil {
+	if cfg.Server.Mode == "release" && (!filepath.IsAbs(uploadRoot) || filepath.Clean(uploadRoot) == string(filepath.Separator)) {
+		log.Fatalf("release 模式的上传目录必须是非根绝对路径")
+	}
+	if err := os.MkdirAll(filepath.Join(uploadRoot, "activities"), 0o750); err != nil {
 		log.Fatalf("创建上传目录失败: %v", err)
 	}
 	r.Static("/api/public/uploads", uploadRoot)
 	// 加载路由
 	api.LoadRoutes(r, db, scheduler)
+	if err := ws.StartClusterBridge(rootContext, db); err != nil {
+		if cluster.Required() {
+			log.Fatalf("启动 WebSocket Redis 桥接失败: %v", err)
+		}
+		log.Printf("WebSocket Redis 桥接不可用，使用本机连接: %v", err)
+	}
+	scheduler.Start(rootContext)
+	services.StartSimulatedDrawLoop(rootContext, db)
+	services.StartSettlementRecovery(rootContext, db)
+	services.StartIdempotencyRecovery(rootContext, db)
+	services.StartDataLifecycleLoop(rootContext, db)
+	services.StartRoomActivity(rootContext.Done(), db)
+	services.StartRedPacketExpiry(rootContext, db)
+	middleware.StartAuditRecovery(rootContext, db)
 	log.Printf(constants.ServerStartMessage, cfg.Server.Port)
-	server := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Server.Port), Handler: r, ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{
+		Addr:              net.JoinHostPort(cfg.Server.Bind, fmt.Sprintf("%d", cfg.Server.Port)),
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       75 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 	go func() {
 		if serveErr := server.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Fatal(constants.ErrServerStartFailed, serveErr)
@@ -87,63 +125,4 @@ func main() {
 	if err := server.Shutdown(shutdownContext); err != nil {
 		log.Printf("服务关闭超时: %v", err)
 	}
-}
-
-// InitDependencies 初始化依赖
-func InitDependencies(db *gorm.DB) error {
-	isRelease := config.GetConfig().Server.Mode == "release"
-	// 初始化管理员用户
-	userService := services.NewUserService(db)
-	adminAccount, err := userService.GetUserByUsername(constants.DefaultAdminUsername)
-	if err != nil {
-		// 不是"用户未找到"的情况，直接返回错误
-		if !errors.Is(err, gorm.ErrRecordNotFound) && !strings.Contains(err.Error(), constants.ErrUserNotFound) {
-			return err
-		}
-
-		// The well-known local bootstrap password must never create a production
-		// administrator. Production operators have to provision the first admin
-		// explicitly, so a fresh deployment cannot be taken over with 123456.
-		if isRelease {
-			return fmt.Errorf("release 模式未配置管理员账户，拒绝创建默认管理员")
-		}
-		// 用户不存在时，创建一个默认管理员
-		hashedPwd, err := utils.HashPassword(constants.DefaultAdminPassword)
-		if err != nil {
-			return fmt.Errorf("%s: %w", constants.ErrCreateAdminPasswordFailed, err)
-		}
-
-		admin := &user.User{
-			Username:   constants.DefaultAdminUsername,
-			LoginScope: "platform",
-			Password:   hashedPwd,
-			Nickname:   constants.DefaultAdminNickname,
-			Email:      constants.DefaultAdminEmail,
-			Role:       "admin",
-			Status:     1,
-		}
-		if err := userService.CreateUser(admin); err != nil {
-			return fmt.Errorf("%s: %w", constants.ErrCreateAdminUserFailed, err)
-		}
-	} else {
-		if isRelease && utils.CheckPasswordHash(constants.DefaultAdminPassword, adminAccount.Password) {
-			return fmt.Errorf("release 模式检测到默认管理员密码，请先修改后再启动")
-		}
-		// Keep the bootstrap account marked as admin so the new auth gate works
-		// on databases that were seeded before Role was introduced.
-		_ = db.Model(&user.User{}).Where("username = ? AND (role IS NULL OR role = '' OR role <> ?)", constants.DefaultAdminUsername, "admin").Update("role", "admin").Error
-	}
-
-	if err := services.SeedLotteryData(db); err != nil {
-		return fmt.Errorf("初始化开奖数据失败: %w", err)
-	}
-	// Fixed demo credentials and automatic top-ups are local acceptance aids,
-	// not production bootstrap data.
-	if !isRelease {
-		if err := services.SeedExperienceMember(db); err != nil {
-			return fmt.Errorf("初始化默认会员失败: %w", err)
-		}
-	}
-
-	return nil
 }

@@ -5,6 +5,8 @@ import (
 	"backend/data/vo"
 	apperrors "backend/errors"
 	"backend/services"
+	"backend/sessionauth"
+	"backend/ws"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -18,8 +20,12 @@ import (
 type MemberHandler interface {
 	Login(c *gin.Context)
 	Register(c *gin.Context)
+	Logout(c *gin.Context)
+	Refresh(c *gin.Context)
 	Me(c *gin.Context)
+	Games(c *gin.Context)
 	JoinRoom(c *gin.Context)
+	RoomHistory(c *gin.Context)
 	ListBets(c *gin.Context)
 	PlaceBet(c *gin.Context)
 	CancelCurrentIssueBets(c *gin.Context)
@@ -49,16 +55,22 @@ type MemberHandler interface {
 	GameFeed(c *gin.Context)
 	ChangePassword(c *gin.Context)
 	UpdateNickname(c *gin.Context)
+	UpdateAvatar(c *gin.Context)
 	InviteInfo(c *gin.Context)
 	ListEntertainment(c *gin.Context)
 	LaunchEntertainment(c *gin.Context)
 	ChatPreview(c *gin.Context)
 	ListChatMessages(c *gin.Context)
 	PostChatMessage(c *gin.Context)
+	PostChatCommand(c *gin.Context)
+	LatestClaimableChatRedPacket(c *gin.Context)
 	ClaimChatRedPacket(c *gin.Context)
+	ListPlans(c *gin.Context)
+	PlanDetail(c *gin.Context)
 }
 
 type memberHandler struct {
+	db              *gorm.DB
 	auth            services.AuthService
 	member          *services.MemberService
 	bets            *services.BetAdminService
@@ -70,10 +82,13 @@ type memberHandler struct {
 	assistant       *services.BetAssistantService
 	entertainment   *services.EntertainmentAdminService
 	chat            *services.MemberChatService
+	games           *services.WorkspaceGameService
+	plans           *services.PlanContentService
 }
 
 func NewMemberHandler(db *gorm.DB) MemberHandler {
 	return &memberHandler{
+		db:              db,
 		auth:            services.NewAuthService(db),
 		member:          services.NewMemberService(db),
 		bets:            services.NewBetAdminService(db),
@@ -85,7 +100,60 @@ func NewMemberHandler(db *gorm.DB) MemberHandler {
 		assistant:       services.NewBetAssistantService(db),
 		entertainment:   services.NewEntertainmentAdminService(db),
 		chat:            services.NewMemberChatService(db),
+		games:           services.NewWorkspaceGameService(db),
+		plans:           services.NewPlanContentService(db),
 	}
+}
+
+func (h *memberHandler) ListPlans(c *gin.Context) {
+	_, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	workspaceID, valid := c.Get("workspace_id")
+	roomID, validID := workspaceID.(uint64)
+	if !valid || !validID || roomID == 0 {
+		constants.SendError(c, http.StatusForbidden, "请先进入房间", nil)
+		return
+	}
+	result, err := h.plans.Catalog(roomID)
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取计划群失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+func (h *memberHandler) PlanDetail(c *gin.Context) {
+	_, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	workspaceID, valid := c.Get("workspace_id")
+	roomID, validID := workspaceID.(uint64)
+	if !valid || !validID || roomID == 0 {
+		constants.SendError(c, http.StatusForbidden, "请先进入房间", nil)
+		return
+	}
+	result, err := h.plans.Detail(roomID, c.Param("gameID"))
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "读取彩票计划失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+func (h *memberHandler) Games(c *gin.Context) {
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	result, err := h.games.ListEnabledForMember(userID)
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取房间游戏失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
 }
 
 // AssistantBet accepts the compact room syntax and delegates every financial
@@ -131,7 +199,7 @@ func (h *memberHandler) AssistantBetHistory(c *gin.Context) {
 		return
 	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	result, err := h.assistant.History(userID, c.Param("id"), limit)
+	result, err := h.assistant.DirectHistory(userID, c.Param("id"), limit)
 	if err != nil {
 		if apperrors.IsBusinessError(err) {
 			constants.SendError(c, http.StatusBadRequest, "读取投注消息失败", err)
@@ -147,7 +215,11 @@ func (h *memberHandler) AssistantBetHistory(c *gin.Context) {
 // summary. Publishing a draw intentionally remains an administrator-only
 // operation and is never exposed through this member route.
 func (h *memberHandler) AssistantStatus(c *gin.Context) {
-	result, err := h.assistant.Status(c.Param("id"))
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	result, err := h.assistant.StatusForUser(userID, c.Param("id"))
 	if err != nil {
 		if apperrors.IsBusinessError(err) {
 			constants.SendError(c, http.StatusBadRequest, "读取开奖助手状态失败", err)
@@ -170,11 +242,12 @@ func (h *memberHandler) Login(c *gin.Context) {
 		constants.SendError(c, http.StatusUnauthorized, constants.ErrInvalidCredentials, err)
 		return
 	}
+	writeSessionCookie(c, sessionauth.ScopeMember, token)
 	constants.SendSuccess(c, http.StatusOK, constants.UserLoginSuccess, vo.LoginResponse{
-		Token: token,
 		User: vo.UserResponse{
 			ID: account.UserID, Username: account.Username, Email: account.Email,
-			PublicID: account.PublicID, Nickname: account.Nickname, Role: account.Role, Status: account.Status,
+			PublicID: account.PublicID, Nickname: account.Nickname, Avatar: account.Avatar,
+			Title: account.PublicTitle, Badge: account.PublicBadge, Role: account.Role, Status: account.Status,
 		},
 	})
 }
@@ -186,14 +259,30 @@ func (h *memberHandler) Register(c *gin.Context) {
 		return
 	}
 	result, err := h.member.RegisterWithToken(services.MemberRegisterInput{
-		Username: req.Username, Password: req.Password, Nickname: req.Nickname,
+		Username: req.Username, Password: req.Password,
 		InviteCode: req.InviteCode, RoomCode: req.RoomCode,
 	})
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "注册失败", err)
 		return
 	}
+	writeSessionCookie(c, sessionauth.ScopeMember, result.Token)
+	result.Token = ""
 	constants.SendSuccess(c, http.StatusCreated, "注册成功", result)
+}
+
+func (h *memberHandler) Logout(c *gin.Context) {
+	if err := ws.RevokeRequestSession(h.db, c.Request); err != nil {
+		clearSessionCookie(c, sessionauth.ScopeMember)
+		constants.SendError(c, http.StatusInternalServerError, "退出登录失败，请稍后重试", err)
+		return
+	}
+	clearSessionCookie(c, sessionauth.ScopeMember)
+	constants.SendSuccess(c, http.StatusOK, "已退出登录", nil)
+}
+
+func (h *memberHandler) Refresh(c *gin.Context) {
+	refreshSessionCookie(c, sessionauth.ScopeMember)
 }
 
 func (h *memberHandler) Me(c *gin.Context) {
@@ -220,7 +309,11 @@ func (h *memberHandler) JoinRoom(c *gin.Context) {
 		constants.SendError(c, http.StatusBadRequest, constants.ErrInvalidRequestFormat, err)
 		return
 	}
-	result, err := h.member.JoinRoom(userID, req.RoomCode)
+	requestID := strings.TrimSpace(req.RequestID)
+	if requestID == "" {
+		requestID = strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	}
+	result, err := h.member.JoinRoom(userID, req.RoomCode, requestID)
 	if err != nil {
 		constants.SendError(c, http.StatusNotFound, "房间号无效或未开通", err)
 		return
@@ -230,6 +323,20 @@ func (h *memberHandler) JoinRoom(c *gin.Context) {
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "已进入房间", result)
+}
+
+func (h *memberHandler) RoomHistory(c *gin.Context) {
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "8"))
+	result, err := h.member.RoomHistory(userID, limit)
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取房间记录失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
 }
 
 func (h *memberHandler) ListBets(c *gin.Context) {
@@ -364,6 +471,7 @@ func (h *memberHandler) CreateApplication(c *gin.Context) {
 		return
 	}
 	var req struct {
+		RequestID        string  `json:"request_id" binding:"max=96"`
 		RequestType      string  `json:"request_type" binding:"required"`
 		PaymentType      string  `json:"payment_type"`
 		PaymentAccountID uint64  `json:"payment_account_id"`
@@ -380,6 +488,7 @@ func (h *memberHandler) CreateApplication(c *gin.Context) {
 	}
 	result, err := h.apps.Create(services.CreateApplicationInput{
 		UserID: userID, RequestType: req.RequestType,
+		RequestID:        req.RequestID,
 		PaymentType:      defaultString(req.PaymentType, "manual"),
 		PaymentAccountID: req.PaymentAccountID,
 		Amount:           req.Amount, Remark: req.Remark,
@@ -407,7 +516,11 @@ func (h *memberHandler) BalanceHistory(c *gin.Context) {
 }
 
 func (h *memberHandler) WalletChannels(c *gin.Context) {
-	channels, err := h.wallet.List(services.WalletListFilter{Status: "enabled"})
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	channels, err := h.wallet.ListForUser(userID, services.WalletListFilter{Status: "enabled"})
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取收款方式失败", err)
 		return
@@ -516,7 +629,11 @@ func (h *memberHandler) GameOdds(c *gin.Context) {
 }
 
 func (h *memberHandler) ListActivities(c *gin.Context) {
-	result, err := h.portal.ListActivities(c.Query("type"))
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	result, err := h.portal.ListActivities(userID, c.Query("type"))
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取活动失败", err)
 		return
@@ -598,6 +715,21 @@ func (h *memberHandler) ClaimChatRedPacket(c *gin.Context) {
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "领取成功", result)
+}
+
+func (h *memberHandler) LatestClaimableChatRedPacket(c *gin.Context) {
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	result, err := h.chat.LatestClaimableRedPacket(userID)
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取房间红包失败", err)
+		return
+	}
+	// A typed nil pointer keeps the standard success envelope stable while
+	// encoding data as JSON null when the room has no claimable envelope.
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
 }
 
 func (h *memberHandler) ListNotifications(c *gin.Context) {
@@ -740,6 +872,26 @@ func (h *memberHandler) UpdateNickname(c *gin.Context) {
 	constants.SendSuccess(c, http.StatusOK, "昵称已更新", profile)
 }
 
+func (h *memberHandler) UpdateAvatar(c *gin.Context) {
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Avatar string `json:"avatar"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "头像参数不正确", err)
+		return
+	}
+	profile, err := h.member.UpdateAvatar(userID, req.Avatar)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "头像修改失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "头像已更新", profile)
+}
+
 func (h *memberHandler) InviteInfo(c *gin.Context) {
 	userID, ok := memberUserID(c)
 	if !ok {
@@ -814,28 +966,65 @@ func (h *memberHandler) ListChatMessages(c *gin.Context) {
 }
 
 func (h *memberHandler) PostChatMessage(c *gin.Context) {
+	h.postChatMessage(c, false)
+}
+
+// PostChatCommand is the rate-limited room-command boundary used by the text
+// betting keyboard. Keeping it separate from ordinary chat prevents compact
+// bets from bypassing the betting limiter and prevents chat-only mute/minimum
+// balance rules from changing the outcome of the same bet placed by the
+// structured panel.
+func (h *memberHandler) PostChatCommand(c *gin.Context) {
+	h.postChatMessage(c, true)
+}
+
+func (h *memberHandler) postChatMessage(c *gin.Context, commandRoute bool) {
 	userID, ok := memberUserID(c)
 	if !ok {
 		return
 	}
 	var req struct {
-		RoomType string `json:"room_type"`
-		GameID   string `json:"game_id"`
-		Content  string `json:"content" binding:"required"`
+		RoomType  string `json:"room_type"`
+		GameID    string `json:"game_id"`
+		Content   string `json:"content" binding:"required"`
+		Issue     string `json:"issue"`
+		RequestID string `json:"request_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		constants.SendError(c, http.StatusBadRequest, "消息参数不正确", err)
 		return
 	}
-	result, err := h.chat.Post(userID, req.RoomType, req.GameID, req.Content)
+	isCommand := isRoomCommandRequest(req.RoomType, req.GameID, req.Content)
+	if commandRoute != isCommand {
+		if commandRoute {
+			constants.SendError(c, http.StatusBadRequest, "请输入有效的房间指令", nil)
+		} else {
+			constants.SendError(c, http.StatusBadRequest, "该内容请通过投注指令发送", nil)
+		}
+		return
+	}
+	var result *services.ChatMessageView
+	var err error
+	if commandRoute {
+		requestID := strings.TrimSpace(req.RequestID)
+		if len(requestID) < 8 || len(requestID) > 96 {
+			constants.SendError(c, http.StatusBadRequest, "请求标识不正确", nil)
+			return
+		}
+		result, err = h.chat.PostCommand(userID, req.RoomType, req.GameID, req.Content, requestID)
+	} else {
+		result, err = h.chat.Post(userID, req.RoomType, req.GameID, req.Content)
+	}
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "发送消息失败", err)
 		return
 	}
-	if defaultString(strings.TrimSpace(req.RoomType), "group") == "group" {
+	if commandRoute {
+		requestID := strings.TrimSpace(req.RequestID)
 		if command, matched := parseRoomApplicationCommand(req.Content); matched {
 			applicationResult, createErr := h.apps.Create(services.CreateApplicationInput{
-				UserID: userID, RequestType: command.RequestType, PaymentType: "manual", AllowManualDebit: true,
+				RequestID: requestID + ":" + command.RequestType,
+				UserID:    userID, RequestType: command.RequestType, PaymentType: "manual", AllowManualDebit: true,
 				RoomScope: result.RoomScope, GameID: result.GameID, ChatMessageID: result.ID,
 				Amount: command.Amount, Remark: "群聊申请 · " + strings.TrimSpace(req.Content),
 			})
@@ -847,7 +1036,7 @@ func (h *memberHandler) PostChatMessage(c *gin.Context) {
 				_, _ = h.chat.PostAssistant(result.RoomScope, result.GameID, assistantContent, 0)
 			}
 		} else {
-			h.handleRoomBetCommand(userID, result, strings.TrimSpace(req.Content))
+			h.handleRoomBetCommand(userID, result, strings.TrimSpace(req.Content), strings.TrimSpace(req.Issue), requestID)
 		}
 	}
 	constants.SendSuccess(c, http.StatusCreated, "消息已发送", result)
@@ -856,12 +1045,12 @@ func (h *memberHandler) PostChatMessage(c *gin.Context) {
 // handleRoomBetCommand keeps the compact keyboard commands in the same
 // persistent room timeline as ordinary messages. Members always see the text
 // they sent first, followed by one durable assistant reply.
-func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.ChatMessageView, content string) {
+func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.ChatMessageView, content, requestedIssue, requestID string) {
 	if message == nil || strings.TrimSpace(message.GameID) == "" || message.GameID == "lobby" {
 		return
 	}
 	mention := "@" + message.Nickname + "\n"
-	status, _ := h.assistant.Status(message.GameID)
+	status, _ := h.assistant.StatusForUser(userID, message.GameID)
 	gameName := message.GameID
 	if status != nil && strings.TrimSpace(status.GameName) != "" {
 		gameName = status.GameName
@@ -872,6 +1061,10 @@ func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.Ch
 	}
 	switch content {
 	case "取消":
+		if requestedIssue != "" && (status == nil || status.Issue != requestedIssue) {
+			post("撤单失败，期号已经切换，请核对最新一期后再操作。")
+			return
+		}
 		cancelled, err := h.bets.CancelCurrentIssue(userID, message.GameID, message.Nickname)
 		if err != nil {
 			post("撤单失败，" + roomCommandError(err))
@@ -880,9 +1073,11 @@ func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.Ch
 		post(fmt.Sprintf("【%s - %s】撤单成功\n已撤回 %d 注，退回 %.2f\n剩余：%.2f", gameName, cancelled.Issue, cancelled.Count, cancelled.Refund, cancelled.Balance))
 		return
 	case "查":
-		issue := ""
+		issue := requestedIssue
 		if status != nil {
-			issue = status.Issue
+			if issue == "" {
+				issue = status.Issue
+			}
 		}
 		if issue == "" {
 			var err error
@@ -922,8 +1117,11 @@ func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.Ch
 			post("暂无可以重复的上一笔投注。")
 			return
 		}
-		accepted, err := h.assistant.Place(userID, message.GameID, "", history[len(history)-1].Content, message.Nickname, fmt.Sprintf("chat-repeat:%d", message.ID))
+		accepted, err := h.assistant.Place(userID, message.GameID, requestedIssue, history[len(history)-1].Content, message.Nickname, requestID)
 		if err != nil {
+			if apperrors.GetErrorCode(err) == "REQUEST_IN_PROGRESS" {
+				return
+			}
 			post("重复投注失败，" + roomCommandError(err))
 			return
 		}
@@ -934,8 +1132,14 @@ func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.Ch
 	if !strings.Contains(content, "/") && !strings.Contains(content, "梭哈") {
 		return
 	}
-	accepted, err := h.assistant.Place(userID, message.GameID, "", content, message.Nickname, fmt.Sprintf("chat-bet:%d", message.ID))
+	accepted, err := h.assistant.Place(userID, message.GameID, requestedIssue, content, message.Nickname, requestID)
 	if err != nil {
+		// The original request is still committing. Do not persist a misleading
+		// failure reply for a concurrent retry; the winning request will append
+		// the one authoritative assistant receipt.
+		if apperrors.GetErrorCode(err) == "REQUEST_IN_PROGRESS" {
+			return
+		}
 		prefix := "投注失败，"
 		if apperrors.GetErrorCode(err) == "INVALID_REQUEST" {
 			prefix = "解析失败，"
@@ -968,6 +1172,9 @@ func formatAssistantAccepted(result *services.AssistantBetResult) string {
 	fmt.Fprintf(&body, "【%s - %s】下单成功\n", result.GameName, result.Issue)
 	for _, line := range result.Lines {
 		body.WriteString(line.Label)
+		if line.Odds > 0 {
+			fmt.Fprintf(&body, " · 赔率 %.3f", line.Odds)
+		}
 		body.WriteByte('\n')
 	}
 	fmt.Fprintf(&body, "\n使用：%.2f\n剩余：%.2f", result.Total, result.Balance)
@@ -988,7 +1195,21 @@ type roomApplicationCommand struct {
 	AmountText  string
 }
 
-var roomApplicationCommandPattern = regexp.MustCompile(`^(申请)?[[:space:]]*(上分|下分)[[:space:]]*[/：:]?[[:space:]]*([0-9]+(\.[0-9]{1,2})?)(.*)$`)
+var roomApplicationCommandPattern = regexp.MustCompile(`^(申请)?[[:space:]]*(上分|下分)[[:space:]]*[/：:]?[[:space:]]*([0-9]+(\.[0-9]{1,2})?)([[:space:]]+.*)?$`)
+
+func isRoomCommandRequest(roomType, gameID, content string) bool {
+	if defaultString(strings.TrimSpace(roomType), "group") != "group" || strings.TrimSpace(gameID) == "" || strings.TrimSpace(gameID) == "lobby" {
+		return false
+	}
+	content = strings.TrimSpace(content)
+	if content == "取消" || content == "查" || content == "重复" {
+		return true
+	}
+	if _, matched := parseRoomApplicationCommand(content); matched {
+		return true
+	}
+	return strings.Contains(content, "/") || strings.Contains(content, "梭哈")
+}
 
 func parseRoomApplicationCommand(content string) (roomApplicationCommand, bool) {
 	matches := roomApplicationCommandPattern.FindStringSubmatch(strings.TrimSpace(content))

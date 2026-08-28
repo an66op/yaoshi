@@ -79,7 +79,7 @@ function SubpageNotice({ title, children }: { title: string; children: ReactNode
   return <div className="wallet-subpage-notice"><b>{title}</b><span>{children}</span></div>
 }
 
-function WalletPage({ title, hint, onBack, children, footer }: { title: string; hint?: string; onBack: () => void; children: ReactNode; footer?: ReactNode }) {
+function WalletPage({ title, hint, sectionLabel = '资金服务', onBack, children, footer }: { title: string; hint?: string; sectionLabel?: string; onBack: () => void; children: ReactNode; footer?: ReactNode }) {
   return (
     <section className="wallet-page wallet-subpage">
       <header className="wallet-header wallet-header-back">
@@ -88,7 +88,7 @@ function WalletPage({ title, hint, onBack, children, footer }: { title: string; 
         <span aria-hidden="true" />
       </header>
       <div className="wallet-subpage-body">
-        <div className="wallet-subpage-heading"><span>资金服务</span><i /></div>
+        <div className="wallet-subpage-heading"><span>{sectionLabel}</span><i /></div>
         {children}
       </div>
       {footer && <footer className="wallet-panel-foot wallet-subpage-foot">{footer}</footer>}
@@ -163,7 +163,8 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
   const [betLoadingMore, setBetLoadingMore] = useState(false)
   // 详情保留一份快照，列表刷新、筛选或余额更新时不会把刚点开的记录清空。
   const [selectedBet, setSelectedBet] = useState<MemberBet | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'code' | 'link' | 'share' | null>(null)
+  const [inviteReloadKey, setInviteReloadKey] = useState(0)
 
   const paymentChannels = channels.length ? channels : [{ id: 'manual', credit_type: 'manual', name: '人工处理', min_amount: 0, max_amount: 0 }]
   const selectedPaymentChannel = paymentChannels.find((channel) => channel.credit_type === paymentType) ?? paymentChannels[0]
@@ -248,6 +249,7 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
           const result = await memberApi.balanceHistory(50)
           if (!cancelled) setHistory(result.items.filter((item) => item.type.includes('redpacket')))
         } else if (activeAction === '邀请好友') {
+          if (!cancelled) setInvite(null)
           const result = await memberApi.inviteInfo()
           if (!cancelled) setInvite(result)
         }
@@ -258,7 +260,7 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
       }
     })()
     return () => { cancelled = true }
-  }, [activeAction, betFilter])
+  }, [activeAction, betFilter, inviteReloadKey])
 
   const loadMoreHistory = async () => {
     const beforeID = history.at(-1)?.id
@@ -324,14 +326,65 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
     }
   }
 
-  const copyInvite = async () => {
-    if (!invite) return
+  const inviteLink = invite ? `${window.location.origin}/register?invite=${encodeURIComponent(invite.invite_code)}` : ''
+
+  const copyText = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(invite.share_text)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1800)
+      await navigator.clipboard.writeText(text)
+      return true
     } catch {
-      setMessage('复制失败，请手动复制邀请码')
+      // 局域网 HTTP 和部分 Safari 不开放 Clipboard API，保留兼容复制。
+      const input = document.createElement('textarea')
+      try {
+        input.value = text
+        input.style.position = 'fixed'
+        input.style.opacity = '0'
+        document.body.appendChild(input)
+        input.focus()
+        input.select()
+        return document.execCommand('copy')
+      } catch {
+        return false
+      } finally {
+        input.remove()
+      }
+    }
+  }
+
+  const markInviteCopied = (target: 'code' | 'link' | 'share') => {
+    setCopied(target)
+    window.setTimeout(() => setCopied((current) => current === target ? null : current), 1800)
+  }
+
+  const copyInvite = async (target: 'code' | 'link') => {
+    if (!invite) return
+    const successful = await copyText(target === 'code' ? invite.invite_code : inviteLink)
+    if (successful) {
+      setMessage('')
+      markInviteCopied(target)
+    } else {
+      setMessage('复制失败，请长按邀请码手动复制')
+    }
+  }
+
+  const shareInvite = async () => {
+    if (!invite) return
+    const shareText = `${invite.share_text}\n注册链接：${inviteLink}`
+    if (typeof navigator.share === 'function') {
+      try {
+        await navigator.share({ title: invite.title || '邀请有礼', text: invite.share_text, url: inviteLink })
+        markInviteCopied('share')
+        return
+      } catch (reason) {
+        if (reason instanceof DOMException && reason.name === 'AbortError') return
+      }
+    }
+    const successful = await copyText(shareText)
+    if (successful) {
+      setMessage('')
+      markInviteCopied('share')
+    } else {
+      setMessage('暂时无法分享，请复制邀请码后发送给好友')
     }
   }
 
@@ -545,17 +598,50 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
 
     if (activeAction === '邀请好友') {
       return (
-        <WalletPage title={invite?.title ?? '邀请好友'} onBack={goHome}>
-          {invite ? (
+        <WalletPage title="邀请有礼" hint={invite?.room_code ? `房间 ${invite.room_code}` : undefined} sectionLabel="邀请中心" onBack={goHome}>
+          {subpageLoading ? <EmptyHint text="正在读取专属邀请信息…" /> : invite ? (
             <>
-              <div className="wallet-invite-card"><span>专属邀请码</span><strong>{invite.invite_code}</strong><p>{invite.share_text}</p><button type="button" onClick={() => void copyInvite()}>{copied ? '已复制邀请文案' : '复制邀请文案'}</button></div>
-              <div className="wallet-stat-grid">
-                <div><small>邀请码</small><b>{invite.invite_code}</b></div>
-                {invite.room_code && <div><small>房间号</small><b>{invite.room_code}</b></div>}
-                {invite.reward > 0 && <div><small>活动奖励</small><b>{invite.reward.toFixed(2)} 元</b></div>}
+              <section className="wallet-invite-hero">
+                <div>
+                  <span>INVITE BENEFITS</span>
+                  <h2>{invite.title || '邀请好友'}</h2>
+                  <p>{invite.reward > 0 ? `好友完成注册，双方各得 ${formatMoney(invite.reward)} 元奖励` : '分享您的专属链接，邀请好友一起加入'}</p>
+                </div>
+                <div className="wallet-invite-gift" aria-hidden="true"><i>礼</i><span /><span /></div>
+              </section>
+
+              <section className="wallet-invite-code-card">
+                <header><div><small>专属邀请码</small><b>{invite.username}</b></div><em>长期有效</em></header>
+                <div className="wallet-invite-code-row"><strong>{invite.invite_code}</strong><button type="button" onClick={() => void copyInvite('code')}>{copied === 'code' ? '已复制' : '复制'}</button></div>
+                <div className="wallet-invite-link"><span>{inviteLink}</span><button type="button" aria-label="复制注册链接" onClick={() => void copyInvite('link')}>{copied === 'link' ? '已复制' : '复制链接'}</button></div>
+                <button type="button" className="wallet-invite-share" onClick={() => void shareInvite()}><span aria-hidden="true">↗</span>{copied === 'share' ? '邀请内容已复制' : '立即邀请好友'}</button>
+              </section>
+
+              <div className="wallet-invite-stats">
+                <div><small>成功邀请</small><b>{Math.max(0, Number(invite.invited_count) || 0)}<i> 人</i></b></div>
+                <div><small>累计奖励</small><b>{formatMoney(Math.max(0, Number(invite.total_reward) || 0))}<i> 元</i></b></div>
+                <div><small>每位好友奖励</small><b>{invite.reward > 0 ? formatMoney(invite.reward) : '按活动规则'}{invite.reward > 0 && <i> 元</i>}</b></div>
+                <div><small>邀请归属</small><b>{invite.room_code || '当前房间'}</b></div>
               </div>
+
+              <section className="wallet-invite-steps">
+                <header><b>邀请流程</b><small>三步完成</small></header>
+                <ol>
+                  <li><i>1</i><div><b>分享邀请</b><small>发送专属链接或邀请码</small></div></li>
+                  <li><i>2</i><div><b>好友注册</b><small>好友使用邀请码创建帐号</small></div></li>
+                  <li><i>3</i><div><b>奖励到账</b><small>符合活动条件后自动发放</small></div></li>
+                </ol>
+              </section>
+
+              <section className="wallet-invite-rules">
+                <header><b>活动规则</b><span>RULES</span></header>
+                <p><i>•</i>好友首次使用您的邀请码完成注册后，邀请关系生效。</p>
+                <p><i>•</i>邀请关系归属于当前房间，好友无需另外填写房间号。</p>
+                <p><i>•</i>奖励金额及发放条件以当前房间活动配置为准。</p>
+              </section>
+              {message && <p className="wallet-message" aria-live="polite">{message}</p>}
             </>
-          ) : <EmptyHint text="加载邀请信息…" />}
+          ) : <section className="wallet-invite-error"><i>!</i><b>邀请信息暂未加载</b><p>{message || '请检查网络后重新获取专属邀请码。'}</p><button type="button" onClick={() => setInviteReloadKey((current) => current + 1)}>重新加载</button></section>}
         </WalletPage>
       )
     }
@@ -567,7 +653,7 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
 
   return (
     <section className="wallet-page">
-      <header className="wallet-header"><b>钱包中心</b><button type="button" aria-label="刷新余额" onClick={onRefresh}><Icon name="more" /></button></header>
+      <header className="wallet-header"><b>钱包中心</b></header>
       <section className="wallet-balance">
         <div><small>账户余额</small><b>{balance.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</b><span>元</span></div>
         <em>今日统计</em>

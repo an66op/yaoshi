@@ -17,7 +17,6 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import CasinoRounded from '@mui/icons-material/CasinoRounded'
 import TaskAltRounded from '@mui/icons-material/TaskAltRounded'
 import { useCallback, useEffect, useState } from 'react'
@@ -109,13 +108,12 @@ export function MonitorPage() {
       <PageHeader
         eyebrow="游戏运营 / 实时"
         title="现场监控"
-        description="监控当期注单分布，支持开奖并自动结算派彩。"
+        description=""
         actions={
           <>
             <TextField select size="small" label="彩种" value={gameId} onChange={event => { setGameId(event.target.value); void load(event.target.value) }} sx={{ minWidth: 180 }} disabled={!games.length || loading}>
               {games.map(game => <MenuItem key={game.id} value={game.id}>{game.name}</MenuItem>)}
             </TextField>
-            <Button variant="outlined" startIcon={<RefreshRounded />} disabled={loading || Boolean(busy)} onClick={() => void load(gameId, true)}>刷新</Button>
             <Button variant="contained" startIcon={<CasinoRounded />} disabled={!gameId || !data || loading || Boolean(busy)} onClick={() => void run('publish')}>{busy === 'publish' ? '开奖中…' : '开奖并结算'}</Button>
             <Button variant="contained" color="secondary" startIcon={<TaskAltRounded />} disabled={!gameId || !data || loading || Boolean(busy) || !settlement?.has_draw || settlement.pending === 0} onClick={() => void run('settle')}>{busy === 'settle' ? '结算中…' : '仅结算'}</Button>
             <Chip color="success" label="实时更新" />

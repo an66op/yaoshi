@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { memberApi } from '../api/member'
-import { setToken } from '../api/client'
-import { BRAND_NAME, DEMO_ROOM } from '../data/brand'
+import { BRAND_NAME } from '../data/brand'
 import type { Theme } from '../types'
 
 type Props = {
@@ -15,9 +14,7 @@ type Props = {
 export function Register({ onContinue, onBack, theme = 'day' }: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [nickname, setNickname] = useState('')
   const [inviteCode, setInviteCode] = useState('')
-  const [roomCode, setRoomCode] = useState(DEMO_ROOM)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [loading, setLoading] = useState(false)
@@ -41,11 +38,8 @@ export function Register({ onContinue, onBack, theme = 'day' }: Props) {
       const result = await memberApi.register({
         username: value,
         password,
-        nickname: nickname.trim() || value,
         invite_code: inviteCode.trim(),
-        room_code: roomCode.trim(),
       })
-      setToken(result.token)
       if (result.message) setSuccess(result.message)
       onContinue(result.user.username, result.user.nickname || result.user.username)
     } catch (reason) {
@@ -56,7 +50,7 @@ export function Register({ onContinue, onBack, theme = 'day' }: Props) {
   }
 
   return (
-    <main className={`login-page theme-${theme}`}>
+    <main className={`login-page register-page theme-${theme}`}>
       <section className="login-card">
         <header className="login-brand">
           <img alt={BRAND_NAME} src="/images/king-racing-mark.jpg" />
@@ -65,12 +59,10 @@ export function Register({ onContinue, onBack, theme = 'day' }: Props) {
         <div className="login-copy">
           <small>新用户注册</small>
           <h1>创建帐号</h1>
-          <p>选择所属房间并创建帐号；同一帐号可在不同房间独立使用。</p>
+          <p>系统会自动生成显示昵称；创建成功后再选择需要进入的房间。</p>
         </div>
         <label className="login-field"><span>帐号</span><div><i>◉</i><input autoComplete="username" value={username} onChange={(e) => { setUsername(e.target.value.replace(/\s/g, '')); setError('') }} placeholder="至少 3 位" /></div></label>
         <label className="login-field"><span>密码</span><div><i>●</i><input type="password" autoComplete="new-password" value={password} onChange={(e) => { setPassword(e.target.value); setError('') }} placeholder="8–72 位" /></div></label>
-        <label className="login-field"><span>昵称</span><div><i>◎</i><input value={nickname} onChange={(e) => setNickname(e.target.value)} placeholder="可选" /></div></label>
-        <label className="login-field"><span>房间号</span><div><i>◈</i><input value={roomCode} onChange={(e) => { setRoomCode(e.target.value.replace(/\s/g, '')); setError('') }} placeholder="输入所属房间号" /></div></label>
         <label className="login-field"><span>邀请码</span><div><i>礼</i><input value={inviteCode} onChange={(e) => setInviteCode(e.target.value)} placeholder="例如 U1001（至少 4 位，可选）" /></div></label>
         {success && <p className="login-error login-success" role="status">{success}</p>}
         {error && <p className="login-error" role="alert">{error}</p>}

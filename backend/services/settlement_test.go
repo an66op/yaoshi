@@ -41,6 +41,45 @@ func TestEvaluateBetPatterns(t *testing.T) {
 	}
 }
 
+func TestEvaluateRacingCrownSumBoundariesAreExclusive(t *testing.T) {
+	// 4 + 7 = 11: small and odd only.
+	eleven := []int{4, 7, 1, 2, 3, 5, 6, 8, 9, 10}
+	for _, selection := range []string{"小", "单", "11"} {
+		if won, reason := evaluateBet(eleven, "sum", 6, selection); !won {
+			t.Fatalf("11 should win %s: %s", selection, reason)
+		}
+	}
+	for _, selection := range []string{"大", "双", "12"} {
+		if won, reason := evaluateBet(eleven, "sum", 6, selection); won {
+			t.Fatalf("11 must lose %s: %s", selection, reason)
+		}
+	}
+
+	// 5 + 7 = 12: big and even only.
+	twelve := []int{5, 7, 1, 2, 3, 4, 6, 8, 9, 10}
+	for _, selection := range []string{"大", "双", "12"} {
+		if won, reason := evaluateBet(twelve, "sum", 6, selection); !won {
+			t.Fatalf("12 should win %s: %s", selection, reason)
+		}
+	}
+	for _, selection := range []string{"小", "单", "11"} {
+		if won, reason := evaluateBet(twelve, "sum", 6, selection); won {
+			t.Fatalf("12 must lose %s: %s", selection, reason)
+		}
+	}
+}
+
+func TestEvaluateRacingZeroAliasOnlyMeansTenForTenBallGames(t *testing.T) {
+	racing := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	if won, reason := evaluateBet(racing, "ball_1_5", 10, "0"); !won {
+		t.Fatalf("racing 0 alias should match number 10: %s", reason)
+	}
+	ssc := []int{0, 2, 3, 4, 5}
+	if won, reason := evaluateBet(ssc, "ball_1_5", 1, "0"); !won {
+		t.Fatalf("five-ball game must keep literal zero: %s", reason)
+	}
+}
+
 func TestSettlementEventKeyKeepsGameAndRoomIsolation(t *testing.T) {
 	base := settlementEventKey("speed-racing", "34130076", 23, "agent:9")
 	if base == settlementEventKey("speed-ssc", "34130076", 23, "agent:9") {

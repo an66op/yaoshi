@@ -21,7 +21,7 @@ export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }:
 
   const submit = async () => {
     const value = room.trim()
-    if (value.length < 4) return setError('请输入至少 4 位房间号')
+    if (!/^\d{5,12}$/.test(value)) return setError('请输入 5–12 位数字房间号')
     setLoading(true)
     setError('')
     setNotice('')
@@ -65,7 +65,7 @@ export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }:
                 maxLength={12}
                 onChange={(event) => { setRoom(event.target.value.replace(/\D/g, '')); setError(''); setNotice('') }}
                 onKeyDown={(event) => event.key === 'Enter' && void submit()}
-                placeholder="例如 1024 8801"
+                placeholder="例如 88001"
                 value={room}
               />
               <i>ROOM ID</i>

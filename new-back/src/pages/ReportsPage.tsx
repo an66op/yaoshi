@@ -1,189 +1,143 @@
 import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  CardContent,
-  Chip,
-  CircularProgress,
-  InputAdornment,
-  MenuItem,
-  Paper,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TablePagination,
-  TableRow,
-  Tab,
-  Tabs,
-  TextField,
-  Tooltip,
-  Typography,
+  Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Divider, InputAdornment, MenuItem,
+  Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TablePagination, TableRow,
+  TextField, Typography,
 } from '@mui/material'
-import AccountBalanceWalletRounded from '@mui/icons-material/AccountBalanceWalletRounded'
-import ArrowDownwardRounded from '@mui/icons-material/ArrowDownwardRounded'
-import ArrowUpwardRounded from '@mui/icons-material/ArrowUpwardRounded'
-import DownloadRounded from '@mui/icons-material/DownloadRounded'
-import GroupsRounded from '@mui/icons-material/GroupsRounded'
-import InfoOutlined from '@mui/icons-material/InfoOutlined'
-import PendingActionsRounded from '@mui/icons-material/PendingActionsRounded'
-import ReceiptLongRounded from '@mui/icons-material/ReceiptLongRounded'
-import RefreshRounded from '@mui/icons-material/RefreshRounded'
+import AssessmentRounded from '@mui/icons-material/AssessmentRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
-import TrendingUpRounded from '@mui/icons-material/TrendingUpRounded'
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { adminApi, type FinancialRecord, type FinancialReport } from '../api'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  adminApi, agentApi, tenantApi, type AgentItem, type ReportCenterParams, type ReportCenterResult,
+  type ReportDefinition, type TenantItem,
+} from '../api'
+import { getStoredUser } from '../auth'
 import { PageHeader } from '../components/PageHeader'
-import { OperatingReportPanel } from '../components/OperatingReportPanel'
-import { useFeedback } from '../components/feedback'
+import { normalizeReportResult } from '../utils/reportData'
 
-const ledgerLabels: Record<string, string> = {
-  manual: '人工调整',
-  application_credit: '申请上分',
-  application_debit: '申请下分',
-  bet: '下注扣款',
-  bet_cancel: '撤单退款',
-  settlement: '开奖派彩',
-  rebate: '回水入账',
-  checkin: '签到奖励',
-  redpacket: '红包奖励',
-  invite: '邀请奖励',
-  agent_share: '代理利润分账',
+const reportGroups = ['经营分析', '财务结算', '风控会员', '系统审计']
+const pad = (value: number) => String(value).padStart(2, '0')
+const dateValue = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+const today = () => dateValue(new Date())
+const daysAgo = (days: number) => { const value = new Date(); value.setDate(value.getDate() - days); return dateValue(value) }
+const defaultCatalog: ReportDefinition[] = [
+  ['summary', '总报表', '经营分析'], ['users', '用户报表', '经营分析'], ['entertainment', '娱乐报表', '经营分析'], ['28', '28报表', '经营分析'], ['categories', '分类报表', '经营分析'], ['unsettled', '未结报表', '经营分析'],
+  ['financial', '财务报表', '财务结算'], ['commission', '返佣报表', '财务结算'], ['redpackets', '红包报表', '财务结算'], ['rebates', '回水报表', '财务结算'], ['entertainment-rebates', '娱乐回水', '财务结算'], ['28-rebates', '28回水', '财务结算'],
+  ['alerts', '告警报表', '风控会员'], ['new-members', '新会员统计', '风控会员'], ['daily-members', '当日会员概要', '风控会员'], ['logs', '日志报表', '系统审计'],
+].map(([key, title, group]) => ({ key, title, group }))
+
+type Filters = { query: string; start: string; end: string; workspaceId: number; gameId: string; category: string; issue: string; status: string }
+const initialFilters = (): Filters => {
+  const query = new URLSearchParams(window.location.search)
+  return {
+    query: query.get('query') ?? '', start: query.get('start') ?? daysAgo(6), end: query.get('end') ?? today(),
+    workspaceId: Number(query.get('workspace_id') ?? 0), gameId: query.get('game_id') ?? '', category: query.get('category') ?? '',
+    issue: query.get('issue') ?? '', status: query.get('status') ?? 'all',
+  }
 }
 
-const categoryLabels: Record<string, string> = {
-  finance: '资金操作',
-  betting: '投注结算',
-  welfare: '福利活动',
-  share: '代理分账',
-  other: '其他',
+const roleApi = (role: string) => role === 'agent' ? agentApi : role === 'tenant' ? tenantApi : adminApi
+const formatCell = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (typeof value === 'number') return Number.isInteger(value) ? value.toLocaleString('zh-CN') : value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) return new Date(value).toLocaleString('zh-CN', { hour12: false })
+  return String(value)
 }
 
-const ledgerColors: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'info' | 'secondary'> = {
-  manual: 'primary',
-  application_credit: 'success',
-  application_debit: 'warning',
-  bet: 'info',
-  bet_cancel: 'info',
-  settlement: 'info',
-  rebate: 'secondary',
-  checkin: 'secondary',
-  redpacket: 'secondary',
-  invite: 'secondary',
-  agent_share: 'success',
-}
-
-const money = (value: number) => new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
-const dateTime = (value: string) => new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(value))
-const dayText = (value: string) => value.slice(5).replace('-', '/')
-const today = () => new Date().toISOString().slice(0, 10)
-const daysAgo = (days: number) => { const date = new Date(); date.setDate(date.getDate() - days); return date.toISOString().slice(0, 10) }
-
-type ReportFilters = { query: string; type: string; start: string; end: string }
-const defaultFilters = (): ReportFilters => ({ query: '', type: 'all', start: daysAgo(6), end: today() })
-
-export function ReportsPage() {
-  const [view, setView] = useState<'operating' | 'ledger'>('operating')
-  const [draft, setDraft] = useState<ReportFilters>(defaultFilters)
-  const [applied, setApplied] = useState<ReportFilters>(defaultFilters)
-  const [page, setPage] = useState(0)
-  const [pageSize, setPageSize] = useState(20)
-  const [data, setData] = useState<FinancialReport | null>(null)
+export function ReportsPage({ initialReport }: { initialReport?: string } = {}) {
+  const role = getStoredUser()?.role ?? 'admin'
+  const api = useMemo(() => roleApi(role), [role])
+  const url = new URLSearchParams(window.location.search)
+  const [catalog, setCatalog] = useState<ReportDefinition[]>(defaultCatalog)
+  const [reportKey, setReportKey] = useState(url.get('report') ?? initialReport ?? 'summary')
+  const [draft, setDraft] = useState<Filters>(initialFilters)
+  const [filters, setFilters] = useState<Filters>(initialFilters)
+  const [data, setData] = useState<ReportCenterResult | null>(null)
+  const [workspaces, setWorkspaces] = useState<Array<{ id: number; label: string }>>([])
+  const [page, setPage] = useState(Math.max(0, Number(url.get('page') ?? 1) - 1))
+  const [pageSize, setPageSize] = useState(Number(url.get('page_size') ?? 20))
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const { showMessage } = useFeedback()
 
-  const load = useCallback(async (notify = false) => {
-    setLoading(true)
-    setError('')
+  useEffect(() => {
+    void api.reportCatalog().then(items => setCatalog(Array.isArray(items) && items.length ? items : defaultCatalog)).catch(() => setCatalog(defaultCatalog))
+    if (role !== 'admin') return
+    void Promise.all([adminApi.tenants({ pageSize: 100 }), adminApi.agents({ pageSize: 100 })]).then(([tenants, agents]) => {
+      const tenantRooms = (Array.isArray(tenants.items) ? tenants.items : []).filter((item: TenantItem) => item.workspace_id).map((item: TenantItem) => ({ id: item.workspace_id, label: `租户直属 · ${item.room_code || '未分配'} · ${item.room_name || item.nickname || item.username}` }))
+      const agentRooms = (Array.isArray(agents.items) ? agents.items : []).filter((item: AgentItem) => item.workspace_id).map((item: AgentItem) => ({ id: item.workspace_id, label: `代理房间 · ${item.room_code} · ${item.room_name || item.nickname || item.username}` }))
+      setWorkspaces([...tenantRooms, ...agentRooms])
+    }).catch(() => setWorkspaces([]))
+  }, [api, role])
+
+  const params = useMemo<ReportCenterParams>(() => ({
+    query: filters.query, start: filters.start, end: filters.end, workspaceId: role === 'admin' ? filters.workspaceId : undefined,
+    gameId: filters.gameId, category: filters.category, issue: filters.issue, status: filters.status,
+    page: page + 1, pageSize,
+  }), [filters, page, pageSize, role])
+
+  const syncUrl = useCallback((nextKey: string, next: Filters, nextPage: number, nextSize: number) => {
+    const query = new URLSearchParams({ report: nextKey, start: next.start, end: next.end, page: String(nextPage + 1), page_size: String(nextSize) })
+    if (next.query) query.set('query', next.query)
+    if (next.workspaceId) query.set('workspace_id', String(next.workspaceId))
+    if (next.gameId) query.set('game_id', next.gameId)
+    if (next.category) query.set('category', next.category)
+    if (next.issue) query.set('issue', next.issue)
+    if (next.status !== 'all') query.set('status', next.status)
+    window.history.replaceState({}, '', `${window.location.pathname}?${query}`)
+  }, [])
+
+  const load = useCallback(async () => {
+    setLoading(true); setError('')
     try {
-      const result = await adminApi.financialReport({ ...applied, page: page + 1, pageSize })
+      const result = normalizeReportResult(await api.reportCenter(reportKey, params))
       setData(result)
-      if (notify) showMessage('财务报表已刷新')
+      syncUrl(reportKey, filters, page, pageSize)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '读取财务报表失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [applied, page, pageSize, showMessage])
+      setError(reason instanceof Error ? reason.message : '读取报表失败')
+    } finally { setLoading(false) }
+  }, [api, filters, page, pageSize, params, reportKey, setData, syncUrl])
 
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load])
-
+  const selectReport = (key: string) => { setReportKey(key); setPage(0); setData(null) }
   const apply = () => {
-    if (draft.start && draft.end && draft.start > draft.end) {
-      setError('结束日期不能早于开始日期')
-      return
-    }
-    setError('')
-    setPage(0)
-    setApplied({ ...draft, query: draft.query.trim() })
+    if (draft.start > draft.end) { setError('结束日期不能早于开始日期'); return }
+    setFilters({ ...draft, query: draft.query.trim(), issue: draft.issue.trim() }); setPage(0)
   }
-  const selectPeriod = (days: number) => {
-    const next = { ...draft, start: daysAgo(days - 1), end: today() }
-    setDraft(next)
-    setApplied({ ...next, query: next.query.trim() })
-    setPage(0)
+  const period = (days: number, offset = 0) => {
+    const end = daysAgo(offset); const start = daysAgo(offset + days - 1)
+    const next = { ...draft, start, end }; setDraft(next); setFilters(next); setPage(0)
   }
-  const reset = () => {
-    const next = defaultFilters()
-    setDraft(next)
-    setApplied(next)
-    setPage(0)
-  }
-  const exportCurrentPage = () => {
-    const records = data?.items ?? []
-    const escape = (value: unknown) => `"${String(value).replaceAll('"', '""')}"`
-    const rows = records.map(record => [record.id, record.username, record.nickname, ledgerLabels[record.type] ?? record.type, record.amount.toFixed(2), record.before.toFixed(2), record.after.toFixed(2), record.remark, record.operator, dateTime(record.created_at)])
-    const csv = [['流水编号', '用户名', '昵称', '类型', '变动金额', '变动前', '变动后', '备注', '操作人', '发生时间'], ...rows].map(row => row.map(escape).join(',')).join('\n')
-    const link = document.createElement('a')
-    link.href = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }))
-    link.download = `财务流水_${data?.summary.period_start ?? today()}_${data?.summary.period_end ?? today()}.csv`
-    link.click()
-    URL.revokeObjectURL(link.href)
-  }
+  const definition = catalog.find(item => item.key === reportKey) ?? defaultCatalog[0]
 
-  const summary = data?.summary
-  const statCards = [
-    ['当前用户余额', summary?.total_balance ?? 0, AccountBalanceWalletRounded, '#238dae', '所有未删除账户的实时可用余额'],
-    ['区间入账', summary?.credit_amount ?? 0, ArrowUpwardRounded, '#2ba87c', `${summary?.record_count ?? 0} 笔余额流水`],
-    ['区间出账', summary?.debit_amount ?? 0, ArrowDownwardRounded, '#dc786d', `${summary?.active_users ?? 0} 个发生变动的账户`],
-    ['区间净变化', summary?.net_change ?? 0, TrendingUpRounded, (summary?.net_change ?? 0) >= 0 ? '#4f7edc' : '#d86868', `待审核申请 ${summary?.pending_applications ?? 0} 笔`],
-  ] as const
-  const chartPoints = useMemo(() => data?.trend.length && data.trend.length > 14 ? data.trend.slice(-14) : data?.trend ?? [], [data])
-  const chartMax = Math.max(1, ...chartPoints.flatMap(point => [point.credit, point.debit]))
-
-  const reportTabs = <Paper variant="outlined" sx={{ mb: 1.5 }}><Tabs value={view} onChange={(_, value: 'operating' | 'ledger') => setView(value)} sx={{ px: 1 }}><Tab value="operating" label="经营利润" /><Tab value="ledger" label="余额流水" /></Tabs></Paper>
-
-  if (view === 'operating') return <Box p={{ xs: 2, lg: 2.5 }}>
-    <PageHeader eyebrow="数据中心 / 经营" title="经营与分账报表" description="从有效投注穿透到房间、代理、会员和逐笔注单，统一核算毛利、回水、福利成本、代理分成与平台净利润。" />
-    {reportTabs}
-    <OperatingReportPanel />
+  return <Box p={{ xs: 1.5, md: 2.5 }}>
+    <PageHeader eyebrow="数据中心" title="报表中心" description="" />
+    {error && <Alert severity="error" action={<Button color="inherit" size="small" onClick={() => void load()}>重试</Button>} sx={{ mt: 1.5 }}>{error}</Alert>}
+    <TextField select fullWidth size="small" label="选择报表" value={reportKey} onChange={event => selectReport(event.target.value)} sx={{ display: { xs: 'flex', lg: 'none' }, mt: 1.5 }}>
+      {reportGroups.map(group => [<MenuItem key={`${group}-head`} disabled>{group}</MenuItem>, ...catalog.filter(item => item.group === group).map(item => <MenuItem key={item.key} value={item.key}>{item.title}</MenuItem>)])}
+    </TextField>
+    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: '252px minmax(0,1fr)' }, alignItems: 'start', gap: 1.8, mt: 1.5 }}>
+      <Paper variant="outlined" sx={{ display: { xs: 'none', lg: 'block' }, p: 1.25, position: 'sticky', top: 88, borderRadius: 2.5 }}>
+        <Typography fontSize={16} fontWeight={850} px={1} pt={.35} pb={1}>报表目录</Typography>
+        {reportGroups.map(group => {
+          const groupItems = catalog.filter(item => item.group === group)
+          return <Box key={group} mb={1.25}>
+            <Typography variant="caption" color="text.secondary" fontWeight={850} display="block" px={1} mb={.55} sx={{ borderLeft: 3, borderColor: 'primary.main', lineHeight: 1.2 }}>{group}</Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: .65 }}>
+              {groupItems.map((item, index) => {
+                const spansRow = groupItems.length % 2 === 1 && index === groupItems.length - 1
+                const selected = reportKey === item.key
+                return <Button key={item.key} fullWidth onClick={() => selectReport(item.key)} variant={selected ? 'contained' : 'outlined'} sx={{ gridColumn: spansRow ? '1 / -1' : 'auto', minHeight: 40, px: .7, justifyContent: 'center', borderRadius: 1.6, borderColor: selected ? 'primary.main' : 'divider', color: selected ? 'primary.contrastText' : 'text.primary', bgcolor: selected ? undefined : 'background.default', fontSize: 13.5, fontWeight: selected ? 850 : 650, whiteSpace: 'nowrap' }}>{item.title}</Button>
+              })}
+            </Box>
+          </Box>
+        })}
+      </Paper>
+      <Box minWidth={0}>
+        <Paper variant="outlined" sx={{ p: 1.4 }}><Stack direction={{ xs: 'column', xl: 'row' }} gap={1}><TextField size="small" placeholder="搜索用户、期号或记录" value={draft.query} onChange={event => setDraft(current => ({ ...current, query: event.target.value }))} sx={{ flex: 1, minWidth: 190 }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRounded fontSize="small" /></InputAdornment> } }} />{role === 'admin' && <TextField select size="small" label="房间" value={draft.workspaceId} onChange={event => setDraft(current => ({ ...current, workspaceId: Number(event.target.value) }))} sx={{ minWidth: 230 }}><MenuItem value={0}>全部房间</MenuItem>{workspaces.map(item => <MenuItem key={item.id} value={item.id}>{item.label}</MenuItem>)}</TextField>}<TextField size="small" type="date" label="开始" value={draft.start} onChange={event => setDraft(current => ({ ...current, start: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} /><TextField size="small" type="date" label="结束" value={draft.end} onChange={event => setDraft(current => ({ ...current, end: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} /><Button variant="contained" onClick={apply}>查询</Button></Stack><Stack direction="row" gap={.6} flexWrap="wrap" mt={1}><Button size="small" onClick={() => period(1)}>今日</Button><Button size="small" onClick={() => period(1, 1)}>昨日</Button><Button size="small" onClick={() => period(7)}>近 7 天</Button><Button size="small" onClick={() => period(30)}>近 30 天</Button><Divider orientation="vertical" flexItem /><TextField size="small" placeholder="彩种 ID" value={draft.gameId} onChange={event => setDraft(current => ({ ...current, gameId: event.target.value }))} sx={{ width: 130 }} /><TextField size="small" placeholder="分类" value={draft.category} onChange={event => setDraft(current => ({ ...current, category: event.target.value }))} sx={{ width: 110 }} /><TextField size="small" placeholder="期号" value={draft.issue} onChange={event => setDraft(current => ({ ...current, issue: event.target.value }))} sx={{ width: 135 }} /><TextField select size="small" value={draft.status} onChange={event => setDraft(current => ({ ...current, status: event.target.value }))} sx={{ width: 120 }}><MenuItem value="all">全部状态</MenuItem><MenuItem value="pending">待处理</MenuItem><MenuItem value="settling">结算中</MenuItem><MenuItem value="won">已中奖</MenuItem><MenuItem value="lost">未中奖</MenuItem><MenuItem value="abnormal">异常</MenuItem></TextField></Stack></Paper>
+        <Stack direction="row" justifyContent="space-between" alignItems="center" mt={1.6} mb={1}><Box><Typography variant="h6" fontWeight={850}>{definition.title}</Typography><Typography variant="caption" color="text.secondary">{data ? `${data.period_start} 至 ${data.period_end}` : '正在加载统计区间'}</Typography></Box><Chip icon={<AssessmentRounded />} label={`共 ${data?.total ?? 0} 条`} variant="outlined" /></Stack>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2,minmax(0,1fr))', md: 'repeat(3,minmax(0,1fr))', xl: 'repeat(6,minmax(0,1fr))' }, gap: 1 }}>{(data?.metrics ?? []).map(metric => <Card key={metric.key} variant="outlined"><CardContent sx={{ p: '13px !important' }}><Typography variant="caption" color="text.secondary">{metric.label}</Typography><Typography fontSize={{ xs: 17, md: 20 }} fontWeight={850} mt={.4} noWrap>{formatCell(metric.value)}</Typography></CardContent></Card>)}</Box>
+        <Card sx={{ mt: 1.3 }}>{loading && <Box px={2} pt={1}><CircularProgress size={18} /></Box>}<TableContainer><Table size="small" sx={{ minWidth: Math.max(720, (data?.columns ?? []).length * 145) }}><TableHead><TableRow>{(data?.columns ?? []).map(column => <TableCell key={column.key}>{column.label}</TableCell>)}</TableRow></TableHead><TableBody>{(data?.items ?? []).map((row, index) => <TableRow hover key={String(row.id ?? `${reportKey}-${index}`)}>{(data?.columns ?? []).map(column => <TableCell key={column.key}><Typography fontSize={11.5} fontWeight={column.key === 'username' || column.key === 'id' ? 750 : 500} noWrap>{formatCell(row[column.key])}</Typography></TableCell>)}</TableRow>)}{!loading && !(data?.items ?? []).length && <TableRow><TableCell colSpan={Math.max(1, (data?.columns ?? []).length)}><Stack minHeight={220} alignItems="center" justifyContent="center" color="text.secondary"><AssessmentRounded sx={{ fontSize: 42, opacity: .4 }} /><Typography mt={1}>当前条件暂无记录</Typography></Stack></TableCell></TableRow>}</TableBody></Table></TableContainer><TablePagination component="div" count={data?.total ?? 0} page={page} onPageChange={(_, next) => setPage(next)} rowsPerPage={pageSize} onRowsPerPageChange={event => { setPageSize(Number(event.target.value)); setPage(0) }} rowsPerPageOptions={[10, 20, 50, 100]} labelRowsPerPage="每页" /></Card>
+      </Box>
+    </Box>
   </Box>
-
-  return <Box p={{ xs: 2, lg: 2.5 }}>
-    <PageHeader eyebrow="数据中心 / 财务" title="数据报表" description={summary ? `统计区间：${summary.period_start} 至 ${summary.period_end} · 数据来自不可篡改的余额流水` : '统一查询账户余额、上下分和人工调整流水。'} actions={<><Button variant="outlined" startIcon={<DownloadRounded />} disabled={!data?.items.length} onClick={exportCurrentPage}>导出当前页</Button><Button variant="outlined" startIcon={loading ? <CircularProgress size={16} /> : <RefreshRounded />} disabled={loading} onClick={() => void load(true)}>刷新</Button></>} />
-    {reportTabs}
-    {error && <Alert severity="error" sx={{ mt: 2 }} onClose={() => setError('')}>{error}</Alert>}
-    <Alert icon={<InfoOutlined />} severity="info" sx={{ mt: 2 }}>统计全部余额流水：资金操作（上下分/人工调整）、投注结算（下注/撤单/派彩）、福利活动（回水/签到/红包/邀请）和已实际入账的代理利润分账。</Alert>
-    <Paper variant="outlined" sx={{ p: 1.5, mt: 1.5 }}><Stack direction={{ xs: 'column', lg: 'row' }} gap={1} alignItems={{ lg: 'center' }}><TextField placeholder="搜索用户名、备注或操作人" value={draft.query} onChange={event => setDraft(current => ({ ...current, query: event.target.value }))} onKeyDown={event => { if (event.key === 'Enter') apply() }} sx={{ flex: 1, minWidth: { lg: 220 } }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRounded fontSize="small" /></InputAdornment> } }} /><TextField select label="流水类型" value={draft.type} onChange={event => setDraft(current => ({ ...current, type: event.target.value }))} sx={{ minWidth: 170 }}><MenuItem value="all">全部流水</MenuItem><MenuItem value="credit">全部入账</MenuItem><MenuItem value="debit">全部出账</MenuItem><MenuItem value="finance">资金操作</MenuItem><MenuItem value="betting">投注结算</MenuItem><MenuItem value="welfare">福利活动</MenuItem><MenuItem value="share">代理分账</MenuItem><MenuItem value="manual">人工调整</MenuItem><MenuItem value="application_credit">申请上分</MenuItem><MenuItem value="application_debit">申请下分</MenuItem><MenuItem value="bet">下注扣款</MenuItem><MenuItem value="bet_cancel">撤单退款</MenuItem><MenuItem value="settlement">开奖派彩</MenuItem><MenuItem value="rebate">回水</MenuItem><MenuItem value="agent_share">代理利润分账</MenuItem><MenuItem value="checkin">签到</MenuItem><MenuItem value="redpacket">红包</MenuItem><MenuItem value="invite">邀请</MenuItem></TextField><TextField type="date" label="开始日期" value={draft.start} onChange={event => setDraft(current => ({ ...current, start: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} sx={{ minWidth: 150 }} /><TextField type="date" label="结束日期" value={draft.end} onChange={event => setDraft(current => ({ ...current, end: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} sx={{ minWidth: 150 }} /><Button variant="contained" onClick={apply}>查询</Button><Button variant="text" onClick={reset}>重置</Button></Stack><Stack direction="row" gap={.75} flexWrap="wrap" mt={1.25}><Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center', mr: .25 }}>快捷区间</Typography><Button size="small" variant="outlined" onClick={() => selectPeriod(1)}>今日</Button><Button size="small" variant="outlined" onClick={() => selectPeriod(7)}>近 7 天</Button><Button size="small" variant="outlined" onClick={() => selectPeriod(30)}>近 30 天</Button><Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center', ml: { sm: 'auto' } }}>单次最多查询 92 天</Typography></Stack></Paper>
-    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2,1fr)', lg: 'repeat(4,1fr)' }, gap: 1.25, mt: 1.5 }}>{statCards.map(([label, value, Icon, color, hint]) => <Card key={label}><CardContent sx={{ p: '15px !important' }}><Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}><Box minWidth={0}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography fontSize={{ xs: 18, sm: 23 }} fontWeight={850} mt={.4} noWrap color={label === '区间净变化' && Number(value) < 0 ? 'error.main' : 'text.primary'}>{label === '区间净变化' && Number(value) > 0 ? '+' : ''}{money(Number(value))}</Typography><Typography variant="caption" color="text.secondary" noWrap>{hint}</Typography></Box><Box sx={{ width: 39, height: 39, borderRadius: 2.5, flex: '0 0 auto', display: 'grid', placeItems: 'center', color: '#fff', bgcolor: color }}><Icon fontSize="small" /></Box></Stack></CardContent></Card>)}</Box>
-    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', xl: 'minmax(0,1fr) 310px' }, gap: 1.5, mt: 1.5 }}><Card><CardContent><Stack direction="row" alignItems="center" justifyContent="space-between"><Box><Typography fontWeight={850}>资金趋势</Typography><Typography variant="caption" color="text.secondary">绿色为入账，红色为出账；展示区间内最近 {chartPoints.length} 天</Typography></Box><Chip size="small" icon={<ReceiptLongRounded />} label={`${summary?.record_count ?? 0} 条流水`} /></Stack><Box sx={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(chartPoints.length, 1)}, minmax(22px, 1fr))`, height: 212, gap: { xs: .55, sm: 1 }, alignItems: 'end', mt: 2, pt: 2, borderBottom: 1, borderColor: 'divider' }}>{chartPoints.map(point => <Tooltip key={point.date} arrow title={<><div>{point.date}</div><div>入账：{money(point.credit)}</div><div>出账：{money(point.debit)}</div><div>流水：{point.record_count} 笔</div></>}><Stack height="100%" justifyContent="flex-end" alignItems="center" gap={.4} sx={{ cursor: 'default', minWidth: 0 }}><Stack direction="row" alignItems="flex-end" justifyContent="center" gap={.25} flex={1} width="100%"><Box sx={{ width: { xs: 7, sm: 11 }, minHeight: point.credit ? 4 : 0, height: `${Math.max(2, point.credit / chartMax * 100)}%`, borderRadius: '5px 5px 1px 1px', bgcolor: 'success.main', opacity: .86 }} /><Box sx={{ width: { xs: 7, sm: 11 }, minHeight: point.debit ? 4 : 0, height: `${Math.max(2, point.debit / chartMax * 100)}%`, borderRadius: '5px 5px 1px 1px', bgcolor: 'error.main', opacity: .78 }} /></Stack><Typography fontSize={9} color="text.secondary" noWrap>{dayText(point.date)}</Typography></Stack></Tooltip>)}{!chartPoints.length && <Stack gridColumn="1 / -1" height="100%" alignItems="center" justifyContent="center" color="text.secondary"><ReceiptLongRounded sx={{ fontSize: 36, opacity: .45 }} /><Typography variant="caption" mt={1}>当前区间暂无余额流水</Typography></Stack>}</Box><Stack direction="row" gap={1.5} justifyContent="flex-end" mt={1.2}><Legend color="success.main" label="入账" /><Legend color="error.main" label="出账" /></Stack></CardContent></Card><Card><CardContent><Typography fontWeight={850}>分类汇总</Typography><Stack gap={1.3} mt={1.5}><Metric icon={<GroupsRounded fontSize="small" />} label="变动账户" value={`${summary?.active_users ?? 0} 个`} /><Metric icon={<ReceiptLongRounded fontSize="small" />} label="流水笔数" value={`${summary?.record_count ?? 0} 笔`} /><Metric icon={<PendingActionsRounded fontSize="small" />} label="待审核申请" value={`${summary?.pending_applications ?? 0} 笔`} /><Metric icon={<ArrowUpwardRounded fontSize="small" />} label="资金入账" value={money(summary?.finance_credit ?? 0)} /><Metric icon={<ArrowDownwardRounded fontSize="small" />} label="资金出账" value={money(summary?.finance_debit ?? 0)} /><Metric icon={<TrendingUpRounded fontSize="small" />} label="投注派彩" value={money(summary?.betting_credit ?? 0)} /><Metric icon={<TrendingUpRounded fontSize="small" />} label="投注扣款" value={money(summary?.betting_debit ?? 0)} /><Metric icon={<TrendingUpRounded fontSize="small" />} label="福利发放" value={money(summary?.welfare_credit ?? 0)} /><Metric icon={<AccountBalanceWalletRounded fontSize="small" />} label="代理分账入账" value={money(summary?.agent_share_credit ?? 0)} /></Stack><Alert severity="warning" icon={false} sx={{ mt: 1.75, py: .5 }}><Typography fontSize={11}>当前余额是实时值，不受筛选日期影响；分类汇总按当前筛选区间计算。</Typography></Alert></CardContent></Card></Box>
-    <Card sx={{ mt: 1.5 }}>{loading && <Box px={2} py={1}><CircularProgress size={18} /></Box>}<Stack direction={{ xs: 'column', sm: 'row' }} gap={1} justifyContent="space-between" alignItems={{ sm: 'center' }} p={2} pb={1}><Box><Typography fontWeight={850}>余额流水明细</Typography><Typography variant="caption" color="text.secondary">每笔变动均保留变动前后金额和操作来源</Typography></Box><Chip size="small" label={`共 ${data?.total ?? 0} 条`} variant="outlined" /></Stack><TableContainer><Table size="small" sx={{ minWidth: 1030 }}><TableHead><TableRow><TableCell>用户</TableCell><TableCell>来源</TableCell><TableCell align="right">变动金额</TableCell><TableCell align="right">余额变化</TableCell><TableCell>备注</TableCell><TableCell>操作人</TableCell><TableCell>发生时间</TableCell></TableRow></TableHead><TableBody>{data?.items.map(record => <FinancialRow key={record.id} record={record} />)}{!loading && !data?.items.length && <TableRow><TableCell colSpan={7}><Stack minHeight={190} alignItems="center" justifyContent="center" color="text.secondary"><ReceiptLongRounded sx={{ fontSize: 40, opacity: .45 }} /><Typography fontWeight={750} mt={1}>当前筛选条件下暂无余额流水</Typography><Typography variant="caption">审核上分、下分或人工调整后，数据会自动出现在这里</Typography></Stack></TableCell></TableRow>}</TableBody></Table></TableContainer><TablePagination component="div" count={data?.total ?? 0} page={page} onPageChange={(_, next) => setPage(next)} rowsPerPage={pageSize} onRowsPerPageChange={event => { setPageSize(Number(event.target.value)); setPage(0) }} rowsPerPageOptions={[10, 20, 50]} labelRowsPerPage="每页" /></Card>
-  </Box>
-}
-
-function FinancialRow({ record }: { record: FinancialRecord }) {
-  const positive = record.amount >= 0
-  return <TableRow hover><TableCell><Typography fontSize={12} fontWeight={800}>{record.nickname || record.username}</Typography><Typography fontSize={10} color="text.secondary">@{record.username} · ID {record.user_id}</Typography></TableCell><TableCell><Stack direction="row" gap={.5} flexWrap="wrap"><Chip size="small" label={categoryLabels[record.category ?? 'other'] ?? '其他'} variant="outlined" /><Chip size="small" label={ledgerLabels[record.type] ?? record.type} color={ledgerColors[record.type] ?? 'default'} variant="outlined" /></Stack></TableCell><TableCell align="right"><Typography fontWeight={850} color={positive ? 'success.main' : 'error.main'}>{positive ? '+' : ''}{money(record.amount)}</Typography></TableCell><TableCell align="right"><Typography fontSize={12}>{money(record.before)} <Box component="span" color="text.secondary">→</Box> {money(record.after)}</Typography></TableCell><TableCell><Typography fontSize={11} sx={{ maxWidth: 250 }} noWrap>{record.remark || '—'}</Typography></TableCell><TableCell><Typography fontSize={11}>{record.operator || '系统'}</Typography></TableCell><TableCell><Typography fontSize={11}>{dateTime(record.created_at)}</Typography></TableCell></TableRow>
-}
-
-function Legend({ color, label }: { color: string; label: string }) {
-  return <Stack direction="row" alignItems="center" gap={.5}><Box sx={{ width: 8, height: 8, borderRadius: 1, bgcolor: color }} /><Typography variant="caption" color="text.secondary">{label}</Typography></Stack>
-}
-
-function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
-  return <Stack direction="row" alignItems="center" gap={1.1}><Box sx={{ width: 32, height: 32, borderRadius: 2, display: 'grid', placeItems: 'center', color: 'primary.main', bgcolor: 'primary.light', opacity: .9 }}>{icon}</Box><Typography variant="caption" color="text.secondary" flex={1}>{label}</Typography><Typography fontSize={13} fontWeight={850}>{value}</Typography></Stack>
 }

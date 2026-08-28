@@ -7,7 +7,7 @@ import "time"
 type NumberResource struct {
 	ID          uint64    `gorm:"primaryKey" json:"id"`
 	Number      string    `gorm:"size:40;not null;uniqueIndex" json:"number"`
-	Level       string    `gorm:"size:20;not null;default:normal" json:"level"` // normal / rare / epic
+	Level       string    `gorm:"size:20;not null;default:normal" json:"level"`           // normal / rare / epic
 	Status      string    `gorm:"size:20;not null;default:available;index" json:"status"` // available / reserved / granted
 	OwnerUserID *uint64   `gorm:"index" json:"owner_user_id"`
 	PriceCents  int64     `gorm:"not null;default:0" json:"-"`

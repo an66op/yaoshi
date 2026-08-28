@@ -69,6 +69,12 @@ func (s *BetAdminService) EnsureCurrentIssue(game *lottery.Game) (*lottery.Issue
 			status = lottery.IssueStatusSettling
 		}
 		lastError = ""
+	} else if row.Status == lottery.IssueStatusError && strings.HasPrefix(strings.TrimSpace(row.LastError), "对账异常：") {
+		// A successful HTTP sync must not silently reopen a period which still
+		// has no verifiable draw. Only importing that draw or an explicit repair
+		// can clear a reconciliation error.
+		status = lottery.IssueStatusError
+		lastError = row.LastError
 	} else if mode == "external" && (game.SyncStatus == "error" || (game.SyncStatus == "syncing" && strings.TrimSpace(game.LastSyncError) != "")) {
 		status = lottery.IssueStatusError
 		lastError = strings.TrimSpace(game.LastSyncError)
@@ -98,15 +104,15 @@ func (s *BetAdminService) EnsureCurrentIssue(game *lottery.Game) (*lottery.Issue
 	return &row, nil
 }
 
-func (s *BetAdminService) setIssueStatus(gameID, issue, status, message string, drawAt, settledAt *time.Time) {
-	updates := map[string]any{"status": status, "last_error": strings.TrimSpace(message)}
+func (s *BetAdminService) setIssueStatus(gameID, issue, status, message string, drawAt, settledAt *time.Time) error {
+	updates := map[string]any{"status": status, "last_error": limitDBText(message, 500)}
 	if drawAt != nil {
 		updates["draw_at"] = drawAt.UTC()
 	}
 	if settledAt != nil {
 		updates["settled_at"] = settledAt.UTC()
 	}
-	_ = s.db.Model(&lottery.Issue{}).Where("game_id = ? AND issue = ?", gameID, issue).Updates(updates).Error
+	return s.db.Model(&lottery.Issue{}).Where("game_id = ? AND issue = ?", gameID, issue).Updates(updates).Error
 }
 
 func issueAccepting(row *lottery.Issue) bool {

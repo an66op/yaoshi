@@ -1,12 +1,16 @@
 package services
 
 import (
+	"backend/data/models/settings"
 	"backend/data/models/user"
+	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
 	"backend/utils"
+	"backend/ws"
 	"strings"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type TenantAdminService struct{ db *gorm.DB }
@@ -18,6 +22,10 @@ type TenantView struct {
 	Email       string  `json:"email"`
 	Nickname    string  `json:"nickname"`
 	Phone       string  `json:"phone"`
+	RoomCode    string  `json:"room_code"`
+	RoomName    string  `json:"room_name"`
+	RoomLogo    string  `json:"room_logo"`
+	WorkspaceID uint64  `json:"workspace_id"`
 	Balance     float64 `json:"balance"`
 	Status      int     `json:"status"`
 	AgentCount  int64   `json:"agent_count"`
@@ -44,6 +52,9 @@ type TenantPayload struct {
 	Email    string
 	Nickname string
 	Phone    string
+	RoomCode string
+	RoomName string
+	RoomLogo string
 	Remark   string
 	Status   int
 }
@@ -88,6 +99,9 @@ func (s *TenantAdminService) List(query string, page, pageSize int) (*TenantList
 func (s *TenantAdminService) Create(input TenantPayload) (*TenantView, error) {
 	input.Username = strings.TrimSpace(input.Username)
 	input.Email = strings.TrimSpace(input.Email)
+	if err := normalizeTenantRoomPayload(&input); err != nil {
+		return nil, err
+	}
 	if len(input.Username) < 3 || len(input.Username) > 50 {
 		return nil, apperrors.NewBusinessError("INVALID_USERNAME", "登录账号长度应为 3–50 个字符")
 	}
@@ -100,10 +114,24 @@ func (s *TenantAdminService) Create(input TenantPayload) (*TenantView, error) {
 	}
 	row := user.User{Username: input.Username, LoginScope: platformLoginScope, Password: hash, Email: input.Email, Nickname: strings.TrimSpace(input.Nickname), Phone: strings.TrimSpace(input.Phone), Role: "tenant", Remark: strings.TrimSpace(input.Remark), RiskLevel: "normal", Status: normalizeAgentStatus(input.Status)}
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockPublicRoomCodeRegistry(tx); err != nil {
+			return err
+		}
 		if err := ensureAccountAvailable(tx, row.Username, row.Email, 0); err != nil {
 			return err
 		}
-		return tx.Create(&row).Error
+		if input.RoomCode != "" {
+			if err := ensureRoomCodeAvailable(tx, input.RoomCode, 0); err != nil {
+				return err
+			}
+		}
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+		if err := EnsureWorkspaceHierarchy(tx); err != nil {
+			return err
+		}
+		return s.updateDirectRoomTx(tx, row.UserID, input.RoomCode, input.RoomName, input.RoomLogo)
 	}); err != nil {
 		return nil, err
 	}
@@ -113,19 +141,42 @@ func (s *TenantAdminService) Create(input TenantPayload) (*TenantView, error) {
 
 func (s *TenantAdminService) Update(id uint64, input TenantPayload) (*TenantView, error) {
 	input.Email = strings.TrimSpace(input.Email)
+	if err := normalizeTenantRoomPayload(&input); err != nil {
+		return nil, err
+	}
 	var row user.User
-	if err := s.db.Where("user_id = ? AND role = ?", id, "tenant").First(&row).Error; err != nil {
-		return nil, apperrors.NewBusinessError("TENANT_NOT_FOUND", "租户不存在")
-	}
-	if err := ensureAccountAvailable(s.db, row.Username, input.Email, id); err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockPublicRoomCodeRegistry(tx); err != nil {
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ? AND role = ?", id, "tenant").First(&row).Error; err != nil {
+			return apperrors.NewBusinessError("TENANT_NOT_FOUND", "租户不存在")
+		}
+		if err := ensureAccountAvailable(tx, row.Username, input.Email, id); err != nil {
+			return err
+		}
+		if input.RoomCode != "" {
+			if err := ensureRoomCodeAvailable(tx, input.RoomCode, id); err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&row).Updates(map[string]any{"email": input.Email, "nickname": strings.TrimSpace(input.Nickname), "phone": strings.TrimSpace(input.Phone), "remark": strings.TrimSpace(input.Remark), "status": normalizeAgentStatus(input.Status)}).Error; err != nil {
+			return apperrors.NewSystemError("TENANT_UPDATE_FAILED", "保存租户失败", err)
+		}
+		if err := EnsureWorkspaceHierarchy(tx); err != nil {
+			return err
+		}
+		if err := s.updateDirectRoomTx(tx, row.UserID, input.RoomCode, input.RoomName, input.RoomLogo); err != nil {
+			return err
+		}
+		return tx.First(&row, id).Error
+	}); err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&row).Updates(map[string]any{"email": input.Email, "nickname": strings.TrimSpace(input.Nickname), "phone": strings.TrimSpace(input.Phone), "remark": strings.TrimSpace(input.Remark), "status": normalizeAgentStatus(input.Status)}).Error; err != nil {
-		return nil, apperrors.NewSystemError("TENANT_UPDATE_FAILED", "保存租户失败", err)
-	}
-	if err := s.db.First(&row, id).Error; err != nil {
-		return nil, err
-	}
+	// Status and room changes must invalidate every live session immediately.
+	// Disconnecting after the room update also prevents an already-connected
+	// tenant from continuing to receive events for the previous workspace.
+	ws.DisconnectUser(id)
 	view, err := s.toView(row)
 	return &view, err
 }
@@ -138,13 +189,14 @@ func (s *TenantAdminService) ResetPassword(id uint64, password string) error {
 	if err != nil {
 		return err
 	}
-	result := s.db.Model(&user.User{}).Where("user_id = ? AND role = ?", id, "tenant").Update("password", hash)
+	result := s.db.Model(&user.User{}).Where("user_id = ? AND role = ?", id, "tenant").Updates(passwordSessionUpdate(hash))
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
 		return apperrors.NewBusinessError("TENANT_NOT_FOUND", "租户不存在")
 	}
+	ws.DisconnectUser(id)
 	return nil
 }
 
@@ -154,29 +206,105 @@ func (s *TenantAdminService) Dashboard(tenantID uint64) (map[string]any, error) 
 		return nil, apperrors.NewBusinessError("TENANT_NOT_FOUND", "租户不存在")
 	}
 	var agents, activeAgents, members int64
-	agentIDs := s.db.Model(&user.User{}).Select("user_id").Where("role = ? AND parent_tenant_id = ?", "agent", tenantID)
 	if err := s.db.Model(&user.User{}).Where("role = ? AND parent_tenant_id = ?", "agent", tenantID).Count(&agents).Error; err != nil {
 		return nil, err
 	}
 	_ = s.db.Model(&user.User{}).Where("role = ? AND parent_tenant_id = ? AND status = ?", "agent", tenantID, 1).Count(&activeAgents).Error
-	_ = s.db.Model(&user.User{}).Where("role = ? AND parent_agent_id IN (?)", "member", agentIDs).Count(&members).Error
-	return map[string]any{"tenant_id": tenant.UserID, "tenant_name": firstNonEmpty(tenant.Nickname, tenant.Username), "agent_count": agents, "active_agent_count": activeAgents, "member_count": members}, nil
+	_ = s.db.Model(&user.User{}).Where("role = ? AND parent_tenant_id = ? AND parent_agent_id IS NULL", "member", tenantID).Count(&members).Error
+	var workspace workspacemodel.Workspace
+	_ = s.db.Where("owner_user_id = ? AND type = ?", tenantID, workspacemodel.TypeTenant).First(&workspace).Error
+	return map[string]any{"tenant_id": tenant.UserID, "tenant_name": firstNonEmpty(tenant.Nickname, tenant.Username), "workspace_id": workspace.ID, "room_code": workspace.RoomCode, "room_name": workspace.Name, "room_logo": workspace.Logo, "agent_count": agents, "active_agent_count": activeAgents, "member_count": members}, nil
 }
 
 func (s *TenantAdminService) toView(row user.User) (TenantView, error) {
 	var agents, members int64
-	agentIDs := s.db.Model(&user.User{}).Select("user_id").Where("role = ? AND parent_tenant_id = ?", "agent", row.UserID)
 	if err := s.db.Model(&user.User{}).Where("role = ? AND parent_tenant_id = ?", "agent", row.UserID).Count(&agents).Error; err != nil {
 		return TenantView{}, err
 	}
-	if err := s.db.Model(&user.User{}).Where("role = ? AND parent_agent_id IN (?)", "member", agentIDs).Count(&members).Error; err != nil {
+	if err := s.db.Model(&user.User{}).Where("role = ? AND parent_tenant_id = ? AND parent_agent_id IS NULL", "member", row.UserID).Count(&members).Error; err != nil {
 		return TenantView{}, err
 	}
-	view := TenantView{ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone, Balance: centsToAmount(row.BalanceCents), Status: row.Status, AgentCount: agents, MemberCount: members, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount}
+	var workspace workspacemodel.Workspace
+	_ = s.db.Where("owner_user_id = ? AND type = ?", row.UserID, workspacemodel.TypeTenant).First(&workspace).Error
+	view := TenantView{ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone, RoomCode: workspace.RoomCode, RoomName: workspace.Name, RoomLogo: workspace.Logo, WorkspaceID: workspace.ID, Balance: centsToAmount(row.BalanceCents), Status: row.Status, AgentCount: agents, MemberCount: members, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount}
 	if row.LastLoginAt != nil {
 		view.LastLoginAt = row.LastLoginAt.Local().Format("2006-01-02 15:04:05")
 	}
 	return view, nil
+}
+
+func (s *TenantAdminService) updateDirectRoom(tenantID uint64, roomCode, roomName, roomLogo string) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockPublicRoomCodeRegistry(tx); err != nil {
+			return err
+		}
+		return s.updateDirectRoomTx(tx, tenantID, roomCode, roomName, roomLogo)
+	})
+}
+
+func (s *TenantAdminService) updateDirectRoomTx(tx *gorm.DB, tenantID uint64, roomCode, roomName, roomLogo string) error {
+	roomCode = normalizeAgentRoomCode(roomCode)
+	roomName = normalizeAgentRoomName(roomName)
+	if roomCode != "" {
+		if err := validateAgentRoomCode(roomCode); err != nil {
+			return err
+		}
+	}
+	if roomName != "" {
+		if err := validateAgentRoomName(roomName); err != nil {
+			return err
+		}
+	}
+	logo, err := normalizeRoomLogo(roomLogo)
+	if err != nil {
+		return err
+	}
+	var workspace workspacemodel.Workspace
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("owner_user_id = ? AND type = ?", tenantID, workspacemodel.TypeTenant).First(&workspace).Error; err != nil {
+		return err
+	}
+	if roomCode != "" {
+		if err := ensureRoomCodeAvailable(tx, roomCode, tenantID); err != nil {
+			return err
+		}
+	}
+	updates := map[string]any{"logo": logo}
+	if roomCode != "" {
+		updates["room_code"] = roomCode
+	}
+	if roomName != "" {
+		updates["name"] = roomName
+	}
+	if err := tx.Model(&workspace).Updates(updates).Error; err != nil {
+		return err
+	}
+	configUpdates := map[string]any{"room_logo": logo}
+	if roomCode != "" {
+		configUpdates["room_code"] = roomCode
+	}
+	if roomName != "" {
+		configUpdates["room_name"] = roomName
+	}
+	return tx.Model(&settings.SystemConfig{}).Where("workspace_id = ?", workspace.ID).Updates(configUpdates).Error
+}
+
+func normalizeTenantRoomPayload(input *TenantPayload) error {
+	input.RoomCode = normalizeAgentRoomCode(input.RoomCode)
+	input.RoomName = normalizeAgentRoomName(input.RoomName)
+	if input.RoomCode != "" {
+		if err := validateAgentRoomCode(input.RoomCode); err != nil {
+			return err
+		}
+	}
+	if err := validateAgentRoomName(input.RoomName); err != nil {
+		return err
+	}
+	logo, err := normalizeRoomLogo(input.RoomLogo)
+	if err != nil {
+		return err
+	}
+	input.RoomLogo = logo
+	return nil
 }
 
 func ensureAccountAvailable(db *gorm.DB, username, email string, excludeID uint64) error {

@@ -1,0 +1,36 @@
+export const gameLogoPaths: Partial<Record<string, string>> = {
+  'speed-racing': '/images/game-logos/speed-racing.png',
+  'speed-fly': '/images/game-logos/speed-fly.png',
+  'speed-ssc': '/images/game-logos/speed-ssc.png',
+  'sg-fly': '/images/game-logos/sg-fly.png',
+  'sg-ssc': '/images/game-logos/sg-ssc.png',
+  'fly-racing': '/images/game-logos/fly-racing.png',
+  'au-lucky-5': '/images/game-logos/au-lucky-5.png',
+  'au-lucky-10': '/images/game-logos/au-lucky-10.png',
+  'pc-canada': '/images/game-logos/pc-canada.svg',
+  'canada-28': '/images/game-logos/canada-28.png',
+  'canada-20': '/images/game-logos/canada-20.svg',
+  'bingo-mark-six': '/images/game-logos/bingo-mark-six.png',
+  'bingo-racing-a': '/images/game-logos/bingo-racing.png',
+  'bingo-racing-b': '/images/game-logos/bingo-racing.png',
+  'bingo-ssc-1': '/images/game-logos/bingo-ssc-1.svg',
+  'bingo-ssc-2': '/images/game-logos/bingo-ssc-2.svg',
+  'bingo-ssc-3': '/images/game-logos/bingo-ssc-3.svg',
+  'bingo-ssc-4': '/images/game-logos/bingo-ssc-4.svg',
+  'hong-kong-mark-six': '/images/game-logos/hong-kong-mark-six.svg',
+  'happy8-mark-six': '/images/game-logos/happy8-mark-six.png',
+  'new-macau-mark-six': '/images/game-logos/new-macau-mark-six.svg',
+  'old-macau-mark-six': '/images/game-logos/old-macau-mark-six.svg',
+  'official-tw-bingo': '/images/game-logos/official-tw-bingo.svg',
+  'official-tw-super-lotto': '/images/game-logos/official-tw-super-lotto.svg',
+  'official-tw-daily539': '/images/game-logos/official-tw-daily539.svg',
+  'official-tw-lotto649': '/images/game-logos/official-tw-lotto649.svg',
+  'official-fc3d': '/images/game-logos/official-fc3d.svg',
+  'official-kl8': '/images/game-logos/official-kl8.svg',
+  'official-pl3': '/images/game-logos/official-pl3.svg',
+  'official-qxc': '/images/game-logos/official-qxc.svg',
+}
+
+export function gameLogo(gameId?: string) {
+  return gameId ? gameLogoPaths[gameId] : undefined
+}

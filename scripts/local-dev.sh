@@ -5,14 +5,31 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$ROOT_DIR/.local-logs"
 mkdir -p "$LOG_DIR"
 
+# A clean checkout intentionally has no tracked config.yaml. Keep all local
+# defaults here so `make dev` is reproducible, while still allowing developers
+# to override any value from their shell. These credentials are debug-only;
+# release validation rejects them.
+export BACKEND_SERVER_BIND="${BACKEND_SERVER_BIND:-0.0.0.0}"
+export BACKEND_SERVER_PORT="${BACKEND_SERVER_PORT:-8080}"
+export BACKEND_SERVER_MODE="${BACKEND_SERVER_MODE:-debug}"
+export BACKEND_DATABASE_HOST="${BACKEND_DATABASE_HOST:-localhost}"
+export BACKEND_DATABASE_PORT="${BACKEND_DATABASE_PORT:-5432}"
+export BACKEND_DATABASE_USER="${BACKEND_DATABASE_USER:-postgres}"
+export BACKEND_DATABASE_PASSWORD="${BACKEND_DATABASE_PASSWORD:-123456}"
+export BACKEND_DATABASE_DBNAME="${BACKEND_DATABASE_DBNAME:-backend}"
+export BACKEND_DATABASE_SSLMODE="${BACKEND_DATABASE_SSLMODE:-disable}"
+export BACKEND_JWT_SECRET="${BACKEND_JWT_SECRET:-backend_jwt_secret_key_2024}"
+export BACKEND_JWT_EXPIRE="${BACKEND_JWT_EXPIRE:-86400}"
+export BACKEND_SECURITY_DATA_ENCRYPTION_KEY="${BACKEND_SECURITY_DATA_ENCRYPTION_KEY:-local-data-encryption-key-7xlottery-dev-2026}"
+
 for command_name in go npm curl jq; do
   command -v "$command_name" >/dev/null 2>&1 || { echo "缺少命令：$command_name" >&2; exit 1; }
 done
 
 if command -v pg_isready >/dev/null 2>&1; then
-  pg_isready -h "${BACKEND_DATABASE_HOST:-localhost}" -p "${BACKEND_DATABASE_PORT:-5432}" -U "${BACKEND_DATABASE_USER:-postgres}" -d "${BACKEND_DATABASE_DBNAME:-backend}" >/dev/null
+  pg_isready -h "$BACKEND_DATABASE_HOST" -p "$BACKEND_DATABASE_PORT" -U "$BACKEND_DATABASE_USER" -d "$BACKEND_DATABASE_DBNAME" >/dev/null
 elif [[ -x /Library/PostgreSQL/17/bin/pg_isready ]]; then
-  /Library/PostgreSQL/17/bin/pg_isready -h "${BACKEND_DATABASE_HOST:-localhost}" -p "${BACKEND_DATABASE_PORT:-5432}" -U "${BACKEND_DATABASE_USER:-postgres}" -d "${BACKEND_DATABASE_DBNAME:-backend}" >/dev/null
+  /Library/PostgreSQL/17/bin/pg_isready -h "$BACKEND_DATABASE_HOST" -p "$BACKEND_DATABASE_PORT" -U "$BACKEND_DATABASE_USER" -d "$BACKEND_DATABASE_DBNAME" >/dev/null
 else
   echo "未找到 pg_isready，请先确认 PostgreSQL 已启动" >&2
   exit 1

@@ -1,6 +1,7 @@
 package services
 
 import (
+	workspacemodel "backend/data/models/workspace"
 	"errors"
 	"testing"
 	"time"
@@ -26,10 +27,26 @@ func TestClampRoomActivity(t *testing.T) {
 	}
 }
 
+func TestRobotRunAllowanceProtectsDailyAndPendingBacklog(t *testing.T) {
+	setting := workspacemodel.RobotSetting{DailyBetLimit: 200, MaxPendingBets: 50}
+	if got, reason := robotRunAllowance(setting, 198, 10); got != 2 || reason != "" {
+		t.Fatalf("daily allowance = %d, reason %q; want 2 and empty", got, reason)
+	}
+	if got, reason := robotRunAllowance(setting, 10, 49); got != 1 || reason != "" {
+		t.Fatalf("pending allowance = %d, reason %q; want 1 and empty", got, reason)
+	}
+	if got, reason := robotRunAllowance(setting, 200, 0); got != 0 || reason == "" {
+		t.Fatalf("daily guard = %d, reason %q; want stopped", got, reason)
+	}
+	if got, reason := robotRunAllowance(setting, 0, 50); got != 0 || reason == "" {
+		t.Fatalf("pending guard = %d, reason %q; want stopped", got, reason)
+	}
+}
+
 func TestRoomActivityStatusAccumulatesRuns(t *testing.T) {
 	service := &RoomActivityService{}
 	config := roomActivityConfig{
-		Enabled: true, IntervalSecs: 8, BotsPerRoom: 6, BetsPerCycle: 2, ChatChancePct: 0,
+		Enabled: true, IntervalSecs: 8, BotsPerRoom: defaultWorkspaceRobotCount, BetsPerCycle: 2, ChatChancePct: 0,
 	}
 	firstRun := time.Date(2026, time.August, 24, 3, 10, 0, 0, time.UTC)
 	service.recordActivityRun(config, firstRun, 2, 8, 12, 4, 0, nil)

@@ -17,7 +17,7 @@ func ensureSeededBalance(tx *gorm.DB, account *user.User, minimumCents, targetCe
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		if account.BalanceCents != 0 {
 			if err := tx.Create(&user.BalanceTransaction{
-				UserID: account.UserID, AmountCents: account.BalanceCents,
+				WorkspaceID: account.WorkspaceID, UserID: account.UserID, AmountCents: account.BalanceCents,
 				BeforeCents: 0, AfterCents: account.BalanceCents,
 				Type: "opening_balance", Remark: label + "期初余额", Operator: "系统初始化",
 			}).Error; err != nil {
@@ -30,7 +30,7 @@ func ensureSeededBalance(tx *gorm.DB, account *user.User, minimumCents, targetCe
 		// Older versions seeded these accounts without a ledger. Preserve the
 		// real current balance while explicitly recording the historic repair.
 		if err := tx.Create(&user.BalanceTransaction{
-			UserID: account.UserID, AmountCents: account.BalanceCents - last.AfterCents,
+			WorkspaceID: account.WorkspaceID, UserID: account.UserID, AmountCents: account.BalanceCents - last.AfterCents,
 			BeforeCents: last.AfterCents, AfterCents: account.BalanceCents,
 			Type: "seed_reconciliation", Remark: label + "历史余额补录", Operator: "系统迁移",
 		}).Error; err != nil {
@@ -49,7 +49,7 @@ func ensureSeededBalance(tx *gorm.DB, account *user.User, minimumCents, targetCe
 		return err
 	}
 	if err := tx.Create(&user.BalanceTransaction{
-		UserID: account.UserID, AmountCents: targetCents - before,
+		WorkspaceID: account.WorkspaceID, UserID: account.UserID, AmountCents: targetCents - before,
 		BeforeCents: before, AfterCents: targetCents,
 		Type: "system_topup", Remark: label + "自动补充", Operator: "系统初始化",
 	}).Error; err != nil {

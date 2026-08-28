@@ -76,7 +76,7 @@ function ResultCells({ mode, numbers, gameBalls }: { mode: ResultMode; numbers: 
   </div>
 }
 
-export function DrawResults({ games, initialGameId, onBack }: { games: Game[]; initialGameId?: string; onBack: () => void }) {
+export function DrawResults({ games, initialGameId, onBack, onSelectGame }: { games: Game[]; initialGameId?: string; onBack: () => void; onSelectGame: (gameId: string) => void }) {
   const [selectedGameId, setSelectedGameId] = useState(initialGameId ?? games[0]?.id ?? '')
   const [selectedDate, setSelectedDate] = useState('')
   const [gamePickerOpen, setGamePickerOpen] = useState(false)
@@ -88,12 +88,20 @@ export function DrawResults({ games, initialGameId, onBack }: { games: Game[]; i
   const availableModes = selectedGame?.balls.length >= 10 ? resultModes : resultModes.filter((item) => item.id !== 'trend')
 
   useEffect(() => {
-    if (initialGameId && games.some((game) => game.id === initialGameId)) {
+    if (initialGameId) {
       setSelectedGameId(initialGameId)
       setSelectedDate('')
       setResultMode('numbers')
     }
-  }, [games, initialGameId])
+  }, [initialGameId])
+
+  // `games` is rebuilt every second so the lobby countdown can tick. Keep a
+  // valid manual selection across those refreshes; only fall back when that
+  // game was actually disabled or removed.
+  useEffect(() => {
+    if (!games.length) return
+    setSelectedGameId((current) => games.some((game) => game.id === current) ? current : games[0].id)
+  }, [games])
 
   if (!selectedGame) return null
 
@@ -104,7 +112,7 @@ export function DrawResults({ games, initialGameId, onBack }: { games: Game[]; i
       <span aria-hidden="true" />
     </header>
     <section className="draw-results-filters">
-      <div className="draw-game-picker"><button className="draw-game-picker-trigger" aria-expanded={gamePickerOpen} onClick={() => setGamePickerOpen((open) => !open)}><span>彩种</span><b>{selectedGame.title}</b><i>⌄</i></button>{gamePickerOpen && <div className="draw-game-picker-menu">{games.map((item) => <button className={item.id === selectedGameId ? 'active' : ''} key={item.id} onClick={() => { setSelectedGameId(item.id); setSelectedDate(''); setResultMode('numbers'); setGamePickerOpen(false) }}><span style={{ background: item.color }}>{item.tag.slice(0, 2)}</span><b>{item.title}</b>{item.id === selectedGameId && <i>✓</i>}</button>)}</div>}</div>
+      <div className="draw-game-picker"><button className="draw-game-picker-trigger" aria-expanded={gamePickerOpen} onClick={() => setGamePickerOpen((open) => !open)}><span>彩种</span><b>{selectedGame.title}</b><i>⌄</i></button>{gamePickerOpen && <div className="draw-game-picker-menu">{games.map((item) => <button className={item.id === selectedGameId ? 'active' : ''} key={item.id} onClick={() => { setSelectedGameId(item.id); setSelectedDate(''); setResultMode('numbers'); setGamePickerOpen(false); onSelectGame(item.id) }}><span style={{ background: item.color }}>{item.tag.slice(0, 2)}</span><b>{item.title}</b>{item.id === selectedGameId && <i>✓</i>}</button>)}</div>}</div>
       <label className="draw-date-picker"><span>日期</span><input aria-label="选择开奖日期" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />{!selectedDate && <i aria-hidden="true">年 / 月 / 日</i>}<em aria-hidden="true" /></label>
       {selectedDate && <button onClick={() => setSelectedDate('')}>全部日期</button>}
     </section>

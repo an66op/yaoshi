@@ -792,11 +792,59 @@
 .wallet-rebate-card footer { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; padding-top: 9px; border-top: 1px solid #ffffff45; }
 .wallet-rebate-card footer b { display: grid; gap: 2px; color: #d8ffff; font-size: 10px; font-weight: 500; }
 .wallet-rebate-card footer i { color: #fff; font: 700 15px "Rajdhani", monospace; font-style: normal; }
-.wallet-invite-card { display: grid; gap: 6px; padding: 16px; border: 1px solid #bfe6e7; border-radius: 17px; background: radial-gradient(circle at 91% 5%, #62d9d63a, transparent 33%), #f4ffff; }
-.wallet-invite-card span { color: #2c8790; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
-.wallet-invite-card strong { color: #194c5d; font: 700 28px "DM Mono", monospace; letter-spacing: .11em; }
-.wallet-invite-card p { margin: 1px 0 6px; color: #63838d; font-size: 11px; line-height: 1.55; }
-.wallet-invite-card button { min-height: 38px; border: 1px solid #79c9cb; border-radius: 11px; background: #e5f8f7; color: #167b84; font-size: 12px; font-weight: 700; }
+.wallet-invite-hero { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 82px; align-items: center; min-height: 134px; padding: 18px 16px; overflow: hidden; border: 1px solid #2faeb84c; border-radius: 18px; background: radial-gradient(circle at 90% 5%, #b9fff090, transparent 33%), linear-gradient(135deg, #087aa1, #18a7ad 62%, #63caae); box-shadow: 0 12px 24px #107b9630; color: #fff; }
+.wallet-invite-hero::after { position: absolute; right: -38px; bottom: -69px; width: 150px; height: 150px; border: 1px solid #e2ffff66; border-radius: 50%; content: ''; }
+.wallet-invite-hero > div:first-child { position: relative; z-index: 1; min-width: 0; }
+.wallet-invite-hero > div:first-child > span { color: #bafff4; font-size: 8px; font-weight: 800; letter-spacing: .16em; }
+.wallet-invite-hero h2 { margin: 5px 0 6px; color: #fff; font-size: 23px; line-height: 1.15; }
+.wallet-invite-hero p { max-width: 225px; margin: 0; color: #e5ffff; font-size: 11px; line-height: 1.55; }
+.wallet-invite-gift { position: relative; z-index: 1; display: grid; place-items: center; width: 68px; height: 68px; justify-self: end; border: 1px solid #fff9; border-radius: 20px; background: linear-gradient(145deg, #fff5c9, #ffc45f); box-shadow: inset 0 1px #fff, 0 10px 18px #07536b47; transform: rotate(4deg); }
+.wallet-invite-gift i { color: #d26a34; font-size: 28px; font-style: normal; font-weight: 900; transform: rotate(-4deg); }
+.wallet-invite-gift span { position: absolute; width: 9px; height: 9px; border-radius: 50%; background: #fff8aa; box-shadow: 0 0 0 4px #fff2; }
+.wallet-invite-gift span:first-of-type { top: 7px; right: 7px; }
+.wallet-invite-gift span:last-of-type { bottom: 9px; left: 7px; width: 5px; height: 5px; }
+
+.wallet-invite-code-card { display: grid; gap: 10px; margin-top: 12px; padding: 14px; border: 1px solid #d5e9eb; border-radius: 17px; background: linear-gradient(145deg, #fff, #f4fbfb); box-shadow: 0 8px 20px #2b6e7c12; }
+.wallet-invite-code-card > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.wallet-invite-code-card > header > div { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.wallet-invite-code-card > header small { color: #638792; font-size: 10px; }
+.wallet-invite-code-card > header b { overflow: hidden; color: #315a68; font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.wallet-invite-code-card > header em { flex: none; padding: 3px 7px; border-radius: 999px; background: #e2f7f2; color: #168774; font-size: 8px; font-style: normal; font-weight: 700; }
+.wallet-invite-code-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.wallet-invite-code-row strong { overflow: hidden; color: #17495b; font-family: Arial, "Helvetica Neue", system-ui, sans-serif; font-size: clamp(25px, 8vw, 34px); font-weight: 800; letter-spacing: .09em; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wallet-invite-code-row button,.wallet-invite-link button { min-height: 33px; padding: 0 12px; border: 1px solid #7ecdd0; border-radius: 10px; background: #e8f8f7; color: #137f88; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.wallet-invite-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 7px 7px 7px 10px; border: 1px solid #e0ecee; border-radius: 11px; background: #f4f9fa; }
+.wallet-invite-link > span { overflow: hidden; color: #7b969e; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.wallet-invite-share { min-height: 43px; border: 0; border-radius: 12px; background: linear-gradient(110deg, #0a85a1, #20b4ac); box-shadow: 0 7px 14px #0d89952a; color: #fff; font-size: 13px; font-weight: 800; }
+.wallet-invite-share span { display: inline-grid; place-items: center; width: 19px; height: 19px; margin-right: 7px; border: 1px solid #dfffff80; border-radius: 7px; font-size: 11px; }
+.wallet-invite-share:active,.wallet-invite-code-row button:active,.wallet-invite-link button:active { transform: translateY(1px); }
+
+.wallet-invite-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.wallet-invite-stats > div { min-height: 66px; padding: 11px; border: 1px solid #dfedef; border-radius: 13px; background: linear-gradient(150deg, #faffff, #f0f8f9); }
+.wallet-invite-stats small { display: block; color: #839da5; font-size: 9px; }
+.wallet-invite-stats b { display: block; margin-top: 6px; overflow: hidden; color: #1e5362; font-family: Arial, "Helvetica Neue", system-ui, sans-serif; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wallet-invite-stats b i { color: #71929b; font-size: 9px; font-style: normal; font-weight: 600; }
+
+.wallet-invite-steps,.wallet-invite-rules { margin-top: 12px; padding: 14px; border: 1px solid #dfedef; border-radius: 16px; background: #fff; }
+.wallet-invite-steps > header,.wallet-invite-rules > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.wallet-invite-steps > header b,.wallet-invite-rules > header b { color: #275362; font-size: 13px; }
+.wallet-invite-steps > header small,.wallet-invite-rules > header span { color: #97aeb4; font-size: 8px; letter-spacing: .12em; }
+.wallet-invite-steps ol { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.wallet-invite-steps li { position: relative; display: grid; justify-items: center; gap: 6px; min-width: 0; text-align: center; }
+.wallet-invite-steps li:not(:last-child)::after { position: absolute; top: 14px; left: calc(50% + 20px); width: calc(100% - 40px); border-top: 1px dashed #95d3d4; content: ''; }
+.wallet-invite-steps li > i { position: relative; z-index: 1; display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid #8dd6d7; border-radius: 10px; background: #e6f8f6; color: #168b91; font-size: 11px; font-style: normal; font-weight: 800; }
+.wallet-invite-steps li > div { min-width: 0; }
+.wallet-invite-steps li b { display: block; color: #335d69; font-size: 10px; }
+.wallet-invite-steps li small { display: block; margin-top: 3px; color: #8aa1a8; font-size: 8px; line-height: 1.4; }
+.wallet-invite-rules { padding-bottom: 11px; }
+.wallet-invite-rules > header { margin-bottom: 8px; }
+.wallet-invite-rules p { display: grid; grid-template-columns: 10px 1fr; gap: 3px; margin: 0; padding: 4px 0; color: #78929a; font-size: 9px; line-height: 1.5; }
+.wallet-invite-rules p i { color: #20a8a7; font-style: normal; }
+.wallet-invite-error { display: grid; justify-items: center; padding: 36px 16px; text-align: center; }
+.wallet-invite-error > i { display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid #b8dcdf; border-radius: 13px; background: #eef9f9; color: #278f98; font-size: 18px; font-style: normal; font-weight: 800; }
+.wallet-invite-error b { margin-top: 10px; color: #315967; font-size: 13px; }
+.wallet-invite-error p { margin: 5px 0 12px; color: #829ba3; font-size: 10px; }
+.wallet-invite-error button { min-height: 35px; padding: 0 17px; border: 1px solid #80cbd0; border-radius: 10px; background: #e9f8f7; color: #177f89; font-size: 11px; font-weight: 800; }
 .theme-night .wallet-subpage { background: radial-gradient(circle at 88% 0, #27b8c427 0, transparent 28%), linear-gradient(180deg, #061a32, #092945); }
 .theme-night .wallet-subpage-body { border-color: #4bd4dc35; background: #0c2b47ed; box-shadow: 0 14px 30px #00000024, inset 0 1px #b6ffff12; }
 .theme-night .wallet-subpage-heading { color: #8bc4cb; }
@@ -856,18 +904,26 @@
 .theme-night .wallet-row b,
 .theme-night .wallet-application-row strong,
 .theme-night .wallet-bet-row strong,
-.theme-night .wallet-channel-card b,
-.theme-night .wallet-invite-card strong { color: #e6fbfb; }
+.theme-night .wallet-channel-card b { color: #e6fbfb; }
 .theme-night .wallet-row small,
 .theme-night .wallet-application-row > p,
 .theme-night .wallet-channel-card small,
 .theme-night .wallet-channel-card p { color: #8eb9c2; }
 .theme-night .wallet-channel-card,
 .theme-night .wallet-stat-grid > div { border-color: #4bd4dc2d; background: #092942; }
-.theme-night .wallet-invite-card { border-color: #4bd4dc35; background: radial-gradient(circle at 91% 5%, #42d3d233, transparent 33%), #0a304b; }
-.theme-night .wallet-invite-card span { color: #79dfe0; }
-.theme-night .wallet-invite-card p { color: #a1cbd0; }
-.theme-night .wallet-invite-card button { border-color: #4bd4dc58; background: #10455a; color: #a5ffff; }
+.theme-night .wallet-invite-hero { border-color: #70ffff46; background: radial-gradient(circle at 90% 5%, #51d7ca3d, transparent 33%), linear-gradient(135deg, #075273, #087d83 62%, #248a79); box-shadow: 0 12px 24px #0005; }
+.theme-night .wallet-invite-code-card,.theme-night .wallet-invite-steps,.theme-night .wallet-invite-rules { border-color: #4bd4dc31; background: #0a2943; box-shadow: none; }
+.theme-night .wallet-invite-code-card > header small,.theme-night .wallet-invite-link > span,.theme-night .wallet-invite-stats small,.theme-night .wallet-invite-steps li small,.theme-night .wallet-invite-rules p { color: #8fb8bf; }
+.theme-night .wallet-invite-code-card > header b,.theme-night .wallet-invite-code-row strong,.theme-night .wallet-invite-stats b,.theme-night .wallet-invite-steps > header b,.theme-night .wallet-invite-rules > header b,.theme-night .wallet-invite-steps li b,.theme-night .wallet-invite-error b { color: #e4fafa; }
+.theme-night .wallet-invite-code-card > header em { background: #164d50; color: #83eee2; }
+.theme-night .wallet-invite-code-row button,.theme-night .wallet-invite-link button,.theme-night .wallet-invite-error button { border-color: #4bd4dc55; background: #103d52; color: #9df8f1; }
+.theme-night .wallet-invite-link { border-color: #4bd4dc24; background: #071f36; }
+.theme-night .wallet-invite-stats > div { border-color: #4bd4dc29; background: #08253d; }
+.theme-night .wallet-invite-stats b i { color: #8cb8c0; }
+.theme-night .wallet-invite-steps li > i { border-color: #4bd4dc61; background: #104454; color: #94fff5; }
+.theme-night .wallet-invite-steps li:not(:last-child)::after { border-color: #4bd4dc4f; }
+.theme-night .wallet-invite-error > i { border-color: #4bd4dc42; background: #0d3b50; color: #8df7f1; }
+.theme-night .wallet-invite-error p { color: #8eb8c0; }
 .wallet-load-more { display: block; width: max-content; margin: 13px auto 4px; padding: 8px 13px; border: 1px solid #8ad8d5; border-radius: 999px; background: #eefaf9; color: #158b8b; font-size: 10px; font-weight: 700; }
 .wallet-load-more:disabled { opacity: .68; }
 .theme-night .wallet-load-more { border-color: #4bc6ca70; background: #103b56; color: #b8eff1; }
@@ -892,4 +948,17 @@
 }
 .wallet-header.wallet-header-back > span {
   grid-column: 3;
+}
+
+@media (max-width: 350px) {
+  .wallet-subpage-body:has(.wallet-invite-hero) { margin-inline: 9px; padding-inline: 11px; }
+  .wallet-invite-hero { grid-template-columns: minmax(0, 1fr) 60px; min-height: 122px; padding: 15px 13px; }
+  .wallet-invite-hero h2 { font-size: 20px; }
+  .wallet-invite-hero p { font-size: 10px; }
+  .wallet-invite-gift { width: 53px; height: 53px; border-radius: 16px; }
+  .wallet-invite-gift i { font-size: 23px; }
+  .wallet-invite-code-row strong { font-size: 23px; letter-spacing: .06em; }
+  .wallet-invite-code-row button,.wallet-invite-link button { padding-inline: 9px; }
+  .wallet-invite-steps,.wallet-invite-rules { padding-inline: 11px; }
+  .wallet-invite-steps li small { font-size: 7px; }
 }

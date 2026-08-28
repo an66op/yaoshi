@@ -25,7 +25,7 @@ func TestParseReportPeriodRejectsInvalidRange(t *testing.T) {
 }
 
 func TestValidateLedgerType(t *testing.T) {
-	for _, value := range []string{"", "all", "credit", "debit", "manual", "application_credit", "application_debit"} {
+	for _, value := range []string{"", "all", "credit", "debit", "manual", "application_credit", "application_debit", "reconciliation_refund"} {
 		if err := validateLedgerType(value); err != nil {
 			t.Fatalf("%q should be valid: %v", value, err)
 		}

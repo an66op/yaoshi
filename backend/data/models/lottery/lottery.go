@@ -1,32 +1,52 @@
 package lottery
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 // Game is the operational configuration displayed in the admin dashboard.
 // Financial limits and play rules will be kept in separate models so this
 // table stays safe to query frequently from the live dashboard.
 type Game struct {
-	ID            string     `gorm:"primaryKey;size:40" json:"id"`
-	Code          string     `gorm:"size:40;uniqueIndex;not null" json:"code"`
-	Name          string     `gorm:"size:80;not null" json:"name"`
-	Category      string     `gorm:"size:40;not null" json:"category"`
-	Badge         string     `gorm:"size:24;not null" json:"badge"`
-	BadgeColor    string     `gorm:"size:24;not null" json:"badge_color"`
-	Enabled       bool       `gorm:"not null;default:true" json:"enabled"`
-	SortOrder     int        `gorm:"not null;default:0" json:"sort_order"`
-	DrawInterval  int        `gorm:"not null;default:300" json:"draw_interval"`
-	NextDrawAt    time.Time  `json:"next_draw_at"`
-	SourceKind    string     `gorm:"size:20;not null;default:platform" json:"source_kind"`
-	SourceName    string     `gorm:"size:80" json:"source_name"`
-	SourceURL     string     `gorm:"size:320" json:"source_url"`
-	SyncStatus    string     `gorm:"size:20;not null;default:idle" json:"sync_status"`
-	LastSyncAt    *time.Time `json:"last_sync_at"`
-	LastSyncError string     `gorm:"size:500" json:"last_sync_error"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID             string     `gorm:"primaryKey;size:40" json:"id"`
+	Code           string     `gorm:"size:40;uniqueIndex;not null" json:"code"`
+	Name           string     `gorm:"size:80;not null" json:"name"`
+	Category       string     `gorm:"size:40;not null" json:"category"`
+	LobbyCategory  string     `gorm:"size:40;not null;default:'';index" json:"lobby_category"`
+	LobbySortOrder int        `gorm:"not null;default:0" json:"lobby_sort_order"`
+	Badge          string     `gorm:"size:24;not null" json:"badge"`
+	BadgeColor     string     `gorm:"size:24;not null" json:"badge_color"`
+	Enabled        bool       `gorm:"not null;default:true" json:"enabled"`
+	SortOrder      int        `gorm:"not null;default:0" json:"sort_order"`
+	DrawInterval   int        `gorm:"not null;default:300" json:"draw_interval"`
+	NextDrawAt     time.Time  `json:"next_draw_at"`
+	SourceKind     string     `gorm:"size:20;not null;default:platform" json:"source_kind"`
+	SourceName     string     `gorm:"size:80" json:"source_name"`
+	SourceURL      string     `gorm:"size:320" json:"source_url"`
+	SyncStatus     string     `gorm:"size:20;not null;default:idle" json:"sync_status"`
+	LastSyncAt     *time.Time `json:"last_sync_at"`
+	LastSyncError  string     `gorm:"size:500" json:"last_sync_error"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 func (Game) TableName() string { return "lottery_games" }
+
+// LobbyCategory is the administrator-managed shelf shown in the member lobby.
+// A game with an empty LobbyCategory remains visible in administration as
+// "unclassified", but cannot be enabled for members until it is assigned.
+type LobbyCategory struct {
+	ID        uint64         `gorm:"primaryKey" json:"id"`
+	Name      string         `gorm:"size:40;not null;uniqueIndex" json:"name"`
+	SortOrder int            `gorm:"not null;default:0" json:"sort_order"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (LobbyCategory) TableName() string { return "lottery_lobby_categories" }
 
 const (
 	IssueStatusPending   = "pending"

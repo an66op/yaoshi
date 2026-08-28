@@ -4,7 +4,9 @@ import (
 	"backend/accesscontrol"
 	"backend/data/models/application"
 	"backend/data/models/user"
+	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
+	"backend/ws"
 	"fmt"
 	"math"
 	"strings"
@@ -18,6 +20,8 @@ type ApplicationAdminService struct{ db *gorm.DB }
 
 type AdminApplication struct {
 	ID                  uint64     `json:"id"`
+	RequestID           string     `json:"request_id,omitempty"`
+	WorkspaceID         uint64     `json:"workspace_id"`
 	UserID              uint64     `json:"user_id"`
 	Username            string     `json:"username"`
 	AccountType         string     `json:"account_type"`
@@ -25,16 +29,22 @@ type AdminApplication struct {
 	PaymentType         string     `json:"payment_type"`
 	PaymentAccountID    uint64     `json:"payment_account_id"`
 	PaymentAccountLabel string     `json:"payment_account_label"`
-	RoomScope           string     `json:"-"`
+	RoomScope           string     `json:"room_scope"`
 	TargetRoomCode      string     `json:"target_room_code,omitempty"`
 	GameID              string     `json:"game_id,omitempty"`
-	ChatMessageID       uint64     `json:"-"`
+	ChatMessageID       uint64     `json:"chat_message_id,omitempty"`
+	UserBalance         float64    `json:"user_balance"`
+	BalanceBefore       *float64   `json:"balance_before,omitempty"`
+	BalanceAfter        *float64   `json:"balance_after,omitempty"`
+	RoomCode            string     `json:"room_code,omitempty"`
+	RoomName            string     `json:"room_name,omitempty"`
 	RequestedAmount     float64    `json:"requested_amount"`
 	ReceivedAmount      float64    `json:"received_amount"`
 	Remark              string     `json:"remark"`
 	Status              string     `json:"status"`
 	Operator            string     `json:"operator"`
 	ReviewRemark        string     `json:"review_remark"`
+	OddsMultiplier      float64    `json:"odds_multiplier"`
 	ReviewedAt          *time.Time `json:"reviewed_at"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
@@ -42,7 +52,9 @@ type AdminApplication struct {
 
 type ApplicationFilter struct {
 	Query, Status, RequestType, Date string
+	Start, End                       string
 	UserID                           uint64
+	WorkspaceID                      uint64
 	Page, PageSize                   int
 }
 
@@ -54,19 +66,23 @@ type ApplicationList struct {
 }
 
 type ApplicationStats struct {
-	Pending       int64   `json:"pending"`
-	ApprovedToday int64   `json:"approved_today"`
-	RejectedToday int64   `json:"rejected_today"`
-	TodayAmount   float64 `json:"today_amount"`
+	Pending           int64            `json:"pending"`
+	PendingByCategory map[string]int64 `json:"pending_by_category"`
+	ApprovedToday     int64            `json:"approved_today"`
+	RejectedToday     int64            `json:"rejected_today"`
+	TodayAmount       float64          `json:"today_amount"`
 }
 
 type CreateApplicationInput struct {
 	UserID           uint64
+	WorkspaceID      uint64
+	RequestID        string
 	RequestType      string
 	PaymentType      string
 	PaymentAccountID uint64
 	AllowManualDebit bool
 	RoomScope        string
+	TargetRoomCode   string
 	GameID           string
 	ChatMessageID    uint64
 	Amount           float64
@@ -76,6 +92,7 @@ type CreateApplicationInput struct {
 type ReviewApplicationInput struct {
 	Decision       string
 	ReceivedAmount float64
+	OddsMultiplier *float64
 	Remark         string
 	Operator       string
 }
@@ -85,72 +102,234 @@ func NewApplicationAdminService(db *gorm.DB) *ApplicationAdminService {
 }
 
 func (s *ApplicationAdminService) List(filter ApplicationFilter) (*ApplicationList, error) {
+	return s.list(filter, false)
+}
+
+// ListForPlatform deliberately excludes room-entry requests. A join request
+// belongs to its target workspace and is visible only to that workspace owner.
+func (s *ApplicationAdminService) ListForPlatform(filter ApplicationFilter) (*ApplicationList, error) {
+	return s.list(filter, true)
+}
+
+func (s *ApplicationAdminService) list(filter ApplicationFilter, excludeJoin bool) (*ApplicationList, error) {
 	if filter.Page < 1 {
 		filter.Page = 1
 	}
 	if filter.PageSize < 1 || filter.PageSize > 100 {
 		filter.PageSize = 20
 	}
-	query := s.db.Model(&application.Application{})
-	if keyword := strings.TrimSpace(filter.Query); keyword != "" {
-		like := "%" + strings.ToLower(keyword) + "%"
-		query = query.Where("LOWER(username) LIKE ? OR LOWER(remark) LIKE ? OR LOWER(review_remark) LIKE ?", like, like, like)
-	}
-	if filter.Status != "" && filter.Status != "all" {
-		query = query.Where("status = ?", filter.Status)
-	}
-	query = filterApplicationCategory(query, filter.RequestType)
-	if filter.Date != "" {
-		if day, err := time.ParseInLocation("2006-01-02", filter.Date, time.Local); err == nil {
-			query = query.Where("created_at >= ? AND created_at < ?", day, day.AddDate(0, 0, 1))
-		}
-	}
-	if filter.UserID > 0 {
-		query = query.Where("user_id = ?", filter.UserID)
-	}
+	query := scopedApplicationQuery(s.db, filter.WorkspaceID, excludeJoin)
+	query = applyApplicationFilters(query, filter)
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		return nil, err
 	}
 	var rows []application.Application
-	if err := query.Order("CASE WHEN status = 'pending' THEN 0 ELSE 1 END, created_at desc").Offset((filter.Page - 1) * filter.PageSize).Limit(filter.PageSize).Find(&rows).Error; err != nil {
+	if err := query.Order("CASE WHEN status = 'pending' THEN 0 ELSE 1 END, CASE WHEN status = 'pending' THEN created_at END ASC, created_at DESC").Offset((filter.Page - 1) * filter.PageSize).Limit(filter.PageSize).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	items := make([]AdminApplication, 0, len(rows))
 	for _, row := range rows {
 		items = append(items, adminApplication(row))
 	}
+	if err := s.hydrateApplicationViews(items); err != nil {
+		return nil, err
+	}
 	return &ApplicationList{Items: items, Total: total, Page: filter.Page, PageSize: filter.PageSize}, nil
 }
 
+// applyApplicationFilters is shared by the platform, tenant and agent lists.
+// Callers provide the ownership/workspace scope first so common filters cannot
+// widen the authenticated query.
+func applyApplicationFilters(query *gorm.DB, filter ApplicationFilter) *gorm.DB {
+	if keyword := strings.TrimSpace(filter.Query); keyword != "" {
+		like := "%" + strings.ToLower(keyword) + "%"
+		query = query.Where("LOWER(username) LIKE ? OR LOWER(remark) LIKE ? OR LOWER(review_remark) LIKE ? OR LOWER(request_id) LIKE ? OR CAST(id AS TEXT) LIKE ?", like, like, like, like, like)
+	}
+	if filter.Status != "" && filter.Status != "all" {
+		query = query.Where("status = ?", filter.Status)
+	}
+	query = filterApplicationCategory(query, filter.RequestType)
+	start, end, ok := parseReportDateRange(filter.Start, filter.End)
+	if !ok && strings.TrimSpace(filter.Date) != "" {
+		start, end, ok = parseReportDateRange(filter.Date, filter.Date)
+	}
+	if ok {
+		query = query.Where("created_at >= ? AND created_at < ?", start, end)
+	}
+	if filter.UserID > 0 {
+		query = query.Where("user_id = ?", filter.UserID)
+	}
+	return query
+}
+
 func (s *ApplicationAdminService) Stats() (*ApplicationStats, error) {
-	now := time.Now()
-	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	stats := &ApplicationStats{}
-	if err := s.db.Model(&application.Application{}).Where("status = 'pending'").Count(&stats.Pending).Error; err != nil {
+	return s.StatsForPlatform(0)
+}
+
+func (s *ApplicationAdminService) StatsForWorkspace(workspaceID uint64) (*ApplicationStats, error) {
+	return s.statsForWorkspace(workspaceID, false)
+}
+
+// StatsForPlatform omits room-entry work queues even when a platform operator
+// selects one formal workspace. Entry approval remains a room-owner action.
+func (s *ApplicationAdminService) StatsForPlatform(workspaceID uint64) (*ApplicationStats, error) {
+	return s.statsForWorkspace(workspaceID, true)
+}
+
+func (s *ApplicationAdminService) statsForWorkspace(workspaceID uint64, excludeJoin bool) (*ApplicationStats, error) {
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		location = time.FixedZone("CST", 8*60*60)
+	}
+	date := time.Now().In(location).Format("2006-01-02")
+	start, end, _ := parseReportDateRange(date, date)
+	stats := &ApplicationStats{PendingByCategory: map[string]int64{"wallet": 0, "join": 0, "entertainment": 0}}
+	base := func() *gorm.DB {
+		return scopedApplicationQuery(s.db, workspaceID, excludeJoin)
+	}
+	if err := base().Where("status = 'pending'").Count(&stats.Pending).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&application.Application{}).Where("status = 'approved' AND reviewed_at >= ?", start).Count(&stats.ApprovedToday).Error; err != nil {
+	for _, category := range []string{"wallet", "join", "entertainment"} {
+		var count int64
+		if err := filterApplicationCategory(base().Where("status = 'pending'"), category).Count(&count).Error; err != nil {
+			return nil, err
+		}
+		stats.PendingByCategory[category] = count
+	}
+	if err := base().Where("status = 'approved' AND reviewed_at >= ? AND reviewed_at < ?", start, end).Count(&stats.ApprovedToday).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&application.Application{}).Where("status = 'rejected' AND reviewed_at >= ?", start).Count(&stats.RejectedToday).Error; err != nil {
+	if err := base().Where("status = 'rejected' AND reviewed_at >= ? AND reviewed_at < ?", start, end).Count(&stats.RejectedToday).Error; err != nil {
 		return nil, err
 	}
 	var cents int64
-	if err := s.db.Model(&application.Application{}).Select("COALESCE(SUM(requested_cents), 0)").Where("created_at >= ? AND request_type IN ('credit','debit')", start).Scan(&cents).Error; err != nil {
+	if err := base().Select("COALESCE(SUM(requested_cents), 0)").Where("created_at >= ? AND created_at < ? AND request_type IN ('credit','debit')", start, end).Scan(&cents).Error; err != nil {
 		return nil, err
 	}
 	stats.TodayAmount = centsToAmount(cents)
 	return stats, nil
 }
 
+func scopedApplicationQuery(db *gorm.DB, workspaceID uint64, excludeJoin bool) *gorm.DB {
+	query := db.Model(&application.Application{})
+	if workspaceID > 0 {
+		query = query.Where("workspace_id = ?", workspaceID)
+	} else {
+		query = query.Where("workspace_id > 0")
+	}
+	if excludeJoin {
+		query = query.Where("request_type <> ?", "join")
+	}
+	return query
+}
+
 func (s *ApplicationAdminService) Get(id uint64) (*AdminApplication, error) {
+	return s.GetForWorkspace(id, 0)
+}
+
+func (s *ApplicationAdminService) GetForWorkspace(id, workspaceID uint64) (*AdminApplication, error) {
 	var row application.Application
-	if err := s.db.First(&row, id).Error; err != nil {
+	query := s.db.Where("id = ?", id)
+	if workspaceID > 0 {
+		query = query.Where("workspace_id = ?", workspaceID)
+	}
+	if err := query.First(&row).Error; err != nil {
 		return nil, err
 	}
 	result := adminApplication(row)
+	views := []AdminApplication{result}
+	if err := s.hydrateApplicationViews(views); err != nil {
+		return nil, err
+	}
+	result = views[0]
 	return &result, nil
+}
+
+func (s *ApplicationAdminService) hydrateApplicationViews(items []AdminApplication) error {
+	if len(items) == 0 {
+		return nil
+	}
+	userIDs := make([]uint64, 0, len(items))
+	workspaceIDs := make([]uint64, 0, len(items))
+	ledgerReferences := make([]string, 0, len(items))
+	for _, item := range items {
+		userIDs = append(userIDs, item.UserID)
+		workspaceIDs = append(workspaceIDs, item.WorkspaceID)
+		if item.RequestType == "credit" || item.RequestType == "debit" {
+			ledgerReferences = append(ledgerReferences, "application:"+formatUint(item.ID)+":"+item.RequestType)
+		}
+	}
+	type userSummary struct {
+		UserID       uint64
+		BalanceCents int64
+	}
+	var users []userSummary
+	if err := s.db.Model(&user.User{}).Select("user_id, balance_cents").Where("user_id IN ?", userIDs).Scan(&users).Error; err != nil {
+		return err
+	}
+	balances := make(map[uint64]int64, len(users))
+	for _, account := range users {
+		balances[account.UserID] = account.BalanceCents
+	}
+	var workspaces []workspacemodel.Workspace
+	if err := s.db.Select("id, room_code, name").Where("id IN ?", workspaceIDs).Find(&workspaces).Error; err != nil {
+		return err
+	}
+	rooms := make(map[uint64]workspacemodel.Workspace, len(workspaces))
+	for _, workspace := range workspaces {
+		rooms[workspace.ID] = workspace
+	}
+	// Pending join applications show the member's existing setting for that
+	// target room when they have visited it before. The lookup includes both
+	// workspace_id and user_id so a multiplier can never bleed between rooms.
+	type membershipKey struct{ WorkspaceID, UserID uint64 }
+	membershipMultipliers := make(map[membershipKey]float64)
+	var memberships []workspacemodel.Membership
+	if err := s.db.Select("workspace_id, user_id, odds_multiplier").
+		Where("workspace_id IN ? AND user_id IN ?", workspaceIDs, userIDs).
+		Find(&memberships).Error; err != nil {
+		return err
+	}
+	for _, membership := range memberships {
+		membershipMultipliers[membershipKey{WorkspaceID: membership.WorkspaceID, UserID: membership.UserID}] = normalizeOddsMultiplier(membership.OddsMultiplier)
+	}
+	type applicationLedger struct {
+		Reference   string
+		BeforeCents int64
+		AfterCents  int64
+	}
+	ledgers := make(map[string]applicationLedger, len(ledgerReferences))
+	if len(ledgerReferences) > 0 {
+		var rows []applicationLedger
+		if err := s.db.Model(&user.BalanceTransaction{}).
+			Select("reference, before_cents, after_cents").
+			Where("reference IN ?", ledgerReferences).Find(&rows).Error; err != nil {
+			return err
+		}
+		for _, row := range rows {
+			ledgers[row.Reference] = row
+		}
+	}
+	for index := range items {
+		items[index].UserBalance = centsToAmount(balances[items[index].UserID])
+		if workspace, ok := rooms[items[index].WorkspaceID]; ok {
+			items[index].RoomCode = workspace.RoomCode
+			items[index].RoomName = workspace.Name
+		}
+		if items[index].RequestType == "join" && items[index].Status == "pending" {
+			if value, ok := membershipMultipliers[membershipKey{WorkspaceID: items[index].WorkspaceID, UserID: items[index].UserID}]; ok {
+				items[index].OddsMultiplier = value
+			}
+		}
+		if ledger, ok := ledgers["application:"+formatUint(items[index].ID)+":"+items[index].RequestType]; ok {
+			before, after := centsToAmount(ledger.BeforeCents), centsToAmount(ledger.AfterCents)
+			items[index].BalanceBefore = &before
+			items[index].BalanceAfter = &after
+		}
+	}
+	return nil
 }
 
 func (s *ApplicationAdminService) Create(input CreateApplicationInput) (*AdminApplication, error) {
@@ -175,7 +354,24 @@ func (s *ApplicationAdminService) Create(input CreateApplicationInput) (*AdminAp
 	if account.Status != 1 {
 		return nil, apperrors.NewBusinessError("USER_DISABLED", "停用用户不能创建申请")
 	}
+	workspaceID := input.WorkspaceID
 	roomScope := betRoomScope(account)
+	if workspaceID == 0 {
+		workspaceID = account.WorkspaceID
+	}
+	if workspaceID == 0 && (requestType == "credit" || requestType == "debit" || requestType == "join") {
+		return nil, apperrors.NewBusinessError("ROOM_REQUIRED", "请先进入房间后再提交申请")
+	}
+	if workspaceID > 0 && requestType != "join" && account.WorkspaceID != workspaceID {
+		return nil, apperrors.NewBusinessError("FORBIDDEN", "用户不属于所选房间")
+	}
+	if workspaceID > 0 {
+		var target workspacemodel.Workspace
+		if err := s.db.First(&target, workspaceID).Error; err != nil {
+			return nil, apperrors.NewBusinessError("WORKSPACE_NOT_FOUND", "申请所属房间不存在")
+		}
+		roomScope = target.Scope
+	}
 	if requestedScope := strings.TrimSpace(input.RoomScope); requestedScope != "" && requestedScope != roomScope {
 		return nil, apperrors.NewBusinessError("FORBIDDEN", "申请所属房间与当前账号不一致")
 	}
@@ -195,32 +391,82 @@ func (s *ApplicationAdminService) Create(input CreateApplicationInput) (*AdminAp
 		paymentAccountLabel = paymentAccount.Label + " · " + maskPaymentAccountNo(paymentAccount.AccountNo)
 	}
 	row := application.Application{
+		RequestID: strings.TrimSpace(input.RequestID), WorkspaceID: workspaceID,
 		UserID: account.UserID, Username: account.Username, AccountType: defaultString(account.Role, "member"),
 		RequestType: requestType, PaymentType: payment, PaymentAccountID: paymentAccountID, PaymentAccountLabel: paymentAccountLabel,
-		RoomScope: roomScope, GameID: strings.TrimSpace(input.GameID), ChatMessageID: input.ChatMessageID,
-		RequestedCents: amountCents, Remark: strings.TrimSpace(input.Remark), Status: "pending",
+		RoomScope: roomScope, TargetRoomCode: strings.TrimSpace(input.TargetRoomCode), GameID: strings.TrimSpace(input.GameID), ChatMessageID: input.ChatMessageID,
+		RequestedCents: amountCents, Remark: strings.TrimSpace(input.Remark), Status: "pending", ReviewOddsMultiplier: 1,
+	}
+	if row.RequestID != "" {
+		var existing application.Application
+		if err := s.db.Where("user_id = ? AND request_id = ?", row.UserID, row.RequestID).First(&existing).Error; err == nil {
+			result := adminApplication(existing)
+			return &result, nil
+		} else if err != gorm.ErrRecordNotFound {
+			return nil, err
+		}
 	}
 	if err := s.db.Create(&row).Error; err != nil {
+		if row.RequestID != "" {
+			var existing application.Application
+			if lookupErr := s.db.Where("user_id = ? AND request_id = ?", row.UserID, row.RequestID).First(&existing).Error; lookupErr == nil {
+				result := adminApplication(existing)
+				return &result, nil
+			}
+		}
 		return nil, err
 	}
 	result := adminApplication(row)
 	return &result, nil
 }
 
+// CreateForPlatform preserves platform-created wallet/entertainment requests
+// while preventing the platform surface from manufacturing room-entry work.
+func (s *ApplicationAdminService) CreateForPlatform(input CreateApplicationInput) (*AdminApplication, error) {
+	if !platformMayProcessApplication(input.RequestType) {
+		return nil, apperrors.NewBusinessError("FORBIDDEN", "入房申请只能由会员向目标房间提交")
+	}
+	return s.Create(input)
+}
+
 func (s *ApplicationAdminService) Review(id uint64, input ReviewApplicationInput) (*AdminApplication, error) {
-	return s.review(id, input, nil)
+	return s.review(id, input, nil, false)
 }
 
 // ReviewOwned is used by room agents. Ownership comes from the immutable room
 // snapshot on the application, not from the member's current room.  Both rows
 // are locked so legacy requests without a snapshot still have a safe fallback.
 func (s *ApplicationAdminService) ReviewOwned(id, ownerAgentID uint64, input ReviewApplicationInput) (*AdminApplication, error) {
-	return s.review(id, input, &ownerAgentID)
+	var workspace workspacemodel.Workspace
+	if err := s.db.Where("owner_user_id = ? AND type = ?", ownerAgentID, workspacemodel.TypeAgent).First(&workspace).Error; err != nil {
+		return nil, apperrors.NewBusinessError("WORKSPACE_NOT_FOUND", "房间不存在")
+	}
+	return s.review(id, input, &workspace.ID, true)
 }
 
-func (s *ApplicationAdminService) review(id uint64, input ReviewApplicationInput, ownerAgentID *uint64) (*AdminApplication, error) {
+func (s *ApplicationAdminService) ReviewForWorkspace(id, workspaceID uint64, input ReviewApplicationInput) (*AdminApplication, error) {
+	return s.review(id, input, &workspaceID, true)
+}
+
+func (s *ApplicationAdminService) review(id uint64, input ReviewApplicationInput, ownerWorkspaceID *uint64, allowJoin bool) (*AdminApplication, error) {
 	if input.Decision != "approved" && input.Decision != "rejected" {
 		return nil, apperrors.NewBusinessError("INVALID_DECISION", "审核结果不正确")
+	}
+	input.Remark = strings.TrimSpace(input.Remark)
+	if len([]rune(input.Remark)) > 500 {
+		return nil, apperrors.NewBusinessError("INVALID_REMARK", "审核备注不能超过 500 个字符")
+	}
+	if input.Decision == "rejected" && input.Remark == "" {
+		return nil, apperrors.NewBusinessError("INVALID_REMARK", "拒绝申请时请填写原因")
+	}
+	reviewOddsMultiplier := 1.0
+	if input.OddsMultiplier != nil {
+		reviewOddsMultiplier = *input.OddsMultiplier
+	}
+	if input.Decision == "approved" {
+		if err := validateOddsMultiplier(reviewOddsMultiplier); err != nil {
+			return nil, err
+		}
 	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var item application.Application
@@ -230,18 +476,19 @@ func (s *ApplicationAdminService) review(id uint64, input ReviewApplicationInput
 		if item.Status != "pending" {
 			return apperrors.NewBusinessError("ALREADY_REVIEWED", "该申请已经审核，不能重复操作")
 		}
+		if !allowJoin && !platformMayProcessApplication(item.RequestType) {
+			return apperrors.NewBusinessError("FORBIDDEN", "入房申请只能由目标房间处理")
+		}
 		var account user.User
 		accountLoaded := false
-		if ownerAgentID != nil || (input.Decision == "approved" && (item.RequestType == "credit" || item.RequestType == "debit" || item.RequestType == "agent" || item.RequestType == "join")) {
+		if ownerWorkspaceID != nil && item.WorkspaceID != *ownerWorkspaceID {
+			return apperrors.NewBusinessError("FORBIDDEN", "该申请不属于当前房间")
+		}
+		if ownerWorkspaceID != nil || (input.Decision == "approved" && (item.RequestType == "credit" || item.RequestType == "debit" || item.RequestType == "agent" || item.RequestType == "join")) {
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, item.UserID).Error; err != nil {
 				return err
 			}
 			accountLoaded = true
-			if ownerAgentID != nil {
-				if err := requireApplicationOwnership(item, account, *ownerAgentID); err != nil {
-					return err
-				}
-			}
 		}
 		now := time.Now().UTC()
 		receivedCents := int64(math.Round(input.ReceivedAmount * 100))
@@ -270,11 +517,12 @@ func (s *ApplicationAdminService) review(id uint64, input ReviewApplicationInput
 					receivedCents = item.RequestedCents
 				}
 			}
-			after := account.BalanceCents + change
+			before := account.BalanceCents
+			after := before + change
 			if err := tx.Model(&account).Update("balance_cents", after).Error; err != nil {
 				return err
 			}
-			record := user.BalanceTransaction{UserID: account.UserID, Reference: "application:" + formatUint(item.ID) + ":" + item.RequestType, AmountCents: change, BeforeCents: account.BalanceCents, AfterCents: after, Type: "application_" + item.RequestType, Remark: "申请 #" + formatUint(item.ID) + " 审核通过", Operator: defaultString(input.Operator, "后台管理员")}
+			record := user.BalanceTransaction{WorkspaceID: item.WorkspaceID, UserID: account.UserID, Reference: "application:" + formatUint(item.ID) + ":" + item.RequestType, AmountCents: change, BeforeCents: before, AfterCents: after, Type: "application_" + item.RequestType, Remark: "申请 #" + formatUint(item.ID) + " 审核通过", Operator: defaultString(input.Operator, "后台管理员")}
 			if err := tx.Create(&record).Error; err != nil {
 				return err
 			}
@@ -291,37 +539,42 @@ func (s *ApplicationAdminService) review(id uint64, input ReviewApplicationInput
 			if !accountLoaded {
 				return fmt.Errorf("join review account lock was not acquired")
 			}
-			targetAgentID, ok := agentIDFromScope(item.RoomScope)
-			if !ok {
-				return apperrors.NewBusinessError("INVALID_ROOM_SCOPE", "入房申请缺少有效目标房间")
+			if !roomEntryApplicantRoleAllowed(account.Role) {
+				return apperrors.NewBusinessError("FORBIDDEN", "该账号不是普通会员，不能通过入房申请")
 			}
-			var agent user.User
-			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("user_id = ? AND role = ? AND status = ?", targetAgentID, "agent", 1).First(&agent).Error; err != nil {
+			var target workspacemodel.Workspace
+			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ? AND status = ?", item.WorkspaceID, 1).First(&target).Error; err != nil {
 				return apperrors.NewBusinessError("ROOM_NOT_FOUND", "目标房间已停用或不存在")
 			}
-			active, err := accesscontrol.AgentHierarchyActive(tx, agent)
-			if err != nil {
+			if target.Type == workspacemodel.TypeAgent {
+				var agent user.User
+				if err := tx.Where("user_id = ? AND role = ? AND status = ?", target.OwnerUserID, "agent", 1).First(&agent).Error; err != nil {
+					return apperrors.NewBusinessError("ROOM_NOT_FOUND", "目标房间已停用或不存在")
+				}
+				active, err := accesscontrol.AgentHierarchyActive(tx, agent)
+				if err != nil || !active {
+					return apperrors.NewBusinessError("ROOM_NOT_FOUND", "目标房间所属租户已停用")
+				}
+			} else if target.Type == workspacemodel.TypeTenant {
+				var activeOwner int64
+				if err := tx.Model(&user.User{}).Where("user_id = ? AND role = ? AND status = ?", target.OwnerUserID, "tenant", 1).Count(&activeOwner).Error; err != nil || activeOwner != 1 {
+					return apperrors.NewBusinessError("ROOM_NOT_FOUND", "目标租户房间已停用")
+				}
+			}
+			if err := ActivateWorkspaceMembership(tx, &account, target); err != nil {
 				return err
 			}
-			if !active {
-				return apperrors.NewBusinessError("ROOM_NOT_FOUND", "目标房间所属租户已停用")
-			}
-			updates := map[string]any{"parent_agent_id": targetAgentID}
-			loginScope := agentLoginScope(targetAgentID)
-			if err := ensureUsernameInScope(tx, loginScope, account.Username, account.UserID); err != nil {
-				return err
-			}
-			updates["login_scope"] = loginScope
-			if agent.ParentTenantID != nil {
-				updates["parent_tenant_id"] = *agent.ParentTenantID
-			} else {
-				updates["parent_tenant_id"] = nil
-			}
-			if err := tx.Model(&account).Updates(updates).Error; err != nil {
+			if err := tx.Model(&workspacemodel.Membership{}).
+				Where("workspace_id = ? AND user_id = ?", target.ID, account.UserID).
+				Update("odds_multiplier", reviewOddsMultiplier).Error; err != nil {
 				return err
 			}
 		}
-		return tx.Model(&item).Updates(map[string]any{"status": input.Decision, "received_cents": receivedCents, "operator": defaultString(input.Operator, "后台管理员"), "review_remark": strings.TrimSpace(input.Remark), "reviewed_at": now}).Error
+		updates := map[string]any{"status": input.Decision, "received_cents": receivedCents, "operator": defaultString(input.Operator, "后台管理员"), "review_remark": input.Remark, "reviewed_at": now}
+		if input.Decision == "approved" && item.RequestType == "join" {
+			updates["review_odds_multiplier"] = reviewOddsMultiplier
+		}
+		return tx.Model(&item).Updates(updates).Error
 	})
 	if err != nil {
 		return nil, err
@@ -330,7 +583,9 @@ func (s *ApplicationAdminService) review(id uint64, input ReviewApplicationInput
 	if err != nil {
 		return nil, err
 	}
+	notifyApplicationEvent(s.db, result.WorkspaceID, result.ID, result.Status, result.RequestType)
 	notifyMemberApplication(s.db, &applicationReviewNotify{
+		WorkspaceID:     result.WorkspaceID,
 		UserID:          result.UserID,
 		Decision:        input.Decision,
 		Remark:          applicationReviewMessage(*result),
@@ -341,7 +596,50 @@ func (s *ApplicationAdminService) review(id uint64, input ReviewApplicationInput
 		GameID:          result.GameID,
 		ApplicationID:   result.ID,
 	})
+	if result.Status == "approved" && result.RequestType == "join" {
+		ws.DisconnectUser(result.UserID)
+	}
 	return result, nil
+}
+
+func notifyApplicationEvent(db *gorm.DB, workspaceID, applicationID uint64, status, requestType string) {
+	if workspaceID == 0 || applicationID == 0 {
+		return
+	}
+	ids := make([]uint64, 0, 4)
+	var workspace workspacemodel.Workspace
+	if err := db.Select("owner_user_id").First(&workspace, workspaceID).Error; err == nil && workspace.OwnerUserID > 0 {
+		ids = append(ids, workspace.OwnerUserID)
+	}
+	if applicationEventIncludesPlatformAdmins(requestType) {
+		var admins []uint64
+		if err := db.Model(&user.User{}).Where("role = ? AND status = ?", "admin", 1).Pluck("user_id", &admins).Error; err == nil {
+			ids = append(ids, admins...)
+		}
+	}
+	seen := map[uint64]struct{}{}
+	for _, id := range ids {
+		if _, ok := seen[id]; ok || id == 0 {
+			continue
+		}
+		seen[id] = struct{}{}
+		ws.NotifyUser(id, "application", applicationEventPayload(workspaceID, applicationID, status, requestType))
+	}
+}
+
+func applicationEventIncludesPlatformAdmins(requestType string) bool {
+	return platformMayProcessApplication(requestType)
+}
+
+func platformMayProcessApplication(requestType string) bool {
+	return strings.TrimSpace(requestType) != "join"
+}
+
+func applicationEventPayload(workspaceID, applicationID uint64, status, requestType string) map[string]any {
+	return map[string]any{
+		"workspace_id": workspaceID, "application_id": applicationID,
+		"status": status, "request_type": strings.TrimSpace(requestType),
+	}
 }
 
 func applicationBelongsToAgent(item application.Application, account user.User, agentID uint64) bool {
@@ -406,8 +704,46 @@ func filterApplicationCategory(query *gorm.DB, value string) *gorm.DB {
 	}
 }
 
+func parseReportDateRange(startValue, endValue string) (time.Time, time.Time, bool) {
+	if strings.TrimSpace(startValue) == "" && strings.TrimSpace(endValue) == "" {
+		return time.Time{}, time.Time{}, false
+	}
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		location = time.FixedZone("CST", 8*60*60)
+	}
+	startValue = strings.TrimSpace(startValue)
+	endValue = strings.TrimSpace(endValue)
+	if startValue == "" {
+		startValue = endValue
+	}
+	if endValue == "" {
+		endValue = startValue
+	}
+	start, startErr := time.ParseInLocation("2006-01-02", startValue, location)
+	end, endErr := time.ParseInLocation("2006-01-02", endValue, location)
+	if startErr != nil || endErr != nil || end.Before(start) {
+		return time.Time{}, time.Time{}, false
+	}
+	return start.UTC(), end.AddDate(0, 0, 1).UTC(), true
+}
+
 func adminApplication(row application.Application) AdminApplication {
-	return AdminApplication{ID: row.ID, UserID: row.UserID, Username: row.Username, AccountType: row.AccountType, RequestType: row.RequestType, PaymentType: row.PaymentType, PaymentAccountID: row.PaymentAccountID, PaymentAccountLabel: row.PaymentAccountLabel, RoomScope: row.RoomScope, TargetRoomCode: row.TargetRoomCode, GameID: row.GameID, ChatMessageID: row.ChatMessageID, RequestedAmount: centsToAmount(row.RequestedCents), ReceivedAmount: centsToAmount(row.ReceivedCents), Remark: row.Remark, Status: row.Status, Operator: row.Operator, ReviewRemark: row.ReviewRemark, ReviewedAt: row.ReviewedAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return AdminApplication{ID: row.ID, RequestID: row.RequestID, WorkspaceID: row.WorkspaceID, UserID: row.UserID, Username: row.Username, AccountType: row.AccountType, RequestType: row.RequestType, PaymentType: row.PaymentType, PaymentAccountID: row.PaymentAccountID, PaymentAccountLabel: row.PaymentAccountLabel, RoomScope: row.RoomScope, TargetRoomCode: row.TargetRoomCode, GameID: row.GameID, ChatMessageID: row.ChatMessageID, RequestedAmount: centsToAmount(row.RequestedCents), ReceivedAmount: centsToAmount(row.ReceivedCents), Remark: row.Remark, Status: row.Status, Operator: row.Operator, ReviewRemark: row.ReviewRemark, OddsMultiplier: normalizeOddsMultiplier(row.ReviewOddsMultiplier), ReviewedAt: row.ReviewedAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+}
+
+func normalizeOddsMultiplier(value float64) float64 {
+	if value == 0 {
+		return 1
+	}
+	return math.Round(value*10000) / 10000
+}
+
+func validateOddsMultiplier(value float64) error {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0.5 || value > 1.5 {
+		return apperrors.NewBusinessError("INVALID_ODDS_MULTIPLIER", "会员赔率倍率需在 0.50–1.50 之间")
+	}
+	return nil
 }
 
 func formatUint(value uint64) string {

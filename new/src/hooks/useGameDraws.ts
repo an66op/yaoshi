@@ -9,6 +9,14 @@ export function useGameDraws(gameId: string, limit = 12, recoveryMs = 10_000) {
   const [error, setError] = useState('')
 
   useEffect(() => {
+    // Draws belong to exactly one game. Clear only when that scope changes,
+    // not when a recovery request for the same game temporarily fails.
+    setDraws([])
+    setLoading(true)
+    setError('')
+  }, [gameId])
+
+  useEffect(() => {
     let cancelled = false
     const load = async () => {
       try {
@@ -18,7 +26,8 @@ export function useGameDraws(gameId: string, limit = 12, recoveryMs = 10_000) {
         setError('')
       } catch (reason) {
         if (!cancelled) {
-          setDraws([])
+          // Preserve the last confirmed draw list while WebSocket/polling
+          // recovers; the game-id effect already starts a new hook lifecycle.
           setError(reason instanceof Error ? reason.message : '读取开奖失败')
         }
       } finally {

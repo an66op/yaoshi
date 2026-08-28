@@ -27,6 +27,7 @@ type HandlerRegistry struct {
 	AgentWorkspaceHandler   *agentctrl.WorkspaceHandler
 	TenantWorkspaceHandler  *tenantctrl.WorkspaceHandler
 	SystemAuditHandler      *admin.SystemAuditHandler
+	PlanHandler             *admin.PlanHandler
 }
 
 func InitHandlers(db *gorm.DB, scheduler *lotteryfeed.Scheduler) *HandlerRegistry {
@@ -47,5 +48,6 @@ func InitHandlers(db *gorm.DB, scheduler *lotteryfeed.Scheduler) *HandlerRegistr
 		AgentWorkspaceHandler:   agentctrl.NewWorkspaceHandler(db),
 		TenantWorkspaceHandler:  tenantctrl.NewWorkspaceHandler(db),
 		SystemAuditHandler:      admin.NewSystemAuditHandler(db),
+		PlanHandler:             admin.NewPlanHandler(db),
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"backend/accesscontrol"
 	"backend/constants"
 	"backend/data/models/user"
+	"backend/services"
+	"backend/sessionauth"
 	"backend/utils"
 	"fmt"
 	"net/http"
@@ -15,19 +17,14 @@ import (
 
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
+		token, _ := sessionauth.TokenFromRequest(c.Request)
+		if token == "" {
 			constants.SendError(c, http.StatusUnauthorized, "请先登录", nil)
 			c.Abort()
 			return
 		}
 
-		tokenParts := strings.Split(authHeader, " ")
-		if len(tokenParts) == 2 && strings.ToLower(tokenParts[0]) == "bearer" {
-			authHeader = tokenParts[1]
-		}
-
-		claims, err := utils.ParseToken(authHeader)
+		claims, err := utils.ParseToken(token)
 		if err != nil {
 			constants.SendError(c, http.StatusUnauthorized, "登录已失效，请重新登录", err)
 			c.Abort()
@@ -35,8 +32,36 @@ func AuthMiddleware() gin.HandlerFunc {
 		}
 
 		c.Set("user_id", claims.UserID)
+		c.Set("auth_version", claims.AuthVersion)
 		c.Next()
 	}
+}
+
+// requireCurrentAuthVersion binds a parsed JWT to the account's current
+// credential state. Every role middleware calls it after loading the account,
+// so password changes revoke old tokens across all application surfaces.
+func requireCurrentAuthVersion(c *gin.Context, accountVersion uint64) bool {
+	rawVersion, ok := c.Get("auth_version")
+	claimVersion, typeOK := rawVersion.(uint64)
+	if !ok || !typeOK || claimVersion == 0 || accountVersion == 0 || claimVersion != accountVersion {
+		constants.SendError(c, http.StatusUnauthorized, "登录已失效，请重新登录", nil)
+		c.Abort()
+		return false
+	}
+	return true
+}
+
+// requireWorkspaceBinding makes room-scoped administration fail closed. Some
+// platform services intentionally interpret workspace_id=0 as an all-workspace
+// query for platform administrators, so tenant and agent entry points must
+// never pass an unbound account into those services.
+func requireWorkspaceBinding(c *gin.Context, workspaceID uint64) bool {
+	if workspaceID == 0 {
+		constants.SendError(c, http.StatusForbidden, "账号尚未绑定房间工作区，请联系平台管理员", nil)
+		c.Abort()
+		return false
+	}
+	return true
 }
 
 // AdminMiddleware requires an authenticated user with role=admin and status=1.
@@ -55,9 +80,12 @@ func AdminMiddleware(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		var account user.User
-		if err := db.Select("user_id", "username", "nickname", "email", "role", "status").First(&account, userID).Error; err != nil {
+		if err := db.Select("user_id", "workspace_id", "username", "nickname", "email", "role", "status", "auth_version").First(&account, userID).Error; err != nil {
 			constants.SendError(c, http.StatusUnauthorized, "账号不存在或已失效", err)
 			c.Abort()
+			return
+		}
+		if !requireCurrentAuthVersion(c, account.AuthVersion) {
 			return
 		}
 		if account.Status != 1 {
@@ -71,6 +99,7 @@ func AdminMiddleware(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		c.Set("admin_user", account)
+		c.Set("workspace_id", account.WorkspaceID)
 		c.Set("username", account.Username)
 		c.Next()
 	}
@@ -89,9 +118,12 @@ func AgentMiddleware(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		var account user.User
-		if err := db.Select("user_id", "public_id", "username", "nickname", "email", "role", "status", "agent_room_code", "parent_tenant_id").First(&account, userID).Error; err != nil {
+		if err := db.Select("user_id", "workspace_id", "public_id", "username", "nickname", "email", "role", "status", "auth_version", "agent_room_code", "parent_tenant_id").First(&account, userID).Error; err != nil {
 			constants.SendError(c, http.StatusUnauthorized, "账号不存在或已失效", err)
 			c.Abort()
+			return
+		}
+		if !requireCurrentAuthVersion(c, account.AuthVersion) {
 			return
 		}
 		if account.Status != 1 {
@@ -102,6 +134,9 @@ func AgentMiddleware(db *gorm.DB) gin.HandlerFunc {
 		if account.Role != "agent" || strings.TrimSpace(account.AgentRoomCode) == "" {
 			constants.SendError(c, http.StatusForbidden, "需要房间代理权限", nil)
 			c.Abort()
+			return
+		}
+		if !requireWorkspaceBinding(c, account.WorkspaceID) {
 			return
 		}
 		hierarchyActive, err := accesscontrol.AgentHierarchyActive(db, account)
@@ -117,6 +152,7 @@ func AgentMiddleware(db *gorm.DB) gin.HandlerFunc {
 		}
 		c.Set("agent_user", account)
 		c.Set("agent_id", account.UserID)
+		c.Set("workspace_id", account.WorkspaceID)
 		c.Set("room_scope", "agent:"+fmt.Sprint(account.UserID))
 		c.Set("username", account.Username)
 		c.Next()
@@ -135,9 +171,12 @@ func TenantMiddleware(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		var account user.User
-		if err := db.Select("user_id", "public_id", "username", "nickname", "email", "role", "status").First(&account, userID).Error; err != nil {
+		if err := db.Select("user_id", "workspace_id", "public_id", "username", "nickname", "email", "role", "status", "auth_version").First(&account, userID).Error; err != nil {
 			constants.SendError(c, http.StatusUnauthorized, "账号不存在或已失效", err)
 			c.Abort()
+			return
+		}
+		if !requireCurrentAuthVersion(c, account.AuthVersion) {
 			return
 		}
 		if account.Status != 1 {
@@ -150,8 +189,12 @@ func TenantMiddleware(db *gorm.DB) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if !requireWorkspaceBinding(c, account.WorkspaceID) {
+			return
+		}
 		c.Set("tenant_user", account)
 		c.Set("tenant_id", account.UserID)
+		c.Set("workspace_id", account.WorkspaceID)
 		c.Set("username", account.Username)
 		c.Next()
 	}
@@ -173,10 +216,13 @@ func MemberMiddleware(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		var account user.User
-		if err := db.Select("user_id", "username", "nickname", "email", "role", "status").
+		if err := db.Select("user_id", "workspace_id", "username", "nickname", "email", "role", "status", "auth_version", "parent_agent_id", "parent_tenant_id").
 			First(&account, userID).Error; err != nil {
 			constants.SendError(c, http.StatusUnauthorized, "账号不存在或已失效", err)
 			c.Abort()
+			return
+		}
+		if !requireCurrentAuthVersion(c, account.AuthVersion) {
 			return
 		}
 		if account.Status != 1 {
@@ -189,7 +235,22 @@ func MemberMiddleware(db *gorm.DB) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		roomActive, err := accesscontrol.AccountRoomActive(db, account)
+		if err != nil {
+			constants.SendError(c, http.StatusInternalServerError, "读取房间权限失败", err)
+			c.Abort()
+			return
+		}
+		if !roomActive {
+			constants.SendError(c, http.StatusForbidden, "所属房间已停用，请联系管理员", nil)
+			c.Abort()
+			return
+		}
 		c.Set("member_user", account)
+		c.Set("workspace_id", account.WorkspaceID)
+		if workspace, err := services.WorkspaceForAccount(db, account); err == nil {
+			c.Set("room_scope", workspace.Scope)
+		}
 		c.Set("username", account.Username)
 		c.Next()
 	}

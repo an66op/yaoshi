@@ -4,6 +4,7 @@ import (
 	"backend/accesscontrol"
 	"backend/data/models/special"
 	"backend/data/models/user"
+	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
 	"strings"
 	"time"
@@ -52,6 +53,9 @@ type RoomResolveResult struct {
 	AgentID       uint64 `json:"agent_id"`
 	AgentUsername string `json:"agent_username"`
 	AgentNickname string `json:"agent_nickname"`
+	WorkspaceID   uint64 `json:"workspace_id"`
+	WorkspaceType string `json:"workspace_type"`
+	RoomScope     string `json:"room_scope"`
 	Status        string `json:"status"`
 	ApplicationID uint64 `json:"application_id,omitempty"`
 }
@@ -60,13 +64,23 @@ func NewSpecialAdminService(db *gorm.DB) *SpecialAdminService { return &SpecialA
 
 func (s *SpecialAdminService) Overview() (*SpecialOverview, error) {
 	var available, reserved, granted int64
-	_ = s.db.Model(&special.NumberResource{}).Where("status = ?", "available").Count(&available).Error
-	_ = s.db.Model(&special.NumberResource{}).Where("status = ?", "reserved").Count(&reserved).Error
-	_ = s.db.Model(&special.NumberResource{}).Where("status = ?", "granted").Count(&granted).Error
+	if err := s.db.Model(&special.NumberResource{}).Where("status = ?", "available").Count(&available).Error; err != nil {
+		return nil, apperrors.NewSystemError("SPECIAL_READ_FAILED", "读取可用房间号失败", err)
+	}
+	if err := s.db.Model(&special.NumberResource{}).Where("status = ?", "reserved").Count(&reserved).Error; err != nil {
+		return nil, apperrors.NewSystemError("SPECIAL_READ_FAILED", "读取预留房间号失败", err)
+	}
+	if err := s.db.Model(&special.NumberResource{}).Where("status = ?", "granted").Count(&granted).Error; err != nil {
+		return nil, apperrors.NewSystemError("SPECIAL_READ_FAILED", "读取已分配房间号失败", err)
+	}
 	var campaigns []special.Campaign
-	_ = s.db.Order("id desc").Limit(50).Find(&campaigns).Error
+	if err := s.db.Order("id desc").Limit(50).Find(&campaigns).Error; err != nil {
+		return nil, apperrors.NewSystemError("SPECIAL_READ_FAILED", "读取房间号活动失败", err)
+	}
 	var resources []special.NumberResource
-	_ = s.db.Order("id desc").Limit(100).Find(&resources).Error
+	if err := s.db.Order("id desc").Limit(100).Find(&resources).Error; err != nil {
+		return nil, apperrors.NewSystemError("SPECIAL_READ_FAILED", "读取房间号资源失败", err)
+	}
 	ownerIDs := make([]uint64, 0)
 	for _, row := range resources {
 		if row.OwnerUserID != nil {
@@ -76,12 +90,20 @@ func (s *SpecialAdminService) Overview() (*SpecialOverview, error) {
 	names := map[uint64]string{}
 	if len(ownerIDs) > 0 {
 		var owners []user.User
-		_ = s.db.Select("user_id, username, nickname").Where("user_id IN ?", ownerIDs).Find(&owners).Error
+		if err := s.db.Select("user_id, username, nickname").Where("user_id IN ?", ownerIDs).Find(&owners).Error; err != nil {
+			return nil, apperrors.NewSystemError("SPECIAL_READ_FAILED", "读取房间号所有者失败", err)
+		}
 		for _, owner := range owners {
 			names[owner.UserID] = defaultString(owner.Nickname, owner.Username)
 		}
 	}
-	out := &SpecialOverview{Available: available, Reserved: reserved, Granted: granted}
+	out := &SpecialOverview{
+		Available: available,
+		Reserved:  reserved,
+		Granted:   granted,
+		Campaigns: make([]SpecialCampaignView, 0, len(campaigns)),
+		Resources: make([]NumberResourceView, 0, len(resources)),
+	}
 	for _, row := range campaigns {
 		out.Campaigns = append(out.Campaigns, SpecialCampaignView{ID: row.ID, Title: row.Title, Status: row.Status, RuleText: row.RuleText, GrantedCount: row.GrantedCount, StartsAt: row.StartsAt, EndsAt: row.EndsAt, CreatedAt: row.CreatedAt})
 	}
@@ -100,18 +122,47 @@ func (s *SpecialAdminService) AddResources(numbers []string, level, remark strin
 	if level != "normal" && level != "rare" && level != "epic" {
 		return 0, apperrors.NewBusinessError("INVALID_REQUEST", "房间号等级不正确")
 	}
-	created := 0
+	normalized := make([]string, 0, len(numbers))
+	seen := make(map[string]struct{}, len(numbers))
 	for _, raw := range numbers {
 		number := strings.TrimSpace(raw)
 		if number == "" {
 			continue
 		}
-		row := special.NumberResource{Number: number, Level: level, Status: "available", Remark: strings.TrimSpace(remark)}
-		result := s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
-		if result.Error != nil {
-			return created, apperrors.NewSystemError("SPECIAL_CREATE_FAILED", "添加房间号失败", result.Error)
+		if err := validateAgentRoomCode(number); err != nil {
+			return 0, err
 		}
-		created += int(result.RowsAffected)
+		if _, exists := seen[number]; exists {
+			continue
+		}
+		seen[number] = struct{}{}
+		normalized = append(normalized, number)
+	}
+	created := 0
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockPublicRoomCodeRegistry(tx); err != nil {
+			return err
+		}
+		for _, number := range normalized {
+			// Re-adding a number already present in the pool is intentionally
+			// idempotent; only an active tenant/agent identity blocks creation.
+			if err := ensureRoomCodeIdentityAvailable(tx, number, 0); err != nil {
+				return err
+			}
+			row := special.NumberResource{Number: number, Level: level, Status: "available", Remark: strings.TrimSpace(remark)}
+			result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+			if result.Error != nil {
+				return result.Error
+			}
+			created += int(result.RowsAffected)
+		}
+		return nil
+	})
+	if err != nil {
+		if apperrors.IsBusinessError(err) {
+			return 0, err
+		}
+		return 0, apperrors.NewSystemError("SPECIAL_CREATE_FAILED", "添加房间号失败", err)
 	}
 	return created, nil
 }
@@ -133,6 +184,9 @@ func (s *SpecialAdminService) CreateCampaign(title, rule, status string) (*Speci
 // Grant assigns a vanity room number to a user and promotes them to agent.
 func (s *SpecialAdminService) Grant(campaignID, resourceID, userID uint64, operator string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockPublicRoomCodeRegistry(tx); err != nil {
+			return err
+		}
 		var campaign special.Campaign
 		if err := tx.First(&campaign, campaignID).Error; err != nil {
 			return apperrors.NewBusinessError("NOT_FOUND", "房间号活动不存在")
@@ -144,6 +198,9 @@ func (s *SpecialAdminService) Grant(campaignID, resourceID, userID uint64, opera
 		if resource.Status != "available" {
 			return apperrors.NewBusinessError("INVALID_REQUEST", "该房间号不可发放")
 		}
+		if err := validateAgentRoomCode(strings.TrimSpace(resource.Number)); err != nil {
+			return err
+		}
 		var account user.User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, userID).Error; err != nil {
 			return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
@@ -154,12 +211,8 @@ func (s *SpecialAdminService) Grant(campaignID, resourceID, userID uint64, opera
 		if strings.TrimSpace(account.AgentRoomCode) != "" && account.AgentRoomCode != resource.Number {
 			return apperrors.NewBusinessError("INVALID_REQUEST", "该用户已绑定其他房间号: "+account.AgentRoomCode)
 		}
-		var occupied int64
-		if err := tx.Model(&user.User{}).Where("agent_room_code = ? AND user_id <> ?", resource.Number, account.UserID).Count(&occupied).Error; err != nil {
+		if err := ensureRoomCodeAvailableForResource(tx, resource.Number, account.UserID, resource.ID); err != nil {
 			return err
-		}
-		if occupied > 0 {
-			return apperrors.NewBusinessError("INVALID_REQUEST", "该房间号已被其他代理占用")
 		}
 		ownerID := account.UserID
 		resource.Status = "granted"
@@ -167,14 +220,17 @@ func (s *SpecialAdminService) Grant(campaignID, resourceID, userID uint64, opera
 		if err := tx.Save(&resource).Error; err != nil {
 			return err
 		}
-		updates := map[string]any{"role": "agent", "agent_room_code": resource.Number}
+		updates := map[string]any{"role": "agent", "agent_room_code": resource.Number, "parent_agent_id": nil}
 		if err := tx.Model(&account).Updates(updates).Error; err != nil {
 			return err
 		}
 		if err := tx.Create(&special.GrantRecord{CampaignID: campaignID, ResourceID: resourceID, Number: resource.Number, UserID: account.UserID, Username: account.Username, Operator: defaultString(operator, "后台管理员")}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&campaign).Update("granted_count", gorm.Expr("granted_count + 1")).Error
+		if err := tx.Model(&campaign).Update("granted_count", gorm.Expr("granted_count + 1")).Error; err != nil {
+			return err
+		}
+		return EnsureWorkspaceHierarchy(tx)
 	})
 }
 
@@ -197,30 +253,53 @@ func (s *SpecialAdminService) AssignRoom(resourceID, userID uint64, operator str
 
 func (s *SpecialAdminService) ResolveRoom(code string) (*RoomResolveResult, error) {
 	code = strings.TrimSpace(code)
-	if code == "" {
-		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "请输入房间号")
+	if err := validateAgentRoomCode(code); err != nil {
+		return nil, err
 	}
-	var account user.User
-	err := s.db.Where("agent_room_code = ? AND role = ? AND status = ?", code, "agent", 1).First(&account).Error
+	var workspace workspacemodel.Workspace
+	err := s.db.Where("room_code = ? AND type IN ? AND status = ?", code, []string{workspacemodel.TypeTenant, workspacemodel.TypeAgent}, 1).First(&workspace).Error
 	if err == gorm.ErrRecordNotFound {
-		return nil, apperrors.NewBusinessError("ROOM_NOT_FOUND", "房间号无效或未开通")
+		// Compatibility while an older database is starting its additive
+		// workspace migration: resolve the legacy agent room and materialize the
+		// hierarchy before returning the result.
+		var legacy user.User
+		if legacyErr := s.db.Where("agent_room_code = ? AND role = ? AND status = ?", code, "agent", 1).First(&legacy).Error; legacyErr != nil {
+			return nil, apperrors.NewBusinessError("ROOM_NOT_FOUND", "房间号无效或未开通")
+		}
+		if hierarchyErr := EnsureWorkspaceHierarchy(s.db); hierarchyErr != nil {
+			return nil, hierarchyErr
+		}
+		err = s.db.Where("owner_user_id = ? AND type = ?", legacy.UserID, workspacemodel.TypeAgent).First(&workspace).Error
 	}
 	if err != nil {
 		return nil, err
 	}
-	hierarchyActive, hierarchyErr := accesscontrol.AgentHierarchyActive(s.db, account)
-	if hierarchyErr != nil {
-		return nil, hierarchyErr
-	}
-	if !hierarchyActive {
+	var owner user.User
+	if err := s.db.First(&owner, workspace.OwnerUserID).Error; err != nil || owner.Status != 1 {
 		return nil, apperrors.NewBusinessError("ROOM_NOT_FOUND", "房间号无效或未开通")
+	}
+	if workspace.Type == workspacemodel.TypeAgent {
+		hierarchyActive, hierarchyErr := accesscontrol.AgentHierarchyActive(s.db, owner)
+		if hierarchyErr != nil {
+			return nil, hierarchyErr
+		}
+		if !hierarchyActive {
+			return nil, apperrors.NewBusinessError("ROOM_NOT_FOUND", "房间号无效或未开通")
+		}
+	}
+	agentID := uint64(0)
+	if workspace.Type == workspacemodel.TypeAgent {
+		agentID = owner.UserID
 	}
 	return &RoomResolveResult{
 		RoomCode:      code,
-		RoomName:      agentRoomDisplayName(account),
-		RoomLogo:      account.AgentRoomLogo,
-		AgentID:       account.UserID,
-		AgentUsername: account.Username,
-		AgentNickname: defaultString(account.Nickname, account.Username),
+		RoomName:      defaultString(strings.TrimSpace(workspace.Name), owner.Username),
+		RoomLogo:      workspace.Logo,
+		AgentID:       agentID,
+		AgentUsername: owner.Username,
+		AgentNickname: defaultString(owner.Nickname, owner.Username),
+		WorkspaceID:   workspace.ID,
+		WorkspaceType: workspace.Type,
+		RoomScope:     workspace.Scope,
 	}, nil
 }

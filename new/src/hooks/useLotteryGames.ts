@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { lotteryApi, type LotteryGame } from '../api/lottery'
-import { memberLotteryGameIds } from '../data/games'
 import { WS_EVENT, type WsEvent, useWebSocketConnected } from './useWebSocket'
+import { shouldReloadGameCatalog } from '../utils/gameCatalogEvents'
 import type { Game } from '../types'
 
 export const gameLogoPaths: Partial<Record<string, string>> = {
@@ -27,6 +27,14 @@ export const gameLogoPaths: Partial<Record<string, string>> = {
   'happy8-mark-six': '/images/game-logos/happy8-mark-six.png',
   'new-macau-mark-six': '/images/game-logos/new-macau-mark-six.svg',
   'old-macau-mark-six': '/images/game-logos/old-macau-mark-six.svg',
+  'official-tw-bingo': '/images/game-logos/official-tw-bingo.svg',
+  'official-tw-super-lotto': '/images/game-logos/official-tw-super-lotto.svg',
+  'official-tw-daily539': '/images/game-logos/official-tw-daily539.svg',
+  'official-tw-lotto649': '/images/game-logos/official-tw-lotto649.svg',
+  'official-fc3d': '/images/game-logos/official-fc3d.svg',
+  'official-kl8': '/images/game-logos/official-kl8.svg',
+  'official-pl3': '/images/game-logos/official-pl3.svg',
+  'official-qxc': '/images/game-logos/official-qxc.svg',
 }
 
 export function lotteryGameLogo(gameId?: string) {
@@ -61,12 +69,15 @@ const mapGame = (item: LotteryGame, nowMs: number): Game => {
     title: item.name,
     tag: item.badge || item.code.toUpperCase(),
     category: item.category,
+    lobbyCategory: item.lobby_category,
     online: item.bettor_count != null ? String(item.bettor_count) : '—',
     period: item.current_issue || item.issue || '—',
     due: toClock(remaining),
     color: resolvedBadgeColor(item),
     logo: gameLogoPaths[item.id],
-    balls: item.latest_numbers?.length ? item.latest_numbers : [0, 0, 0, 0, 0],
+    // Missing draw data is an empty state. Zero-filled balls look like a real
+    // result and would be recreated even after the database was reset.
+    balls: item.latest_numbers?.length ? item.latest_numbers : [],
     issueStatus: item.issue_status || 'pending',
     sourceKind: item.source_kind || 'platform',
     sourceName: item.source_name || '王者开奖',
@@ -78,9 +89,10 @@ const mapGame = (item: LotteryGame, nowMs: number): Game => {
 }
 
 /** 从后端拉取彩种列表；接口异常时不伪造业务数据。 */
-export function useLotteryGames() {
+export function useLotteryGames(enabled = true, roomKey = '') {
   const realtimeConnected = useWebSocketConnected()
   const [remote, setRemote] = useState<LotteryGame[] | null>(null)
+  const [loadedRoomKey, setLoadedRoomKey] = useState('')
   const [serverOffsetMs, setServerOffsetMs] = useState(0)
   const [clientNowMs, setClientNowMs] = useState(() => Date.now())
   const [loading, setLoading] = useState(true)
@@ -99,26 +111,39 @@ export function useLotteryGames() {
   }, [])
 
   useEffect(() => {
+    if (!enabled) {
+      setRemote(null)
+      setLoadedRoomKey('')
+      setLoading(false)
+      setError('')
+      return
+    }
     let cancelled = false
+    let loadSequence = 0
     const load = async () => {
+      const requestSequence = ++loadSequence
       try {
         const [games, clock] = await Promise.all([lotteryApi.enabledGames(), lotteryApi.clock()])
-        if (cancelled) return
+        if (cancelled || requestSequence !== loadSequence) return
         setRemote(games)
+        setLoadedRoomKey(roomKey)
         setServerOffsetMs(clock.server_time_ms - Date.now())
         setError('')
       } catch (reason) {
-        if (!cancelled) {
-          setRemote(null)
+        if (!cancelled && requestSequence === loadSequence) {
+          // 实时开奖后会立即补拉一次目录。弱网或瞬时超时不能清空上一份
+          // 已成功的数据，否则正在打开的游戏页会被卸载，开奖/中奖弹窗也
+          // 会随之消失。首次加载失败时 remote 本来就是 null，仍会正常
+          // 呈现错误状态；已有数据时则保留页面并等待下一次恢复。
           setError(reason instanceof Error ? reason.message : '网络连接失败，请稍后重试')
         }
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled && requestSequence === loadSequence) setLoading(false)
       }
     }
     const onWs = (event: Event) => {
       const detail = (event as CustomEvent<WsEvent>).detail
-      if (detail?.type === 'draw_update') void load()
+      if (detail && shouldReloadGameCatalog(detail, roomKey)) void load()
     }
     void load()
     window.addEventListener(WS_EVENT, onWs)
@@ -129,19 +154,15 @@ export function useLotteryGames() {
       window.removeEventListener(WS_EVENT, onWs)
       if (recovery) window.clearInterval(recovery)
     }
-  }, [realtimeConnected])
+  }, [enabled, realtimeConnected, roomKey])
 
   return useMemo(() => {
     const nowMs = clientNowMs + serverOffsetMs
     // `remote !== null` means the request succeeded. Preserve an intentionally
     // 启用列表为空时保持空状态，不使用本地业务数据补位。
-    if (remote !== null) {
-      const remoteById = new Map(remote.map((item) => [item.id, item]))
-      const visibleRemote = memberLotteryGameIds
-        .map((id) => remoteById.get(id))
-        .filter((item): item is LotteryGame => item !== undefined)
-      return { games: visibleRemote.map((item) => mapGame(item, nowMs)), loading, error, live: true }
+    if (remote !== null && loadedRoomKey === roomKey) {
+      return { games: remote.map((item) => mapGame(item, nowMs)), loading, error, live: true }
     }
     return { games: [], loading, error, live: false }
-  }, [remote, serverOffsetMs, clientNowMs, loading, error])
+  }, [remote, loadedRoomKey, roomKey, serverOffsetMs, clientNowMs, loading, error])
 }

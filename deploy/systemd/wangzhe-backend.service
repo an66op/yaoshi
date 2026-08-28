@@ -1,0 +1,40 @@
+[Unit]
+Description=Wangzhe lottery application backend
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wangzhe
+Group=wangzhe
+WorkingDirectory=/var/lib/wangzhe
+EnvironmentFile=/etc/wangzhe/backend.env
+ExecStart=/opt/wangzhe/bin/wangzhe-backend
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+LimitNOFILE=65536
+UMask=0027
+StateDirectory=wangzhe
+StateDirectoryMode=0750
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/wangzhe
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

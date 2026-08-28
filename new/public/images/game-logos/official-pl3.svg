@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs><linearGradient id="bg" x1="72" y1="48" x2="441" y2="467" gradientUnits="userSpaceOnUse"><stop stop-color="#7A73F5"/><stop offset=".5" stop-color="#5544D8"/><stop offset="1" stop-color="#322395"/></linearGradient></defs>
+  <circle cx="256" cy="256" r="250" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="224" fill="none" stroke="#CBC8FF" stroke-width="18" opacity=".88"/>
+  <path d="M105 220h80v154h-80zm106-61h80v215h-80zm106-73h80v288h-80z" fill="#fff" opacity=".22"/>
+  <text x="256" y="164" text-anchor="middle" fill="#EDEBFF" font-family="PingFang SC,Microsoft YaHei,sans-serif" font-size="55" font-weight="800">中国体彩</text>
+  <text x="220" y="346" text-anchor="middle" fill="#fff" font-family="PingFang SC,Microsoft YaHei,sans-serif" font-size="104" font-weight="900" stroke="#30208E" stroke-width="6" paint-order="stroke">排列</text>
+  <text x="389" y="356" text-anchor="middle" fill="#FFE25A" font-family="Arial Black,Arial,sans-serif" font-size="158" font-weight="900" stroke="#30208E" stroke-width="6" paint-order="stroke">3</text>
+</svg>

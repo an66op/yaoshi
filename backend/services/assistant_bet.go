@@ -1,6 +1,7 @@
 package services
 
 import (
+	"backend/accesscontrol"
 	"backend/data/models/bet"
 	"backend/data/models/lottery"
 	"backend/data/models/user"
@@ -14,16 +15,19 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // AssistantBetLine is the server-authoritative explanation of one parsed bet.
-// Amounts are returned in yuan and always add up to the amount typed by the member.
+// The amount suffix is the amount of each expanded selection. For example,
+// 1/123/100 expands to three lines of 100 and a total debit of 300.
 type AssistantBetLine struct {
 	Position  int     `json:"position"`
 	Selection string  `json:"selection"`
 	PlayCode  string  `json:"play_code"`
 	PlayName  string  `json:"play_name"`
 	Amount    float64 `json:"amount"`
+	Odds      float64 `json:"odds"`
 	Label     string  `json:"label"`
 }
 
@@ -54,10 +58,20 @@ type AssistantDrawStatus struct {
 	SourceError   string     `json:"source_error,omitempty"`
 }
 
-// History returns the member's accepted compact-input messages for one game.
-// AssistantRequest already stores the authoritative result for idempotency, so
-// it is also the correct source for rebuilding the room timeline after refresh.
+// History returns all accepted compact-input requests for server-side actions
+// such as “重复”. It includes both chat commands and detailed-board requests.
 func (s *BetAssistantService) History(userID uint64, gameID string, limit int) ([]AssistantBetResult, error) {
+	return s.history(userID, gameID, limit, false)
+}
+
+// DirectHistory returns only requests created by the detailed betting board.
+// Chat-command requests already have a durable assistant reply in the chat
+// table, so excluding them prevents duplicate receipts in the member timeline.
+func (s *BetAssistantService) DirectHistory(userID uint64, gameID string, limit int) ([]AssistantBetResult, error) {
+	return s.history(userID, gameID, limit, true)
+}
+
+func (s *BetAssistantService) history(userID uint64, gameID string, limit int, directOnly bool) ([]AssistantBetResult, error) {
 	gameID = strings.TrimSpace(gameID)
 	if gameID == "" {
 		return nil, apperrors.NewBusinessError("INVALID_GAME", "彩种参数不正确")
@@ -71,13 +85,23 @@ func (s *BetAssistantService) History(userID uint64, gameID string, limit int) (
 	if limit > 50 {
 		limit = 50
 	}
+	var owner user.User
+	if err := s.db.Select("workspace_id").First(&owner, userID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+		}
+		return nil, apperrors.NewSystemError("BET_HISTORY_READ_FAILED", "读取投注消息失败", err)
+	}
 
 	// ResultJSON contains game_id. Read a bounded recent window for this user,
 	// then filter after decoding so records from another game can never leak
 	// into the current room.
 	var rows []bet.AssistantRequest
-	if err := s.db.Where("user_id = ? AND result_json <> ''", userID).
-		Order("id desc").Limit(500).Find(&rows).Error; err != nil {
+	query := s.db.Where("workspace_id = ? AND user_id = ? AND status = ? AND result_json <> ''", owner.WorkspaceID, userID, "completed")
+	if directOnly {
+		query = query.Where("request_id NOT LIKE ?", "chat-%")
+	}
+	if err := query.Order("id desc").Limit(500).Find(&rows).Error; err != nil {
 		return nil, apperrors.NewSystemError("BET_HISTORY_READ_FAILED", "读取投注消息失败", err)
 	}
 
@@ -115,47 +139,177 @@ func NewBetAssistantService(db *gorm.DB) *BetAssistantService {
 
 func (s *BetAssistantService) Place(userID uint64, gameID, issue, content, operator, requestID string) (*AssistantBetResult, error) {
 	requestID = strings.TrimSpace(requestID)
-	if requestID != "" {
-		if len(requestID) < 8 || len(requestID) > 96 {
-			return nil, apperrors.NewBusinessError("INVALID_REQUEST", "请求标识不正确")
-		}
-		row := bet.AssistantRequest{UserID: userID, RequestID: requestID}
-		created := s.db.Create(&row)
-		if created.Error != nil {
-			if !strings.Contains(strings.ToLower(created.Error.Error()), "duplicate") {
-				return nil, apperrors.NewSystemError("REQUEST_SAVE_FAILED", "保存投注请求失败", created.Error)
-			}
-			var previous bet.AssistantRequest
-			if err := s.db.Where("user_id = ? AND request_id = ?", userID, requestID).First(&previous).Error; err != nil {
-				return nil, apperrors.NewSystemError("REQUEST_READ_FAILED", "读取投注请求失败", err)
-			}
-			if strings.TrimSpace(previous.ResultJSON) == "" {
-				return nil, apperrors.NewBusinessError("REQUEST_IN_PROGRESS", "投注请求处理中，请勿重复提交")
-			}
-			var cached AssistantBetResult
-			if err := json.Unmarshal([]byte(previous.ResultJSON), &cached); err != nil {
-				return nil, apperrors.NewSystemError("REQUEST_READ_FAILED", "读取投注结果失败", err)
-			}
-			return &cached, nil
-		}
-		result, err := s.place(userID, gameID, issue, content, operator, "assistant_request:"+strconv.FormatUint(row.ID, 10))
-		if err != nil {
-			_ = s.db.Delete(&row).Error // validation failures may be corrected and retried with the same key.
-			return nil, err
-		}
-		payload, err := json.Marshal(result)
-		if err != nil {
-			// The financial transaction has already committed.  Never report the
-			// accepted ticket as failed, because a client retry could create a new
-			// request id and deduct the balance again.
-			return result, nil
-		}
-		if err := s.db.Model(&row).Update("result_json", string(payload)).Error; err != nil {
-			return result, nil
-		}
-		return result, nil
+	if requestID == "" {
+		return s.place(userID, gameID, issue, content, operator, "")
 	}
-	return s.place(userID, gameID, issue, content, operator, "")
+	if len(requestID) < 8 || len(requestID) > 96 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "请求标识不正确")
+	}
+	payloadHash, hashErr := idempotencyPayloadHash(struct {
+		GameID  string `json:"game_id"`
+		Issue   string `json:"issue"`
+		Content string `json:"content"`
+	}{
+		GameID: strings.TrimSpace(gameID), Issue: strings.TrimSpace(issue),
+		Content: strings.TrimSpace(content),
+	})
+	if hashErr != nil {
+		return nil, apperrors.NewSystemError("REQUEST_SAVE_FAILED", "生成投注请求凭证失败", hashErr)
+	}
+
+	var result *AssistantBetResult
+	var notify bool
+	var workspaceID uint64
+	var roomScope string
+	var terminalErr error
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var owner user.User
+		if err := tx.Select("user_id", "workspace_id").First(&owner, userID).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+			}
+			return err
+		}
+
+		row := bet.AssistantRequest{WorkspaceID: owner.WorkspaceID, UserID: userID, RequestID: requestID, PayloadHash: payloadHash, Status: "processing"}
+		created := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "user_id"}, {Name: "request_id"}},
+			DoNothing: true,
+		}).Create(&row)
+		if created.Error != nil {
+			return created.Error
+		}
+		if created.RowsAffected == 0 {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("user_id = ? AND request_id = ?", userID, requestID).First(&row).Error; err != nil {
+				return err
+			}
+			// The request id is member supplied and remains unique across that
+			// member's lifetime. Check the frozen room before returning a cached
+			// receipt so moving rooms cannot replay assistant data from the prior
+			// workspace.
+			if row.WorkspaceID != owner.WorkspaceID {
+				message := "请求所属房间已变化，请使用新的请求标识重新提交"
+				if row.Status == "processing" {
+					if err := tx.Model(&bet.AssistantRequest{}).Where("id = ? AND status = ?", row.ID, "processing").
+						Updates(map[string]any{"status": "failed", "last_error": message}).Error; err != nil {
+						return err
+					}
+				}
+				terminalErr = apperrors.NewBusinessError("REQUEST_CONTEXT_CHANGED", message)
+				return nil
+			}
+			if row.PayloadHash != "" && row.PayloadHash != payloadHash {
+				terminalErr = apperrors.NewBusinessError("IDEMPOTENCY_CONFLICT", "该请求标识已用于其他投注")
+				return nil
+			}
+			cached, handled, err := s.resolveExistingAssistantRequest(tx, row, time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			if handled {
+				result = cached
+				return nil
+			}
+		}
+
+		atomic := &BetAssistantService{
+			db:   tx,
+			bets: &BetAdminService{db: tx, suppressNotifications: true},
+		}
+		placed, err := atomic.place(userID, gameID, issue, content, operator, assistantBetRequestReference(row.ID))
+		if err != nil {
+			return err
+		}
+		payload, err := json.Marshal(placed)
+		if err != nil {
+			return apperrors.NewSystemError("REQUEST_SAVE_FAILED", "保存投注回执失败", err)
+		}
+		updated := tx.Model(&bet.AssistantRequest{}).Where("id = ? AND status = ? AND result_json = ''", row.ID, "processing").
+			Updates(map[string]any{"status": "completed", "result_json": string(payload), "last_error": ""})
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected != 1 {
+			return fmt.Errorf("开奖助手请求状态发生冲突")
+		}
+		var committedOwner user.User
+		if err := tx.Select("user_id", "workspace_id", "role", "parent_agent_id", "parent_tenant_id").First(&committedOwner, userID).Error; err != nil {
+			return err
+		}
+		result = placed
+		notify = true
+		workspaceID = committedOwner.WorkspaceID
+		roomScope = betRoomScope(committedOwner)
+		return nil
+	})
+	if err != nil {
+		if app, ok := err.(*apperrors.AppError); ok {
+			return nil, app
+		}
+		return nil, apperrors.NewSystemError("BET_CREATE_FAILED", "创建注单失败", err)
+	}
+	if terminalErr != nil {
+		return nil, terminalErr
+	}
+	if notify && result != nil {
+		s.bets.notifyPlacement(userID, workspaceID, roomScope, result.GameID, result.Issue, result.Balance)
+	}
+	return result, nil
+}
+
+func assistantBetRequestReference(id uint64) string {
+	return "assistant_request:" + strconv.FormatUint(id, 10)
+}
+
+func (s *BetAssistantService) resolveExistingAssistantRequest(tx *gorm.DB, row bet.AssistantRequest, now time.Time) (*AssistantBetResult, bool, error) {
+	if row.Status == "completed" && strings.TrimSpace(row.ResultJSON) != "" {
+		var cached AssistantBetResult
+		if err := json.Unmarshal([]byte(row.ResultJSON), &cached); err != nil {
+			return nil, true, apperrors.NewSystemError("REQUEST_READ_FAILED", "读取投注结果失败", err)
+		}
+		return &cached, true, nil
+	}
+	if row.Status == "failed" {
+		return nil, true, apperrors.NewBusinessError("REQUEST_FAILED", defaultString(row.LastError, "该次投注未成功，请重新提交"))
+	}
+	if !idempotencyReservationExpired(row.UpdatedAt, now) {
+		return nil, true, apperrors.NewBusinessError("REQUEST_IN_PROGRESS", "投注请求处理中，请勿重复提交")
+	}
+
+	var ledger user.BalanceTransaction
+	err := tx.Where("user_id = ? AND reference = ?", row.UserID, assistantBetRequestReference(row.ID)).First(&ledger).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, true, err
+	}
+	if err := validateIdempotencyRequestLedger(ledger, row.UserID, row.WorkspaceID, assistantBetRequestReference(row.ID)); err != nil {
+		return nil, true, fmt.Errorf("历史开奖助手请求账务证据不一致")
+	}
+	recovered, payload, marshalErr := recoveredAssistantResult(ledger)
+	if marshalErr != nil {
+		return nil, true, marshalErr
+	}
+	updated := tx.Model(&bet.AssistantRequest{}).Where("id = ? AND status = ? AND result_json = ''", row.ID, "processing").
+		Updates(map[string]any{"status": "completed", "result_json": string(payload), "last_error": ""})
+	if updated.Error != nil {
+		return nil, true, updated.Error
+	}
+	if updated.RowsAffected != 1 {
+		return nil, true, fmt.Errorf("恢复开奖助手请求时状态发生冲突")
+	}
+	return recovered, true, nil
+}
+
+func recoveredAssistantResult(ledger user.BalanceTransaction) (*AssistantBetResult, []byte, error) {
+	recovered := &AssistantBetResult{
+		Content: "该次投注已受理，请在注单记录查看详情",
+		Total:   centsToAmount(-ledger.AmountCents), Balance: centsToAmount(ledger.AfterCents), AcceptedAt: ledger.CreatedAt.UTC(),
+	}
+	payload, err := json.Marshal(recovered)
+	return recovered, payload, err
 }
 
 func (s *BetAssistantService) place(userID uint64, gameID, issue, content, operator, ledgerReference string) (*AssistantBetResult, error) {
@@ -213,8 +367,14 @@ func (s *BetAssistantService) place(userID uint64, gameID, issue, content, opera
 		})
 		totalCents += int64(math.Round(line.Amount * 100))
 	}
-	if _, err := s.bets.PlaceBatch(inputs); err != nil {
+	placedBets, err := s.bets.PlaceBatch(inputs)
+	if err != nil {
 		return nil, err
+	}
+	for index := range lines {
+		if index < len(placedBets) {
+			lines[index].Odds = placedBets[index].Odds
+		}
 	}
 	var account user.User
 	if err := s.db.Select("balance_cents").First(&account, userID).Error; err != nil {
@@ -258,6 +418,36 @@ func (s *BetAssistantService) Status(gameID string) (*AssistantDrawStatus, error
 	} else if err != gorm.ErrRecordNotFound {
 		return nil, apperrors.NewSystemError("DRAW_READ_FAILED", "读取开奖结果失败", err)
 	}
+	return status, nil
+}
+
+// StatusForUser narrows the platform draw state with the member's current
+// room switches. A room may close itself or one game even while the shared
+// platform lifecycle is healthy; the assistant must then report that it is
+// not accepting rather than waiting for the final Place transaction to reject
+// a command.
+func (s *BetAssistantService) StatusForUser(userID uint64, gameID string) (*AssistantDrawStatus, error) {
+	status, err := s.Status(gameID)
+	if err != nil {
+		return nil, err
+	}
+	var account user.User
+	if err := s.db.Select("user_id", "workspace_id", "role", "status", "agent_room_code", "parent_agent_id", "parent_tenant_id").
+		First(&account, userID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+		}
+		return nil, err
+	}
+	roomActive, err := accesscontrol.AccountRoomActive(s.db, account)
+	if err != nil {
+		return nil, err
+	}
+	gameEnabled, err := WorkspaceGameEnabled(s.db, account.WorkspaceID, gameID)
+	if err != nil {
+		return nil, err
+	}
+	status.Accepting = status.Accepting && roomActive && gameEnabled
 	return status, nil
 }
 
@@ -397,13 +587,22 @@ func assistantSumEntries(raw string) ([]assistantEntry, error) {
 	if raw == "" {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "请选择冠亚和号码或大小单双")
 	}
+	// 冠亚和 10-19 必须作为一个完整和值，不能按两个字符拆成两注。
+	// 单个 3-9 仍是一个和值；多个单字符和值可以继续用 # 分段下单。
+	if total, err := strconv.Atoi(raw); err == nil && total >= 3 && total <= 19 {
+		return []assistantEntry{{position: 6, selection: strconv.Itoa(total), playCode: "sum", playName: "冠亚和"}}, nil
+	}
 	entries := make([]assistantEntry, 0, len([]rune(raw)))
 	for _, char := range raw {
 		selection := string(char)
 		if !(char >= '0' && char <= '9') && !strings.ContainsRune("大小单双", char) {
 			return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("“%s”不是支持的冠亚和玩法", raw))
 		}
-		entries = append(entries, assistantEntry{position: 0, selection: selection, playCode: "sum", playName: "冠亚和"})
+		// Position 6 is the canonical storage slot for 冠亚和 throughout the
+		// betting, odds and settlement pipeline. Keeping the assistant on the
+		// same slot prevents an otherwise valid parsed ticket being rejected by
+		// PlaceBatch before any balance mutation happens.
+		entries = append(entries, assistantEntry{position: 6, selection: selection, playCode: "sum", playName: "冠亚和"})
 	}
 	return entries, nil
 }
@@ -441,8 +640,10 @@ func assistantPlayEntries(play string) ([]assistantEntry, error) {
 		}
 		return []assistantEntry{{position: assistantRanks[match[1]], selection: selection, playCode: playCode, playName: play}}, nil
 	}
-	if strings.HasPrefix(play, "冠亚和") {
-		selection := strings.TrimPrefix(strings.TrimPrefix(play, "冠亚和"), "/")
+	if strings.HasPrefix(play, "冠亚和") || strings.HasPrefix(play, "冠亚") {
+		selection := strings.TrimPrefix(play, "冠亚和")
+		selection = strings.TrimPrefix(selection, "冠亚")
+		selection = strings.TrimPrefix(selection, "/")
 		return assistantSumEntries(selection)
 	}
 	playRunes := []rune(play)

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"backend/data/models/lottery"
 	"math"
 	"testing"
 )
@@ -54,11 +55,16 @@ func TestParseAssistantBetMultipleRacingPositions(t *testing.T) {
 		t.Fatalf("expected eleven selections across three positions, got %d", len(lines))
 	}
 	var total float64
+	positions := map[int]int{}
 	for _, line := range lines {
 		total += line.Amount
+		positions[line.Position]++
 	}
 	if math.Abs(total-1200) > 0.00001 {
 		t.Fatalf("expected exact ticket total 1200, got %.2f", total)
+	}
+	if positions[1] != 5 || positions[6] != 1 || positions[7] != 5 || len(positions) != 3 {
+		t.Fatalf("expected 5/1/5 selections for positions 1/6/7, got %#v", positions)
 	}
 	if lines[0].Position != 1 || lines[0].Selection != "1" || lines[0].Amount != 100 {
 		t.Fatalf("unexpected first-position line: %#v", lines[0])
@@ -136,8 +142,9 @@ func TestParseAssistantBetReferenceRoomSyntax(t *testing.T) {
 		wantSelect string
 		wantCode   string
 	}{
-		{name: "crown sum number", content: "冠亚/9/9", wantLines: 1, wantTotal: 9, wantPos: 0, wantSelect: "9", wantCode: "sum"},
-		{name: "crown sum side", content: "冠亚/小/96", wantLines: 1, wantTotal: 96, wantPos: 0, wantSelect: "小", wantCode: "sum"},
+		{name: "crown sum number", content: "冠亚/9/9", wantLines: 1, wantTotal: 9, wantPos: 6, wantSelect: "9", wantCode: "sum"},
+		{name: "two digit crown sum", content: "冠亚/14/9", wantLines: 1, wantTotal: 9, wantPos: 6, wantSelect: "14", wantCode: "sum"},
+		{name: "crown sum side", content: "冠亚/小/96", wantLines: 1, wantTotal: 96, wantPos: 6, wantSelect: "小", wantCode: "sum"},
 		{name: "tenth place", content: "0/38/12", wantLines: 2, wantTotal: 24, wantPos: 10, wantSelect: "3", wantCode: "ball_1_5"},
 		{name: "default champion", content: "1234578/100", wantLines: 7, wantTotal: 700, wantPos: 1, wantSelect: "1", wantCode: "ball_1_5"},
 	}
@@ -198,10 +205,53 @@ func TestEvaluateRacingDragonTigerAndCrownSum(t *testing.T) {
 	if won, reason := evaluateBet(numbers, "dragon_tiger", 2, "龙"); !won {
 		t.Fatalf("expected runner-up dragon (10 > 9), got %s", reason)
 	}
-	if won, reason := evaluateBet(numbers, "sum", 0, "14"); won {
-		t.Fatalf("sum selection 14 is not a single supported selection: %s", reason)
+	if won, reason := evaluateBet(numbers, "sum", 6, "14"); !won {
+		t.Fatalf("expected exact crown sum 14, got %s", reason)
 	}
-	if won, reason := evaluateBet(numbers, "sum", 0, "4"); !won {
-		t.Fatalf("expected crown sum tail 4, got %s", reason)
+	if won, reason := evaluateBet(numbers, "sum", 6, "4"); won {
+		t.Fatalf("racing crown sum must not settle by tail: %s", reason)
+	}
+}
+
+func TestValidateRacingBetChoice(t *testing.T) {
+	game := &lottery.Game{Name: "极速赛车", Category: "赛车"}
+	valid := []struct {
+		playCode  string
+		position  int
+		selection string
+	}{
+		{"ball_1_5", 10, "10"},
+		{"two_sided", 6, "大"},
+		{"dragon_tiger", 5, "虎"},
+		{"sum", 6, "3"},
+		{"sum", 6, "19"},
+	}
+	for _, item := range valid {
+		if err := validateBetChoice(game, item.playCode, item.position, item.selection); err != nil {
+			t.Fatalf("expected valid choice %#v, got %v", item, err)
+		}
+	}
+	if normalized := normalizeBetSelection(game, "ball_1_5", "0"); normalized != "10" {
+		t.Fatalf("racing zero alias normalized to %q, want 10", normalized)
+	} else if err := validateBetChoice(game, "ball_1_5", 10, normalized); err != nil {
+		t.Fatalf("normalized racing number 10 must be accepted: %v", err)
+	}
+	invalid := []struct {
+		playCode  string
+		position  int
+		selection string
+	}{
+		{"ball_1_5", 1, "11"},
+		{"two_sided", 1, "龙"},
+		{"dragon_tiger", 6, "龙"},
+		{"dragon_tiger", 1, "大"},
+		{"sum", 6, "2"},
+		{"sum", 6, "20"},
+		{"leopard", 1, "中"},
+	}
+	for _, item := range invalid {
+		if err := validateBetChoice(game, item.playCode, item.position, item.selection); err == nil {
+			t.Fatalf("expected invalid choice %#v to be rejected", item)
+		}
 	}
 }

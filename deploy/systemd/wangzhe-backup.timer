@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Wangzhe PostgreSQL backup every day
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=10m
+Unit=wangzhe-backup.service
+
+[Install]
+WantedBy=timers.target

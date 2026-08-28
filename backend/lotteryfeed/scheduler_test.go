@@ -34,6 +34,12 @@ func TestRetryIntervalBacksOffAndCaps(t *testing.T) {
 	}
 }
 
+func TestTruncatePreservesUnicode(t *testing.T) {
+	if got := truncate("开奖源读取失败", 4); got != "开奖源读" {
+		t.Fatalf("truncate returned %q", got)
+	}
+}
+
 func TestSchedulerRunsImmediately(t *testing.T) {
 	called := make(chan struct{}, 1)
 	job := JobConfig{ID: "test", Name: "test", Group: "test", Timezone: "Asia/Shanghai", FastStart: "00:00", FastEnd: "23:59", FastInterval: time.Hour, NormalInterval: time.Hour, Timeout: time.Second}

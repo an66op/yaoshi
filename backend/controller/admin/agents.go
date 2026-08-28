@@ -2,7 +2,10 @@ package admin
 
 import (
 	"backend/constants"
+	workspacemodel "backend/data/models/workspace"
 	"backend/services"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -11,17 +14,99 @@ import (
 )
 
 type AgentHandler struct {
+	db      *gorm.DB
 	agents  *services.AgentAdminService
 	special *services.SpecialAdminService
 	trading *services.TradingAdminService
+	chat    *services.ChatAdminService
 }
 
 func NewAgentHandler(db *gorm.DB) *AgentHandler {
 	return &AgentHandler{
+		db:      db,
 		agents:  services.NewAgentAdminService(db),
 		special: services.NewSpecialAdminService(db),
 		trading: services.NewTradingAdminService(db),
+		chat:    services.NewChatAdminService(db),
 	}
+}
+
+func (h *AgentHandler) agentWorkspace(c *gin.Context) (workspacemodel.Workspace, bool) {
+	id, err := services.ParseUserID(c.Param("id"))
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "代理编号不正确", err)
+		return workspacemodel.Workspace{}, false
+	}
+	var workspace workspacemodel.Workspace
+	if err := h.db.Where("owner_user_id = ? AND type = ?", id, workspacemodel.TypeAgent).First(&workspace).Error; err != nil {
+		constants.SendError(c, http.StatusNotFound, "代理房间不存在", err)
+		return workspacemodel.Workspace{}, false
+	}
+	return workspace, true
+}
+
+func (h *AgentHandler) GetSettings(c *gin.Context) {
+	workspace, ok := h.agentWorkspace(c)
+	if !ok {
+		return
+	}
+	result, err := services.NewSettingsAdminService(h.db).GetForWorkspace(workspace.ID)
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取代理房间设置失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+func (h *AgentHandler) UpdateSettings(c *gin.Context) {
+	workspace, ok := h.agentWorkspace(c)
+	if !ok {
+		return
+	}
+	var request services.UpdateSystemSettingsInput
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "房间设置参数不正确", err)
+		return
+	}
+	result, err := services.NewSettingsAdminService(h.db).UpdateForWorkspace(workspace.ID, request)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "保存代理房间设置失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "代理房间设置已保存", result)
+}
+
+func (h *AgentHandler) Games(c *gin.Context) {
+	workspace, ok := h.agentWorkspace(c)
+	if !ok {
+		return
+	}
+	result, err := services.NewWorkspaceGameService(h.db).List(workspace.ID)
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取代理房间游戏失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+func (h *AgentHandler) SetGameStatus(c *gin.Context) {
+	workspace, ok := h.agentWorkspace(c)
+	if !ok {
+		return
+	}
+	var request struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "游戏状态参数不正确", err)
+		return
+	}
+	result, err := h.chat.SetLotteryRoomEnabledForWorkspace(workspace, c.Param("gameID"), request.Enabled)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, "保存代理房间游戏状态失败", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusOK, "代理房间游戏状态已保存", result)
 }
 
 func (h *AgentHandler) List(c *gin.Context) {
@@ -44,7 +129,10 @@ func (h *AgentHandler) Promote(c *gin.Context) {
 	var request struct {
 		RoomCode string `json:"room_code"`
 	}
-	_ = c.ShouldBindJSON(&request)
+	if err := c.ShouldBindJSON(&request); err != nil && !errors.Is(err, io.EOF) {
+		constants.SendError(c, http.StatusBadRequest, "代理参数不正确", err)
+		return
+	}
 	result, err := h.agents.Promote(id, request.RoomCode)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "设置代理失败", err)

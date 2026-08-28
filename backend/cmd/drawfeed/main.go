@@ -5,6 +5,7 @@ package main
 
 import (
 	"backend/api"
+	"backend/cluster"
 	"backend/config"
 	"backend/lotteryfeed"
 	"backend/services"
@@ -24,6 +25,20 @@ import (
 
 func main() {
 	config.LoadConfig()
+	cfg := config.GetConfig()
+	rootContext, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if err := cluster.Init(rootContext, cluster.Options{
+		Addr: cfg.Redis.Addr, Password: cfg.Redis.Password, DB: cfg.Redis.DB,
+		TLS: cfg.Redis.TLS, Prefix: cfg.Redis.Prefix, Required: cfg.Server.Mode == "release",
+	}); err != nil {
+		log.Fatalf("初始化 Redis 共享运行时失败: %v", err)
+	}
+	defer func() {
+		if err := cluster.Close(); err != nil {
+			log.Printf("关闭 Redis 连接失败: %v", err)
+		}
+	}()
 	db, err := config.ConnectDB()
 	if err != nil {
 		log.Fatal(err)
@@ -41,9 +56,8 @@ func main() {
 		}
 		return mapped
 	})
-	rootContext, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	scheduler.Start(rootContext)
+	services.StartSettlementRecovery(rootContext, db)
 
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery(), api.Cors())

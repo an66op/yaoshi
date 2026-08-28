@@ -1,12 +1,11 @@
 import {
-  Alert, Box, Button, Card, CardContent, Chip, CircularProgress, InputAdornment, MenuItem, Paper, Stack,
+  Alert, Box, Button, Card, CardContent, Chip, InputAdornment, MenuItem, Paper, Stack,
   Table, TableBody, TableCell, TableContainer, TableHead, TablePagination, TableRow, TextField, Typography,
 } from '@mui/material'
 import DownloadRounded from '@mui/icons-material/DownloadRounded'
-import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
 import { useCallback, useEffect, useState } from 'react'
-import { adminApi, agentApi, tenantApi, type OperatingReport } from '../api'
+import { adminApi, agentApi, type OperatingReport } from '../api'
 import { useFeedback } from './feedback'
 import { ProfitSharePanel } from './ProfitSharePanel'
 
@@ -18,7 +17,7 @@ const daysAgo = (days: number) => { const date = new Date(); date.setDate(date.g
 type Filters = { query: string; start: string; end: string; roomScope: string; gameId: string; dimension: 'room' | 'game' | 'user' }
 const initialFilters = (agent: boolean): Filters => ({ query: '', start: daysAgo(6), end: today(), roomScope: '', gameId: '', dimension: agent ? 'game' : 'room' })
 
-export function OperatingReportPanel({ agent = false, tenantAgentId }: { agent?: boolean; tenantAgentId?: number }) {
+export function OperatingReportPanel({ agent = false }: { agent?: boolean }) {
   const [draft, setDraft] = useState(() => initialFilters(agent))
   const [applied, setApplied] = useState(() => initialFilters(agent))
   const [page, setPage] = useState(0)
@@ -32,14 +31,17 @@ export function OperatingReportPanel({ agent = false, tenantAgentId }: { agent?:
     setLoading(true); setError('')
     try {
       const params = { ...applied, page: page + 1, pageSize }
-      const result = tenantAgentId
-        ? await tenantApi.roomOperatingReport(tenantAgentId, params)
-        : await (agent ? agentApi : adminApi).operatingReport(params)
-      setData(result)
+      const result = await (agent ? agentApi : adminApi).operatingReport(params)
+      setData({
+        ...result,
+        trend: Array.isArray(result?.trend) ? result.trend : [],
+        breakdown: Array.isArray(result?.breakdown) ? result.breakdown : [],
+        items: Array.isArray(result?.items) ? result.items : [],
+      })
       if (notify) showMessage('经营账单已刷新')
     } catch (reason) { setError(reason instanceof Error ? reason.message : '读取经营账单失败') }
     finally { setLoading(false) }
-  }, [agent, applied, page, pageSize, showMessage, tenantAgentId])
+  }, [agent, applied, page, pageSize, showMessage])
 
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load])
   const apply = () => {
@@ -89,7 +91,7 @@ export function OperatingReportPanel({ agent = false, tenantAgentId }: { agent?:
       <Stack direction="row" gap={.75} flexWrap="wrap" mt={1.2} alignItems="center">
         <Button size="small" variant="outlined" onClick={() => selectPeriod(1)}>今日</Button><Button size="small" variant="outlined" onClick={() => selectPeriod(7)}>近 7 天</Button><Button size="small" variant="outlined" onClick={() => selectPeriod(30)}>近 30 天</Button>
         <Box flex={1} />
-        <Button size="small" onClick={reset}>重置</Button><Button size="small" variant="contained" onClick={apply} sx={{ minWidth: 88 }}>查询</Button><Button size="small" startIcon={<DownloadRounded />} disabled={!data?.items.length} onClick={exportItems}>导出当前页</Button><Button size="small" startIcon={loading ? <CircularProgress size={14} /> : <RefreshRounded />} disabled={loading} onClick={() => void load(true)}>刷新</Button>
+        <Button size="small" onClick={reset}>重置</Button><Button size="small" variant="contained" onClick={apply} sx={{ minWidth: 88 }}>查询</Button><Button size="small" startIcon={<DownloadRounded />} disabled={!data?.items.length} onClick={exportItems}>导出当前页</Button>
       </Stack>
     </Paper>
 
@@ -100,7 +102,7 @@ export function OperatingReportPanel({ agent = false, tenantAgentId }: { agent?:
       <Card><CardContent><Stack direction="row" justifyContent="space-between"><Box><Typography fontWeight={850}>{breakdownTitle}</Typography><Typography variant="caption" color="text.secondary">每一层都可核对投注、派彩、三项成本与净利</Typography></Box><Chip size="small" label={`${data?.breakdown.length ?? 0} 项`} /></Stack><TableContainer sx={{ mt: 1, maxHeight: 245 }}><Table stickyHeader size="small"><TableHead><TableRow><TableCell>对象</TableCell><TableCell align="right">投注</TableCell><TableCell align="right">毛利</TableCell><TableCell align="right">回水</TableCell><TableCell align="right">福利</TableCell><TableCell align="right">代理分成</TableCell><TableCell align="right">净利</TableCell></TableRow></TableHead><TableBody>{data?.breakdown.map(row => <TableRow key={row.key} hover><TableCell><Typography fontSize={12} fontWeight={800}>{row.label}</Typography><Typography fontSize={9} color="text.secondary">{row.tickets} 注 · {row.key}</Typography></TableCell><TableCell align="right">{money(row.turnover)}</TableCell><TableCell align="right">{money(row.gross_profit)}</TableCell><TableCell align="right">{money(row.rebate)}</TableCell><TableCell align="right">{money(row.welfare)}</TableCell><TableCell align="right">{money(row.agent_share)}</TableCell><TableCell align="right"><Typography fontWeight={850} color={row.platform_profit >= 0 ? 'success.main' : 'error.main'}>{money(row.platform_profit)}</Typography></TableCell></TableRow>)}</TableBody></Table></TableContainer></CardContent></Card>
     </Box>
 
-    {!tenantAgentId && <ProfitSharePanel key={`${agent ? 'agent' : 'admin'}:${applied.end || today()}`} agent={agent} initialDate={applied.end || today()} />}
+    <ProfitSharePanel key={`${agent ? 'agent' : 'admin'}:${applied.end || today()}`} agent={agent} initialDate={applied.end || today()} />
 
     <Card sx={{ mt: 1.5 }}><Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1} p={2} pb={1}><Box><Typography fontWeight={850}>逐笔注单利润明细</Typography><Typography variant="caption" color="text.secondary">赔率、回水率和分成率均为下注时冻结快照，可直接追账</Typography></Box><Chip size="small" variant="outlined" label={`共 ${data?.total ?? 0} 笔`} /></Stack><TableContainer><Table size="small" sx={{ minWidth: 1260 }}><TableHead><TableRow><TableCell>注单 / 房间</TableCell><TableCell>会员</TableCell><TableCell>彩种 / 期号</TableCell><TableCell>玩法</TableCell><TableCell align="right">投注</TableCell><TableCell align="right">派彩</TableCell><TableCell align="right">毛利</TableCell><TableCell align="right">回水</TableCell><TableCell align="right">代理分成</TableCell><TableCell align="right">平台净利</TableCell><TableCell>结算时间</TableCell></TableRow></TableHead><TableBody>{data?.items.map(row => <TableRow key={row.id} hover><TableCell><Typography fontWeight={800}>#{row.id}</Typography><Typography fontSize={9} color="text.secondary">{row.room_scope || 'lobby'}</Typography></TableCell><TableCell><Typography fontSize={12}>{row.username}</Typography><Typography fontSize={9} color="text.secondary">ID {row.user_id}</Typography></TableCell><TableCell><Typography fontSize={12} fontWeight={700}>{row.game_name}</Typography><Typography fontSize={9} color="text.secondary">{row.issue}</Typography></TableCell><TableCell><Typography fontSize={11}>{row.play_name}</Typography><Typography fontSize={9} color="text.secondary">{row.selection}</Typography></TableCell><TableCell align="right">{money(row.stake)}</TableCell><TableCell align="right">{money(row.payout)}</TableCell><TableCell align="right">{money(row.gross_profit)}</TableCell><TableCell align="right"><Typography fontSize={11}>{money(row.rebate)}</Typography><Typography fontSize={9} color="text.secondary">{row.rebate_rate}%</Typography></TableCell><TableCell align="right"><Typography fontSize={11}>{money(row.agent_share)}</Typography><Typography fontSize={9} color="text.secondary">{row.agent_share_rate}%</Typography></TableCell><TableCell align="right"><Typography fontWeight={850} color={row.platform_profit >= 0 ? 'success.main' : 'error.main'}>{money(row.platform_profit)}</Typography></TableCell><TableCell>{dateTime(row.settled_at)}</TableCell></TableRow>)}{!loading && !data?.items.length && <TableRow><TableCell colSpan={11} align="center" sx={{ py: 8, color: 'text.secondary' }}>当前条件没有已结算注单</TableCell></TableRow>}</TableBody></Table></TableContainer><TablePagination component="div" count={data?.total ?? 0} page={page} onPageChange={(_, next) => setPage(next)} rowsPerPage={pageSize} onRowsPerPageChange={event => { setPageSize(Number(event.target.value)); setPage(0) }} rowsPerPageOptions={[10, 20, 50, 100]} labelRowsPerPage="每页" /></Card>
   </Box>

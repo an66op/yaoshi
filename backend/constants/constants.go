@@ -1,7 +1,8 @@
 package constants
 
 import (
-	"backend/errors"
+	apperrors "backend/errors"
+	stderrors "errors"
 	"log"
 	"net/http"
 
@@ -35,12 +36,13 @@ func SendError(c *gin.Context, defaultCode int, defaultMessage string, err error
 	}
 
 	// 检查是否是自定义错误类型
-	if appErr, ok := err.(*errors.AppError); ok {
+	var appErr *apperrors.AppError
+	if stderrors.As(err, &appErr) {
 		httpCode := http.StatusInternalServerError
 		message := appErr.Message
 
 		// 根据错误类型设置HTTP状态码
-		if appErr.Type == errors.ErrTypeBusiness {
+		if appErr.Type == apperrors.ErrTypeBusiness {
 			// 业务错误：根据错误代码设置合适的状态码
 			switch appErr.Code {
 			case "USERNAME_EXISTS", "EMAIL_EXISTS":

@@ -19,3 +19,25 @@ func TestNormalizeAdminContextAcceptsSelectedGroupRoom(t *testing.T) {
 		t.Fatalf("normalizeAdminContext() = %q, %q", roomScope, gameID)
 	}
 }
+
+func TestNormalizeAdminContextKeepsExplicitHistoricalServiceRoom(t *testing.T) {
+	service := &ChatAdminService{}
+	for _, roomScope := range []string{"agent:9", "tenant:4", "lobby"} {
+		resolvedRoom, gameID, err := service.normalizeAdminContext("user:7", "service", roomScope, "ignored")
+		if err != nil {
+			t.Fatalf("normalize historic service room %q: %v", roomScope, err)
+		}
+		if resolvedRoom != roomScope || gameID != "service" {
+			t.Fatalf("historic service room was reclassified: got %q/%q, want %q/service", resolvedRoom, gameID, roomScope)
+		}
+	}
+}
+
+func TestNormalizeAdminContextRejectsServiceWithoutFrozenRoom(t *testing.T) {
+	service := &ChatAdminService{}
+	for _, roomScope := range []string{"", "legacy", "user:7"} {
+		if _, _, err := service.normalizeAdminContext("user:7", "service", roomScope, "service"); err == nil {
+			t.Fatalf("service context accepted invalid frozen room %q", roomScope)
+		}
+	}
+}

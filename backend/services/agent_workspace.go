@@ -5,6 +5,7 @@ import (
 	"backend/data/models/application"
 	"backend/data/models/bet"
 	"backend/data/models/user"
+	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
 	"fmt"
 	"strings"
@@ -41,48 +42,57 @@ func NewAgentWorkspaceService(db *gorm.DB) *AgentWorkspaceService {
 	return &AgentWorkspaceService{db: db}
 }
 
+func (s *AgentWorkspaceService) DashboardForWorkspace(workspaceID uint64) (*AgentWorkspaceDashboard, error) {
+	var workspace workspacemodel.Workspace
+	if err := s.db.Where("id = ? AND status = ?", workspaceID, 1).First(&workspace).Error; err != nil {
+		return nil, apperrors.NewBusinessError("WORKSPACE_NOT_FOUND", "房间不存在或已停用")
+	}
+	result := &AgentWorkspaceDashboard{AgentID: workspace.OwnerUserID, RoomCode: workspace.RoomCode, RoomName: workspace.Name, RoomLogo: workspace.Logo}
+	members := s.db.Model(&user.User{}).Where("workspace_id = ? AND role = ? AND remark <> ?", workspaceID, "member", roomActivityRemark)
+	if err := members.Count(&result.MemberCount).Error; err != nil {
+		return nil, err
+	}
+	if err := s.db.Model(&user.User{}).Where("workspace_id = ? AND role = ? AND status = 1 AND remark <> ?", workspaceID, "member", roomActivityRemark).Count(&result.ActiveMemberCount).Error; err != nil {
+		return nil, err
+	}
+	var balance int64
+	if err := members.Select("COALESCE(SUM(balance_cents),0)").Scan(&balance).Error; err != nil {
+		return nil, err
+	}
+	result.MemberBalance = centsToAmount(balance)
+	start := startOfDayCST(time.Now())
+	var money struct{ Stake, Payout, Rebate, AgentShare int64 }
+	if err := s.db.Model(&bet.Bet{}).Where("workspace_id = ? AND COALESCE(settled_at,updated_at,created_at) >= ? AND status IN ?", workspaceID, start, []string{"won", "lost"}).
+		Select("COALESCE(SUM(amount_cents),0) AS stake, COALESCE(SUM(payout_cents),0) AS payout, COALESCE(SUM(rebate_cents),0) AS rebate, COALESCE(SUM(agent_share_cents),0) AS agent_share").Scan(&money).Error; err != nil {
+		return nil, err
+	}
+	result.TodayStake, result.TodayPayout = centsToAmount(money.Stake), centsToAmount(money.Payout)
+	result.TodayNet, result.TodayRebate, result.TodayAgentShare = result.TodayStake-result.TodayPayout, centsToAmount(money.Rebate), centsToAmount(money.AgentShare)
+	result.TodayPlatformProfit = centsToAmount(money.Stake - money.Payout - money.Rebate - money.AgentShare)
+	var pending int64
+	if err := s.db.Model(&bet.Bet{}).Where("workspace_id = ? AND status = ?", workspaceID, "pending").Select("COALESCE(SUM(amount_cents),0)").Scan(&pending).Error; err != nil {
+		return nil, err
+	}
+	result.PendingTurnover = centsToAmount(pending)
+	if err := s.db.Model(&bet.Bet{}).Where("workspace_id = ? AND status = ?", workspaceID, "pending").Count(&result.PendingBets).Error; err != nil {
+		return nil, err
+	}
+	if err := s.db.Model(&application.Application{}).Where("workspace_id = ? AND status = ?", workspaceID, "pending").Count(&result.PendingApplications).Error; err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (s *AgentWorkspaceService) Dashboard(agentID uint64) (*AgentWorkspaceDashboard, error) {
 	agent, err := s.agent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	result := &AgentWorkspaceDashboard{AgentID: agentID, RoomCode: agent.AgentRoomCode, RoomName: agentRoomDisplayName(*agent), RoomLogo: agent.AgentRoomLogo}
-	members := s.db.Model(&user.User{}).Where("parent_agent_id = ? AND remark <> ?", agentID, roomActivityRemark)
-	if err := members.Count(&result.MemberCount).Error; err != nil {
+	workspace, err := WorkspaceForAccount(s.db, *agent)
+	if err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&user.User{}).Where("parent_agent_id = ? AND status = 1 AND remark <> ?", agentID, roomActivityRemark).Count(&result.ActiveMemberCount).Error; err != nil {
-		return nil, err
-	}
-	var balance int64
-	if err := s.db.Model(&user.User{}).Where("parent_agent_id = ? AND remark <> ?", agentID, roomActivityRemark).Select("COALESCE(SUM(balance_cents),0)").Scan(&balance).Error; err != nil {
-		return nil, err
-	}
-	result.MemberBalance = centsToAmount(balance)
-	scope := fmt.Sprintf("agent:%d", agentID)
-	start := startOfDayCST(time.Now())
-	var money struct{ Stake, Payout, Rebate, AgentShare int64 }
-	if err := s.db.Model(&bet.Bet{}).Where("room_scope = ? AND COALESCE(settled_at,updated_at,created_at) >= ? AND status IN ?", scope, start, []string{"won", "lost"}).
-		Select("COALESCE(SUM(amount_cents),0) AS stake, COALESCE(SUM(payout_cents),0) AS payout, COALESCE(SUM(rebate_cents),0) AS rebate, COALESCE(SUM(agent_share_cents),0) AS agent_share").Scan(&money).Error; err != nil {
-		return nil, err
-	}
-	result.TodayStake, result.TodayPayout = centsToAmount(money.Stake), centsToAmount(money.Payout)
-	result.TodayNet = result.TodayStake - result.TodayPayout
-	result.TodayRebate = centsToAmount(money.Rebate)
-	result.TodayAgentShare = centsToAmount(money.AgentShare)
-	result.TodayPlatformProfit = centsToAmount(money.Stake - money.Payout - money.Rebate - money.AgentShare)
-	var pendingTurnover int64
-	if err := s.db.Model(&bet.Bet{}).Where("room_scope = ? AND status = ?", scope, "pending").Select("COALESCE(SUM(amount_cents),0)").Scan(&pendingTurnover).Error; err != nil {
-		return nil, err
-	}
-	result.PendingTurnover = centsToAmount(pendingTurnover)
-	if err := s.db.Model(&bet.Bet{}).Where("room_scope = ? AND status = ?", scope, "pending").Count(&result.PendingBets).Error; err != nil {
-		return nil, err
-	}
-	if err := s.applicationQuery(agentID).Where("status = ?", "pending").Count(&result.PendingApplications).Error; err != nil {
-		return nil, err
-	}
-	return result, nil
+	return s.DashboardForWorkspace(workspace.ID)
 }
 
 func (s *AgentWorkspaceService) Users(agentID uint64, filter UserListFilter) (*UserList, error) {
@@ -180,21 +190,13 @@ func (s *AgentWorkspaceService) Applications(agentID uint64, filter ApplicationF
 	if filter.PageSize < 1 || filter.PageSize > 100 {
 		filter.PageSize = 20
 	}
-	query := s.applicationQuery(agentID)
-	if q := strings.TrimSpace(filter.Query); q != "" {
-		like := "%" + strings.ToLower(q) + "%"
-		query = query.Where("LOWER(username) LIKE ? OR LOWER(remark) LIKE ? OR LOWER(review_remark) LIKE ?", like, like, like)
-	}
-	if filter.Status != "" && filter.Status != "all" {
-		query = query.Where("status = ?", filter.Status)
-	}
-	query = filterApplicationCategory(query, filter.RequestType)
+	query := applyApplicationFilters(s.applicationQuery(agentID), filter)
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		return nil, err
 	}
 	var rows []application.Application
-	if err := query.Order("CASE WHEN status = 'pending' THEN 0 ELSE 1 END, created_at DESC").Offset((filter.Page - 1) * filter.PageSize).Limit(filter.PageSize).Find(&rows).Error; err != nil {
+	if err := query.Order("CASE WHEN status = 'pending' THEN 0 ELSE 1 END, CASE WHEN status = 'pending' THEN created_at END ASC, created_at DESC").Offset((filter.Page - 1) * filter.PageSize).Limit(filter.PageSize).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	items := make([]AdminApplication, 0, len(rows))
@@ -244,23 +246,18 @@ func (s *AgentWorkspaceService) agent(agentID uint64) (*user.User, error) {
 }
 
 func (s *AgentWorkspaceService) UpdateRoomProfile(agentID uint64, roomName, roomLogo string) (*AgentWorkspaceDashboard, error) {
-	roomName = normalizeAgentRoomName(roomName)
-	length := len([]rune(roomName))
-	if length < 2 || length > 30 {
-		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "房间名称长度需为 2–30 个字符")
-	}
-	roomLogo, logoErr := normalizeRoomLogo(roomLogo)
-	if logoErr != nil {
-		return nil, logoErr
-	}
 	agent, err := s.agent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(agent).Updates(map[string]any{"agent_room_name": roomName, "agent_room_logo": roomLogo}).Error; err != nil {
-		return nil, apperrors.NewSystemError("ROOM_UPDATE_FAILED", "保存房间名称失败", err)
+	workspace, err := WorkspaceForAccount(s.db, *agent)
+	if err != nil {
+		return nil, err
 	}
-	return s.Dashboard(agentID)
+	if _, err := NewSettingsAdminService(s.db).UpdateRoomProfileForWorkspace(workspace.ID, roomName, roomLogo); err != nil {
+		return nil, err
+	}
+	return s.DashboardForWorkspace(workspace.ID)
 }
 
 func (s *AgentWorkspaceService) roomMemberIDs(agentID uint64) *gorm.DB {
@@ -268,7 +265,7 @@ func (s *AgentWorkspaceService) roomMemberIDs(agentID uint64) *gorm.DB {
 }
 
 func (s *AgentWorkspaceService) applicationQuery(agentID uint64) *gorm.DB {
-	scope := fmt.Sprintf("agent:%d", agentID)
-	return s.db.Model(&application.Application{}).
-		Where("room_scope = ? OR (COALESCE(room_scope, '') = '' AND user_id IN (?))", scope, s.roomMemberIDs(agentID))
+	var workspaceID uint64
+	_ = s.db.Model(&user.User{}).Where("user_id = ?", agentID).Pluck("workspace_id", &workspaceID).Error
+	return s.db.Model(&application.Application{}).Where("workspace_id = ?", workspaceID)
 }

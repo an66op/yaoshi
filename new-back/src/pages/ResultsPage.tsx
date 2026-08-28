@@ -21,7 +21,6 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import RefreshRounded from "@mui/icons-material/RefreshRounded";
 import DownloadRounded from "@mui/icons-material/DownloadRounded";
 import SearchRounded from "@mui/icons-material/SearchRounded";
 import CloudSyncRounded from "@mui/icons-material/CloudSyncRounded";
@@ -82,12 +81,6 @@ function drawSummary(numbers: number[], gameId: string) {
     parity: threshold === undefined ? "—" : sum % 2 ? "单" : "双",
   };
 }
-
-const TARGET_GAME_IDS = new Set([
-  'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4',
-  'bingo-racing-a', 'bingo-racing-b', 'bingo-mark-six',
-  'hong-kong-mark-six', 'happy8-mark-six', 'new-macau-mark-six', 'old-macau-mark-six',
-])
 
 export function ResultsPage() {
   const [games, setGames] = useState<AdminGame[]>([]);
@@ -159,20 +152,6 @@ export function ResultsPage() {
     page * rowsPerPage,
     page * rowsPerPage + rowsPerPage,
   );
-  const targetReadyCount = games.filter((game) => TARGET_GAME_IDS.has(game.id)).length;
-  const reload = async () => {
-    if (!gameId) return;
-    setLoading(true);
-    setError("");
-    try {
-      setDraws(await adminApi.draws(gameId));
-      showMessage("开奖结果已刷新");
-    } catch {
-      setError("刷新失败");
-    } finally {
-      setLoading(false);
-    }
-  };
   const exportCsv = () => {
     const game =
       games.find((item) => item.id === gameId)?.name ?? "开奖结果查询";
@@ -263,7 +242,7 @@ export function ResultsPage() {
       <PageHeader
         eyebrow="游戏运营 / 官方开奖"
         title="开奖结果查询"
-        description={`自动跟随官方数据发布时间。目标彩种 ${targetReadyCount}/11 已入库。`}
+        description=""
         actions={
           <>
             <Button
@@ -293,20 +272,6 @@ export function ResultsPage() {
               onClick={syncOfficial}
             >
               立即补抓
-            </Button>
-            <Button
-              variant="contained"
-              startIcon={
-                loading ? (
-                  <CircularProgress color="inherit" size={16} />
-                ) : (
-                  <RefreshRounded />
-                )
-              }
-              disabled={loading}
-              onClick={reload}
-            >
-              刷新
             </Button>
           </>
         }

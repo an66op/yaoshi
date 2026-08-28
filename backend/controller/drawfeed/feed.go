@@ -6,6 +6,7 @@ import (
 	"backend/services"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -35,7 +36,16 @@ func (h *Handler) Clock(c *gin.Context) {
 
 func (h *Handler) Status(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
-	constants.SendSuccess(c, http.StatusOK, "ok", h.scheduler.Status())
+	health, err := h.lottery.SettlementHealth(time.Now().UTC())
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取开奖结算健康状态失败", err)
+		return
+	}
+	type statusResponse struct {
+		lotteryfeed.Status
+		Health services.SettlementHealthSummary `json:"health"`
+	}
+	constants.SendSuccess(c, http.StatusOK, "ok", statusResponse{Status: h.scheduler.Status(), Health: health})
 }
 
 func (h *Handler) Games(c *gin.Context) {
@@ -63,7 +73,7 @@ func (h *Handler) EnabledGames(c *gin.Context) {
 	}
 	enabled := make([]services.GameSummary, 0, len(games))
 	for _, game := range games {
-		if game.Enabled {
+		if game.Enabled && strings.TrimSpace(game.LobbyCategory) != "" {
 			enabled = append(enabled, game)
 		}
 	}

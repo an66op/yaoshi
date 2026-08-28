@@ -4,6 +4,7 @@
 package lotteryfeed
 
 import (
+	"backend/cluster"
 	"context"
 	"fmt"
 	"sort"
@@ -163,6 +164,27 @@ func (s *Scheduler) run(ctx context.Context, job JobConfig) {
 }
 
 func (s *Scheduler) runOnce(parent context.Context, job JobConfig) {
+	timeout := job.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	lease, acquired, leaseErr := cluster.AcquireLease(parent, "lottery-sync:"+job.ID, timeout+30*time.Second)
+	if leaseErr != nil && cluster.Required() {
+		s.recordRuntimeError(job, "无法获取开奖同步分布式锁: "+leaseErr.Error())
+		return
+	}
+	if leaseErr == nil {
+		if !acquired {
+			s.markStandby(job)
+			return
+		}
+		defer func() {
+			releaseContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = lease.Release(releaseContext)
+		}()
+	}
+
 	started := time.Now().UTC()
 	s.mu.Lock()
 	status := s.statuses[job.ID]
@@ -172,10 +194,6 @@ func (s *Scheduler) runOnce(parent context.Context, job JobConfig) {
 	s.statuses[job.ID] = status
 	s.mu.Unlock()
 
-	timeout := job.Timeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	results := s.sync(ctx, job.Group)
 	cancel()
@@ -215,6 +233,29 @@ func (s *Scheduler) runOnce(parent context.Context, job JobConfig) {
 		status.ConsecutiveErr++
 		status.LastError = truncate(strings.Join(errors, "; "), 500)
 	}
+	s.statuses[job.ID] = status
+	s.mu.Unlock()
+}
+
+func (s *Scheduler) markStandby(job JobConfig) {
+	s.mu.Lock()
+	status := s.statuses[job.ID]
+	status.Running = false
+	status.Mode = "standby"
+	status.LastError = ""
+	s.statuses[job.ID] = status
+	s.mu.Unlock()
+}
+
+func (s *Scheduler) recordRuntimeError(job JobConfig, message string) {
+	now := time.Now().UTC()
+	s.mu.Lock()
+	status := s.statuses[job.ID]
+	status.Running = false
+	status.LastStartedAt = now
+	status.LastFinishedAt = now
+	status.ConsecutiveErr++
+	status.LastError = truncate(message, 500)
 	s.statuses[job.ID] = status
 	s.mu.Unlock()
 }
@@ -272,8 +313,12 @@ func retryInterval(failures int) time.Duration {
 }
 
 func truncate(value string, limit int) string {
-	if len(value) <= limit {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
 		return value
 	}
-	return value[:limit]
+	return string(runes[:limit])
 }

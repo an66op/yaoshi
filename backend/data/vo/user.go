@@ -17,13 +17,19 @@ type UserResponse struct {
 	Username string `json:"username"`
 	Email    string `json:"email,omitempty"`
 	Nickname string `json:"nickname,omitempty"`
+	Avatar   string `json:"avatar,omitempty"`
+	Title    string `json:"public_title,omitempty"`
+	Badge    string `json:"badge,omitempty"`
 	Role     string `json:"role"`
 	Status   int    `json:"status"`
 }
 
 // LoginResponse 用户登录响应
 type LoginResponse struct {
-	Token   string       `json:"token"`
+	// Token is carried to the HTTP handler so it can set the HttpOnly cookie.
+	// Browser responses clear it before serialization; omitempty prevents the
+	// bearer credential from becoming readable JavaScript state.
+	Token   string       `json:"token,omitempty"`
 	User    UserResponse `json:"user"`
 	Message string       `json:"message,omitempty"`
 }
@@ -35,9 +41,11 @@ type MemberProfileResponse struct {
 	ParentAgentID *uint64 `json:"parent_agent_id,omitempty"`
 	RoomCode      string  `json:"room_code,omitempty"`
 	RoomName      string  `json:"room_name,omitempty"`
+	RoomLogo      string  `json:"room_logo,omitempty"`
 }
 
 // JoinRoomRequest 会员进入代理房间
 type JoinRoomRequest struct {
-	RoomCode string `json:"room_code" binding:"required"`
+	RoomCode  string `json:"room_code" binding:"required"`
+	RequestID string `json:"request_id" binding:"omitempty,max=96"`
 }

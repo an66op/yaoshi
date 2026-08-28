@@ -3,7 +3,7 @@ import { BRAND_NAME } from '../data/brand'
 import { createPortal } from 'react-dom'
 import { Avatar } from '../components/Avatar'
 import { Icon } from '../components/Icon'
-import { avatars } from '../data/avatars'
+import { avatarIndexFromSrc, avatarSrcForIndex, avatars } from '../data/avatars'
 import { defaultNotificationSounds, notificationKinds, notificationSounds } from '../data/notificationSounds'
 import type { NotificationKind } from '../data/notificationSounds'
 import { isNotificationMuted, setNotificationMuted, startNotificationSound } from '../utils/notificationAudio'
@@ -18,6 +18,21 @@ type Panel = 'avatar' | 'nickname' | 'security' | 'history' | 'betMode' | 'fontS
 type SettingRow = { icon: string; label: string; hint?: string; panel: Exclude<Panel, null>; tone: string }
 
 type PreferenceSummary = { drawHistoryLimit: number; defaultBetMode: BetModePreference; fontScale: FontScalePreference }
+type AvatarSelection = { index: number; src?: string }
+type ProfileProps = {
+  account: string
+  publicId?: number
+  balance: number
+  avatarUrl?: string
+  publicTitle?: string
+  badge?: string
+  theme: Theme
+  onLogout: () => void
+  onResetDemo: () => void
+  onToggleTheme: () => void
+  onChangeNickname: (nickname: string) => Promise<void>
+  onChangeAvatar: (avatar: string) => Promise<void>
+}
 
 const preferenceRowDefs: Array<Omit<SettingRow, 'hint'> & { hint?: (prefs: PreferenceSummary) => string }> = [
   { icon: '◷', label: '聊天室历史开奖期数', panel: 'history', tone: 'mint', hint: (p) => `最近 ${p.drawHistoryLimit} 期` },
@@ -26,17 +41,26 @@ const preferenceRowDefs: Array<Omit<SettingRow, 'hint'> & { hint?: (prefs: Prefe
   { icon: '♪', label: '消息与通知声音', hint: () => '4 类提醒', panel: 'sounds', tone: 'coral' },
   { icon: '◉', label: '线路检测', hint: () => '连接良好', panel: 'line', tone: 'lime' },
 ]
-const accountRows: SettingRow[] = [
+const accountRowDefs: SettingRow[] = [
   { icon: '⚙', label: '账户与安全', hint: '已认证', panel: 'security', tone: 'blue' },
   { icon: '◐', label: '显示与主题', hint: '白天模式', panel: 'theme', tone: 'gold' },
   { icon: '?', label: '帮助与反馈', panel: 'help', tone: 'aqua' },
 ]
 
 /** “我的”仅保留资料与设置；资产类服务全部收拢到钱包。 */
-export function Profile({ account, publicId, balance, theme, onLogout, onResetDemo, onToggleTheme, onChangeNickname }: { account: string; publicId?: number; balance: number; theme: Theme; onLogout: () => void; onResetDemo: () => void; onToggleTheme: () => void; onChangeNickname: (nickname: string) => Promise<void> }) {
+export function Profile({ account, publicId, balance, avatarUrl = '', publicTitle = '', badge = '', theme, onLogout, onResetDemo, onToggleTheme, onChangeNickname, onChangeAvatar }: ProfileProps) {
   const [panel, setPanel] = useState<Panel>(null)
-  const [avatar, setAvatar] = usePersistentState('seven-star-avatar', { index: 0 })
-  const { drawHistoryLimit, defaultBetMode, fontScale } = useMemberPreferences()
+  const [avatar, setAvatar] = usePersistentState<AvatarSelection>('seven-star-avatar', { index: 0 })
+  const { drawHistoryLimit, defaultBetMode, fontScale, displayStyle } = useMemberPreferences()
+  const displayedAvatar = avatar.src?.trim() || avatarUrl.trim()
+  const selectedAvatarIndex = avatarIndexFromSrc(displayedAvatar) ?? avatar.index
+  const changeAvatar = async (index: number) => {
+    const src = avatarSrcForIndex(index)
+    // Keep an on-device selection even when an older backend cannot yet save
+    // avatars. Once persistence succeeds, App refreshes the session profile.
+    setAvatar({ index, src })
+    await onChangeAvatar(src)
+  }
   const preferenceRows = useMemo<SettingRow[]>(() => preferenceRowDefs.map((row) => ({
     icon: row.icon,
     label: row.label,
@@ -44,16 +68,20 @@ export function Profile({ account, publicId, balance, theme, onLogout, onResetDe
     tone: row.tone,
     hint: row.hint?.({ drawHistoryLimit, defaultBetMode, fontScale }),
   })), [drawHistoryLimit, defaultBetMode, fontScale])
-  return <section className="profile-simple-page"><header className="profile-simple-hero"><b>个人资料</b><button aria-label="打开显示设置" onClick={() => setPanel('theme')}><Icon name="more" /></button><section><button className="profile-simple-avatar" aria-label="修改头像" onClick={() => setPanel('avatar')}><Avatar index={avatar.index} label="当前头像" /><i>编辑</i></button><div className="profile-name-block"><button className="profile-nickname-edit" aria-label="修改昵称" onClick={() => setPanel('nickname')}>修改</button><button className="profile-current-name" aria-label="修改昵称" onClick={() => setPanel('nickname')}><strong>{account}</strong></button><small>{publicId ? `ID ${publicId} · ` : ''}余额 {balance.toFixed(2)} 元</small></div></section></header><ProfileGroup title="偏好设置" rows={preferenceRows} onSelect={setPanel} /><ProfileGroup title="账户设置" rows={accountRows} onSelect={setPanel} /><button className="profile-logout" onClick={onLogout}>退出登录</button><p className="profile-simple-version">{BRAND_NAME} · 安全服务已开启</p>{panel && <ProfilePanel avatarIndex={avatar.index} onAvatarChange={(index) => setAvatar({ index })} account={account} onChangeNickname={onChangeNickname} panel={panel} theme={theme} onClose={() => setPanel(null)} onResetDemo={onResetDemo} onToggleTheme={onToggleTheme} />}</section>
+  const accountRows = useMemo(() => accountRowDefs.map((row) => row.panel === 'theme' ? {
+    ...row,
+    hint: theme === 'night' ? '夜间模式' : displayStyle === 'simple' ? '简洁模式' : '白天模式',
+  } : row), [displayStyle, theme])
+  return <section className="profile-simple-page"><header className="profile-simple-hero"><b>个人资料</b><button aria-label="打开显示设置" onClick={() => setPanel('theme')}><Icon name="more" /></button><section><button className="profile-simple-avatar" aria-label="修改头像" onClick={() => setPanel('avatar')}><Avatar index={selectedAvatarIndex} src={displayedAvatar} label="当前头像" /><i>编辑</i></button><div className="profile-name-block"><button className="profile-nickname-edit" aria-label="修改昵称" onClick={() => setPanel('nickname')}>修改</button><button className="profile-current-name" aria-label="修改昵称" onClick={() => setPanel('nickname')}><strong>{account}{badge && <i>{badge}</i>}</strong>{publicTitle && <em>{publicTitle}</em>}</button><small>{publicId ? `ID ${publicId} · ` : ''}余额 {balance.toFixed(2)} 元</small></div></section></header><ProfileGroup title="偏好设置" rows={preferenceRows} onSelect={setPanel} /><ProfileGroup title="账户设置" rows={accountRows} onSelect={setPanel} /><button className="profile-logout" onClick={onLogout}>退出登录</button><p className="profile-simple-version">{BRAND_NAME} · 安全服务已开启</p>{panel && <ProfilePanel avatarIndex={selectedAvatarIndex} onAvatarChange={changeAvatar} account={account} onChangeNickname={onChangeNickname} panel={panel} theme={theme} onClose={() => setPanel(null)} onResetDemo={onResetDemo} onToggleTheme={onToggleTheme} />}</section>
 }
 
 function ProfileGroup({ title, rows, onSelect }: { title: string; rows: SettingRow[]; onSelect: (panel: Panel) => void }) {
   return <section className="profile-setting-group"><small>{title}</small><div>{rows.map((row) => <button key={row.label} onClick={() => onSelect(row.panel)}><span className={row.tone}>{row.icon}</span><b>{row.label}</b>{row.hint && <em>{row.hint}</em>}<Icon name="arrow" /></button>)}</div></section>
 }
 
-function ProfilePanel({ panel, theme, onClose, onResetDemo, onToggleTheme, avatarIndex, onAvatarChange, account, onChangeNickname }: { panel: Exclude<Panel, null>; theme: Theme; onClose: () => void; onResetDemo: () => void; onToggleTheme: () => void; avatarIndex: number; onAvatarChange: (index: number) => void; account: string; onChangeNickname: (nickname: string) => Promise<void> }) {
+function ProfilePanel({ panel, theme, onClose, onResetDemo, onToggleTheme, avatarIndex, onAvatarChange, account, onChangeNickname }: { panel: Exclude<Panel, null>; theme: Theme; onClose: () => void; onResetDemo: () => void; onToggleTheme: () => void; avatarIndex: number; onAvatarChange: (index: number) => Promise<void>; account: string; onChangeNickname: (nickname: string) => Promise<void> }) {
   const info = panelInfo[panel]
-  return createPortal(<div className={`profile-sheet-layer theme-${theme}`} role="presentation" onClick={onClose}><section className="profile-sheet" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><header><button onClick={onClose}><Icon name="back" /></button><b>{info.title}</b><button onClick={onClose}>完成</button></header>{panel === 'avatar' ? <AvatarSettings selected={avatarIndex} onSelect={onAvatarChange} /> : panel === 'nickname' ? <NicknameSettings current={account} onSave={onChangeNickname} /> : panel === 'sounds' ? <SoundSettings /> : panel === 'theme' ? <ThemeSettings theme={theme} onResetDemo={onResetDemo} onToggleTheme={onToggleTheme} /> : panel === 'security' ? <SecuritySettings /> : panel === 'line' ? <LineSettings /> : panel === 'help' ? <HelpSettings /> : panel === 'history' ? <HistorySettings onClose={onClose} /> : panel === 'betMode' ? <BetModeSettings onClose={onClose} /> : panel === 'fontSize' ? <FontSizeSettings /> : <SimplePanel content={info} />}</section></div>, document.body)
+  return createPortal(<div className={`profile-sheet-layer theme-${theme}`} role="presentation" onClick={onClose}><section className="profile-sheet" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><header><button onClick={onClose}><Icon name="back" /></button><b>{info.title}</b><button onClick={onClose}>完成</button></header>{panel === 'avatar' ? <AvatarSettings selected={avatarIndex} onSelect={onAvatarChange} /> : panel === 'nickname' ? <NicknameSettings current={account} onSave={onChangeNickname} onSaved={onClose} /> : panel === 'sounds' ? <SoundSettings /> : panel === 'theme' ? <ThemeSettings theme={theme} onResetDemo={onResetDemo} onToggleTheme={onToggleTheme} /> : panel === 'security' ? <SecuritySettings /> : panel === 'line' ? <LineSettings /> : panel === 'help' ? <HelpSettings /> : panel === 'history' ? <HistorySettings onClose={onClose} /> : panel === 'betMode' ? <BetModeSettings onClose={onClose} /> : panel === 'fontSize' ? <FontSizeSettings /> : <SimplePanel content={info} />}</section></div>, document.body)
 }
 
 const panelInfo: Record<Exclude<Panel, null>, { title: string; summary: string; rows: Array<{ icon: string; title: string; detail: string; value?: string }> }> = {
@@ -73,11 +101,26 @@ function SimplePanel({ content }: { content: (typeof panelInfo)[Exclude<Panel, n
   return <><p className="sheet-subtitle">{content.summary}</p><div className="sheet-list">{content.rows.map((row) => <article key={row.title}><span>{row.icon}</span><div><b>{row.title}</b><small>{row.detail}</small></div>{row.value && <em>{row.value}</em>}</article>)}</div></>
 }
 
-function AvatarSettings({ selected, onSelect }: { selected: number; onSelect: (index: number) => void }) {
-  return <div className="avatar-settings"><p>选择一个头像，保存后将同时用于你的个人资料与会话展示。</p><div>{avatars.map((name, index) => <button aria-label={`选择${name}头像`} className={selected === index ? 'selected' : ''} key={name} onClick={() => onSelect(index)}><Avatar index={index} label={`${name}头像`} />{selected === index && <i>✓</i>}</button>)}</div></div>
+function AvatarSettings({ selected, onSelect }: { selected: number; onSelect: (index: number) => Promise<void> }) {
+  const [saving, setSaving] = useState<number | null>(null)
+  const [message, setMessage] = useState('')
+  const select = async (index: number) => {
+    if (saving !== null) return
+    setSaving(index)
+    setMessage('')
+    try {
+      await onSelect(index)
+      setMessage('头像已同步')
+    } catch (reason) {
+      setMessage(`${reason instanceof Error ? reason.message : '头像同步失败'}，已保留本机头像`)
+    } finally {
+      setSaving(null)
+    }
+  }
+  return <div className="avatar-settings"><p>选择一个头像，保存后将同时用于你的个人资料与会话展示。</p><div>{avatars.map((name, index) => <button aria-label={`选择${name}头像`} className={selected === index ? 'selected' : ''} disabled={saving !== null} key={name} onClick={() => void select(index)}><Avatar index={index} label={`${name}头像`} />{selected === index && <i>{saving === index ? '…' : '✓'}</i>}</button>)}</div>{message && <small className="avatar-feedback">{message}</small>}</div>
 }
 
-function NicknameSettings({ current, onSave }: { current: string; onSave: (nickname: string) => Promise<void> }) {
+function NicknameSettings({ current, onSave, onSaved }: { current: string; onSave: (nickname: string) => Promise<void>; onSaved: () => void }) {
   const [value, setValue] = useState(current)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
@@ -88,22 +131,39 @@ function NicknameSettings({ current, onSave }: { current: string; onSave: (nickn
     setMessage('')
     try {
       await onSave(cleanValue)
-      setMessage('昵称已保存')
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : '昵称保存失败')
-    } finally {
       setSaving(false)
+      return
     }
+    onSaved()
   }
   const randomize = () => {
     setValue(generateNickname())
     setMessage('')
   }
-  return <div className="nickname-settings"><p>输入你想使用的显示昵称，保存后会同步更新个人资料与会话名称。</p><label><span>当前显示昵称</span><div><input maxLength={16} value={value} onChange={(event) => setValue(event.target.value)} placeholder="请输入 2–16 个字符" /><button type="button" aria-label="换一个随机昵称" title="随机昵称" onClick={randomize}>↻</button></div><small>{cleanValue.length}/16</small></label><button className="nickname-save" disabled={saving || cleanValue.length < 2 || cleanValue.length > 16} onClick={() => void save()}>{saving ? '保存中…' : '保存显示昵称'}</button>{message && <small className="nickname-feedback">{message}</small>}</div>
+  return <div className="nickname-settings"><p>输入你想使用的显示昵称，保存后会同步更新个人资料与会话名称。</p><label><span>当前显示昵称</span><div><input maxLength={16} value={value} onChange={(event) => setValue(event.target.value)} placeholder="请输入 2–16 个字符" /><button type="button" aria-label="换一个随机昵称" title="随机昵称" onClick={randomize}>↻</button></div><small>{cleanValue.length}/16</small></label><button className="nickname-save" disabled={saving || cleanValue.length < 2 || cleanValue.length > 16} onClick={() => void save()}>{saving ? '保存中…' : '保存'}</button>{message && <small className="nickname-feedback">{message}</small>}</div>
 }
 
 function ThemeSettings({ theme, onResetDemo, onToggleTheme }: { theme: Theme; onResetDemo: () => void; onToggleTheme: () => void }) {
-  return <div className="theme-setting"><section><span className="theme-preview day-preview">☀</span><div><b>白天模式</b><small>晴空背景与清晰卡片</small></div><button className={theme === 'day' ? 'selected' : ''} onClick={() => theme === 'night' && onToggleTheme()}>{theme === 'day' ? '使用中' : '使用'}</button></section><section><span className="theme-preview night-preview">☾</span><div><b>夜间模式</b><small>深海背景与沉浸界面</small></div><button className={theme === 'night' ? 'selected' : ''} onClick={() => theme === 'day' && onToggleTheme()}>{theme === 'night' ? '使用中' : '使用'}</button></section><button className="demo-reset" onClick={onResetDemo}>恢复默认偏好</button></div>
+  const { displayStyle, setDisplayStyle } = useMemberPreferences()
+  const activeMode = theme === 'night' ? 'night' : displayStyle === 'simple' ? 'simple' : 'day'
+  const selectDay = () => {
+    setDisplayStyle('scenic')
+    if (theme === 'night') onToggleTheme()
+  }
+  const selectSimple = () => {
+    setDisplayStyle('simple')
+    if (theme === 'night') onToggleTheme()
+  }
+  const selectNight = () => {
+    if (theme === 'day') onToggleTheme()
+  }
+  const reset = () => {
+    setDisplayStyle('scenic')
+    onResetDemo()
+  }
+  return <div className="theme-setting"><section><span className="theme-preview day-preview">☀</span><div><b>白天模式</b><small>晴空背景与清晰卡片</small></div><button className={activeMode === 'day' ? 'selected' : ''} onClick={selectDay}>{activeMode === 'day' ? '使用中' : '使用'}</button></section><section><span className="theme-preview simple-preview">◇</span><div><b>简洁模式</b><small>隐藏背景图片，使用纯净底色</small></div><button className={activeMode === 'simple' ? 'selected' : ''} onClick={selectSimple}>{activeMode === 'simple' ? '使用中' : '使用'}</button></section><section><span className="theme-preview night-preview">☾</span><div><b>夜间模式</b><small>深海背景与沉浸界面</small></div><button className={activeMode === 'night' ? 'selected' : ''} onClick={selectNight}>{activeMode === 'night' ? '使用中' : '使用'}</button></section><button className="demo-reset" onClick={reset}>恢复默认偏好</button></div>
 }
 
 function FontSizeSettings() {
@@ -147,6 +207,7 @@ function SecuritySettings() {
 
 function HelpSettings() {
   const [invite, setInvite] = useState<{ invite_code: string; share_text: string } | null>(null)
+  const supportEmail = String(import.meta.env.VITE_SUPPORT_EMAIL ?? '').trim()
   useEffect(() => {
     void memberApi.inviteInfo().then(setInvite).catch(() => setInvite(null))
   }, [])
@@ -154,7 +215,7 @@ function HelpSettings() {
     <div className="theme-setting">
       <p className="sheet-subtitle">需要协助时，请优先通过在线客服提交问题，便于追踪处理进度。</p>
       <section className="help-setting-block"><b>在线客服</b><p>消息页 → 在线客服</p><small>请附上房间号、彩种、期号和问题截图。</small></section>
-      <section className="help-setting-block"><b>客服邮箱</b><p>support@yaotu.example</p><small>邮件主题请注明「王者用户反馈」。</small></section>
+      {supportEmail && <section className="help-setting-block"><b>客服邮箱</b><p><a href={`mailto:${supportEmail}`}>{supportEmail}</a></p><small>邮件主题请注明「王者用户反馈」。</small></section>}
       {invite && (
         <section className="help-setting-block">
           <b>我的邀请码</b>

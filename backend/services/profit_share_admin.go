@@ -21,6 +21,7 @@ type AgentProfitShareService struct{ db *gorm.DB }
 
 type ProfitShareItem struct {
 	RecordID          uint64     `json:"record_id,omitempty"`
+	WorkspaceID       uint64     `json:"workspace_id"`
 	BizDate           string     `json:"biz_date"`
 	AgentID           uint64     `json:"agent_id"`
 	AgentUsername     string     `json:"agent_username"`
@@ -59,6 +60,7 @@ type ProfitShareRunResult struct {
 }
 
 type profitShareAggregate struct {
+	WorkspaceID   uint64
 	RoomScope     string
 	BetCount      int64
 	TurnoverCents int64
@@ -91,7 +93,7 @@ func (s *AgentProfitShareService) Statement(date string, onlyAgentID uint64) (*P
 			continue
 		}
 		var record profitshare.DailyRecord
-		recordErr := s.db.Where("biz_date = ? AND agent_id = ?", bizDate, agentID).First(&record).Error
+		recordErr := s.db.Where("workspace_id = ? AND biz_date = ? AND agent_id = ?", aggregate.WorkspaceID, bizDate, agentID).First(&record).Error
 		if recordErr != nil && recordErr != gorm.ErrRecordNotFound {
 			return nil, recordErr
 		}
@@ -110,7 +112,7 @@ func (s *AgentProfitShareService) Statement(date string, onlyAgentID uint64) (*P
 			status = "partial"
 		}
 		item := ProfitShareItem{
-			RecordID: record.ID, BizDate: bizDate, AgentID: agentID, AgentUsername: agent.Username,
+			RecordID: record.ID, WorkspaceID: aggregate.WorkspaceID, BizDate: bizDate, AgentID: agentID, AgentUsername: agent.Username,
 			RoomCode: agent.AgentRoomCode, RoomScope: aggregate.RoomScope, BetCount: aggregate.BetCount,
 			Turnover: centsToAmount(aggregate.TurnoverCents), Payout: centsToAmount(aggregate.PayoutCents),
 			GrossProfit: centsToAmount(aggregate.TurnoverCents - aggregate.PayoutCents), Rebate: centsToAmount(aggregate.RebateCents),
@@ -162,14 +164,14 @@ func (s *AgentProfitShareService) creditOne(item ProfitShareItem, operator strin
 	credited := int64(0)
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		placeholder := profitshare.DailyRecord{
-			BizDate: item.BizDate, AgentID: item.AgentID, RoomScope: item.RoomScope,
+			WorkspaceID: item.WorkspaceID, BizDate: item.BizDate, AgentID: item.AgentID, RoomScope: item.RoomScope,
 			AgentUsername: item.AgentUsername, RoomCode: item.RoomCode, Status: "pending",
 		}
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "biz_date"}, {Name: "agent_id"}}, DoNothing: true}).Create(&placeholder).Error; err != nil {
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "workspace_id"}, {Name: "biz_date"}, {Name: "agent_id"}}, DoNothing: true}).Create(&placeholder).Error; err != nil {
 			return err
 		}
 		var record profitshare.DailyRecord
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("biz_date = ? AND agent_id = ?", item.BizDate, item.AgentID).First(&record).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("workspace_id = ? AND biz_date = ? AND agent_id = ?", item.WorkspaceID, item.BizDate, item.AgentID).First(&record).Error; err != nil {
 			return err
 		}
 		accrued := profitShareAmountToCents(item.AccruedShare)
@@ -190,13 +192,14 @@ func (s *AgentProfitShareService) creditOne(item ProfitShareItem, operator strin
 		if agent.Role != "agent" {
 			return apperrors.NewBusinessError("INVALID_AGENT", fmt.Sprintf("账号 %d 已不是代理", item.AgentID))
 		}
-		after := agent.BalanceCents + pending
+		before := agent.BalanceCents
+		after := before + pending
 		if err := tx.Model(&agent).Update("balance_cents", after).Error; err != nil {
 			return err
 		}
 		ledger := user.BalanceTransaction{
-			UserID: agent.UserID, Reference: fmt.Sprintf("agent_share:%d:%d", record.ID, record.RunCount+1),
-			AmountCents: pending, BeforeCents: agent.BalanceCents, AfterCents: after,
+			WorkspaceID: item.WorkspaceID, UserID: agent.UserID, Reference: fmt.Sprintf("agent_share:%d:%d", record.ID, record.RunCount+1),
+			AmountCents: pending, BeforeCents: before, AfterCents: after,
 			Type: "agent_share", Remark: "代理利润分成 " + item.BizDate, Operator: operator,
 		}
 		if err := tx.Create(&ledger).Error; err != nil {
@@ -220,7 +223,7 @@ func (s *AgentProfitShareService) creditOne(item ProfitShareItem, operator strin
 
 func (s *AgentProfitShareService) aggregate(start, end time.Time, onlyAgentID uint64) ([]profitShareAggregate, error) {
 	query := s.db.Model(&bet.Bet{}).
-		Select(`room_scope, COUNT(*) AS bet_count,
+		Select(`workspace_id, room_scope, COUNT(*) AS bet_count,
 			COALESCE(SUM(amount_cents),0) AS turnover_cents,
 			COALESCE(SUM(payout_cents),0) AS payout_cents,
 			COALESCE(SUM(rebate_cents),0) AS rebate_cents,
@@ -231,7 +234,7 @@ func (s *AgentProfitShareService) aggregate(start, end time.Time, onlyAgentID ui
 		query = query.Where("room_scope = ?", fmt.Sprintf("agent:%d", onlyAgentID))
 	}
 	var rows []profitShareAggregate
-	if err := query.Group("room_scope").Order("room_scope ASC").Scan(&rows).Error; err != nil {
+	if err := query.Group("workspace_id, room_scope").Order("workspace_id ASC, room_scope ASC").Scan(&rows).Error; err != nil {
 		return nil, apperrors.NewSystemError("PROFIT_SHARE_READ_FAILED", "统计代理分成失败", err)
 	}
 	return rows, nil

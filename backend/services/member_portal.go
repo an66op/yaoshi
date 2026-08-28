@@ -4,7 +4,9 @@ import (
 	"backend/data/models/activity"
 	membernotify "backend/data/models/notify"
 	"backend/data/models/user"
+	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
+	"backend/ws"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -34,6 +36,9 @@ type MemberRoomSettingsView struct {
 	MinDebitAmount    float64            `json:"min_debit_amount"`
 	MinChatScore      float64            `json:"min_chat_score"`
 	ChatNickname      string             `json:"chat_nickname"`
+	ChatAvatar        string             `json:"chat_avatar"`
+	OperatorTitle     string             `json:"operator_title"`
+	OperatorAvatar    string             `json:"operator_avatar"`
 	Game              json.RawMessage    `json:"game"`
 	QuickReplies      json.RawMessage    `json:"quick_replies"`
 }
@@ -111,36 +116,31 @@ func NewMemberPortalService(db *gorm.DB) *MemberPortalService {
 }
 
 func (s *MemberPortalService) RoomSettings(userID uint64) (*MemberRoomSettingsView, error) {
-	cfg, err := s.settings.Get()
+	var account user.User
+	if err := s.db.Select("workspace_id").First(&account, userID).Error; err != nil {
+		return nil, err
+	}
+	cfg, err := s.settings.GetForWorkspace(account.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
-	roomName := defaultString(strings.TrimSpace(cfg.RoomName), "王者大厅")
-	roomLogo := cfg.RoomLogo
-	var account user.User
-	if err := s.db.Select("parent_agent_id").First(&account, userID).Error; err != nil {
-		return nil, err
-	}
-	if account.ParentAgentID != nil {
-		var agent user.User
-		if err := s.db.Select("username", "nickname", "agent_room_code", "agent_room_name", "agent_room_logo").First(&agent, *account.ParentAgentID).Error; err == nil {
-			roomName = agentRoomDisplayName(agent)
-			if strings.TrimSpace(agent.AgentRoomLogo) != "" {
-				roomLogo = agent.AgentRoomLogo
-			}
-		}
-	}
+	operatorAvatar := defaultString(strings.TrimSpace(cfg.ChatAvatar), cfg.RoomLogo)
 	return &MemberRoomSettingsView{
-		RoomName: roomName, RoomLogo: roomLogo, RoomNotice: cfg.RoomNotice, Announcements: cfg.Announcements, ShowOdds: cfg.ShowOdds,
+		RoomName: cfg.RoomName, RoomLogo: cfg.RoomLogo, RoomNotice: cfg.RoomNotice, Announcements: cfg.Announcements, ShowOdds: cfg.ShowOdds,
 		SoundEnabled: cfg.SoundEnabled, PredictionEnabled: cfg.PredictionEnabled, MinCreditAmount: cfg.MinCreditAmount,
 		MinDebitAmount: cfg.MinDebitAmount, MinChatScore: cfg.MinChatScore,
-		ChatNickname: cfg.ChatNickname,
-		Game:         cfg.Game, QuickReplies: cfg.QuickReplies,
+		ChatNickname: cfg.ChatNickname, ChatAvatar: operatorAvatar,
+		OperatorTitle: cfg.ChatNickname, OperatorAvatar: operatorAvatar,
+		Game: cfg.Game, QuickReplies: cfg.QuickReplies,
 	}, nil
 }
 
 func (s *MemberPortalService) GameOdds(userID uint64, gameID string) (*MemberOddsView, error) {
-	cfg, err := s.settings.Get()
+	var account user.User
+	if err := s.db.Select("workspace_id").First(&account, userID).Error; err != nil {
+		return nil, err
+	}
+	cfg, err := s.settings.GetForWorkspace(account.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -174,8 +174,12 @@ func (s *MemberPortalService) GameOdds(userID uint64, gameID string) (*MemberOdd
 	}, nil
 }
 
-func (s *MemberPortalService) ListActivities(activityType string) ([]ActivityView, error) {
-	items, err := s.activity.List("active")
+func (s *MemberPortalService) ListActivities(userID uint64, activityType string) ([]ActivityView, error) {
+	var account user.User
+	if err := s.db.Select("workspace_id").First(&account, userID).Error; err != nil {
+		return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+	}
+	items, err := s.activity.ListForWorkspace(account.WorkspaceID, "active")
 	if err != nil {
 		return nil, err
 	}
@@ -192,8 +196,12 @@ func (s *MemberPortalService) ListActivities(activityType string) ([]ActivityVie
 }
 
 func (s *MemberPortalService) ActivityStatus(userID, activityID uint64) (*ActivityStatusView, error) {
+	var account user.User
+	if err := s.db.Select("workspace_id").First(&account, userID).Error; err != nil {
+		return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+	}
 	var row activity.Activity
-	if err := s.db.First(&row, activityID).Error; err != nil {
+	if err := s.db.Where("id = ? AND workspace_id = ?", activityID, account.WorkspaceID).First(&row).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, apperrors.NewBusinessError("NOT_FOUND", "活动不存在")
 		}
@@ -225,8 +233,8 @@ func (s *MemberPortalService) ActivityStatus(userID, activityID uint64) (*Activi
 
 	var today int64
 	_ = s.db.Model(&activity.Participation{}).
-		Where("user_id = ? AND activity_id = ? AND action = ? AND biz_date = ?",
-			userID, activityID, action, bizDate).Count(&today).Error
+		Where("workspace_id = ? AND user_id = ? AND activity_id = ? AND action = ? AND biz_date = ?",
+			account.WorkspaceID, userID, activityID, action, bizDate).Count(&today).Error
 	if row.Type == "checkin" {
 		view.CheckedIn = today > 0
 		view.Streak = s.checkinStreak(userID, activityID)
@@ -253,9 +261,16 @@ func (s *MemberPortalService) ClaimChatRedPacket(userID, activityID, messageID u
 
 func (s *MemberPortalService) participate(userID, activityID uint64, action, reference string) (*ActivityActionResult, error) {
 	var result ActivityActionResult
+	var workspaceID uint64
+	var notificationID uint64
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var account user.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, userID).Error; err != nil {
+			return err
+		}
+		workspaceID = account.WorkspaceID
 		var row activity.Activity
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, activityID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND workspace_id = ?", activityID, workspaceID).First(&row).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return apperrors.NewBusinessError("NOT_FOUND", "活动不存在")
 			}
@@ -273,7 +288,7 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action, ref
 		if reference != "" {
 			var claimed int64
 			if err := tx.Model(&activity.Participation{}).
-				Where("user_id = ? AND activity_id = ? AND action = ? AND reference = ?", userID, activityID, action, reference).
+				Where("workspace_id = ? AND user_id = ? AND activity_id = ? AND action = ? AND reference = ?", workspaceID, userID, activityID, action, reference).
 				Count(&claimed).Error; err != nil {
 				return err
 			}
@@ -304,7 +319,7 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action, ref
 		}
 
 		part := activity.Participation{
-			UserID: userID, ActivityID: activityID, Action: action, BizDate: bizDate,
+			WorkspaceID: workspaceID, UserID: userID, ActivityID: activityID, Action: action, BizDate: bizDate,
 			Reference: reference, RewardCents: rewardCents, Streak: streak, ParticipatedAt: now,
 		}
 		if err := tx.Create(&part).Error; err != nil {
@@ -330,10 +345,6 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action, ref
 			return err
 		}
 
-		var account user.User
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, userID).Error; err != nil {
-			return err
-		}
 		before := account.BalanceCents
 		after := before + rewardCents
 		if err := tx.Model(&account).Update("balance_cents", after).Error; err != nil {
@@ -346,7 +357,7 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action, ref
 			remark = "红包奖励 · " + row.Title
 		}
 		if err := tx.Create(&user.BalanceTransaction{
-			UserID: userID, Reference: "activity_participation:" + strconv.FormatUint(part.ID, 10),
+			WorkspaceID: workspaceID, UserID: userID, Reference: "activity_participation:" + strconv.FormatUint(part.ID, 10),
 			AmountCents: rewardCents, BeforeCents: before, AfterCents: after,
 			Type: action, Remark: remark, Operator: "系统",
 		}).Error; err != nil {
@@ -357,10 +368,14 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action, ref
 		if action == "redpacket" {
 			title = "红包领取成功"
 		}
-		_ = tx.Create(&membernotify.MemberNotification{
-			UserID: userID, Title: title, Content: content,
+		notice := membernotify.MemberNotification{
+			WorkspaceID: workspaceID, UserID: userID, Title: title, Content: content,
 			Level: "success", Category: "account",
-		}).Error
+		}
+		if err := tx.Create(&notice).Error; err != nil {
+			return err
+		}
+		notificationID = notice.ID
 		result = ActivityActionResult{
 			Reward: centsToAmount(rewardCents), Streak: streak,
 			Balance: centsToAmount(after), Message: content,
@@ -373,6 +388,8 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action, ref
 		}
 		return nil, apperrors.NewSystemError("ACTIVITY_ACTION_FAILED", "参与活动失败", err)
 	}
+	ws.NotifyUser(userID, "balance", map[string]any{"workspace_id": workspaceID, "balance": result.Balance})
+	ws.NotifyUser(userID, "notification", map[string]any{"workspace_id": workspaceID, "id": notificationID, "category": "account"})
 	return &result, nil
 }
 
@@ -392,8 +409,12 @@ func (s *MemberPortalService) ListNotifications(userID uint64, limit int, before
 	if category != "" && category != "all" && category != "system" && category != "account" && category != "activity" && category != "winning" {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "通知分类不正确")
 	}
+	account, err := s.notificationAccount(userID)
+	if err != nil {
+		return nil, err
+	}
 	var rows []membernotify.MemberNotification
-	query := s.db.Where("user_id = ? AND title <> ?", userID, "客服回复")
+	query := scopedMemberNotificationQuery(s.db, userID, account.WorkspaceID).Where("title <> ?", "客服回复")
 	if category != "" && category != "all" {
 		query = query.Where("category = ?", category)
 		if category == "system" {
@@ -403,10 +424,6 @@ func (s *MemberPortalService) ListNotifications(userID uint64, limit int, before
 	gameID = strings.TrimSpace(gameID)
 	issue = strings.TrimSpace(issue)
 	if gameID != "" {
-		var account user.User
-		if err := s.db.Select("user_id", "role", "parent_agent_id").First(&account, userID).Error; err != nil {
-			return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
-		}
 		// The client chooses a game, never a room scope.  Room ownership is
 		// derived from the authenticated member to prevent cross-room replay.
 		query = query.Where("game_id = ? AND room_scope = ?", gameID, betRoomScope(account))
@@ -447,32 +464,46 @@ func (s *MemberPortalService) ListNotifications(userID uint64, limit int, before
 }
 
 func (s *MemberPortalService) UnreadCount(userID uint64) (int64, error) {
+	account, err := s.notificationAccount(userID)
+	if err != nil {
+		return 0, err
+	}
 	var count int64
-	err := s.db.Model(&membernotify.MemberNotification{}).
-		Where("user_id = ? AND read = ? AND title <> ? AND category <> ?", userID, false, "客服回复", "account").
+	err = unreadMemberNotificationQuery(s.db, userID, account.WorkspaceID).
 		Count(&count).Error
 	return count, err
 }
 
 func (s *MemberPortalService) MarkNotificationRead(userID, id uint64) error {
-	return s.db.Model(&membernotify.MemberNotification{}).
-		Where("user_id = ? AND id = ?", userID, id).Update("read", true).Error
+	account, err := s.notificationAccount(userID)
+	if err != nil {
+		return err
+	}
+	return scopedMemberNotificationQuery(s.db, userID, account.WorkspaceID).
+		Where("id = ?", id).Update("read", true).Error
 }
 
 func (s *MemberPortalService) MarkAllNotificationsRead(userID uint64) error {
-	return s.db.Model(&membernotify.MemberNotification{}).
-		Where("user_id = ? AND read = ?", userID, false).Update("read", true).Error
+	account, err := s.notificationAccount(userID)
+	if err != nil {
+		return err
+	}
+	return unreadMemberNotificationQuery(s.db, userID, account.WorkspaceID).Update("read", true).Error
 }
 
 func (s *MemberPortalService) EnsureWelcomeNotification(userID uint64) error {
+	var account user.User
+	if err := s.db.Select("workspace_id").First(&account, userID).Error; err != nil {
+		return err
+	}
 	var count int64
-	if err := s.db.Model(&membernotify.MemberNotification{}).Where("user_id = ?", userID).Count(&count).Error; err != nil {
+	if err := scopedMemberNotificationQuery(s.db, userID, account.WorkspaceID).Count(&count).Error; err != nil {
 		return err
 	}
 	if count > 0 {
 		return nil
 	}
-	cfg, err := s.settings.Get()
+	cfg, err := s.settings.GetForWorkspace(account.WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -481,8 +512,44 @@ func (s *MemberPortalService) EnsureWelcomeNotification(userID uint64) error {
 		notice = "欢迎来到王者，祝您游戏愉快。"
 	}
 	return s.db.Create(&membernotify.MemberNotification{
-		UserID: userID, Title: "系统公告", Content: notice, Level: "info", Category: "system",
+		WorkspaceID: account.WorkspaceID, UserID: userID, Title: "系统公告", Content: notice, Level: "info", Category: "system",
 	}).Error
+}
+
+var memberUnreadCategories = []string{"system", "activity", "winning"}
+var legacySystemResultTitles = []string{"开奖结果", "恭喜中奖", "未中奖", "开奖通知"}
+
+func scopedMemberNotificationQuery(db *gorm.DB, userID, workspaceID uint64) *gorm.DB {
+	return db.Model(&membernotify.MemberNotification{}).
+		Where("user_id = ? AND workspace_id = ?", userID, workspaceID)
+}
+
+// unreadMemberNotificationQuery mirrors the visible member inbox. Account and
+// placement/order notices are disabled there and therefore must never leave a
+// badge that the user has no visible thread in which to clear.
+func unreadMemberNotificationQuery(db *gorm.DB, userID, workspaceID uint64) *gorm.DB {
+	return scopedMemberNotificationQuery(db, userID, workspaceID).
+		Where("read = ? AND title <> ?", false, "客服回复").
+		Where("category IN ?", memberUnreadCategories).
+		Where("NOT (category = ? AND title IN ?)", "system", legacySystemResultTitles)
+}
+
+func (s *MemberPortalService) notificationAccount(userID uint64) (user.User, error) {
+	var account user.User
+	if err := s.db.Select("user_id", "workspace_id", "role", "parent_agent_id", "parent_tenant_id").First(&account, userID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return user.User{}, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
+		}
+		return user.User{}, err
+	}
+	if account.WorkspaceID == 0 {
+		return user.User{}, apperrors.NewBusinessError("ROOM_NOT_FOUND", "用户尚未进入房间")
+	}
+	var workspace workspacemodel.Workspace
+	if err := s.db.Select("id").Where("id = ? AND status = ?", account.WorkspaceID, 1).First(&workspace).Error; err != nil {
+		return user.User{}, apperrors.NewBusinessError("ROOM_NOT_FOUND", "用户所属房间不存在或已停用")
+	}
+	return account, nil
 }
 
 func (s *MemberPortalService) checkinStreak(userID, activityID uint64) int {

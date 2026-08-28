@@ -16,7 +16,7 @@ import BusinessRounded from '@mui/icons-material/BusinessRounded'
 import StorefrontRounded from '@mui/icons-material/StorefrontRounded'
 import { useState } from 'react'
 import { adminApi } from '../api'
-import { saveSession, type AuthUser } from '../auth'
+import { clearLegacyAdminSession, type AuthUser } from '../auth'
 
 type LoginIdentity = 'platform' | 'tenant' | 'agent'
 
@@ -25,18 +25,24 @@ const identityOptions: Array<{
   label: string
   caption: string
   workspace: string
-  username: string
-  password: string
   icon: typeof AccountBalanceRounded
 }> = [
-  { id: 'platform', label: '平台管理员', caption: '管理全平台', workspace: '平台', username: 'admin', password: '123456', icon: AccountBalanceRounded },
-  { id: 'tenant', label: '租户', caption: '开通并管理房间', workspace: '平台', username: 'wangzhetenant', password: 'WzTenant8801', icon: BusinessRounded },
-  { id: 'agent', label: '代理', caption: '管理房间 8801', workspace: 'wangzhetenant', username: 'suyang', password: 'Room8801', icon: StorefrontRounded },
+  { id: 'platform', label: '平台管理员', caption: '管理全平台', workspace: '平台', icon: AccountBalanceRounded },
+  { id: 'tenant', label: '租户', caption: '开通并管理房间', workspace: '平台', icon: BusinessRounded },
+  { id: 'agent', label: '代理', caption: '管理所属房间', workspace: '', icon: StorefrontRounded },
 ]
 
+const localPresets: Partial<Record<LoginIdentity, { workspace: string; username: string; password: string }>> = import.meta.env.DEV ? {
+  platform: { workspace: '平台', username: 'admin', password: '123456' },
+  tenant: { workspace: '平台', username: 'wangzhetenant', password: 'WzTenant8801' },
+  agent: { workspace: 'wangzhetenant', username: 'suyang', password: 'Room8801' },
+} : {}
+
+const localPreset = (identity: LoginIdentity) => localPresets[identity]
+
 export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }) {
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('123456')
+  const [username, setUsername] = useState(() => localPreset('platform')?.username ?? '')
+  const [password, setPassword] = useState(() => localPreset('platform')?.password ?? '')
   const [workspace, setWorkspace] = useState('平台')
   const [identity, setIdentity] = useState<LoginIdentity>('platform')
   const [loading, setLoading] = useState(false)
@@ -46,9 +52,10 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
     const option = identityOptions.find(item => item.id === next)
     if (!option) return
     setIdentity(next)
-    setWorkspace(option.workspace)
-    setUsername(option.username)
-    setPassword(option.password)
+    setWorkspace(localPreset(next)?.workspace ?? option.workspace)
+    const preset = localPreset(next)
+    setUsername(preset?.username ?? '')
+    setPassword(preset?.password ?? '')
     setError('')
   }
 
@@ -58,7 +65,7 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
     setError('')
     try {
       const result = await adminApi.login(username.trim(), password, workspace.trim())
-      saveSession({ token: result.token, user: result.user })
+	  clearLegacyAdminSession()
       onSuccess(result.user)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '登录失败')
@@ -74,7 +81,7 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
           <Stack alignItems="center" gap={1} mb={3}>
             <Box sx={{ width: 52, height: 52, borderRadius: 2.5, display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 900, fontSize: 22, background: 'linear-gradient(145deg,#1684ad,#29bdb0)' }}>王</Box>
             <Typography variant="h5" fontWeight={850}>王者管理中心</Typography>
-            <Typography variant="body2" color="text.secondary">选择身份后自动填充本地体验账号</Typography>
+            <Typography variant="body2" color="text.secondary">{import.meta.env.DEV ? '选择身份后自动填充本地体验账号' : '请选择身份并输入管理账号'}</Typography>
           </Stack>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           <Stack component="form" gap={2} onSubmit={event => void submit(event)}>
@@ -118,7 +125,7 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
               {loading ? <CircularProgress size={22} color="inherit" /> : `登录${identityOptions.find(item => item.id === identity)?.label ?? ''}`}
             </Button>
           </Stack>
-          <Typography mt={2} display="block" textAlign="center" variant="caption" color="text.secondary">身份按钮仅填充本地体验账号，不影响正式账号登录</Typography>
+          {import.meta.env.DEV && <Typography mt={2} display="block" textAlign="center" variant="caption" color="text.secondary">身份按钮仅填充本地体验账号，不影响正式账号登录</Typography>}
         </CardContent>
       </Card>
     </Box>

@@ -19,6 +19,7 @@ type OperatingReportService struct{ db *gorm.DB }
 type OperatingReportFilter struct {
 	Query, Start, End, RoomScope, GameID, Dimension string
 	UserID                                          uint64
+	WorkspaceID                                     uint64
 	Page, PageSize                                  int
 }
 
@@ -141,7 +142,7 @@ func (s *OperatingReportService) Report(filter OperatingReportFilter) (*Operatin
 	if filter.Dimension != "room" && filter.Dimension != "game" && filter.Dimension != "user" {
 		return nil, apperrors.NewBusinessError("INVALID_REPORT_DIMENSION", "不支持的汇总维度")
 	}
-	if scope := strings.TrimSpace(filter.RoomScope); scope != "" && scope != "lobby" && !strings.HasPrefix(scope, "agent:") {
+	if scope := strings.TrimSpace(filter.RoomScope); scope != "" && scope != "lobby" && !strings.HasPrefix(scope, "agent:") && !strings.HasPrefix(scope, "tenant:") {
 		return nil, apperrors.NewBusinessError("INVALID_ROOM_SCOPE", "房间范围不正确")
 	}
 
@@ -220,6 +221,9 @@ func (s *OperatingReportService) Report(filter OperatingReportFilter) (*Operatin
 
 func (s *OperatingReportService) filteredBets(filter OperatingReportFilter, period reportPeriod, settled bool) *gorm.DB {
 	q := s.db.Table("lottery_bets b").Where(`NOT EXISTS (SELECT 1 FROM "user" activity_account WHERE activity_account.user_id=b.user_id AND activity_account.remark=?)`, roomActivityRemark)
+	if filter.WorkspaceID > 0 {
+		q = q.Where("b.workspace_id = ?", filter.WorkspaceID)
+	}
 	if settled {
 		q = q.Where("b.status IN ?", []string{"won", "lost"}).Where("COALESCE(b.settled_at,b.updated_at,b.created_at) >= ? AND COALESCE(b.settled_at,b.updated_at,b.created_at) < ?", period.Start, period.End)
 	} else {
@@ -250,11 +254,17 @@ func (s *OperatingReportService) welfareCost(filter OperatingReportFilter, perio
 	q := s.db.Table("user_balance_transactions t").Joins(`JOIN "user" u ON u.user_id=t.user_id`).
 		Where("t.created_at >= ? AND t.created_at < ?", period.Start, period.End).
 		Where("t.type IN ? AND t.amount_cents > 0", []string{"checkin", "redpacket", "invite"}).Where("u.remark IS NULL OR u.remark <> ?", roomActivityRemark)
+	if filter.WorkspaceID > 0 {
+		q = q.Where("t.workspace_id = ?", filter.WorkspaceID)
+	}
 	if filter.RoomScope == "lobby" {
 		q = q.Where("u.parent_agent_id IS NULL AND u.role <> ?", "agent")
 	}
 	if strings.HasPrefix(filter.RoomScope, "agent:") {
 		q = q.Where("u.parent_agent_id = ?", strings.TrimPrefix(filter.RoomScope, "agent:"))
+	}
+	if strings.HasPrefix(filter.RoomScope, "tenant:") {
+		q = q.Where("u.parent_tenant_id = ? AND u.parent_agent_id IS NULL", strings.TrimPrefix(filter.RoomScope, "tenant:"))
 	}
 	if filter.UserID > 0 {
 		q = q.Where("t.user_id = ?", filter.UserID)
@@ -271,11 +281,17 @@ func (s *OperatingReportService) welfareQuery(filter OperatingReportFilter, peri
 		Where("t.created_at >= ? AND t.created_at < ?", period.Start, period.End).
 		Where("t.type IN ? AND t.amount_cents > 0", []string{"checkin", "redpacket", "invite"}).
 		Where("u.remark IS NULL OR u.remark <> ?", roomActivityRemark)
+	if filter.WorkspaceID > 0 {
+		q = q.Where("t.workspace_id = ?", filter.WorkspaceID)
+	}
 	if filter.RoomScope == "lobby" {
 		q = q.Where("u.parent_agent_id IS NULL AND u.role <> ?", "agent")
 	}
 	if strings.HasPrefix(filter.RoomScope, "agent:") {
 		q = q.Where("u.parent_agent_id = ?", strings.TrimPrefix(filter.RoomScope, "agent:"))
+	}
+	if strings.HasPrefix(filter.RoomScope, "tenant:") {
+		q = q.Where("u.parent_tenant_id = ? AND u.parent_agent_id IS NULL", strings.TrimPrefix(filter.RoomScope, "tenant:"))
 	}
 	if filter.UserID > 0 {
 		q = q.Where("t.user_id = ?", filter.UserID)

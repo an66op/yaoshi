@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"backend/cluster"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -13,9 +15,9 @@ type rateWindow struct {
 	count   int
 }
 
-// fixedWindowLimiter is intentionally small and local. It protects login and
-// connection-ticket endpoints without adding a Redis dependency. For multiple
-// backend instances, replace it with a shared Redis limiter during deployment.
+// fixedWindowLimiter is the development fallback used only when Redis is not
+// configured. Release mode fails closed instead of silently applying a
+// per-process limit that could be bypassed through another backend instance.
 type fixedWindowLimiter struct {
 	mu      sync.Mutex
 	limit   int
@@ -45,7 +47,27 @@ func (l *fixedWindowLimiter) allow(key string, now time.Time) bool {
 
 func (l *fixedWindowLimiter) middleware(namespace string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if l.allow(namespace+":"+c.ClientIP(), time.Now()) {
+		key := c.ClientIP()
+		allowed, retryAfter, err := cluster.AllowFixedWindow(c.Request.Context(), namespace, key, l.limit, l.period)
+		if err == nil {
+			if allowed {
+				c.Next()
+				return
+			}
+			seconds := int(retryAfter.Round(time.Second) / time.Second)
+			if seconds < 1 {
+				seconds = 1
+			}
+			c.Header("Retry-After", strconv.Itoa(seconds))
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"message": "请求过于频繁，请稍后再试"})
+			return
+		}
+		if cluster.Required() {
+			c.Header("Retry-After", "1")
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"message": "请求校验服务暂不可用，请稍后再试"})
+			return
+		}
+		if l.allow(namespace+":"+key, time.Now()) {
 			c.Next()
 			return
 		}

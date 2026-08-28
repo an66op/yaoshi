@@ -1,6 +1,8 @@
 package user
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"gorm.io/gorm"
 	"time"
 )
@@ -9,19 +11,42 @@ import (
 type User struct {
 	UserID uint64 `gorm:"primaryKey" json:"user_id"`
 	// PublicID is the stable member number shown in the product. It must not
-	// change when a member changes their nickname.
-	PublicID uint64 `gorm:"not null;uniqueIndex;default:nextval('member_public_id_seq')" json:"public_id"`
+	// change when a member changes their nickname. PostgreSQL assigns a random
+	// seven-digit value and serializes allocation before the unique insert.
+	PublicID uint64 `gorm:"not null;uniqueIndex;default:public.next_member_public_id()" json:"public_id"`
 	// 登录相关
-	Username     string `gorm:"size:50;not null;index" json:"username"` // 登录帐号（在所属租户/代理内唯一）
-	LoginScope   string `gorm:"size:80;not null;default:platform;index" json:"login_scope"`
-	Email        string `gorm:"size:100" json:"email,omitempty"`   // 邮箱（可选）
-	Password     string `gorm:"size:255;not null" json:"-"`        // 密码（加密存储，不返回给前端）
-	Nickname     string `gorm:"size:50" json:"nickname,omitempty"` // 昵称
-	Phone        string `gorm:"size:30;index" json:"phone,omitempty"`
-	Role         string `gorm:"size:20;not null;default:member;index" json:"role"`
-	Remark       string `gorm:"size:500" json:"remark,omitempty"`
-	RiskLevel    string `gorm:"size:20;not null;default:normal;index" json:"risk_level"`
-	BalanceCents int64  `gorm:"not null;default:0" json:"-"`
+	Username   string `gorm:"size:50;not null;index" json:"username"` // 登录帐号（在所属租户/代理内唯一）
+	LoginScope string `gorm:"size:80;not null;default:platform;index" json:"login_scope"`
+	// WorkspaceID is the account's current home workspace. Historical business
+	// rows keep their own workspace snapshot and are never rewritten when a
+	// member later joins another room.
+	WorkspaceID uint64 `gorm:"not null;default:0;index" json:"workspace_id"`
+	Email       string `gorm:"size:100" json:"email,omitempty"` // 邮箱（可选）
+	Password    string `gorm:"size:255;not null" json:"-"`      // 密码（加密存储，不返回给前端）
+	// AuthVersion is embedded in every JWT. Changing a password increments it,
+	// which revokes every token issued with the previous credential state.
+	AuthVersion uint64 `gorm:"not null;default:1" json:"-"`
+	Nickname    string `gorm:"size:50" json:"nickname,omitempty"` // 昵称
+	// Avatar, PublicTitle and PublicBadge are member-facing profile metadata.
+	// They are intentionally independent from Remark (an operator-only note)
+	// and are resolved through the message workspace before being exposed in a
+	// room timeline.
+	Avatar      string `gorm:"type:text;not null;default:''" json:"avatar,omitempty"`
+	PublicTitle string `gorm:"size:80;not null;default:''" json:"public_title,omitempty"`
+	PublicBadge string `gorm:"size:40;not null;default:''" json:"badge,omitempty"`
+	Phone       string `gorm:"size:30;index" json:"phone,omitempty"`
+	Role        string `gorm:"size:20;not null;default:member;index" json:"role"`
+	Remark      string `gorm:"size:500" json:"remark,omitempty"`
+	// RobotGameIDsJSON is only used by persisted room activity accounts. An
+	// empty array means that the account follows every enabled lottery; keeping
+	// the selection on the account makes operator changes survive restarts.
+	RobotGameIDsJSON string `gorm:"type:text;not null;default:'[]'" json:"-"`
+	RobotActiveStart string `gorm:"size:5;not null;default:''" json:"-"`
+	RobotActiveEnd   string `gorm:"size:5;not null;default:''" json:"-"`
+	RobotMinBetCents int64  `gorm:"not null;default:0" json:"-"`
+	RobotMaxBetCents int64  `gorm:"not null;default:0" json:"-"`
+	RiskLevel        string `gorm:"size:20;not null;default:normal;index" json:"risk_level"`
+	BalanceCents     int64  `gorm:"not null;default:0" json:"-"`
 
 	// FlyMode: inherit = 跟随房间默认飞单比例; custom = 使用 FlyRate; off = 不飞单
 	FlyMode string  `gorm:"size:20;not null;default:inherit" json:"fly_mode"`
@@ -48,6 +73,9 @@ type User struct {
 	// resized image data URL so local installations do not depend on an object
 	// storage service just to display a room identity.
 	AgentRoomLogo string `gorm:"type:text" json:"agent_room_logo,omitempty"`
+	// GroupChatEnabled controls the public lobby chat owned by this agent.
+	// Rooms start muted and stay muted until an operator explicitly opens them.
+	GroupChatEnabled bool `gorm:"not null;default:false" json:"group_chat_enabled"`
 	// ParentAgentID links a member to the agent room they entered.
 	ParentAgentID *uint64 `gorm:"index" json:"parent_agent_id,omitempty"`
 	// ParentTenantID is the immutable ownership boundary for an agent. Members
@@ -73,11 +101,33 @@ func (User) TableName() string {
 	return "user"
 }
 
+// BeforeCreate gives every new account a non-repeating credential generation.
+// A development database reset restarts numeric user IDs; keeping the old
+// default auth_version=1 would therefore allow a JWT issued before the reset
+// to authenticate as a newly-created account that reused the same ID.  The
+// value stays below JavaScript's safe-integer limit in case an operator needs
+// to inspect a decoded token in browser tooling.
+func (u *User) BeforeCreate(_ *gorm.DB) error {
+	if u.AuthVersion > 1 {
+		return nil
+	}
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return err
+	}
+	u.AuthVersion = binary.BigEndian.Uint64(raw[:]) & ((1 << 52) - 1)
+	if u.AuthVersion < 2 {
+		u.AuthVersion += 2
+	}
+	return nil
+}
+
 // BalanceTransaction is an immutable audit record for every manual balance
 // adjustment made from the admin user-management page.
 type BalanceTransaction struct {
-	ID     uint64 `gorm:"primaryKey" json:"id"`
-	UserID uint64 `gorm:"not null;index" json:"user_id"`
+	ID          uint64 `gorm:"primaryKey" json:"id"`
+	WorkspaceID uint64 `gorm:"not null;default:0;index" json:"workspace_id"`
+	UserID      uint64 `gorm:"not null;index" json:"user_id"`
 	// Reference identifies the domain operation that produced the immutable
 	// ledger row.  Legacy/manual rows may leave it empty; automated operations
 	// use it for traceability and database-level idempotency.

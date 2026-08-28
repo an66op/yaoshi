@@ -9,8 +9,9 @@ import "time"
 // the outstanding delta.
 type DailyRecord struct {
 	ID                uint64     `gorm:"primaryKey" json:"id"`
-	BizDate           string     `gorm:"size:10;not null;uniqueIndex:idx_profit_share_agent_day" json:"biz_date"`
-	AgentID           uint64     `gorm:"not null;uniqueIndex:idx_profit_share_agent_day;index" json:"agent_id"`
+	WorkspaceID       uint64     `gorm:"not null;default:0;index;uniqueIndex:idx_profit_share_agent_day,priority:1" json:"workspace_id"`
+	BizDate           string     `gorm:"size:10;not null;uniqueIndex:idx_profit_share_agent_day,priority:2" json:"biz_date"`
+	AgentID           uint64     `gorm:"not null;uniqueIndex:idx_profit_share_agent_day,priority:3;index" json:"agent_id"`
 	RoomScope         string     `gorm:"size:80;not null;index" json:"room_scope"`
 	AgentUsername     string     `gorm:"size:50;not null;index" json:"agent_username"`
 	RoomCode          string     `gorm:"size:40;index" json:"room_code"`

@@ -25,13 +25,13 @@ type defaultPlay struct {
 var defaultPlays = []defaultPlay{
 	{
 		Code: "two_sided", Name: "两面", Category: "两面盘",
-		Description: "第1-5球或冠亚和的大小、单双",
+		Description: "指定名次的大小、单双；赛车冠亚和使用专用玩法",
 		Example:     "1大/100、冠亚和小/50",
 		Odds:        1.993,
 	},
 	{
-		Code: "ball_1_5", Name: "1-5球号", Category: "号码",
-		Description: "指定名次开出指定号码；第6位为冠亚和尾数",
+		Code: "ball_1_5", Name: "指定名次号码", Category: "号码",
+		Description: "指定名次开出指定号码；赛车、飞艇支持第1-10名",
 		Example:     "3/7/100、12345/200",
 		Odds:        9.9,
 	},
@@ -43,8 +43,8 @@ var defaultPlays = []defaultPlay{
 	},
 	{
 		Code: "sum", Name: "冠亚和", Category: "总和",
-		Description: "冠亚和值的大小、单双或尾数",
-		Example:     "冠亚和大/100",
+		Description: "赛车冠亚和值3-19，3-11小、12-19大，并支持单双",
+		Example:     "冠亚和大/100、冠亚/14/50",
 		Odds:        1.993,
 	},
 	{

@@ -187,6 +187,7 @@ export function Chats({
   const [pinnedRows, setPinnedRows] = useState<string[]>(["service", "group"]);
   const [hiddenRows, setHiddenRows] = useState<string[]>(["winning"]);
   const [listError, setListError] = useState("");
+  const previewRequestRef = useRef(0);
 
   useEffect(() => {
     void portalApi.roomSettings().then((settings) => {
@@ -199,23 +200,34 @@ export function Chats({
   }, []);
 
   const loadPreview = useCallback(async () => {
+    const requestId = ++previewRequestRef.current;
+    let nextPreview: ChatPreview | null | undefined;
+    let nextNotifications: MemberNotification[] | undefined;
+    let nextPromotionTitles: string[] | undefined;
+    let nextServicePreview: { text: string; time: string } | undefined;
     const results = await Promise.allSettled([
-      chatApi.preview().then(setPreview),
-      portalApi.notifications(50).then((page) => setNotifications(page.items)),
+      chatApi.preview().then((value) => { nextPreview = value; }),
+      portalApi.notifications(50).then((page) => { nextNotifications = page.items; }),
       portalApi.activities().then((items) => {
-        setPromotionTitles([...activePromotionTitles(items)]);
+        nextPromotionTitles = [...activePromotionTitles(items)];
       }),
 	  chatApi.messages("service", "service", 1).then((page) => {
         const last = page.items.at(-1);
         if (last) {
-          setServicePreview(`${last.mine ? "我" : "客服"}：${last.content}`);
-          setServicePreviewTime(messageTime(last.created_at));
+          nextServicePreview = { text: `${last.mine ? "我" : "客服"}：${last.content}`, time: messageTime(last.created_at) };
         } else {
-          setServicePreview("暂无客服消息");
-          setServicePreviewTime("暂无");
+          nextServicePreview = { text: "暂无客服消息", time: "暂无" };
         }
       }),
     ]);
+    if (requestId !== previewRequestRef.current) return;
+    if (nextPreview !== undefined) setPreview(nextPreview);
+    if (nextNotifications !== undefined) setNotifications(nextNotifications);
+    if (nextPromotionTitles !== undefined) setPromotionTitles(nextPromotionTitles);
+    if (nextServicePreview) {
+      setServicePreview(nextServicePreview.text);
+      setServicePreviewTime(nextServicePreview.time);
+    }
     const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
     setListError(failure ? friendlyChatError(failure.reason, "部分消息暂时未更新") : "");
   }, []);

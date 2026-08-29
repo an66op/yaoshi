@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { memberApi } from '../api/member'
 
@@ -18,6 +18,7 @@ export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }:
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
+  const submittingRef = useRef(false)
   const roomDescription = [error && 'room-entry-error', notice && 'room-entry-notice', 'room-entry-hint'].filter(Boolean).join(' ')
 
   const updateRoom = (value: string) => {
@@ -27,8 +28,10 @@ export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }:
   }
 
   const submit = async () => {
+    if (submittingRef.current) return
     const value = room.trim()
     if (!/^\d{5,12}$/.test(value)) return setError('请输入 5–12 位数字房间号')
+    submittingRef.current = true
     setLoading(true)
     setError('')
     setNotice('')
@@ -42,6 +45,7 @@ export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }:
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '无法验证房间号')
     } finally {
+      submittingRef.current = false
       setLoading(false)
     }
   }

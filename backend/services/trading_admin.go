@@ -409,7 +409,7 @@ func (s *TradingAdminService) Update(userID uint64, input UpdateUserTradingInput
 		for _, item := range input.Odds {
 			code := strings.TrimSpace(item.PlayCode)
 			if !valid[code] {
-				continue
+				return apperrors.NewBusinessError("INVALID_REQUEST", "包含当前游戏不存在的玩法赔率")
 			}
 			if item.Override == nil {
 				if err := tx.Where("workspace_id = ? AND user_id = ? AND game_id = ? AND play_code = ?", account.WorkspaceID, userID, gameID, code).
@@ -418,7 +418,7 @@ func (s *TradingAdminService) Update(userID uint64, input UpdateUserTradingInput
 				}
 				continue
 			}
-			if *item.Override <= 1 {
+			if !isValidOddsOverride(*item.Override) {
 				return apperrors.NewBusinessError("INVALID_REQUEST", "单独赔率必须大于 1")
 			}
 			row := odds.UserPlayOdds{WorkspaceID: account.WorkspaceID, UserID: userID, GameID: gameID, PlayCode: code, Odds: *item.Override}
@@ -642,7 +642,7 @@ func (s *TradingAdminService) UpdateRoom(agentID uint64, input UpdateRoomTrading
 }
 
 func (s *TradingAdminService) UpdateRoomForWorkspace(workspaceID uint64, input UpdateRoomTradingInput) (*RoomTradingConfig, error) {
-	if input.RebateRate < 0 || input.RebateRate > 100 {
+	if !isFinitePercent(input.RebateRate) {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "房间返水比例需在 0-100 之间")
 	}
 	gameID := strings.TrimSpace(input.GameID)
@@ -672,7 +672,7 @@ func (s *TradingAdminService) UpdateRoomForWorkspace(workspaceID uint64, input U
 		for _, item := range input.Odds {
 			code := strings.TrimSpace(item.PlayCode)
 			if !valid[code] {
-				continue
+				return apperrors.NewBusinessError("INVALID_REQUEST", "包含当前游戏不存在的玩法赔率")
 			}
 			if item.Override == nil {
 				if err := tx.Where("workspace_id = ? AND game_id = ? AND play_code = ?", workspace.ID, gameID, code).Delete(&odds.RoomPlayOdds{}).Error; err != nil {
@@ -680,7 +680,7 @@ func (s *TradingAdminService) UpdateRoomForWorkspace(workspaceID uint64, input U
 				}
 				continue
 			}
-			if *item.Override <= 1 {
+			if !isValidOddsOverride(*item.Override) {
 				return apperrors.NewBusinessError("INVALID_REQUEST", "房间赔率必须大于 1")
 			}
 			row := odds.RoomPlayOdds{WorkspaceID: workspace.ID, AgentID: workspace.OwnerUserID, GameID: gameID, PlayCode: code, Odds: *item.Override}
@@ -694,6 +694,14 @@ func (s *TradingAdminService) UpdateRoomForWorkspace(workspaceID uint64, input U
 		return nil, err
 	}
 	return s.GetRoomForWorkspace(workspaceID, gameID)
+}
+
+func isFinitePercent(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= 100
+}
+
+func isValidOddsOverride(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value > 1
 }
 
 func (s *TradingAdminService) roomRebateRate(account user.User) (float64, error) {

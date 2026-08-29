@@ -210,7 +210,7 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
       </Stack>
       {error && <Alert severity="error" sx={{ borderRadius: 0 }}>{error}</Alert>}
       <TableContainer sx={{ minHeight: 280 }}>
-        <Table size="small">
+        <Table size="small" sx={{ minWidth: 760 }}>
           <TableHead><TableRow>
             <TableCell>会员</TableCell>
             <TableCell>所属房间</TableCell>

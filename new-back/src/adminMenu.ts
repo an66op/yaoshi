@@ -83,15 +83,18 @@ const normalizeMenu = (fallbacks: AdminMenuItemConfig[], value: unknown) => {
   }
   return fallbacks.map((fallback) => {
     const candidate = byPath.get(fallback.path)
+    const requiredMemberEntry = fallback.path === '/members'
     const legacyTenantAgentLabel = fallback.path === '/agents' && candidate?.label === '代理账号管理'
     const label = fallback.path === '/'
       ? '首页'
+      : requiredMemberEntry
+        ? fallback.label
       : legacyTenantAgentLabel
         ? fallback.label
       : typeof candidate?.label === 'string' && candidate.label.trim() ? candidate.label.trim().slice(0, 18) : fallback.label
-    const group = typeof candidate?.group === 'string' && candidate.group.trim() ? candidate.group.trim().slice(0, 18) : fallback.group
-    const order = typeof candidate?.order === 'number' && Number.isFinite(candidate.order) ? candidate.order : fallback.order
-    const visible = typeof candidate?.visible === 'boolean' ? candidate.visible : fallback.visible
+    const group = requiredMemberEntry ? fallback.group : typeof candidate?.group === 'string' && candidate.group.trim() ? candidate.group.trim().slice(0, 18) : fallback.group
+    const order = requiredMemberEntry ? fallback.order : typeof candidate?.order === 'number' && Number.isFinite(candidate.order) ? candidate.order : fallback.order
+    const visible = requiredMemberEntry ? true : typeof candidate?.visible === 'boolean' ? candidate.visible : fallback.visible
     return { path: fallback.path, label, group, order, visible }
   }).sort((a, b) => a.order - b.order)
 }

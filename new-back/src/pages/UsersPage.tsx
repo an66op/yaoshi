@@ -87,6 +87,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
   const [tradingDirty, setTradingDirty] = useState(false)
   const { showMessage } = useFeedback()
   const loadRequestRef = useRef(0)
+  const detailRequestRef = useRef(0)
 
   const load = useCallback(async (notify = false, silent = false) => {
     const requestID = ++loadRequestRef.current
@@ -221,24 +222,31 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
   }
 
   const openDetail = async (user: AdminUser) => {
+    const requestID = ++detailRequestRef.current
     setDetailUser(user)
     setHistory([])
     setTrading(null)
     setTradingDirty(false)
-    try {
-      const [nextHistory, dashboard, nextTrading] = await Promise.all([
+    const [historyResult, dashboardResult, tradingResult] = await Promise.allSettled([
         adminApi.userBalanceHistory(user.id),
         adminApi.dashboard(),
-        adminApi.userTrading(user.id),
+        user.role === 'member' ? adminApi.userTrading(user.id) : Promise.resolve(null),
       ])
-      setHistory(nextHistory)
-      setGames(dashboard.games ?? [])
-      setTrading(nextTrading)
-      setTradingGameId(nextTrading.game_id)
+    if (requestID !== detailRequestRef.current) return
+    if (historyResult.status === 'fulfilled') setHistory(historyResult.value)
+    if (dashboardResult.status === 'fulfilled') setGames(dashboardResult.value.games ?? [])
+    if (tradingResult.status === 'fulfilled' && tradingResult.value) {
+      setTrading(tradingResult.value)
+      setTradingGameId(tradingResult.value.game_id)
       setTradingDirty(false)
-    } catch {
-      setHistory([])
     }
+    const failure = [historyResult, dashboardResult, tradingResult].find(result => result.status === 'rejected')
+    if (failure?.status === 'rejected') setError(failure.reason instanceof Error ? failure.reason.message : '部分用户详情暂时无法读取')
+  }
+
+  const closeDetail = () => {
+    detailRequestRef.current += 1
+    setDetailUser(null)
   }
 
   const loadTrading = async (userId: number, gameId: string) => {
@@ -316,13 +324,13 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
 
     <Dialog open={Boolean(balanceUser)} onClose={() => !saving && setBalanceUser(null)} fullWidth maxWidth="xs"><DialogTitle>调整用户余额</DialogTitle><DialogContent><Alert severity="info" sx={{ mb: 2 }}>当前余额：{money(balanceUser?.balance ?? 0)}。正数增加，负数扣减，操作会写入审计流水。</Alert><Stack gap={2}><TextField autoFocus type="number" label="调整金额" placeholder="例如 100 或 -50" value={balanceAmount} onChange={event => setBalanceAmount(event.target.value)} /><TextField required multiline minRows={3} label="调整原因" value={balanceRemark} onChange={event => setBalanceRemark(event.target.value)} /></Stack></DialogContent><DialogActions><Button onClick={() => setBalanceUser(null)}>取消</Button><Button variant="contained" disabled={saving} onClick={() => void submitBalance()}>确认调整</Button></DialogActions></Dialog>
 
-    <Drawer anchor="right" open={Boolean(detailUser)} onClose={() => setDetailUser(null)} slotProps={{ paper: { sx: { width: { xs: '100%', sm: 720, lg: 860 }, p: { xs: 1.5, sm: 2.5 } } } }}>
+    <Drawer anchor="right" open={Boolean(detailUser)} onClose={closeDetail} slotProps={{ paper: { sx: { width: { xs: '100%', sm: 720, lg: 860 }, p: { xs: 1.5, sm: 2.5 } } } }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Box>
           <Typography variant="overline" color="primary">用户详情</Typography>
           <Typography variant="h6" fontWeight={850}>{detailUser?.nickname || detailUser?.username}</Typography>
         </Box>
-        <IconButton onClick={() => setDetailUser(null)}><CloseRounded /></IconButton>
+        <IconButton aria-label="关闭用户详情" onClick={closeDetail}><CloseRounded /></IconButton>
       </Stack>
       {detailUser && (
         <>
@@ -348,7 +356,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
             </CardContent>
           </Card>
 
-          <Typography fontWeight={800} mt={2.5} mb={1}>用户交易配置</Typography>
+          {detailUser.role === 'member' && <><Typography fontWeight={800} mt={2.5} mb={1}>用户交易配置</Typography>
           <Card variant="outlined">
             <CardContent>
               {!trading ? (
@@ -473,7 +481,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
                 </Stack>
               )}
             </CardContent>
-          </Card>
+          </Card></>}
 
           <Typography fontWeight={800} mt={2.5} mb={1}>余额流水</Typography>
           <Stack gap={1}>

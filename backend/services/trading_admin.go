@@ -195,7 +195,7 @@ func (s *TradingAdminService) UpdateForWorkspace(workspaceID, userID uint64, inp
 
 func (s *TradingAdminService) Get(userID uint64, gameID string) (*UserTradingConfig, error) {
 	var account user.User
-	if err := s.db.First(&account, userID).Error; err != nil {
+	if err := memberTradingAccountQuery(s.db, userID).First(&account).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
 		}
@@ -362,7 +362,7 @@ func (s *TradingAdminService) Update(userID uint64, input UpdateUserTradingInput
 	gameID := strings.TrimSpace(input.GameID)
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var account user.User
-		if err := tx.First(&account, userID).Error; err != nil {
+		if err := memberTradingAccountQuery(tx, userID).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
 			}
@@ -435,6 +435,10 @@ func (s *TradingAdminService) Update(userID uint64, input UpdateUserTradingInput
 		return nil, err
 	}
 	return s.Get(userID, gameID)
+}
+
+func memberTradingAccountQuery(db *gorm.DB, userID uint64) *gorm.DB {
+	return db.Where("user_id = ? AND role = ?", userID, "member")
 }
 
 func (s *TradingAdminService) Resolve(userID uint64, gameID, playCode string, amount, requestOdds, requestFly float64) (*ResolvedTradeParams, error) {

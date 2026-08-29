@@ -1,0 +1,41 @@
+[Unit]
+Description=Encrypted PostgreSQL PITR base backup for Wangzhe
+After=postgresql.service network-online.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/wangzhe-backup-work/pitr
+OnFailure=wangzhe-ops-failure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+ExecStart=/opt/wangzhe/current/scripts/postgres-base-backup.sh /etc/wangzhe/pitr.env
+TimeoutStartSec=12h
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/wangzhe/pitr.env /etc/wangzhe/pitr-rclone.conf /etc/wangzhe/pitr-provenance-ed25519-private.pem /etc/wangzhe/pitr-cluster-id
+ReadWritePaths=/var/backups/wangzhe/base /var/lib/wangzhe-backup-work/pitr
+NoNewPrivileges=true
+PrivateDevices=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native

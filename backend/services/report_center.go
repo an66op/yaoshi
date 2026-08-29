@@ -161,9 +161,8 @@ func (s *ReportCenterService) Report(key string, filter ReportCenterFilter) (*Re
 var pc28GameIDs = []string{"pc-canada", "canada-28", "canada-20"}
 
 func (s *ReportCenterService) betBase(filter ReportCenterFilter, period reportPeriod) *gorm.DB {
-	query := s.db.Model(&bet.Bet{}).
-		Where("created_at >= ? AND created_at < ?", period.Start, period.End).
-		Where(`NOT EXISTS (SELECT 1 FROM workspace_robot_profiles AS robot WHERE robot.user_id = lottery_bets.user_id AND robot.workspace_id = lottery_bets.workspace_id)`)
+	query := excludeRobotProfileBets(s.db.Model(&bet.Bet{})).
+		Where("created_at >= ? AND created_at < ?", period.Start, period.End)
 	if filter.WorkspaceID > 0 {
 		query = query.Where("workspace_id = ?", filter.WorkspaceID)
 	} else {
@@ -219,8 +218,7 @@ func (s *ReportCenterService) betOverview(out *ReportCenterResult, filter Report
 		{Key: "net", Label: "净利润", Value: centsToAmount(gross - aggregate.Rebate - aggregate.Share)},
 	}
 	if reportKey == "summary" {
-		workspaceLedger := s.db.Model(&user.BalanceTransaction{}).Where("created_at >= ? AND created_at < ?", period.Start, period.End)
-		workspaceLedger = workspaceLedger.Where(`NOT EXISTS (SELECT 1 FROM workspace_robot_profiles AS robot WHERE robot.user_id = user_balance_transactions.user_id AND robot.workspace_id = user_balance_transactions.workspace_id)`)
+		workspaceLedger := excludeRobotProfileLedgers(s.db.Model(&user.BalanceTransaction{})).Where("created_at >= ? AND created_at < ?", period.Start, period.End)
 		workspacePackets := s.db.Model(&chat.RedPacket{}).Where("created_at >= ? AND created_at < ?", period.Start, period.End)
 		if filter.WorkspaceID > 0 {
 			workspaceLedger = workspaceLedger.Where("workspace_id = ?", filter.WorkspaceID)
@@ -356,8 +354,7 @@ func (s *ReportCenterService) dailyMemberReport(out *ReportCenterResult, filter 
 		row.Tickets += source.Tickets
 	}
 
-	ledgerQuery := s.db.Model(&user.BalanceTransaction{}).Where("created_at < ?", period.End)
-	ledgerQuery = ledgerQuery.Where(`NOT EXISTS (SELECT 1 FROM workspace_robot_profiles AS robot WHERE robot.user_id = user_balance_transactions.user_id AND robot.workspace_id = user_balance_transactions.workspace_id)`)
+	ledgerQuery := excludeRobotProfileLedgers(s.db.Model(&user.BalanceTransaction{})).Where("created_at < ?", period.End)
 	if filter.WorkspaceID > 0 {
 		ledgerQuery = ledgerQuery.Where("workspace_id = ?", filter.WorkspaceID)
 	} else {
@@ -460,10 +457,9 @@ func (s *ReportCenterService) dailyMemberReport(out *ReportCenterResult, filter 
 }
 
 func (s *ReportCenterService) categoryReport(out *ReportCenterResult, filter ReportCenterFilter, period reportPeriod) error {
-	base := s.db.Table("lottery_bets AS b").
+	base := excludeRobotProfileRows(s.db.Table("lottery_bets AS b"), "b.workspace_id", "b.user_id").
 		Joins("LEFT JOIN lottery_games AS g ON g.id = b.game_id").
-		Where("b.created_at >= ? AND b.created_at < ?", period.Start, period.End).
-		Where(`NOT EXISTS (SELECT 1 FROM workspace_robot_profiles AS robot WHERE robot.user_id = b.user_id AND robot.workspace_id = b.workspace_id)`)
+		Where("b.created_at >= ? AND b.created_at < ?", period.Start, period.End)
 	if filter.WorkspaceID > 0 {
 		base = base.Where("b.workspace_id = ?", filter.WorkspaceID)
 	} else {
@@ -516,8 +512,7 @@ func (s *ReportCenterService) unsettledReport(out *ReportCenterResult, filter Re
 }
 
 func (s *ReportCenterService) ledgerReport(out *ReportCenterResult, filter ReportCenterFilter, period reportPeriod, commissionOnly bool) error {
-	query := s.db.Model(&user.BalanceTransaction{}).Where("created_at >= ? AND created_at < ?", period.Start, period.End)
-	query = query.Where(`NOT EXISTS (SELECT 1 FROM workspace_robot_profiles AS robot WHERE robot.user_id = user_balance_transactions.user_id AND robot.workspace_id = user_balance_transactions.workspace_id)`)
+	query := excludeRobotProfileLedgers(s.db.Model(&user.BalanceTransaction{})).Where("created_at >= ? AND created_at < ?", period.Start, period.End)
 	if filter.WorkspaceID > 0 {
 		query = query.Where("workspace_id = ?", filter.WorkspaceID)
 	} else {
@@ -663,8 +658,7 @@ func (s *ReportCenterService) alertReport(out *ReportCenterResult, filter Report
 }
 
 func (s *ReportCenterService) newMemberReport(out *ReportCenterResult, filter ReportCenterFilter, period reportPeriod) error {
-	query := s.db.Model(&user.User{}).Where("role = ? AND created_at >= ? AND created_at < ?", "member", period.Start, period.End)
-	query = query.Where(`NOT EXISTS (SELECT 1 FROM workspace_robot_profiles AS robot WHERE robot.user_id = "user".user_id)`)
+	query := excludeRobotProfileUsers(s.db.Model(&user.User{})).Where("role = ? AND created_at >= ? AND created_at < ?", "member", period.Start, period.End)
 	if filter.WorkspaceID > 0 {
 		query = query.Where("workspace_id = ?", filter.WorkspaceID)
 	} else {
@@ -695,9 +689,8 @@ func (s *ReportCenterService) newMemberReport(out *ReportCenterResult, filter Re
 		return err
 	}
 	firstCreditQuery := s.db.Model(&user.BalanceTransaction{}).Select("user_id, MIN(created_at) first_at").Where("type = ?", "application_credit")
-	firstBetQuery := s.db.Model(&bet.Bet{}).Select("user_id, MIN(created_at) first_at").
-		Where("status <> ?", "cancelled").
-		Where("NOT EXISTS (SELECT 1 FROM workspace_robot_profiles AS robot WHERE robot.user_id = lottery_bets.user_id)")
+	firstBetQuery := excludeRobotProfileBets(s.db.Model(&bet.Bet{})).Select("user_id, MIN(created_at) first_at").
+		Where("status <> ?", "cancelled")
 	if filter.WorkspaceID > 0 {
 		firstCreditQuery = firstCreditQuery.Where("workspace_id = ?", filter.WorkspaceID)
 		firstBetQuery = firstBetQuery.Where("workspace_id = ?", filter.WorkspaceID)
@@ -712,10 +705,9 @@ func (s *ReportCenterService) newMemberReport(out *ReportCenterResult, filter Re
 	if err := s.db.Table("(?) AS first_bet", firstBetQuery.Group("user_id")).Where("first_at >= ? AND first_at < ?", period.Start, period.End).Count(&firstBets).Error; err != nil {
 		return err
 	}
-	cohortQuery := s.db.Model(&user.User{}).
+	cohortQuery := excludeRobotProfileUsers(s.db.Model(&user.User{})).
 		Select("user_id, workspace_id, created_at").
-		Where("role = ? AND created_at >= ? AND created_at < ?", "member", period.Start, period.End).
-		Where(`NOT EXISTS (SELECT 1 FROM workspace_robot_profiles AS robot WHERE robot.user_id = "user".user_id)`)
+		Where("role = ? AND created_at >= ? AND created_at < ?", "member", period.Start, period.End)
 	if filter.WorkspaceID > 0 {
 		cohortQuery = cohortQuery.Where("workspace_id = ?", filter.WorkspaceID)
 	} else {

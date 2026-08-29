@@ -1,0 +1,14 @@
+# Create a different least-privilege credential/config for backup, PostgreSQL,
+# recovery and monitor roles.  Replace every CHANGE_ME and install mode 0400,
+# owned by the service user.  Enable bucket versioning and object-lock/retention
+# at the provider; those controls cannot be enforced by this client file.
+[CHANGE_ME_REMOTE]
+type = s3
+provider = Other
+access_key_id = CHANGE_ME_ACCESS_KEY
+secret_access_key = CHANGE_ME_SECRET_KEY
+endpoint = https://CHANGE_ME_OBJECT_STORAGE_ENDPOINT
+region = CHANGE_ME_REGION
+acl = private
+server_side_encryption = aws:kms
+sse_kms_key_id = CHANGE_ME_PROVIDER_KMS_KEY_ID

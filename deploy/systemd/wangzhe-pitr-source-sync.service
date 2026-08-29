@@ -1,0 +1,43 @@
+[Unit]
+Description=Fetch and verify Wangzhe PITR recovery source from off-host storage
+After=network-online.target
+Wants=network-online.target
+Before=wangzhe-pitr-restore-drill.service
+OnFailure=wangzhe-ops-failure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+ExecStart=/opt/wangzhe/current/scripts/pitr-recovery-source-sync.sh /etc/wangzhe/pitr-source-sync.env
+TimeoutStartSec=12h
+UMask=0077
+StateDirectory=wangzhe-pitr-source
+StateDirectoryMode=0700
+RuntimeDirectory=wangzhe-pitr-source
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/wangzhe/pitr-source-sync.env /etc/wangzhe/pitr-wal-read-rclone.conf /etc/wangzhe/pitr-provenance-ed25519-public.pem /etc/wangzhe/recovery-host
+ReadWritePaths=/var/lib/wangzhe-pitr-source /run/wangzhe-pitr-source
+NoNewPrivileges=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native

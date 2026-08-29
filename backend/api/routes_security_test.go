@@ -1,9 +1,15 @@
 package api
 
 import (
+	"backend/cluster"
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -51,13 +57,16 @@ func TestPrivilegedRouteBoundaries(t *testing.T) {
 		"GET /api/agent/chat/messages",
 		"GET /api/agent/robots",
 		"POST /api/agent/robots/reset",
+		"POST /api/agent/robots/run-once",
 		"GET /api/agent/games",
 		"GET /api/tenant/applications",
 		"GET /api/tenant/chat/messages",
 		"GET /api/tenant/robots",
 		"POST /api/tenant/robots/reset",
+		"POST /api/tenant/robots/run-once",
 		"GET /api/tenant/games",
 		"POST /api/admin/robots/reset",
+		"POST /api/admin/room-activity/run-once",
 		"POST /api/admin/sources/:group/test",
 		"GET /api/admin/robot-workspaces",
 		"GET /api/admin/robot-workspaces/:id/games",
@@ -103,5 +112,80 @@ func TestPrivilegedRouteBoundaries(t *testing.T) {
 		if _, ok := registered[forbidden]; ok {
 			t.Errorf("forbidden cross-scope route is registered: %s", forbidden)
 		}
+	}
+}
+
+func TestAdminRoomActivityRunOnceRouteUsesSharedOperatorRateLimit(t *testing.T) {
+	redisServer := miniredis.RunT(t)
+	if err := cluster.Init(context.Background(), cluster.Options{Addr: redisServer.Addr(), Prefix: "admin-room-activity-rate-test"}); err != nil {
+		t.Fatalf("initialize test Redis: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cluster.Close()
+		_ = cluster.Init(context.Background(), cluster.Options{})
+	})
+
+	route := adminRoomActivityRunOnceRoute(func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	if route.Method != http.MethodPost || route.Pattern != "/admin/room-activity/run-once" || len(route.Middlewares) != 1 {
+		t.Fatalf("admin room activity route is not protected: %#v", route)
+	}
+
+	engine := gin.New()
+	engine.Use(func(c *gin.Context) {
+		userID, _ := strconv.ParseUint(c.GetHeader("X-Test-User"), 10, 64)
+		c.Set("user_id", userID)
+		c.Next()
+	})
+	handlers := append([]gin.HandlerFunc{}, route.Middlewares...)
+	handlers = append(handlers, route.Handler)
+	engine.POST(route.Pattern, handlers...)
+
+	request := func(operator string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, route.Pattern, nil)
+		req.Header.Set("X-Test-User", operator)
+		engine.ServeHTTP(recorder, req)
+		return recorder
+	}
+	for index := 0; index < 6; index++ {
+		if status := request("99001").Code; status != http.StatusNoContent {
+			t.Fatalf("request %d status = %d", index+1, status)
+		}
+	}
+	limited := request("99001")
+	if limited.Code != http.StatusTooManyRequests || limited.Header().Get("Retry-After") == "" {
+		t.Fatalf("seventh request status/retry = %d/%q", limited.Code, limited.Header().Get("Retry-After"))
+	}
+	if status := request("99002").Code; status != http.StatusNoContent {
+		t.Fatalf("another admin inherited the first admin's window: %d", status)
+	}
+}
+
+func TestRegistrationRoutesRespectServerMode(t *testing.T) {
+	for _, test := range []struct {
+		mode               string
+		wantLegacyRegister bool
+	}{
+		{mode: gin.DebugMode, wantLegacyRegister: true},
+		{mode: gin.TestMode, wantLegacyRegister: true},
+		{mode: gin.ReleaseMode, wantLegacyRegister: false},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			engine := gin.New()
+			LoadRoutesForMode(engine, &gorm.DB{}, nil, test.mode)
+
+			registered := make(map[string]struct{}, len(engine.Routes()))
+			for _, route := range engine.Routes() {
+				registered[route.Method+" "+route.Path] = struct{}{}
+			}
+
+			_, hasLegacyRegister := registered["POST /api/register"]
+			if hasLegacyRegister != test.wantLegacyRegister {
+				t.Fatalf("legacy register route present = %v, want %v", hasLegacyRegister, test.wantLegacyRegister)
+			}
+			if _, ok := registered["POST /api/member/register"]; !ok {
+				t.Fatal("member registration route must remain available in every server mode")
+			}
+		})
 	}
 }

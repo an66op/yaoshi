@@ -7,6 +7,7 @@ import (
 	workspacemodel "backend/data/models/workspace"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -24,9 +25,21 @@ import (
 // activity.  The accounts are ordinary member accounts from the perspective
 // of the feed: no client-facing label identifies them as automation.
 //
-// Set BACKEND_ROOM_ACTIVITY=0 to
-// disable it in an environment that should contain only real member activity.
+// Release mode is fail-closed: BACKEND_ROOM_ACTIVITY must be exactly 1 and a
+// positive BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES cap must be present before the
+// scheduler starts. Debug/test keep the legacy opt-out behaviour so local
+// fixtures continue to work unless BACKEND_ROOM_ACTIVITY=0 is set.
 const roomActivityRemark = "房间活跃账号"
+
+const maxProductionRoomActivityWorkspaces = 100
+
+var ErrRoomActivityWorkspaceCap = errors.New("机器人生产启用工作区超过上限")
+
+// This PostgreSQL advisory transaction lock serializes production robot
+// setting changes with an actual robot run. It closes the small window where a
+// room could be disabled (or the global cap exceeded) between validation and
+// placing the first bet.
+const roomActivityPolicyLockID int64 = 0x57414e475a484552
 
 type RoomActivityService struct {
 	db       *gorm.DB
@@ -35,7 +48,9 @@ type RoomActivityService struct {
 	cycleMu  sync.Mutex
 	statusMu sync.RWMutex
 	random   *rand.Rand
-	status   RoomActivityStatus
+	// Zero means uncapped and is only used by debug/test compatibility mode.
+	maxEnabledWorkspaces int
+	status               RoomActivityStatus
 }
 
 type RoomActivityStatus struct {
@@ -58,7 +73,8 @@ type RoomActivityStatus struct {
 
 var roomActivityRegistry struct {
 	sync.RWMutex
-	service *RoomActivityService
+	service              *RoomActivityService
+	maxEnabledWorkspaces int
 }
 
 type roomActivityConfig struct {
@@ -80,23 +96,88 @@ var roomActivityAliases = []string{
 }
 
 func StartRoomActivity(ctxDone <-chan struct{}, db *gorm.DB) {
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("BACKEND_ROOM_ACTIVITY")), "0") {
-		log.Printf("房间活跃数据已通过 BACKEND_ROOM_ACTIVITY=0 关闭")
+	serverMode := strings.TrimSpace(os.Getenv("BACKEND_SERVER_MODE"))
+	if serverMode == "" {
+		serverMode = "debug"
+	}
+	StartRoomActivityForMode(ctxDone, db, serverMode)
+}
+
+// StartRoomActivityForMode lets the application pass the already validated
+// server mode instead of relying on ambient process state. StartRoomActivity
+// remains a debug-compatible wrapper for local tools and older tests.
+func StartRoomActivityForMode(ctxDone <-chan struct{}, db *gorm.DB, serverMode string) {
+	policy := resolveRoomActivityProcessPolicy(
+		serverMode,
+		os.Getenv("BACKEND_ROOM_ACTIVITY"),
+		os.Getenv("BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES"),
+	)
+	roomActivityRegistry.Lock()
+	roomActivityRegistry.service = nil
+	roomActivityRegistry.maxEnabledWorkspaces = policy.maxWorkspaces
+	roomActivityRegistry.Unlock()
+	if !policy.enabled {
+		log.Printf("房间活跃调度未启用：%s", policy.reason)
 		return
+	}
+	if serverMode == "release" {
+		// This line is retained by journald and records the process-level side of
+		// activation. Workspace setting changes are separately covered by the
+		// privileged API audit middleware.
+		log.Printf("房间活跃调度已通过生产双门禁启用：工作区上限=%d", policy.maxWorkspaces)
 	}
 	// Missing demo rows are expected during warmup. Keep those normal probes out
 	// of the server log, while the primary application DB retains its logger.
 	activityDB := db.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)})
 	service := &RoomActivityService{
 		db: activityDB, bets: NewBetAdminService(activityDB), random: rand.New(rand.NewSource(time.Now().UnixNano())),
+		maxEnabledWorkspaces: policy.maxWorkspaces,
 	}
 	roomActivityRegistry.Lock()
 	roomActivityRegistry.service = service
+	roomActivityRegistry.maxEnabledWorkspaces = policy.maxWorkspaces
 	roomActivityRegistry.Unlock()
 	service.statusMu.Lock()
 	service.status.Running = true
 	service.statusMu.Unlock()
 	go service.run(ctxDone)
+}
+
+type roomActivityProcessPolicy struct {
+	enabled       bool
+	maxWorkspaces int
+	reason        string
+}
+
+func resolveRoomActivityProcessPolicy(mode, enabledValue, maxWorkspacesValue string) roomActivityProcessPolicy {
+	enabledValue = strings.TrimSpace(enabledValue)
+	maxWorkspacesValue = strings.TrimSpace(maxWorkspacesValue)
+	if mode != "release" {
+		if enabledValue == "0" {
+			return roomActivityProcessPolicy{reason: "BACKEND_ROOM_ACTIVITY=0"}
+		}
+		maximum, _ := strconv.Atoi(maxWorkspacesValue)
+		if maximum < 1 || maximum > maxProductionRoomActivityWorkspaces {
+			maximum = 0
+		}
+		return roomActivityProcessPolicy{enabled: true, maxWorkspaces: maximum}
+	}
+
+	maximum, maximumErr := strconv.Atoi(maxWorkspacesValue)
+	validMaximum := maximumErr == nil && strconv.Itoa(maximum) == maxWorkspacesValue && maximum >= 0 && maximum <= maxProductionRoomActivityWorkspaces
+	if !validMaximum {
+		maximum = 0
+	}
+	if enabledValue != "1" {
+		return roomActivityProcessPolicy{maxWorkspaces: maximum, reason: "release 模式要求显式设置 BACKEND_ROOM_ACTIVITY=1"}
+	}
+	if !validMaximum || maximum < 1 {
+		return roomActivityProcessPolicy{reason: fmt.Sprintf(
+			"BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES 必须在 1-%d 之间",
+			maxProductionRoomActivityWorkspaces,
+		)}
+	}
+	return roomActivityProcessPolicy{enabled: true, maxWorkspaces: maximum}
 }
 
 func (s *RoomActivityService) run(ctxDone <-chan struct{}) {
@@ -119,6 +200,9 @@ func (s *RoomActivityService) run(ctxDone <-chan struct{}) {
 }
 
 func (s *RoomActivityService) runDueWorkspaces() error {
+	if err := s.validateEnabledWorkspaceCap(); err != nil {
+		return err
+	}
 	var settings []workspacemodel.RobotSetting
 	if err := s.db.Where("enabled = ?", true).Order("workspace_id ASC").Find(&settings).Error; err != nil {
 		return err
@@ -136,9 +220,56 @@ func (s *RoomActivityService) runDueWorkspaces() error {
 	return nil
 }
 
+func (s *RoomActivityService) validateEnabledWorkspaceCap() error {
+	return s.validateEnabledWorkspaceCapWithDB(s.db)
+}
+
+func (s *RoomActivityService) validateEnabledWorkspaceCapWithDB(db *gorm.DB) error {
+	if s.maxEnabledWorkspaces <= 0 {
+		return nil
+	}
+	var enabledCount int64
+	if err := db.Model(&workspacemodel.RobotSetting{}).Where("enabled = ?", true).Count(&enabledCount).Error; err != nil {
+		return err
+	}
+	return validateRoomActivityWorkspaceCount(enabledCount, s.maxEnabledWorkspaces)
+}
+
+func validateRoomActivityWorkspaceCount(enabledCount int64, maximum int) error {
+	if maximum > 0 && enabledCount > int64(maximum) {
+		return fmt.Errorf(
+			"%w：启用数量 %d，安全上限 %d，调度已暂停",
+			ErrRoomActivityWorkspaceCap,
+			enabledCount,
+			maximum,
+		)
+	}
+	return nil
+}
+
+func IsRoomActivityWorkspaceCapError(err error) bool {
+	return errors.Is(err, ErrRoomActivityWorkspaceCap)
+}
+
 func (s *RoomActivityService) runWorkspace(setting workspacemodel.RobotSetting) error {
 	s.cycleMu.Lock()
 	defer s.cycleMu.Unlock()
+	return withRoomActivityPolicyLock(s.db, func(tx *gorm.DB) error {
+		freshSetting, err := RobotSettingForWorkspace(tx, setting.WorkspaceID)
+		if err != nil {
+			return err
+		}
+		return s.runWorkspaceWithPolicyLock(freshSetting)
+	})
+}
+
+func (s *RoomActivityService) runWorkspaceWithPolicyLock(setting workspacemodel.RobotSetting) error {
+	if err := s.validateEnabledWorkspaceCap(); err != nil {
+		return err
+	}
+	if s.maxEnabledWorkspaces > 0 && !setting.Enabled {
+		return fmt.Errorf("工作区 %d 未通过生产机器人启用门禁", setting.WorkspaceID)
+	}
 	started := time.Now().UTC()
 	var workspace workspacemodel.Workspace
 	if err := s.db.Where("id = ? AND status = ?", setting.WorkspaceID, 1).First(&workspace).Error; err != nil {
@@ -390,37 +521,69 @@ func RobotSettingForWorkspace(db *gorm.DB, workspaceID uint64) (workspacemodel.R
 }
 
 func UpdateRobotSettingForWorkspace(db *gorm.DB, workspaceID uint64, input UpdateRobotSettingInput) (workspacemodel.RobotSetting, error) {
-	current, err := RobotSettingForWorkspace(db, workspaceID)
-	if err != nil {
-		return current, err
-	}
-	updates := map[string]any{}
-	if input.Enabled != nil {
-		updates["enabled"] = *input.Enabled
-		if *input.Enabled {
-			updates["last_run_at"] = nil
-			updates["last_error"] = ""
-			updates["pause_reason"] = ""
+	var result workspacemodel.RobotSetting
+	err := withRoomActivityPolicyLock(db, func(tx *gorm.DB) error {
+		current, err := RobotSettingForWorkspace(tx, workspaceID)
+		if err != nil {
+			return err
 		}
-	}
-	if input.IntervalSecs != nil {
-		updates["interval_secs"] = clampRoomActivity(*input.IntervalSecs, 30, 3600, 60)
-	}
-	if input.BetsPerCycle != nil {
-		updates["bets_per_cycle"] = clampRoomActivity(*input.BetsPerCycle, 1, 20, 1)
-	}
-	if input.DailyBetLimit != nil {
-		updates["daily_bet_limit"] = clampRoomActivity(*input.DailyBetLimit, 1, 10000, 200)
-	}
-	if input.MaxPendingBets != nil {
-		updates["max_pending_bets"] = clampRoomActivity(*input.MaxPendingBets, 1, 5000, 50)
-	}
-	if len(updates) > 0 {
-		if err := db.Model(&current).Updates(updates).Error; err != nil {
-			return current, err
+		updates := map[string]any{}
+		if input.Enabled != nil {
+			updates["enabled"] = *input.Enabled
+			if *input.Enabled {
+				updates["last_run_at"] = nil
+				updates["last_error"] = ""
+				updates["pause_reason"] = ""
+			}
 		}
+		if input.IntervalSecs != nil {
+			updates["interval_secs"] = clampRoomActivity(*input.IntervalSecs, 30, 3600, 60)
+		}
+		if input.BetsPerCycle != nil {
+			updates["bets_per_cycle"] = clampRoomActivity(*input.BetsPerCycle, 1, 20, 1)
+		}
+		if input.DailyBetLimit != nil {
+			updates["daily_bet_limit"] = clampRoomActivity(*input.DailyBetLimit, 1, 10000, 200)
+		}
+		if input.MaxPendingBets != nil {
+			updates["max_pending_bets"] = clampRoomActivity(*input.MaxPendingBets, 1, 5000, 50)
+		}
+		if len(updates) > 0 {
+			if err := tx.Model(&current).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		if maximum := activeRoomActivityWorkspaceCap(); maximum > 0 {
+			var enabledCount int64
+			if err := tx.Model(&workspacemodel.RobotSetting{}).Where("enabled = ?", true).Count(&enabledCount).Error; err != nil {
+				return err
+			}
+			if err := validateRoomActivityWorkspaceCount(enabledCount, maximum); err != nil {
+				return err
+			}
+		}
+		result, err = RobotSettingForWorkspace(tx, workspaceID)
+		return err
+	})
+	return result, err
+}
+
+func activeRoomActivityWorkspaceCap() int {
+	roomActivityRegistry.RLock()
+	defer roomActivityRegistry.RUnlock()
+	return roomActivityRegistry.maxEnabledWorkspaces
+}
+
+func withRoomActivityPolicyLock(db *gorm.DB, operation func(*gorm.DB) error) error {
+	if db.Dialector.Name() != "postgres" {
+		return operation(db)
 	}
-	return RobotSettingForWorkspace(db, workspaceID)
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", roomActivityPolicyLockID).Error; err != nil {
+			return fmt.Errorf("获取机器人生产策略锁失败: %w", err)
+		}
+		return operation(tx)
+	})
 }
 
 func (s *RoomActivityService) robotBetCounts(workspaceID uint64, now time.Time) (int64, int64, error) {
@@ -661,10 +824,11 @@ func (s *RoomActivityService) place(account user.User, game lottery.Game, issue 
 	if account.RobotMinBetCents > 0 && account.RobotMaxBetCents >= account.RobotMinBetCents {
 		amount = float64(account.RobotMinBetCents+s.randomInt64(account.RobotMaxBetCents-account.RobotMinBetCents+1)) / 100
 	}
+	noFly := 0.0
 	_, err := s.bets.Place(PlaceBetInput{
 		GameID: game.ID, Issue: issue, UserID: account.UserID,
 		PlayCode: "ball_1_5", PlayName: "1-5球号", Position: position,
-		Selection: selection, Amount: amount, Odds: 9.9,
+		Selection: selection, Amount: amount, Odds: 9.9, FlyAmount: &noFly,
 		Remark: "房间实时动态", Operator: "房间活动",
 	})
 	return err

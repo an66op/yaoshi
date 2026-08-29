@@ -230,6 +230,7 @@ func (s *AgentProfitShareService) aggregate(start, end time.Time, onlyAgentID ui
 			COALESCE(SUM(agent_share_cents),0) AS share_cents`).
 		Where("status IN ? AND settled_at >= ? AND settled_at < ?", []string{"won", "lost"}, start, end).
 		Where("room_scope LIKE ?", "agent:%")
+	query = excludeRobotProfileBets(query)
 	if onlyAgentID > 0 {
 		query = query.Where("room_scope = ?", fmt.Sprintf("agent:%d", onlyAgentID))
 	}

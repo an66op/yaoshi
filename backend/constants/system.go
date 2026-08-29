@@ -22,7 +22,7 @@ const (
 // 默认管理员配置
 const (
 	DefaultAdminUsername = "admin"
-	DefaultAdminPassword = "123456"
+	DefaultAdminPassword = "Admin8801!"
 	DefaultAdminNickname = "系统管理员"
 	DefaultAdminEmail    = "admin@example.com"
 )

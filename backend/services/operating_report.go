@@ -220,7 +220,7 @@ func (s *OperatingReportService) Report(filter OperatingReportFilter) (*Operatin
 }
 
 func (s *OperatingReportService) filteredBets(filter OperatingReportFilter, period reportPeriod, settled bool) *gorm.DB {
-	q := s.db.Table("lottery_bets b").Where(`NOT EXISTS (SELECT 1 FROM "user" activity_account WHERE activity_account.user_id=b.user_id AND activity_account.remark=?)`, roomActivityRemark)
+	q := excludeRobotProfileRows(s.db.Table("lottery_bets b"), "b.workspace_id", "b.user_id")
 	if filter.WorkspaceID > 0 {
 		q = q.Where("b.workspace_id = ?", filter.WorkspaceID)
 	}
@@ -251,9 +251,10 @@ func (s *OperatingReportService) welfareCost(filter OperatingReportFilter, perio
 	if filter.GameID != "" || strings.TrimSpace(filter.Query) != "" {
 		return 0, nil
 	}
-	q := s.db.Table("user_balance_transactions t").Joins(`JOIN "user" u ON u.user_id=t.user_id`).
+	q := excludeRobotProfileRows(s.db.Table("user_balance_transactions t"), "t.workspace_id", "t.user_id").
+		Joins(`JOIN "user" u ON u.user_id=t.user_id`).
 		Where("t.created_at >= ? AND t.created_at < ?", period.Start, period.End).
-		Where("t.type IN ? AND t.amount_cents > 0", []string{"checkin", "redpacket", "invite"}).Where("u.remark IS NULL OR u.remark <> ?", roomActivityRemark)
+		Where("t.type IN ? AND t.amount_cents > 0", []string{"checkin", "redpacket", "invite"})
 	if filter.WorkspaceID > 0 {
 		q = q.Where("t.workspace_id = ?", filter.WorkspaceID)
 	}
@@ -277,10 +278,10 @@ func (s *OperatingReportService) welfareCost(filter OperatingReportFilter, perio
 }
 
 func (s *OperatingReportService) welfareQuery(filter OperatingReportFilter, period reportPeriod) *gorm.DB {
-	q := s.db.Table("user_balance_transactions t").Joins(`JOIN "user" u ON u.user_id=t.user_id`).
+	q := excludeRobotProfileRows(s.db.Table("user_balance_transactions t"), "t.workspace_id", "t.user_id").
+		Joins(`JOIN "user" u ON u.user_id=t.user_id`).
 		Where("t.created_at >= ? AND t.created_at < ?", period.Start, period.End).
-		Where("t.type IN ? AND t.amount_cents > 0", []string{"checkin", "redpacket", "invite"}).
-		Where("u.remark IS NULL OR u.remark <> ?", roomActivityRemark)
+		Where("t.type IN ? AND t.amount_cents > 0", []string{"checkin", "redpacket", "invite"})
 	if filter.WorkspaceID > 0 {
 		q = q.Where("t.workspace_id = ?", filter.WorkspaceID)
 	}

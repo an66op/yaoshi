@@ -27,6 +27,61 @@ func TestClampRoomActivity(t *testing.T) {
 	}
 }
 
+func TestResolveRoomActivityProcessPolicy(t *testing.T) {
+	tests := []struct {
+		name, mode, enabled, maximum string
+		wantEnabled                  bool
+		wantMaximum                  int
+	}{
+		{name: "release defaults off", mode: "release", enabled: "", maximum: "", wantEnabled: false},
+		{name: "release explicit off", mode: "release", enabled: "0", maximum: "0", wantEnabled: false},
+		{name: "release rejects truthy alias but preserves activation cap", mode: "release", enabled: "true", maximum: "2", wantEnabled: false, wantMaximum: 2},
+		{name: "release requires positive cap", mode: "release", enabled: "1", maximum: "0", wantEnabled: false},
+		{name: "release rejects ambiguous cap", mode: "release", enabled: "1", maximum: "01", wantEnabled: false},
+		{name: "release rejects excessive cap", mode: "release", enabled: "1", maximum: "101", wantEnabled: false},
+		{name: "release controlled enable", mode: "release", enabled: "1", maximum: "3", wantEnabled: true, wantMaximum: 3},
+		{name: "release disabled keeps pre-activation cap", mode: "release", enabled: "0", maximum: "3", wantEnabled: false, wantMaximum: 3},
+		{name: "debug keeps legacy default", mode: "debug", enabled: "", maximum: "", wantEnabled: true},
+		{name: "test supports explicit off", mode: "test", enabled: "0", maximum: "4", wantEnabled: false},
+		{name: "debug optional cap", mode: "debug", enabled: "1", maximum: "4", wantEnabled: true, wantMaximum: 4},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			policy := resolveRoomActivityProcessPolicy(test.mode, test.enabled, test.maximum)
+			if policy.enabled != test.wantEnabled || policy.maxWorkspaces != test.wantMaximum {
+				t.Fatalf("policy = %#v, want enabled=%v maximum=%d", policy, test.wantEnabled, test.wantMaximum)
+			}
+			if !policy.enabled && policy.reason == "" {
+				t.Fatal("disabled policy must explain why the scheduler is stopped")
+			}
+		})
+	}
+}
+
+func TestValidateRoomActivityWorkspaceCountFailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		enabled    int64
+		maximum    int
+		wantReject bool
+	}{
+		{name: "debug uncapped", enabled: 999, maximum: 0, wantReject: false},
+		{name: "below production cap", enabled: 1, maximum: 2, wantReject: false},
+		{name: "at production cap", enabled: 2, maximum: 2, wantReject: false},
+		{name: "above production cap", enabled: 3, maximum: 2, wantReject: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateRoomActivityWorkspaceCount(test.enabled, test.maximum)
+			if (err != nil) != test.wantReject {
+				t.Fatalf("error = %v, want reject=%v", err, test.wantReject)
+			}
+			if test.wantReject && !errors.Is(err, ErrRoomActivityWorkspaceCap) {
+				t.Fatalf("error = %v, want ErrRoomActivityWorkspaceCap", err)
+			}
+		})
+	}
+}
+
 func TestRobotRunAllowanceProtectsDailyAndPendingBacklog(t *testing.T) {
 	setting := workspacemodel.RobotSetting{DailyBetLimit: 200, MaxPendingBets: 50}
 	if got, reason := robotRunAllowance(setting, 198, 10); got != 2 || reason != "" {

@@ -306,6 +306,25 @@ func TestLifecycleAuditIntegrityMigrationIsFailClosed(t *testing.T) {
 	}
 }
 
+func TestMonitorLedgerIndexesSupportBoundedAccountingAudit(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("202608300001_monitor_ledger_index.sql")
+	if err != nil {
+		t.Fatalf("read monitor ledger index migration: %v", err)
+	}
+	sql := string(contents)
+	for _, fragment := range []string{
+		"idx_balance_archive_user_id_id",
+		"idx_balance_ledger_monitor_chain",
+		"INCLUDE (before_cents, after_cents)",
+		"idx_balance_ledger_monitor_arithmetic_error",
+		"WHERE after_cents <> before_cents + amount_cents",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("monitor ledger index migration is missing %q", fragment)
+		}
+	}
+}
+
 func TestDevelopmentResetGuardClosesTruncateBypass(t *testing.T) {
 	contents, err := migrationFiles.ReadFile("202608270010_dev_reset_guard.sql")
 	if err != nil {

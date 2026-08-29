@@ -1,0 +1,9 @@
+{
+  "name": "wangzhe-release-system-tests",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "devDependencies": {
+    "ws": "8.21.3"
+  }
+}

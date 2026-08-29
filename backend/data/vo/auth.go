@@ -10,7 +10,7 @@ type RegisterRequest struct {
 
 // LoginRequest 登录请求
 type LoginRequest struct {
-	Username  string `json:"username" binding:"required"`
+	Username  string `json:"username" binding:"required,max=50"`
 	Password  string `json:"password" binding:"required"`
-	Workspace string `json:"workspace"`
+	Workspace string `json:"workspace" binding:"omitempty,max=80"`
 }

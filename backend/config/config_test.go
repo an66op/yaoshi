@@ -59,7 +59,9 @@ func validTestConfig(mode string) *Configuration {
 			Host: "127.0.0.1", Port: 5432, User: "lottery",
 			Password: "random-database-password-for-tests", DBName: "lottery", SSLMode: "disable",
 		},
-		Redis:    RedisConfig{Addr: "127.0.0.1:6379", Prefix: "wangzhe-test"},
+		Redis: RedisConfig{
+			Addr: "127.0.0.1:6379", Username: "wangzhe-app", Password: "redis-password-longer-than-24", Prefix: "wangzhe-test",
+		},
 		JWT:      JWTConfig{Secret: "random-jwt-secret-that-is-longer-than-32-bytes", Expire: 86400},
 		Security: SecurityConfig{DataEncryptionKey: "random-data-key-that-is-longer-than-32-bytes"},
 	}
@@ -70,6 +72,24 @@ func TestValidateConfigRequiresRedisInRelease(t *testing.T) {
 	cfg.Redis.Addr = ""
 	if err := validateConfig(cfg); err == nil {
 		t.Fatal("release config accepted an empty Redis address")
+	}
+
+	cfg = validTestConfig("release")
+	cfg.Redis.Username = ""
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("release config accepted an empty Redis ACL username")
+	}
+
+	cfg = validTestConfig("release")
+	cfg.Redis.Username = "default"
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("release config accepted Redis default ACL user")
+	}
+
+	cfg = validTestConfig("release")
+	cfg.Redis.Password = "too-short"
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("release config accepted a short Redis ACL password")
 	}
 }
 

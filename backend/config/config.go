@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -48,6 +49,7 @@ type DatabaseConfig struct {
 // RedisConfig Redis配置
 type RedisConfig struct {
 	Addr     string `mapstructure:"addr"`
+	Username string `mapstructure:"username"`
 	Password string `mapstructure:"password"`
 	DB       int    `mapstructure:"db"`
 	TLS      bool   `mapstructure:"tls"`
@@ -164,6 +166,9 @@ func loadFromEnv() error {
 	// Redis配置
 	if addr := os.Getenv("BACKEND_REDIS_ADDR"); addr != "" {
 		Config.Redis.Addr = addr
+	}
+	if username := os.Getenv("BACKEND_REDIS_USERNAME"); username != "" {
+		Config.Redis.Username = strings.TrimSpace(username)
 	}
 	if password := os.Getenv("BACKEND_REDIS_PASSWORD"); password != "" {
 		Config.Redis.Password = password
@@ -327,6 +332,15 @@ func validateConfig(cfg *Configuration) error {
 	if cfg.Server.Mode == "release" {
 		if strings.TrimSpace(cfg.Redis.Addr) == "" {
 			return fmt.Errorf("release 模式必须配置 Redis，用于多实例票据、限流、推送与调度锁")
+		}
+		if strings.TrimSpace(cfg.Redis.Username) == "" {
+			return fmt.Errorf("release 模式必须配置独立 Redis ACL 用户")
+		}
+		if cfg.Redis.Username == "default" || !regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`).MatchString(cfg.Redis.Username) {
+			return fmt.Errorf("release 模式 Redis ACL 用户名无效或仍在使用 default")
+		}
+		if len(cfg.Redis.Password) < 24 {
+			return fmt.Errorf("release 模式 Redis ACL 密码至少需要 24 位")
 		}
 		if len(cfg.Server.AllowedOrigins) == 0 {
 			return fmt.Errorf("release 模式必须显式配置 allowed_origins")

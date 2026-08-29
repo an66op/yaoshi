@@ -1,0 +1,46 @@
+[Unit]
+Description=Isolated Wangzhe PostgreSQL point-in-time recovery drill
+Requires=wangzhe-pitr-source-sync.service
+After=local-fs.target wangzhe-pitr-source-sync.service
+RequiresMountsFor=/var/lib/wangzhe-pitr-drill
+OnSuccess=wangzhe-pitr-status-publish.service
+OnFailure=wangzhe-ops-failure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+ExecStart=/opt/wangzhe/current/scripts/production-pitr-restore-drill.sh /etc/wangzhe/pitr-drill.env
+UMask=0077
+RuntimeDirectory=wangzhe-pitr-source
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+PrivateNetwork=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/wangzhe-pitr-source /etc/wangzhe/pitr-drill.env /etc/wangzhe/pitr-recovery-age-identity.txt /etc/wangzhe/pitr-provenance-ed25519-public.pem /etc/wangzhe/pitr-restore-status-ed25519-private.pem /etc/wangzhe/pitr-wal-read-rclone.conf /etc/wangzhe/pitr-status-write-rclone.conf /etc/wangzhe/recovery-host
+ReadWritePaths=/var/lib/wangzhe-pitr-drill/work /run/wangzhe-pitr-source
+NoNewPrivileges=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+TimeoutStartSec=12h
+TimeoutStopSec=2min
+KillMode=mixed

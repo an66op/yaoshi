@@ -32,7 +32,7 @@ func main() {
 	rootContext, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := cluster.Init(rootContext, cluster.Options{
-		Addr: cfg.Redis.Addr, Password: cfg.Redis.Password, DB: cfg.Redis.DB,
+		Addr: cfg.Redis.Addr, Username: cfg.Redis.Username, Password: cfg.Redis.Password, DB: cfg.Redis.DB,
 		TLS: cfg.Redis.TLS, Prefix: cfg.Redis.Prefix, Required: cfg.Server.Mode == "release",
 	}); err != nil {
 		log.Fatalf("初始化 Redis 共享运行时失败: %v", err)
@@ -91,7 +91,7 @@ func main() {
 	}
 	r.Static("/api/public/uploads", uploadRoot)
 	// 加载路由
-	api.LoadRoutes(r, db, scheduler)
+	api.LoadRoutesForMode(r, db, scheduler, cfg.Server.Mode)
 	if err := ws.StartClusterBridge(rootContext, db); err != nil {
 		if cluster.Required() {
 			log.Fatalf("启动 WebSocket Redis 桥接失败: %v", err)
@@ -103,7 +103,7 @@ func main() {
 	services.StartSettlementRecovery(rootContext, db)
 	services.StartIdempotencyRecovery(rootContext, db)
 	services.StartDataLifecycleLoop(rootContext, db)
-	services.StartRoomActivity(rootContext.Done(), db)
+	services.StartRoomActivityForMode(rootContext.Done(), db, cfg.Server.Mode)
 	services.StartRedPacketExpiry(rootContext, db)
 	middleware.StartAuditRecovery(rootContext, db)
 	log.Printf(constants.ServerStartMessage, cfg.Server.Port)

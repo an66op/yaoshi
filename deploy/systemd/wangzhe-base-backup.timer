@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Wangzhe PostgreSQL PITR base backup weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=20m
+Unit=wangzhe-base-backup.service
+
+[Install]
+WantedBy=timers.target

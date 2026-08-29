@@ -1,0 +1,11 @@
+[Unit]
+Description=Run isolated Wangzhe restore drill monthly
+
+[Timer]
+OnCalendar=Sun *-*-1..7 05:00:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=30m
+Unit=wangzhe-restore-drill.service
+
+[Install]
+WantedBy=timers.target

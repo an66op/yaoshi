@@ -1,0 +1,165 @@
+name: Fresh release system tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: system-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fresh-release:
+    name: PostgreSQL, Redis, browser and load smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        # Official multi-platform index digest for postgres:16.15-alpine3.24.
+        image: postgres:16.15-alpine3.24@sha256:ab5c955e9e57ae9879d4411ab49a912be9d162455676f7bf56e951b11ac73785
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: wangzhe_ci_admin
+          POSTGRES_PASSWORD: "CiDatabaseAdmin#2026_x9Q7mL2"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wangzhe_ci_admin -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        # Official multi-platform index digest for redis:7.4.11-alpine3.21.
+        image: redis:7.4.11-alpine3.21@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping 2>/dev/null | grep -Eq 'PONG|NOAUTH'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      SYSTEM_TEST_ALLOW_LOCAL: "1"
+      SYSTEM_TEST_POSTGRES_HOST: 127.0.0.1
+      SYSTEM_TEST_POSTGRES_PORT: "5432"
+      SYSTEM_TEST_POSTGRES_ADMIN_USER: wangzhe_ci_admin
+      SYSTEM_TEST_POSTGRES_ADMIN_PASSWORD: "CiDatabaseAdmin#2026_x9Q7mL2"
+      SYSTEM_TEST_POSTGRES_APP_PASSWORD: "CiDatabaseApp#2026_v8K4pN6sT1dF"
+      SYSTEM_TEST_POSTGRES_ADMIN_DATABASE: postgres
+      SYSTEM_TEST_REDIS_ADDR: 127.0.0.1:6379
+      SYSTEM_TEST_REDIS_USERNAME: wangzhe-app
+      SYSTEM_TEST_REDIS_PASSWORD: "CiRedisApp#2026_x9Q7mL2vR8sK4p"
+      SYSTEM_TEST_REDIS_MONITOR_USERNAME: wangzhe-monitor
+      SYSTEM_TEST_REDIS_MONITOR_PASSWORD: "CiRedisMonitor#2026_v8K4pN6sT1dF"
+      LOAD_WRITE_REQUESTS: "20"
+      SYSTEM_TEST_SUITE: all
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.20.0"
+          cache: npm
+          cache-dependency-path: |
+            new/package-lock.json
+            new-back/package-lock.json
+            tests/e2e/package-lock.json
+            tests/system/package-lock.json
+      - name: Install production test tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes postgresql-client redis-tools shellcheck age rclone
+      - name: Verify PostgreSQL image version
+        run: |
+          postgres_server_version="$(PGPASSWORD="$SYSTEM_TEST_POSTGRES_ADMIN_PASSWORD" psql --no-psqlrc \
+            --host "$SYSTEM_TEST_POSTGRES_HOST" --port "$SYSTEM_TEST_POSTGRES_PORT" \
+            --username "$SYSTEM_TEST_POSTGRES_ADMIN_USER" --dbname "$SYSTEM_TEST_POSTGRES_ADMIN_DATABASE" \
+            --tuples-only --no-align --command 'SHOW server_version' | tr -d '[:space:]')"
+          [[ "$postgres_server_version" =~ ^([1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]] || {
+            echo "Unexpected PostgreSQL server_version format: ${postgres_server_version:-<empty>}" >&2
+            exit 1
+          }
+          [[ "${BASH_REMATCH[1]}" == "16" && "${BASH_REMATCH[2]}" == "15" ]] || {
+            echo "PostgreSQL 16.15 is required, got $postgres_server_version" >&2
+            exit 1
+          }
+      - name: Enable and verify Redis AOF
+        run: |
+          redis-cli CONFIG SET appendonly yes
+          redis-cli CONFIG SET appendfsync everysec
+          redis-cli CONFIG SET maxmemory-policy noeviction
+          redis-cli CONFIG SET acl-pubsub-default resetchannels
+          redis-cli ACL SETUSER "$SYSTEM_TEST_REDIS_USERNAME" reset on ">$SYSTEM_TEST_REDIS_PASSWORD" \
+            resetkeys '~wangzhe-system-test:*' resetchannels '&wangzhe-system-test:*' -@all \
+            +ping +hello +select +get +set +getdel +del +incr +pexpire +pttl +eval +evalsha \
+            +publish +subscribe +unsubscribe +xadd +xread +xtrim +xrevrange \
+            +zadd +zrem +zremrangebyscore +zcard +time
+          redis-cli ACL SETUSER "$SYSTEM_TEST_REDIS_MONITOR_USERNAME" reset on ">$SYSTEM_TEST_REDIS_MONITOR_PASSWORD" \
+            resetkeys resetchannels -@all +ping +info '+config|get' '+acl|whoami' '+acl|list' '+acl|getuser'
+          redis-cli ACL SETUSER default reset off
+          redis_acl_runtime="$(REDISCLI_AUTH="$SYSTEM_TEST_REDIS_MONITOR_PASSWORD" redis-cli --no-auth-warning \
+            --user "$SYSTEM_TEST_REDIS_MONITOR_USERNAME" --raw ACL LIST)"
+          test "$(wc -l <<<"$redis_acl_runtime" | tr -d '[:space:]')" = 3
+          app_acl_runtime="$(grep -F "user $SYSTEM_TEST_REDIS_USERNAME " <<<"$redis_acl_runtime")"
+          monitor_acl_runtime="$(grep -F "user $SYSTEM_TEST_REDIS_MONITOR_USERNAME " <<<"$redis_acl_runtime")"
+          grep -Fq '~wangzhe-system-test:*' <<<"$app_acl_runtime"
+          grep -Fq '&wangzhe-system-test:*' <<<"$app_acl_runtime"
+          grep -Fq -- '-@all' <<<"$app_acl_runtime"
+          ! grep -Eq '(^|[[:space:]])~\*([[:space:]]|$)|(^|[[:space:]])&\*([[:space:]]|$)|\+@|\+(config|acl|flushall|flushdb)([[:space:]]|$)' <<<"$app_acl_runtime"
+          [[ "$monitor_acl_runtime" != *'~'* && "$monitor_acl_runtime" != *'&'* ]]
+          [[ "$redis_acl_runtime" != *"$SYSTEM_TEST_REDIS_PASSWORD"* ]]
+          REDISCLI_AUTH="$SYSTEM_TEST_REDIS_MONITOR_PASSWORD" redis-cli --no-auth-warning \
+            --user "$SYSTEM_TEST_REDIS_MONITOR_USERNAME" --raw ACL GETUSER "$SYSTEM_TEST_REDIS_USERNAME" >/dev/null
+          app_redis() {
+            REDISCLI_AUTH="$SYSTEM_TEST_REDIS_PASSWORD" redis-cli --no-auth-warning \
+              --user "$SYSTEM_TEST_REDIS_USERNAME" --raw "$@"
+          }
+          test "$(app_redis SET wangzhe-system-test:acl-probe allowed)" = OK
+          test "$(app_redis GET wangzhe-system-test:acl-probe)" = allowed
+          grep -Fq NOPERM <<<"$(app_redis SET outside-prefix:acl-probe denied 2>&1 || true)"
+          grep -Fq NOPERM <<<"$(app_redis PUBLISH outside-prefix:channel denied 2>&1 || true)"
+          grep -Fq NOPERM <<<"$(app_redis CONFIG GET appendonly 2>&1 || true)"
+          grep -Fq NOPERM <<<"$(app_redis ACL LIST 2>&1 || true)"
+          grep -Fq NOPERM <<<"$(app_redis FLUSHDB 2>&1 || true)"
+          app_redis DEL wangzhe-system-test:acl-probe >/dev/null
+          grep -Fq NOPERM <<<"$(REDISCLI_AUTH="$SYSTEM_TEST_REDIS_MONITOR_PASSWORD" redis-cli --no-auth-warning \
+            --user "$SYSTEM_TEST_REDIS_MONITOR_USERNAME" --raw GET wangzhe-system-test:acl-probe 2>&1 || true)"
+          test "$(REDISCLI_AUTH="$SYSTEM_TEST_REDIS_MONITOR_PASSWORD" redis-cli --no-auth-warning --user "$SYSTEM_TEST_REDIS_MONITOR_USERNAME" --raw CONFIG GET appendonly | tail -n 1)" = yes
+          test "$(REDISCLI_AUTH="$SYSTEM_TEST_REDIS_MONITOR_PASSWORD" redis-cli --no-auth-warning --user "$SYSTEM_TEST_REDIS_MONITOR_USERNAME" --raw CONFIG GET appendfsync | tail -n 1)" = everysec
+          test "$(REDISCLI_AUTH="$SYSTEM_TEST_REDIS_MONITOR_PASSWORD" redis-cli --no-auth-warning --user "$SYSTEM_TEST_REDIS_MONITOR_USERNAME" --raw CONFIG GET acl-pubsub-default | tail -n 1)" = resetchannels
+          test "$(REDISCLI_AUTH="$SYSTEM_TEST_REDIS_MONITOR_PASSWORD" redis-cli --no-auth-warning --user "$SYSTEM_TEST_REDIS_MONITOR_USERNAME" --raw INFO persistence | sed -n 's/^aof_last_write_status://p' | tr -d '\r')" = ok
+          test "$(REDISCLI_AUTH="$SYSTEM_TEST_REDIS_MONITOR_PASSWORD" redis-cli --no-auth-warning --user "$SYSTEM_TEST_REDIS_MONITOR_USERNAME" --raw INFO memory | sed -n 's/^maxmemory_policy://p' | tr -d '\r')" = noeviction
+          test "$(REDISCLI_AUTH="$SYSTEM_TEST_REDIS_MONITOR_PASSWORD" redis-cli --no-auth-warning --user "$SYSTEM_TEST_REDIS_MONITOR_USERNAME" --raw PING)" = PONG
+      - name: Verify Redis AOF survives a real restart
+        run: ./scripts/redis-aof-restart-integration-test.sh
+      - name: Install locked browser-test dependencies
+        run: make production-test-install
+      - name: Build the verified release artifact
+        run: make release
+      - name: Exercise real rclone offsite readback
+        run: make rclone-integration-test
+      - name: Run fresh release system suite
+        run: make production-system-test
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-system-browser-diagnostics
+          path: |
+            tests/e2e/test-results
+            tests/e2e/playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Reject malformed patches
+        if: always()
+        run: git diff --check

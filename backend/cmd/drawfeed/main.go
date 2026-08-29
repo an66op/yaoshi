@@ -29,7 +29,7 @@ func main() {
 	rootContext, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := cluster.Init(rootContext, cluster.Options{
-		Addr: cfg.Redis.Addr, Password: cfg.Redis.Password, DB: cfg.Redis.DB,
+		Addr: cfg.Redis.Addr, Username: cfg.Redis.Username, Password: cfg.Redis.Password, DB: cfg.Redis.DB,
 		TLS: cfg.Redis.TLS, Prefix: cfg.Redis.Prefix, Required: cfg.Server.Mode == "release",
 	}); err != nil {
 		log.Fatalf("初始化 Redis 共享运行时失败: %v", err)

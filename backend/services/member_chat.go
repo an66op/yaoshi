@@ -109,10 +109,7 @@ func (s *MemberChatService) List(userID uint64, roomType, gameID string, limit i
 	// Older releases also wrote synthetic filler text through activity accounts;
 	// hide those rows without deleting real room history or lobby messages.
 	if roomType == "group" && gameID != "lobby" {
-		activityAccounts := s.db.Model(&user.User{}).
-			Select("user_id").
-			Where("remark = ?", roomActivityRemark)
-		query = query.Where("user_id NOT IN (?)", activityAccounts)
+		query = excludeRobotProfileRows(query, "member_chat_messages.workspace_id", "member_chat_messages.user_id")
 	}
 	if afterID > 0 {
 		query = query.Where("id > ?", afterID)

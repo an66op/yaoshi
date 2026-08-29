@@ -1,0 +1,36 @@
+[Unit]
+Description=Publish verified Wangzhe PITR drill evidence off-host
+After=network-online.target
+Wants=network-online.target
+OnFailure=wangzhe-ops-failure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+ExecStart=/opt/wangzhe/current/scripts/publish-pitr-drill-status.sh /etc/wangzhe/pitr-status.env
+UMask=0077
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/wangzhe-pitr-drill/work /etc/wangzhe/pitr-status.env /etc/wangzhe/pitr-status-write-rclone.conf
+NoNewPrivileges=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+TimeoutStartSec=4min

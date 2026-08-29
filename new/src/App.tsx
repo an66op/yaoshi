@@ -218,11 +218,13 @@ function App() {
       setRoomHistory([])
       setPendingAccount(null)
       setDemo((current) => ({ ...current, checkedIn: false, chatUnread: 0 }))
-      navigate(pathForLogin())
+      // Login and registration are public routes. An expected 401 from the
+      // boot-time /me probe must not break a direct registration/invite link.
+      if (route.kind !== 'login' && route.kind !== 'register') navigate(pathForLogin())
     }
     window.addEventListener('yaotu-member-auth-expired', onExpired)
     return () => window.removeEventListener('yaotu-member-auth-expired', onExpired)
-  }, [navigate, setDemo, setSession])
+  }, [navigate, route.kind, setDemo, setSession])
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {

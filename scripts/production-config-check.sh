@@ -12,9 +12,10 @@ required=(
   BACKEND_SERVER_ALLOWED_ORIGINS BACKEND_SERVER_TRUSTED_PROXIES
   BACKEND_DATABASE_HOST BACKEND_DATABASE_PORT BACKEND_DATABASE_USER
   BACKEND_DATABASE_PASSWORD BACKEND_DATABASE_DBNAME BACKEND_DATABASE_SSLMODE
-  BACKEND_REDIS_ADDR BACKEND_REDIS_DB BACKEND_REDIS_TLS BACKEND_REDIS_PREFIX
+  BACKEND_REDIS_ADDR BACKEND_REDIS_USERNAME BACKEND_REDIS_PASSWORD BACKEND_REDIS_DB BACKEND_REDIS_TLS BACKEND_REDIS_PREFIX
   BACKEND_JWT_SECRET BACKEND_JWT_EXPIRE BACKEND_SECURITY_DATA_ENCRYPTION_KEY
   BACKEND_UPLOAD_DIR BACKEND_AUDIT_FALLBACK_FILE BACKEND_ROOM_ACTIVITY
+  BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES
 )
 for key in "${required[@]}"; do
   [[ -n "${!key:-}" ]] || { echo "生产环境缺少 $key" >&2; exit 1; }
@@ -71,12 +72,20 @@ case "$BACKEND_REDIS_TLS" in
   true|false) ;;
   *) echo "BACKEND_REDIS_TLS 必须是 true 或 false" >&2; exit 1 ;;
 esac
+[[ "$BACKEND_REDIS_USERNAME" =~ ^[A-Za-z0-9_.-]{1,64}$ && "$BACKEND_REDIS_USERNAME" != "default" ]] || {
+  echo "生产 Redis 必须使用非 default 的独立 ACL 用户" >&2
+  exit 1
+}
+redis_password_lower="$(printf '%s' "$BACKEND_REDIS_PASSWORD" | tr '[:upper:]' '[:lower:]')"
+(( ${#BACKEND_REDIS_PASSWORD} >= 24 )) || { echo "Redis 密码少于 24 位" >&2; exit 1; }
+case "$redis_password_lower" in
+  *change_me*|*changeme*|*replace_with*|*example*|*123456*) echo "Redis 密码仍是示例值或弱口令" >&2; exit 1 ;;
+esac
 case "$BACKEND_REDIS_ADDR" in
   localhost:*|127.0.0.1:*|::1:*|'[::1]':*)
     ;;
   *)
     [[ "$BACKEND_REDIS_TLS" == "true" ]] || { echo "远程 Redis 必须启用 TLS" >&2; exit 1; }
-    [[ -n "${BACKEND_REDIS_PASSWORD:-}" ]] || { echo "远程 Redis 必须配置密码" >&2; exit 1; }
     ;;
 esac
 [[ "$BACKEND_REDIS_DB" =~ ^[0-9]+$ ]] || { echo "BACKEND_REDIS_DB 必须是非负整数" >&2; exit 1; }
@@ -117,6 +126,23 @@ done
   echo "BACKEND_AUDIT_FALLBACK_FILE 必须位于 /var/lib/wangzhe/ 下" >&2
   exit 1
 }
-[[ "$BACKEND_ROOM_ACTIVITY" == "0" ]] || { echo "首次上线前 BACKEND_ROOM_ACTIVITY 必须保持 0" >&2; exit 1; }
+case "$BACKEND_ROOM_ACTIVITY" in
+  0|1) ;;
+  *) echo "BACKEND_ROOM_ACTIVITY 只能是 0 或 1" >&2; exit 1 ;;
+esac
+[[ "$BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES" =~ ^(0|[1-9][0-9]{0,2})$ ]] || {
+  echo "BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES 必须是 0-100 的十进制整数" >&2
+  exit 1
+}
+(( 10#$BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES <= 100 )) || {
+  echo "BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES 不能超过 100" >&2
+  exit 1
+}
+if [[ "$BACKEND_ROOM_ACTIVITY" == "1" ]]; then
+  (( 10#$BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES >= 1 )) || {
+    echo "启用生产机器人时必须设置正数 BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES" >&2
+    exit 1
+  }
+fi
 
 echo "生产环境配置检查通过（未输出任何密钥）"

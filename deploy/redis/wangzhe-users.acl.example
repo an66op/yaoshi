@@ -1,0 +1,18 @@
+# Install as /etc/redis/wangzhe-users.acl, owner redis, mode 0600.  Replace the
+# two passwords with independently generated password-manager values.  Put the
+# app credential in BACKEND_REDIS_* and the monitor credential only in
+# /etc/wangzhe/redis-check.env.  Do not add whitespace to either password.
+#
+# The application is restricted to the exact primitives used for tickets,
+# rate limits, leases, presence, pub/sub and revocation streams.  It cannot run
+# CLIENT/SCRIPT/FUNCTION administration or inspect server configuration.  The
+# reset rules make an operator-applied reload revoke stale grants first. This
+# dedicated instance intentionally has exactly these three users; the runtime
+# checker rejects an unexpected exporter, admin or stale account.
+user default reset off
+user wangzhe-app reset on >CHANGE_ME_RANDOM_APP_REDIS_PASSWORD resetkeys ~wangzhe-production:* resetchannels &wangzhe-production:* -@all +ping +hello +select +get +set +getdel +del +incr +pexpire +pttl +eval +evalsha +publish +subscribe +unsubscribe +xadd +xread +xtrim +xrevrange +zadd +zrem +zremrangebyscore +zcard +time
+
+# The checker has no key/channel access. ACL LIST/GETUSER are read-only and
+# return password hashes, not the application's plaintext password; mutation
+# subcommands such as SETUSER/LOAD/SAVE remain denied.
+user wangzhe-monitor reset on >CHANGE_ME_RANDOM_MONITOR_REDIS_PASSWORD resetkeys resetchannels -@all +ping +info +config|get +acl|whoami +acl|list +acl|getuser

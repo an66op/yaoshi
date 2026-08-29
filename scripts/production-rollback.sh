@@ -133,10 +133,12 @@ ln -s "$current_target" "$previous_tmp"
 mv -Tf "$previous_tmp" "$PREVIOUS_LINK"
 systemctl reload nginx.service
 echo "代码回滚成功：$previous_target"
+# Initialized by sourced maintenance-edge.sh.
+# shellcheck disable=SC2154
 if (( maintenance_was_active == 1 )); then
   echo "回滚前已有维护标记，已按原样保留。"
 else
   echo "本次回滚创建的维护标记已保留。"
 fi
-echo "维护模式仍然开启；请先运行完整 production-readiness.sh 门禁，通过后再人工删除 $MAINTENANCE_FLAG。"
+echo "维护模式仍然开启；请先运行完整 production-readiness.sh 门禁，通过后再人工删除 ${MAINTENANCE_FLAG}。"
 echo "数据库未回退；如需恢复数据库，必须进入维护窗口并人工执行已验证备份。"

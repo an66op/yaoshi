@@ -6,6 +6,7 @@ import (
 	"backend/data/models/lottery"
 	membernotify "backend/data/models/notify"
 	"backend/data/models/user"
+	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
 	"backend/ws"
 	"encoding/json"
@@ -32,6 +33,16 @@ type SettlementResult struct {
 	StakeAmount   float64   `json:"stake_amount"`
 	PayoutAmount  float64   `json:"payout_amount"`
 	SettledAt     time.Time `json:"settled_at"`
+}
+
+type robotBetIdentity struct {
+	workspaceID uint64
+	userID      uint64
+}
+
+func isRobotSettlementRecipient(robotBets map[robotBetIdentity]struct{}, recipient settlementRecipient) bool {
+	_, exists := robotBets[robotBetIdentity{workspaceID: recipient.WorkspaceID, userID: recipient.UserID}]
+	return exists
 }
 
 type SettlementStatus struct {
@@ -117,6 +128,18 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 	deliveries := make([]settlementNotificationDelivery, 0)
 	roomMessages := make([]chat.Message, 0)
 	err = s.db.Transaction(func(tx *gorm.DB) error {
+		pendingUserIDs := make([]uint64, 0, len(pending))
+		for _, item := range pending {
+			pendingUserIDs = append(pendingUserIDs, item.UserID)
+		}
+		var robotProfiles []workspacemodel.RobotProfile
+		if err := tx.Select("workspace_id", "user_id").Where("user_id IN ?", pendingUserIDs).Find(&robotProfiles).Error; err != nil {
+			return err
+		}
+		robotBets := make(map[robotBetIdentity]struct{}, len(robotProfiles))
+		for _, profile := range robotProfiles {
+			robotBets[robotBetIdentity{workspaceID: profile.WorkspaceID, userID: profile.UserID}] = struct{}{}
+		}
 		for _, item := range pending {
 			won, reason := evaluateBet(numbers, item.PlayCode, item.Position, item.Selection)
 			payout := int64(0)
@@ -126,9 +149,8 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 				payout = int64(math.Round(float64(item.AmountCents) * item.Odds))
 			}
 			settledAt := time.Now().UTC()
-			rebateCents := int64(math.Round(float64(item.AmountCents) * clampPercent(item.RebateRateSnapshot) / 100))
-			grossProfitCents := item.AmountCents - payout
-			agentShareCents := agentProfitShareCents(grossProfitCents, item.AgentShareRateSnapshot)
+			_, isRobotBet := robotBets[robotBetIdentity{workspaceID: item.WorkspaceID, userID: item.UserID}]
+			rebateCents, agentShareCents := settledBetFinancialAmounts(item, payout, isRobotBet)
 			updates := map[string]any{
 				"status":                status,
 				"payout_cents":          payout,
@@ -140,6 +162,11 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 				"updated_at":            settledAt,
 				"reconciliation_status": "normal",
 				"reconciliation_note":   "",
+			}
+			if isRobotBet {
+				updates["fly_cents"] = 0
+				updates["rebate_rate_snapshot"] = 0
+				updates["agent_share_rate_snapshot"] = 0
 			}
 			updated := tx.Model(&bet.Bet{}).Where("id = ? AND status = ?", item.ID, "pending").Updates(updates)
 			if updated.Error != nil {
@@ -192,7 +219,7 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 		if persistErr != nil {
 			return persistErr
 		}
-		roomMessages, persistErr = persistRoomSettlementMessages(tx, draw.ID, game.ID, game.Name, issue, summaries)
+		roomMessages, persistErr = persistRoomSettlementMessages(tx, draw.ID, game.ID, game.Name, issue, summaries, robotBets)
 		if persistErr != nil {
 			return persistErr
 		}
@@ -235,21 +262,21 @@ type roomSettlementKey struct {
 // persistRoomSettlementMessages writes two durable room events for every room
 // that participated in the issue: the per-player settlement detail and the
 // post-settlement score board. drawID + message type is the idempotency key.
-func persistRoomSettlementMessages(db *gorm.DB, drawID uint64, gameID, gameName, issue string, summaries map[settlementRecipient]*settleUserSummary) ([]chat.Message, error) {
+func persistRoomSettlementMessages(db *gorm.DB, drawID uint64, gameID, gameName, issue string, summaries map[settlementRecipient]*settleUserSummary, robotBets map[robotBetIdentity]struct{}) ([]chat.Message, error) {
 	byRoom := make(map[roomSettlementKey][]roomSettlementPlayer)
 	for recipient, summary := range summaries {
 		if summary == nil {
 			continue
 		}
-		var account user.User
-		if err := db.Select("user_id", "username", "nickname", "balance_cents", "remark").First(&account, recipient.UserID).Error; err != nil {
-			return nil, err
-		}
-		// Activity accounts keep the room moving through real bets and real
-		// settlement, but their synthetic results must not flood the member chat.
-		// A room message is created only for genuine member participation.
-		if strings.TrimSpace(account.Remark) == roomActivityRemark {
+		// Robot identity is the immutable workspace/profile pair loaded in this
+		// settlement transaction. Operator edits to a user's mutable remark must
+		// never make synthetic results visible in member settlement messages.
+		if isRobotSettlementRecipient(robotBets, recipient) {
 			continue
+		}
+		var account user.User
+		if err := db.Select("user_id", "username", "nickname", "balance_cents").First(&account, recipient.UserID).Error; err != nil {
+			return nil, err
 		}
 		roomScope := defaultString(strings.TrimSpace(summary.roomScope), recipient.RoomScope)
 		key := roomSettlementKey{workspaceID: recipient.WorkspaceID, roomScope: roomScope}
@@ -343,8 +370,7 @@ func roomScorePlayers(db *gorm.DB, workspaceID uint64) ([]roomSettlementPlayer, 
 	if workspaceID == 0 {
 		return nil, fmt.Errorf("invalid workspace")
 	}
-	query := db.Model(&user.User{}).
-		Where("workspace_id = ? AND status = ? AND role NOT IN ? AND COALESCE(remark, '') <> ?", workspaceID, 1, []string{"admin", "tenant", "agent"}, roomActivityRemark)
+	query := roomScorePlayersQuery(db, workspaceID)
 	var accounts []user.User
 	if err := query.Select("user_id", "username", "nickname", "balance_cents").Order("balance_cents DESC, user_id ASC").Limit(100).Find(&accounts).Error; err != nil {
 		return nil, err
@@ -354,6 +380,11 @@ func roomScorePlayers(db *gorm.DB, workspaceID uint64) ([]roomSettlementPlayer, 
 		players = append(players, roomSettlementPlayer{userID: account.UserID, nickname: defaultString(account.Nickname, account.Username), balanceCents: account.BalanceCents})
 	}
 	return players, nil
+}
+
+func roomScorePlayersQuery(db *gorm.DB, workspaceID uint64) *gorm.DB {
+	return excludeRobotProfileUsers(db.Model(&user.User{})).
+		Where("workspace_id = ? AND status = ? AND role NOT IN ?", workspaceID, 1, []string{"admin", "tenant", "agent"})
 }
 
 func formatRoomScores(gameName, issue string, players []roomSettlementPlayer) string {
@@ -969,4 +1000,13 @@ func agentProfitShareCents(grossProfitCents int64, rate float64) int64 {
 		return 0
 	}
 	return int64(math.Round(float64(grossProfitCents) * clampPercent(rate) / 100))
+}
+
+func settledBetFinancialAmounts(item bet.Bet, payoutCents int64, isRobot bool) (rebateCents, agentShareCents int64) {
+	if isRobot {
+		return 0, 0
+	}
+	rebateCents = int64(math.Round(float64(item.AmountCents) * clampPercent(item.RebateRateSnapshot) / 100))
+	agentShareCents = agentProfitShareCents(item.AmountCents-payoutCents, item.AgentShareRateSnapshot)
+	return rebateCents, agentShareCents
 }

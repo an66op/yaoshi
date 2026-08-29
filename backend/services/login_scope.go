@@ -6,6 +6,7 @@ import (
 	apperrors "backend/errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 )
@@ -21,7 +22,14 @@ func agentLoginScope(agentID uint64) string   { return fmt.Sprintf("agent:%d", a
 // every public/admin account-creation path. Robot provisioning deliberately
 // bypasses this helper and is the only code allowed to allocate these names.
 func validateHumanUsername(username string) error {
+	if !utf8.ValidString(username) {
+		return apperrors.NewBusinessError("INVALID_USERNAME", "登录账号必须是有效的 UTF-8 文本")
+	}
 	value := strings.ToLower(strings.TrimSpace(username))
+	length := utf8.RuneCountInString(value)
+	if length < 3 || length > 50 {
+		return apperrors.NewBusinessError("INVALID_USERNAME", "登录账号长度应为 3–50 个字符")
+	}
 	for _, prefix := range reservedRobotUsernamePrefixes {
 		if strings.HasPrefix(value, prefix) {
 			return apperrors.NewBusinessError("RESERVED_USERNAME", "该登录帐号前缀为系统机器人保留")

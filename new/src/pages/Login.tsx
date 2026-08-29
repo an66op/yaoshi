@@ -1,6 +1,14 @@
 import { useState } from 'react'
 import { Icon } from '../components/Icon'
 import { memberApi } from '../api/member'
+import {
+  MEMBER_LOGIN_USERNAME_MAX_LENGTH,
+  PASSWORD_MAX_BYTES,
+  USERNAME_MIN_LENGTH,
+  passwordByteLength,
+  truncateUnicode,
+  unicodeLength,
+} from '../authLimits'
 import { BRAND_NAME, DEMO_ACCOUNT, DEMO_PASSWORD } from '../data/brand'
 import type { Theme } from '../types'
 
@@ -15,8 +23,9 @@ export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
 
   const submit = async () => {
     const value = account.trim()
-    if (value.length < 3) return setError('请输入至少 3 位帐号')
+    if (unicodeLength(value) < USERNAME_MIN_LENGTH) return setError(`请输入至少 ${USERNAME_MIN_LENGTH} 位帐号`)
     if (!password) return setError('请输入登录密码')
+    if (passwordByteLength(password) > PASSWORD_MAX_BYTES) return setError(`登录密码最多 ${PASSWORD_MAX_BYTES} 字节`)
     setLoading(true)
     setError('')
     try {
@@ -51,8 +60,7 @@ export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
             <input
               autoComplete="username"
               autoFocus
-              maxLength={20}
-              onChange={(event) => { setAccount(event.target.value.replace(/\s/g, '')); setError('') }}
+              onChange={(event) => { setAccount(truncateUnicode(event.target.value, MEMBER_LOGIN_USERNAME_MAX_LENGTH)); setError('') }}
               onKeyDown={(event) => event.key === 'Enter' && void submit()}
               placeholder="输入帐号"
               value={account}
@@ -65,7 +73,7 @@ export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
             <i>●</i>
             <input
               autoComplete="current-password"
-              maxLength={32}
+              maxLength={PASSWORD_MAX_BYTES}
               onChange={(event) => { setPassword(event.target.value); setError('') }}
               onKeyDown={(event) => event.key === 'Enter' && void submit()}
               placeholder="输入登录密码"

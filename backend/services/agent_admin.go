@@ -174,8 +174,8 @@ func (s *AgentAdminService) Create(input CreateAgentInput) (*AgentView, error) {
 	if err := validateAgentRoomName(input.RoomName); err != nil {
 		return nil, err
 	}
-	if len(input.Username) < 3 || len(input.Username) > 50 {
-		return nil, apperrors.NewBusinessError("INVALID_USERNAME", "登录账号长度应为 3–50 个字符")
+	if err := validateHumanUsername(input.Username); err != nil {
+		return nil, err
 	}
 	if err := utils.ValidatePassword(input.Password); err != nil {
 		return nil, apperrors.NewBusinessError("INVALID_PASSWORD", "登录密码长度需为 8–72 个字符")

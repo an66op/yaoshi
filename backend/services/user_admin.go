@@ -255,7 +255,7 @@ func (s *UserAdminService) List(filter UserListFilter) (*UserList, error) {
 	}
 	switch strings.TrimSpace(filter.Kind) {
 	case "member":
-		query = query.Where("role = ? AND COALESCE(remark, '') <> ? AND COALESCE(remark, '') NOT LIKE ?", "member", roomActivityRemark, "测试机器人专用账号%")
+		query = excludeRobotProfileUsers(query.Where("role = ? AND COALESCE(remark, '') NOT LIKE ?", "member", "测试机器人专用账号%"))
 	case "robot":
 		if filter.WorkspaceID == 0 {
 			return nil, apperrors.NewBusinessError("WORKSPACE_REQUIRED", "请选择要查看的机器人工作区")
@@ -293,9 +293,11 @@ func (s *UserAdminService) Stats(kind string) (*UserStats, error) {
 	applyKind := func(query *gorm.DB) *gorm.DB {
 		switch strings.TrimSpace(kind) {
 		case "member":
-			return query.Where("role = ? AND COALESCE(remark, '') <> ? AND COALESCE(remark, '') NOT LIKE ?", "member", roomActivityRemark, "测试机器人专用账号%")
+			return excludeRobotProfileUsers(query.Where("role = ? AND COALESCE(remark, '') NOT LIKE ?", "member", "测试机器人专用账号%"))
 		case "robot":
-			return query.Where("role = ? AND remark = ?", "member", roomActivityRemark)
+			return query.Joins(`JOIN workspace_robot_profiles AS robot_profile
+				ON robot_profile.workspace_id = "user".workspace_id
+				AND robot_profile.user_id = "user".user_id`).Where(`"user".role = ?`, "member")
 		case "account":
 			return query.Where("role IN ?", []string{"admin", "tenant", "agent"})
 		default:
@@ -863,8 +865,8 @@ func (s *UserAdminService) enrichOwnership(items []AdminUser) error {
 func (s *UserAdminService) Create(input CreateAdminUserInput) (*AdminUser, error) {
 	input.Username = strings.TrimSpace(input.Username)
 	input.Email = strings.TrimSpace(input.Email)
-	if len(input.Username) < 3 || len(input.Username) > 50 {
-		return nil, apperrors.NewBusinessError("INVALID_USERNAME", "用户名长度应为 3–50 个字符")
+	if err := validateHumanUsername(input.Username); err != nil {
+		return nil, err
 	}
 	if err := utils.ValidatePassword(input.Password); err != nil {
 		return nil, apperrors.NewBusinessError("INVALID_PASSWORD", "密码长度需为 8–72 个字符")
@@ -1202,7 +1204,7 @@ func adminUser(row user.User) AdminUser {
 		Balance: centsToAmount(row.BalanceCents), FlyMode: defaultString(row.FlyMode, "inherit"), FlyRate: row.FlyRate,
 		AgentRoomCode: row.AgentRoomCode, ParentAgentID: row.ParentAgentID, ParentTenantID: row.ParentTenantID,
 		Status: row.Status, LastLoginAt: row.LastLoginAt, LoginCount: row.LoginCount, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
-		IsRobot: row.Role == "member" && row.Remark == roomActivityRemark, RobotGameIDs: gameIDs,
+		IsRobot: false, RobotGameIDs: gameIDs,
 		RobotActiveStart: row.RobotActiveStart, RobotActiveEnd: row.RobotActiveEnd,
 		RobotMinBet: centsToAmount(row.RobotMinBetCents), RobotMaxBet: centsToAmount(row.RobotMaxBetCents),
 		WorkspaceID: row.WorkspaceID,

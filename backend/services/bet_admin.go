@@ -292,7 +292,13 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 		if !roomGameEnabled {
 			return apperrors.NewBusinessError("GAME_DISABLED", "当前房间暂未开放该游戏")
 		}
-		resolved, resolveErr := NewTradingAdminService(tx).ResolveForAccount(account, game.ID, playCode, centsToAmount(amountCents), input.Odds, requestFly)
+		financialTerms, termsErr := resolveBetFinancialTerms(tx, account)
+		if termsErr != nil {
+			return termsErr
+		}
+		resolved, resolveErr := NewTradingAdminService(tx).ResolveForAccount(
+			account, game.ID, playCode, centsToAmount(amountCents), input.Odds, financialTerms.flyRequest(requestFly),
+		)
 		if resolveErr != nil {
 			return resolveErr
 		}
@@ -302,6 +308,9 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 			return flyErr
 		}
 		flyCents := clampFlyCents(amountCents, resolvedFlyCents)
+		if financialTerms.isRobot {
+			flyCents = 0
+		}
 		if err := validateBetLimitEntries(tx, game.ID, issue, input.UserID, []betLimitEntry{{
 			PlayCode: playCode, Position: input.Position, Selection: selection, AmountCents: amountCents,
 		}}); err != nil {
@@ -312,10 +321,6 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 		}
 		roomScope = betRoomScope(account)
 		workspaceID = account.WorkspaceID
-		rebateRate, shareRate, termsErr := resolveBetFinancialTerms(tx, account)
-		if termsErr != nil {
-			return termsErr
-		}
 		before := account.BalanceCents
 		after := before - amountCents
 		afterBalance = after
@@ -334,7 +339,7 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 			WorkspaceID: account.WorkspaceID, GameID: game.ID, Issue: issue, RoomScope: roomScope, UserID: account.UserID, Username: account.Username,
 			PlayCode: playCode, PlayName: playName, Position: input.Position, Selection: selection, RequestReference: strings.TrimSpace(input.LedgerReference),
 			AmountCents: amountCents, Odds: odds, Status: "pending", FlyCents: flyCents,
-			RebateRateSnapshot: rebateRate, AgentShareRateSnapshot: shareRate,
+			RebateRateSnapshot: financialTerms.rebateRate, AgentShareRateSnapshot: financialTerms.shareRate,
 			Remark: strings.TrimSpace(input.Remark), Operator: defaultString(input.Operator, "后台管理员"),
 		}
 		// Upsert: same user/play/position/selection on same issue accumulates amount.
@@ -354,8 +359,8 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 			existing.AmountCents = accumulatedAmount
 			existing.FlyCents = accumulatedFly
 			existing.Odds = odds
-			existing.RebateRateSnapshot = weightedRate(existing.RebateRateSnapshot, previousAmount, rebateRate, amountCents)
-			existing.AgentShareRateSnapshot = weightedRate(existing.AgentShareRateSnapshot, previousAmount, shareRate, amountCents)
+			existing.RebateRateSnapshot = weightedRate(existing.RebateRateSnapshot, previousAmount, financialTerms.rebateRate, amountCents)
+			existing.AgentShareRateSnapshot = weightedRate(existing.AgentShareRateSnapshot, previousAmount, financialTerms.shareRate, amountCents)
 			existing.Remark = row.Remark
 			existing.Operator = row.Operator
 			if err := tx.Save(&existing).Error; err != nil {
@@ -695,10 +700,16 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 		if !roomGameEnabled {
 			return apperrors.NewBusinessError("GAME_DISABLED", "当前房间暂未开放该游戏")
 		}
+		financialTerms, termsErr := resolveBetFinancialTerms(tx, account)
+		if termsErr != nil {
+			return termsErr
+		}
 		trading := NewTradingAdminService(tx)
 		for index := range prepared {
 			item := &prepared[index]
-			resolved, resolveErr := trading.ResolveForAccount(account, game.ID, item.playCode, centsToAmount(item.amountCents), item.input.Odds, item.requestFly)
+			resolved, resolveErr := trading.ResolveForAccount(
+				account, game.ID, item.playCode, centsToAmount(item.amountCents), item.input.Odds, financialTerms.flyRequest(item.requestFly),
+			)
 			if resolveErr != nil {
 				return resolveErr
 			}
@@ -708,6 +719,9 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 				return flyErr
 			}
 			item.flyCents = clampFlyCents(item.amountCents, resolvedFlyCents)
+			if financialTerms.isRobot {
+				item.flyCents = 0
+			}
 		}
 		limitEntries := make([]betLimitEntry, 0, len(prepared))
 		for _, item := range prepared {
@@ -723,10 +737,6 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 		}
 		roomScope = betRoomScope(account)
 		workspaceID = account.WorkspaceID
-		rebateRate, shareRate, termsErr := resolveBetFinancialTerms(tx, account)
-		if termsErr != nil {
-			return termsErr
-		}
 		before := account.BalanceCents
 		afterBalance = before - totalCents
 		if err := tx.Model(&account).Update("balance_cents", afterBalance).Error; err != nil {
@@ -745,7 +755,7 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 				WorkspaceID: account.WorkspaceID, GameID: game.ID, Issue: issue, RoomScope: roomScope, UserID: account.UserID, Username: account.Username,
 				PlayCode: item.playCode, PlayName: item.playName, Position: item.input.Position, Selection: item.selection, RequestReference: strings.TrimSpace(item.input.LedgerReference),
 				AmountCents: item.amountCents, Odds: item.odds, Status: "pending", FlyCents: item.flyCents,
-				RebateRateSnapshot: rebateRate, AgentShareRateSnapshot: shareRate,
+				RebateRateSnapshot: financialTerms.rebateRate, AgentShareRateSnapshot: financialTerms.shareRate,
 				Remark: strings.TrimSpace(item.input.Remark), Operator: defaultString(item.input.Operator, operator),
 			}
 			existing := bet.Bet{}
@@ -764,8 +774,8 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 				existing.AmountCents = accumulatedAmount
 				existing.FlyCents = accumulatedFly
 				existing.Odds = item.odds
-				existing.RebateRateSnapshot = weightedRate(existing.RebateRateSnapshot, previousAmount, rebateRate, item.amountCents)
-				existing.AgentShareRateSnapshot = weightedRate(existing.AgentShareRateSnapshot, previousAmount, shareRate, item.amountCents)
+				existing.RebateRateSnapshot = weightedRate(existing.RebateRateSnapshot, previousAmount, financialTerms.rebateRate, item.amountCents)
+				existing.AgentShareRateSnapshot = weightedRate(existing.AgentShareRateSnapshot, previousAmount, financialTerms.shareRate, item.amountCents)
 				existing.Remark = row.Remark
 				existing.Operator = row.Operator
 				if err := tx.Save(&existing).Error; err != nil {
@@ -819,19 +829,73 @@ func betRoomScope(account user.User) string {
 	return "lobby"
 }
 
-func resolveBetFinancialTerms(db *gorm.DB, account user.User) (rebateRate, shareRate float64, err error) {
+type betFinancialTerms struct {
+	isRobot    bool
+	rebateRate float64
+	shareRate  float64
+}
+
+func (terms betFinancialTerms) flyRequest(requested float64) float64 {
+	if terms.isRobot {
+		return 0
+	}
+	return requested
+}
+
+func resolveBetFinancialTerms(db *gorm.DB, account user.User) (betFinancialTerms, error) {
+	var robotCount int64
+	if err := robotProfileFinancialQuery(db, account).Count(&robotCount).Error; err != nil {
+		return betFinancialTerms{}, err
+	}
+	if robotCount > 0 {
+		// Robot activity is synthetic room traffic. It must never create an
+		// external fly order, member rebate, or real agent profit share.
+		return betFinancialTerms{isRobot: true}, nil
+	}
 	var roomOwner user.User
 	if account.WorkspaceID > 0 {
 		var workspace workspacemodel.Workspace
 		if loadErr := db.Select("owner_user_id").First(&workspace, account.WorkspaceID).Error; loadErr != nil {
-			return 0, 0, loadErr
+			return betFinancialTerms{}, loadErr
 		}
 		if loadErr := db.Select("user_id", "room_rebate_rate", "room_profit_share_rate").First(&roomOwner, workspace.OwnerUserID).Error; loadErr != nil {
-			return 0, 0, loadErr
+			return betFinancialTerms{}, loadErr
 		}
 	}
-	rebateRate, _ = resolveRebate(account, roomOwner.RoomRebateRate)
-	return clampPercent(rebateRate), clampPercent(roomOwner.RoomProfitShareRate), nil
+	rebateRate, _ := resolveRebate(account, roomOwner.RoomRebateRate)
+	return betFinancialTerms{
+		rebateRate: clampPercent(rebateRate),
+		shareRate:  clampPercent(roomOwner.RoomProfitShareRate),
+	}, nil
+}
+
+func robotProfileFinancialQuery(db *gorm.DB, account user.User) *gorm.DB {
+	return db.Model(&workspacemodel.RobotProfile{}).
+		Where("workspace_id = ? AND user_id = ?", account.WorkspaceID, account.UserID)
+}
+
+// excludeRobotProfileRows removes synthetic robot activity by the immutable
+// workspace/user pair stored in workspace_robot_profiles.  workspaceColumn and
+// userColumn are internal, compile-time SQL identifiers supplied by the small
+// wrappers below; values still flow through GORM parameters as usual.
+func excludeRobotProfileRows(query *gorm.DB, workspaceColumn, userColumn string) *gorm.DB {
+	return query.Where(fmt.Sprintf(`NOT EXISTS (
+		SELECT 1 FROM workspace_robot_profiles AS robot_profile
+		WHERE robot_profile.workspace_id = %s
+		  AND robot_profile.user_id = %s
+	)`, workspaceColumn, userColumn))
+}
+
+func excludeRobotProfileBets(query *gorm.DB) *gorm.DB {
+	return excludeRobotProfileRows(query, "lottery_bets.workspace_id", "lottery_bets.user_id")
+}
+
+func excludeRobotProfileUsers(query *gorm.DB) *gorm.DB {
+	return excludeRobotProfileRows(query, `"user".workspace_id`, `"user".user_id`)
+}
+
+func excludeRobotProfileLedgers(query *gorm.DB) *gorm.DB {
+	return excludeRobotProfileRows(query, "user_balance_transactions.workspace_id", "user_balance_transactions.user_id")
 }
 
 func weightedRate(oldRate float64, oldAmount int64, newRate float64, newAmount int64) float64 {
@@ -956,7 +1020,7 @@ func (s *BetAdminService) BoardReport(filter BoardReportFilter) (*BoardReport, e
 		GameID string
 		Issue  string
 	}
-	pairQuery := s.db.Model(&bet.Bet{}).Where(`user_id NOT IN (SELECT user_id FROM "user" WHERE remark = ?)`, roomActivityRemark).Select("game_id, issue")
+	pairQuery := excludeRobotProfileBets(s.db.Model(&bet.Bet{})).Select("game_id, issue")
 	if gid := strings.TrimSpace(filter.GameID); gid != "" && gid != "all" {
 		pairQuery = pairQuery.Where("game_id = ?", gid)
 	}
@@ -967,7 +1031,7 @@ func (s *BetAdminService) BoardReport(filter BoardReportFilter) (*BoardReport, e
 		return nil, apperrors.NewSystemError("BOARD_READ_FAILED", "读取打盘报表失败", err)
 	}
 	total = int64(len(pairs))
-	query := s.db.Model(&bet.Bet{}).Where(`user_id NOT IN (SELECT user_id FROM "user" WHERE remark = ?)`, roomActivityRemark).
+	query := excludeRobotProfileBets(s.db.Model(&bet.Bet{})).
 		Select("game_id, issue, COUNT(*) as bet_count, COALESCE(SUM(amount_cents),0) as total_cents, COALESCE(SUM(fly_cents),0) as fly_cents, SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_cnt").
 		Group("game_id, issue")
 	if gid := strings.TrimSpace(filter.GameID); gid != "" && gid != "all" {
@@ -1286,7 +1350,7 @@ func (s *BetAdminService) CancelCurrentIssue(userID uint64, gameID, operator str
 
 func (s *BetAdminService) DashboardStats() (*DashboardStats, error) {
 	var totalBalance int64
-	if err := s.db.Model(&user.User{}).Where("remark IS NULL OR remark <> ?", roomActivityRemark).Select("COALESCE(SUM(balance_cents),0)").Scan(&totalBalance).Error; err != nil {
+	if err := excludeRobotProfileUsers(s.db.Model(&user.User{})).Select("COALESCE(SUM(balance_cents),0)").Scan(&totalBalance).Error; err != nil {
 		return nil, err
 	}
 	start := startOfDayCST(time.Now())
@@ -1299,7 +1363,7 @@ func (s *BetAdminService) DashboardStats() (*DashboardStats, error) {
 	}
 	var today, all profitAggregate
 	realBets := func() *gorm.DB {
-		return s.db.Model(&bet.Bet{}).Where(`user_id NOT IN (SELECT user_id FROM "user" WHERE remark = ?)`, roomActivityRemark)
+		return excludeRobotProfileBets(s.db.Model(&bet.Bet{}))
 	}
 	if err := realBets().Where("created_at >= ? AND status <> ?", start, "cancelled").
 		Select("COALESCE(SUM(amount_cents),0)").Scan(&todayStake).Error; err != nil {
@@ -1360,8 +1424,8 @@ func (s *BetAdminService) DashboardStats() (*DashboardStats, error) {
 }
 
 func (s *BetAdminService) welfareCostSince(start time.Time) (float64, error) {
-	query := s.db.Model(&user.BalanceTransaction{}).Where("type IN ? AND amount_cents > 0",
-		[]string{"checkin", "redpacket", "invite"})
+	query := excludeRobotProfileLedgers(s.db.Model(&user.BalanceTransaction{})).
+		Where("type IN ? AND amount_cents > 0", []string{"checkin", "redpacket", "invite"})
 	if !start.IsZero() {
 		query = query.Where("created_at >= ?", start)
 	}
@@ -1381,7 +1445,7 @@ func (s *BetAdminService) GameMoneyMap() (map[string]gameMoney, error) {
 		PayoutCents       int64
 	}
 	var today []row
-	if err := s.db.Model(&bet.Bet{}).Where(`user_id NOT IN (SELECT user_id FROM "user" WHERE remark = ?)`, roomActivityRemark).
+	if err := excludeRobotProfileBets(s.db.Model(&bet.Bet{})).
 		Select("game_id, COALESCE(SUM(CASE WHEN status <> 'cancelled' THEN amount_cents ELSE 0 END),0) as stake_cents, COALESCE(SUM(CASE WHEN status IN ('won','lost') THEN amount_cents ELSE 0 END),0) as settled_stake_cents, COALESCE(SUM(CASE WHEN status IN ('won','lost') THEN payout_cents ELSE 0 END),0) as payout_cents").
 		Where("created_at >= ?", start).
 		Group("game_id").Scan(&today).Error; err != nil {

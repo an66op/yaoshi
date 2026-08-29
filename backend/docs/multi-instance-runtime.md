@@ -11,7 +11,7 @@ Redis 只保存短期协调数据，业务账务仍以 PostgreSQL 为准：
 - 开奖同步、平台自开彩、结算恢复、幂等请求恢复、机器人、红包过期、数据生命周期和审计补写均使用带随机持有令牌的 Redis 租约，同一任务同一时刻仅一个实例执行。
 - 撤权事件携带不可变 `event_id` 和被撤销的 `revoked_auth_version`，重复/延迟回放只关闭旧代连接，不会踢掉撤权后重新登录的新连接。即使 Redis Stream 暂时不可读，每条连接仍每 30 秒向 PostgreSQL 校验身份版本、账号状态、工作区与上级房间状态。
 
-生产环境需设置 `BACKEND_REDIS_ADDR`、`BACKEND_REDIS_PASSWORD`、`BACKEND_REDIS_DB`、`BACKEND_REDIS_TLS` 和独立的 `BACKEND_REDIS_PREFIX`。同一套系统的所有实例必须使用相同前缀；测试、预发布和生产必须使用不同前缀。
+生产环境需设置 `BACKEND_REDIS_ADDR`、`BACKEND_REDIS_USERNAME`、`BACKEND_REDIS_PASSWORD`、`BACKEND_REDIS_DB`、`BACKEND_REDIS_TLS` 和独立的 `BACKEND_REDIS_PREFIX`。应用必须使用非 `default` 的最小权限 ACL 用户；生产巡检另用 `REDIS_USERNAME`/`REDIS_PASSWORD` 配置只能执行 `PING`、`INFO` 和 `CONFIG GET` 的监控用户，两套账号和密码均不得复用。同一套系统的所有应用实例必须使用相同前缀与应用 ACL 账号；测试、预发布和生产必须使用不同前缀。
 
 撤权流要求 Redis 6.2 或更高版本，并应启用 AOF（建议 `appendfsync everysec`）。Stream 保留 24 小时，远大于 30 秒数据库复核周期；确认投递的 PostgreSQL 回执保留 7 天，未投递回执永不由清理任务删除。日常巡检至少检查：
 

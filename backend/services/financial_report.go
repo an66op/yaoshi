@@ -153,7 +153,7 @@ func (s *FinancialReportService) Financial(filter FinancialReportFilter) (*Finan
 	}
 
 	var totalBalanceCents int64
-	balanceQuery := s.db.Model(&user.User{}).Where("remark IS NULL OR remark <> ?", roomActivityRemark)
+	balanceQuery := excludeRobotProfileUsers(s.db.Model(&user.User{}))
 	if filter.WorkspaceID > 0 {
 		balanceQuery = balanceQuery.Where("workspace_id = ?", filter.WorkspaceID)
 	}
@@ -231,8 +231,10 @@ func (s *FinancialReportService) Financial(filter FinancialReportFilter) (*Finan
 }
 
 func (s *FinancialReportService) filteredLedger(filter FinancialReportFilter, period reportPeriod) *gorm.DB {
-	query := s.db.Table("user_balance_transactions AS t").Where("t.created_at >= ? AND t.created_at < ?", period.Start, period.End).
-		Where(`NOT EXISTS (SELECT 1 FROM "user" activity_account WHERE activity_account.user_id = t.user_id AND activity_account.remark = ?)`, roomActivityRemark)
+	query := excludeRobotProfileRows(
+		s.db.Table("user_balance_transactions AS t").Where("t.created_at >= ? AND t.created_at < ?", period.Start, period.End),
+		"t.workspace_id", "t.user_id",
+	)
 	if filter.WorkspaceID > 0 {
 		query = query.Where("t.workspace_id = ?", filter.WorkspaceID)
 	}

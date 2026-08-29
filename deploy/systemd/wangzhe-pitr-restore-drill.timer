@@ -1,0 +1,11 @@
+[Unit]
+Description=Run isolated Wangzhe PostgreSQL PITR drill monthly
+
+[Timer]
+OnCalendar=Sun *-*-1..7 06:30:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=30m
+Unit=wangzhe-pitr-restore-drill.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Wangzhe full backup integrity check every day
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=30m
+Unit=wangzhe-backup-integrity.service
+
+[Install]
+WantedBy=timers.target

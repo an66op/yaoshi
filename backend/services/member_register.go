@@ -30,8 +30,8 @@ type MemberRegisterInput struct {
 func (s *MemberService) Register(input MemberRegisterInput) (*user.User, int64, error) {
 	username := strings.TrimSpace(input.Username)
 	password := input.Password
-	if len(username) < 3 {
-		return nil, 0, apperrors.NewBusinessError("INVALID_USERNAME", "帐号至少 3 位")
+	if err := validateHumanUsername(username); err != nil {
+		return nil, 0, err
 	}
 	if err := utils.ValidatePassword(password); err != nil {
 		return nil, 0, apperrors.NewBusinessError("INVALID_PASSWORD", "密码长度需为 8–72 个字符")

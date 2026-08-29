@@ -19,6 +19,7 @@ import (
 
 type Options struct {
 	Addr     string
+	Username string
 	Password string
 	DB       int
 	TLS      bool
@@ -49,7 +50,11 @@ func Init(ctx context.Context, options Options) error {
 		disableClient()
 		return nil
 	}
-	settings := &redis.Options{Addr: addr, Password: options.Password, DB: options.DB, DialTimeout: 3 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second}
+	settings := &redis.Options{
+		Addr: addr, Username: options.Username, Password: options.Password, DB: options.DB,
+		Protocol: 2, DisableIdentity: true,
+		DialTimeout: 3 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
 	if options.TLS {
 		settings.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}

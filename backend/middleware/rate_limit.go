@@ -46,8 +46,12 @@ func (l *fixedWindowLimiter) allow(key string, now time.Time) bool {
 }
 
 func (l *fixedWindowLimiter) middleware(namespace string) gin.HandlerFunc {
+	return l.middlewareWithSubject(namespace, func(c *gin.Context) string { return c.ClientIP() })
+}
+
+func (l *fixedWindowLimiter) middlewareWithSubject(namespace string, subject func(*gin.Context) string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		key := c.ClientIP()
+		key := subject(c)
 		allowed, retryAfter, err := cluster.AllowFixedWindow(c.Request.Context(), namespace, key, l.limit, l.period)
 		if err == nil {
 			if allowed {
@@ -81,6 +85,7 @@ var (
 	wsTicketLimiter  = newFixedWindowLimiter(30, time.Minute)
 	wsConnectLimiter = newFixedWindowLimiter(30, time.Minute)
 	memberBetLimiter = newFixedWindowLimiter(60, time.Minute)
+	robotRunLimiter  = newFixedWindowLimiter(6, time.Minute)
 )
 
 // AuthRateLimit limits login and registration attempts per verified client IP.
@@ -95,3 +100,17 @@ func WSConnectRateLimit() gin.HandlerFunc { return wsConnectLimiter.middleware("
 // MemberBetRateLimit limits financial write requests. It is intentionally more
 // generous than auth protection so normal multi-line tickets remain usable.
 func MemberBetRateLimit() gin.HandlerFunc { return memberBetLimiter.middleware("member-bet") }
+
+// RobotRunRateLimit limits manual scheduler triggers per authenticated
+// operator. The shared Redis window applies across backend instances; local
+// state is only the existing non-release development fallback.
+func RobotRunRateLimit() gin.HandlerFunc {
+	return robotRunLimiter.middlewareWithSubject("robot-run", func(c *gin.Context) string {
+		if userID, exists := c.Get("user_id"); exists {
+			if value, ok := userID.(uint64); ok && value > 0 {
+				return "user:" + strconv.FormatUint(value, 10)
+			}
+		}
+		return "ip:" + c.ClientIP()
+	})
+}

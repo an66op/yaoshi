@@ -1,0 +1,43 @@
+[Unit]
+Description=Encrypted upload backup for Wangzhe
+After=wangzhe-backend.service network-online.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/wangzhe-backup-work/uploads
+OnFailure=wangzhe-ops-failure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=wangzhe-backup
+Group=wangzhe-backup
+SupplementaryGroups=wangzhe
+ExecStart=/opt/wangzhe/current/scripts/upload-backup.sh /etc/wangzhe/backup-crypto.env
+TimeoutStartSec=6h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/wangzhe/uploads /etc/wangzhe/backup-crypto.env /etc/wangzhe/backup-rclone.conf /etc/wangzhe/backup-provenance-ed25519-private.pem
+ReadWritePaths=/var/backups/wangzhe/uploads /var/lib/wangzhe-backup-work/uploads
+NoNewPrivileges=true
+PrivateDevices=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+SystemCallArchitectures=native

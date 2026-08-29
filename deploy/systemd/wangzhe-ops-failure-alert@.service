@@ -1,0 +1,40 @@
+[Unit]
+Description=Immediate Wangzhe failure alert for %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=15min
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+User=wangzhe-monitor
+Group=wangzhe-monitor
+ExecStart=/opt/wangzhe/current/scripts/production-unit-failure-alert.sh /etc/wangzhe/ops-alert.env %i
+TimeoutStartSec=30
+Restart=on-failure
+RestartSec=30s
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/wangzhe/ops-alert.env
+NoNewPrivileges=true
+PrivateDevices=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+SystemCallArchitectures=native

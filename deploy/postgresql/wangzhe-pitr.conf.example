@@ -1,0 +1,15 @@
+# Include from postgresql.conf after installing the archive command and pitr
+# environment file.  Restart PostgreSQL after changing wal_level/archive_mode.
+wal_level = replica
+archive_mode = on
+archive_command = '/usr/local/libexec/wangzhe/postgres-archive-wal.sh /etc/wangzhe/pitr.env "%p" "%f"'
+archive_timeout = '60s'
+max_wal_senders = 5
+wal_compression = on
+
+# Recovery-host example (PostgreSQL 12+): create recovery.signal and set these
+# with a target chosen by the incident commander.  Never set target_action to
+# promote until consistency and the intended recovery point have been checked.
+# restore_command = '/opt/wangzhe/current/scripts/postgres-restore-wal.sh /etc/wangzhe/pitr-restore.env "%f" "%p"'
+# recovery_target_time = 'YYYY-MM-DD HH:MM:SS+08'
+# recovery_target_action = 'pause'

@@ -86,7 +86,7 @@ type ReconciliationSummary struct {
 
 func (s *SystemAuditService) Reconciliation() (ReconciliationSummary, error) {
 	result := ReconciliationSummary{GeneratedAt: time.Now().UTC()}
-	realUserIDs := s.db.Model(&user.User{}).Select("user_id").Where("remark IS NULL OR remark <> ?", roomActivityRemark)
+	realUserIDs := excludeRobotProfileUsers(s.db.Model(&user.User{})).Select("user_id")
 	health, err := NewBetAdminService(s.db).SettlementHealth(result.GeneratedAt)
 	if err != nil {
 		return result, err
@@ -190,7 +190,7 @@ func (s *SystemAuditService) Reconciliation() (ReconciliationSummary, error) {
 		latest[row.UserID] = row.AfterCents
 	}
 	var accounts []user.User
-	if err := s.db.Select("user_id", "balance_cents").Where("remark IS NULL OR remark <> ?", roomActivityRemark).Find(&accounts).Error; err != nil {
+	if err := excludeRobotProfileUsers(s.db.Model(&user.User{})).Select("user_id", "balance_cents").Find(&accounts).Error; err != nil {
 		return result, err
 	}
 	for _, account := range accounts {

@@ -764,6 +764,10 @@ func (h *WorkspaceHandler) UpdateRobotSetting(c *gin.Context) {
 	}
 	result, err := services.UpdateRobotSettingForWorkspace(h.db, account.WorkspaceID, request)
 	if err != nil {
+		if services.IsRoomActivityWorkspaceCapError(err) {
+			constants.SendError(c, http.StatusConflict, "启用机器人房间已达到生产上限", err)
+			return
+		}
 		constants.SendError(c, http.StatusInternalServerError, "保存机器人设置失败", err)
 		return
 	}

@@ -8,6 +8,8 @@ source "$ROOT_DIR/scripts/lib/backend-env.sh"
 source "$ROOT_DIR/scripts/lib/safe-integer.sh"
 # shellcheck source=lib/maintenance-edge.sh
 source "$ROOT_DIR/scripts/lib/maintenance-edge.sh"
+# shellcheck source=lib/encrypted-backup.sh
+source "$ROOT_DIR/scripts/lib/encrypted-backup.sh"
 
 fixture_dir="$(mktemp -d)"
 cleanup_fixture() { rm -rf -- "$fixture_dir"; }
@@ -82,6 +84,8 @@ fi
 existing_maintenance_marker="$fixture_dir/existing-maintenance"
 printf '%s\n' 'operator-owned-marker' >"$existing_maintenance_marker"
 capture_maintenance_marker_state "$existing_maintenance_marker"
+# Initialized by sourced maintenance-edge.sh.
+# shellcheck disable=SC2154
 [[ "$maintenance_was_active" == 1 && "$maintenance_marker_created" == 0 ]]
 ensure_maintenance_marker "$existing_maintenance_marker"
 finish_maintenance_marker "$existing_maintenance_marker"
@@ -103,7 +107,11 @@ fi
 created_maintenance_marker="$fixture_dir/created-maintenance"
 capture_maintenance_marker_state "$created_maintenance_marker"
 ensure_maintenance_marker "$created_maintenance_marker"
+# Initialized by sourced maintenance-edge.sh.
+# shellcheck disable=SC2154
 [[ "$maintenance_was_active" == 0 && "$maintenance_marker_created" == 1 ]]
+# Initialized by sourced maintenance-edge.sh.
+# shellcheck disable=SC2154
 maintenance_marker_owned_by "$created_maintenance_marker" "$maintenance_marker_token"
 [[ -z "$(find "$fixture_dir" -maxdepth 1 -name '.created-maintenance.tmp.*' -print -quit)" ]]
 finish_maintenance_marker "$created_maintenance_marker"
@@ -200,7 +208,8 @@ BACKEND_DATABASE_PASSWORD=correct-horse-battery-staple-2026
 BACKEND_DATABASE_DBNAME=wangzhe
 BACKEND_DATABASE_SSLMODE=disable
 BACKEND_REDIS_ADDR=127.0.0.1:6379
-BACKEND_REDIS_PASSWORD=
+BACKEND_REDIS_USERNAME=wangzhe-app
+BACKEND_REDIS_PASSWORD=redis-secret-that-is-longer-than-twenty-four-characters
 BACKEND_REDIS_DB=0
 BACKEND_REDIS_TLS=false
 BACKEND_REDIS_PREFIX=wangzhe-production
@@ -210,9 +219,42 @@ BACKEND_SECURITY_DATA_ENCRYPTION_KEY=data-key-that-is-longer-than-thirty-two-cha
 BACKEND_UPLOAD_DIR=/var/lib/wangzhe/uploads
 BACKEND_AUDIT_FALLBACK_FILE=/var/lib/wangzhe/audit-fallback.jsonl
 BACKEND_ROOM_ACTIVITY=0
+BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES=0
 EOF
 chmod 600 "$valid_env"
 bash "$ROOT_DIR/scripts/production-config-check.sh" "$valid_env" >/dev/null
+
+enabled_robot_env="$fixture_dir/enabled-robot.env"
+sed \
+  -e 's/BACKEND_ROOM_ACTIVITY=0/BACKEND_ROOM_ACTIVITY=1/' \
+  -e 's/BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES=0/BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES=2/' \
+  "$valid_env" >"$enabled_robot_env"
+chmod 600 "$enabled_robot_env"
+bash "$ROOT_DIR/scripts/production-config-check.sh" "$enabled_robot_env" >/dev/null
+
+uncapped_robot_env="$fixture_dir/uncapped-robot.env"
+sed 's/BACKEND_ROOM_ACTIVITY=0/BACKEND_ROOM_ACTIVITY=1/' "$valid_env" >"$uncapped_robot_env"
+chmod 600 "$uncapped_robot_env"
+if bash "$ROOT_DIR/scripts/production-config-check.sh" "$uncapped_robot_env" >/dev/null 2>&1; then
+  echo "未设置工作区上限的生产机器人被错误接受" >&2
+  exit 1
+fi
+
+truthy_robot_env="$fixture_dir/truthy-robot.env"
+sed 's/BACKEND_ROOM_ACTIVITY=0/BACKEND_ROOM_ACTIVITY=true/' "$valid_env" >"$truthy_robot_env"
+chmod 600 "$truthy_robot_env"
+if bash "$ROOT_DIR/scripts/production-config-check.sh" "$truthy_robot_env" >/dev/null 2>&1; then
+  echo "非精确开关值的生产机器人被错误接受" >&2
+  exit 1
+fi
+
+over_cap_robot_env="$fixture_dir/over-cap-robot.env"
+sed 's/BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES=0/BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES=101/' "$valid_env" >"$over_cap_robot_env"
+chmod 600 "$over_cap_robot_env"
+if bash "$ROOT_DIR/scripts/production-config-check.sh" "$over_cap_robot_env" >/dev/null 2>&1; then
+  echo "超过安全上限的生产机器人配置被错误接受" >&2
+  exit 1
+fi
 
 duplicate_env="$fixture_dir/duplicate.env"
 cp "$valid_env" "$duplicate_env"
@@ -236,6 +278,14 @@ sed 's/127.0.0.1:6379/redis.internal:6379/' "$valid_env" >"$remote_redis_env"
 chmod 600 "$remote_redis_env"
 if bash "$ROOT_DIR/scripts/production-config-check.sh" "$remote_redis_env" >/dev/null 2>&1; then
   echo "未启用 TLS 的远程 Redis 被错误接受" >&2
+  exit 1
+fi
+
+default_redis_user_env="$fixture_dir/default-redis-user.env"
+sed 's/BACKEND_REDIS_USERNAME=wangzhe-app/BACKEND_REDIS_USERNAME=default/' "$valid_env" >"$default_redis_user_env"
+chmod 600 "$default_redis_user_env"
+if bash "$ROOT_DIR/scripts/production-config-check.sh" "$default_redis_user_env" >/dev/null 2>&1; then
+  echo "生产配置错误接受了 Redis default 用户" >&2
   exit 1
 fi
 
@@ -264,9 +314,12 @@ rg -q "connect-src 'self' wss://admin\.wz6688\.app" "$nginx_config"
 rg -q 'Strict-Transport-Security.*max-age=' "$ROOT_DIR/deploy/nginx/snippets/wangzhe-security-headers.conf"
 rg -q 'ssl_protocols TLSv1\.2 TLSv1\.3;' "$ROOT_DIR/deploy/nginx/snippets/wangzhe-tls.conf"
 rg -q 'openssl x509 -checkend 1209600' "$ROOT_DIR/scripts/production-readiness.sh"
+rg -q "pg_tablespace.*pg_default.*pg_global" "$ROOT_DIR/scripts/production-readiness.sh"
+rg -q 'PITR 流程不支持自定义 PostgreSQL 表空间' "$ROOT_DIR/scripts/production-readiness.sh"
 
 backend_unit="$ROOT_DIR/deploy/systemd/wangzhe-backend.service"
 backup_unit="$ROOT_DIR/deploy/systemd/wangzhe-backup.service"
+failure_alert_unit="$ROOT_DIR/deploy/systemd/wangzhe-ops-failure-alert@.service"
 rg -q 'ExecStart=/opt/wangzhe/current/bin/wangzhe-backend' "$backend_unit"
 rg -q '^NoNewPrivileges=true$' "$backend_unit"
 rg -q '^ProtectSystem=strict$' "$backend_unit"
@@ -275,6 +328,10 @@ rg -q '^User=wangzhe-backup$' "$backup_unit"
 rg -q '/etc/wangzhe/backup.env' "$backup_unit"
 rg -q '^CapabilityBoundingSet=$' "$backup_unit"
 rg -q '^Environment=APPLICATION_DATABASE_USER=wangzhe$' "$backup_unit"
+rg -q '^StartLimitIntervalSec=15min$' "$failure_alert_unit"
+rg -q '^StartLimitBurst=5$' "$failure_alert_unit"
+rg -q '^Restart=on-failure$' "$failure_alert_unit"
+rg -q '^RestartSec=30s$' "$failure_alert_unit"
 
 deploy_script="$ROOT_DIR/scripts/production-deploy.sh"
 rollback_script="$ROOT_DIR/scripts/production-rollback.sh"
@@ -298,6 +355,14 @@ rg -q 'PREVIOUS_LINK=/opt/wangzhe/previous' "$deploy_script"
 rg -q 'env -i PATH=/usr/bin:/bin HOME=/var/backups/wangzhe' "$deploy_script"
 rg -q 'EXPECTED_MANIFEST_SHA256' "$deploy_script"
 rg -q '/usr/local/libexec/wangzhe' "$deploy_script"
+rg -q 'systemctl --version' "$deploy_script"
+rg -q 'systemd_version_decimal >= 249' "$deploy_script"
+systemd_gate_line="$(rg -n '^systemd_version=' "$deploy_script" | head -n1 | cut -d: -f1)"
+source_resolution_line="$(rg -n '^SOURCE_DIR=' "$deploy_script" | head -n1 | cut -d: -f1)"
+[[ -n "$systemd_gate_line" && -n "$source_resolution_line" && "$systemd_gate_line" -lt "$source_resolution_line" ]] || {
+  echo "systemd 249 版本门禁没有在解析发布包前执行" >&2
+  exit 1
+}
 ! rg -q '"\$SOURCE_DIR/scripts/release-integrity\.sh" verify' "$deploy_script"
 rg -q 'RELEASE_ROOT/\.staging-' "$deploy_script"
 rg -q 'mv -T "\$staging" "\$target"' "$deploy_script"
@@ -388,14 +453,19 @@ rg -q '^release: verify readiness-test$' "$ROOT_DIR/Makefile"
 rg -Fq 'GOOS=$(RELEASE_GOOS) GOARCH=$(RELEASE_GOARCH)' "$ROOT_DIR/Makefile"
 rg -q 'PGSSLMODE="\$BACKEND_DATABASE_SSLMODE"' "$ROOT_DIR/scripts/production-readiness.sh"
 rg -Fq 'READINESS_API_URL="${BACKEND_URL:-' "$ROOT_DIR/scripts/production-readiness.sh"
-rg -q 'require_decimal_count 开奖源异常数' "$ROOT_DIR/scripts/production-readiness.sh"
-validation_line="$(rg -n 'require_decimal_count 开奖源异常数' "$ROOT_DIR/scripts/production-readiness.sh" | cut -d: -f1)"
+for field in source_error_game_count error_issue_count stale_pending_issue_count unrecoverable_bet_count abnormal_bet_count; do
+  rg -q "read_lottery_health_count $field" "$ROOT_DIR/scripts/production-readiness.sh"
+done
+! rg -q 'source_error_game_count // 0' "$ROOT_DIR/scripts/production-readiness.sh"
+validation_line="$(rg -n '^source_errors=.*read_lottery_health_count' "$ROOT_DIR/scripts/production-readiness.sh" | cut -d: -f1)"
 arithmetic_line="$(rg -n '10#\$source_errors == 0' "$ROOT_DIR/scripts/production-readiness.sh" | cut -d: -f1)"
 [[ -n "$validation_line" && -n "$arithmetic_line" && "$validation_line" -lt "$arithmetic_line" ]] || {
   echo "外部计数没有在 Bash 算术前完成校验" >&2
   exit 1
 }
-rg -q 'recorded_name.*basename.*recent_backup' "$ROOT_DIR/scripts/production-readiness.sh"
+rg -q 'validate_encrypted_backup_and_manifest.*recent' "$ROOT_DIR/scripts/production-readiness.sh"
+rg -q '\.dump\.age' "$ROOT_DIR/scripts/production-readiness.sh"
+rg -q '\.offsite-ok' "$ROOT_DIR/scripts/production-readiness.sh"
 rg -q 'flock -w "\$LOCK_WAIT_SECONDS"' "$ROOT_DIR/scripts/postgres-backup.sh"
 rg -q '远程 PostgreSQL 备份必须校验证书' "$ROOT_DIR/scripts/postgres-backup.sh"
 rg -q 'release-integrity\.sh.*verify.*candidate' "$ROOT_DIR/scripts/production-rollback.sh"
@@ -420,37 +490,33 @@ rg -Fq 'mv -n -- "$temporary" "$marker"' "$maintenance_helper"
 rg -Fq 'maintenance_marker_owned_by "$marker" "$maintenance_marker_token"' "$maintenance_helper"
 ! rg -q '^rollback_code()' "$deploy_script"
 
-fake_bin="$fixture_dir/fake-bin"
-mkdir -p "$fake_bin"
-printf '%s\n' '#!/bin/sh' 'touch "$BACKUP_TEST_MARKER"' 'exit 77' >"$fake_bin/pg_dump"
-printf '%s\n' '#!/bin/sh' 'exit 0' >"$fake_bin/pg_restore"
-printf '%s\n' '#!/bin/sh' 'exit 0' >"$fake_bin/flock"
-chmod 755 "$fake_bin/pg_dump" "$fake_bin/pg_restore" "$fake_bin/flock"
 backup_test_home="$fixture_dir/backup-home"
 mkdir -p "$backup_test_home"
-backup_marker="$fixture_dir/pg-dump-reached"
-backup_test_env=(
-  BACKEND_DATABASE_HOST=127.0.0.1 BACKEND_DATABASE_PORT=5432
-  BACKEND_DATABASE_USER=backup_test BACKEND_DATABASE_PASSWORD=strong-test-password
-  BACKEND_DATABASE_DBNAME=backup_test BACKEND_DATABASE_SSLMODE=disable
-)
-if env -i PATH="$fake_bin:$PATH" HOME="$backup_test_home" BACKUP_TEST_MARKER="$backup_marker" \
-  BACKUP_DIR=/var/backups "${backup_test_env[@]}" \
-  bash "$ROOT_DIR/scripts/postgres-backup.sh" --current-env >/dev/null 2>&1; then
+# macOS exposes /var as a symlink to /private/var.  Canonicalize only this
+# fixture so the test exercises an exact private directory without weakening
+# the production guard that rejects symlinked backup paths.
+backup_test_home="$(cd "$backup_test_home" && pwd -P)"
+set +e
+validate_backup_directory /var/backups >/dev/null 2>&1
+wide_backup_status=$?
+set -e
+if (( wide_backup_status == 0 )); then
   echo "过宽的备份目录被错误接受" >&2
   exit 1
 fi
-[[ ! -e "$backup_marker" ]] || { echo "过宽目录检查发生得太晚" >&2; exit 1; }
-if env -i PATH="$fake_bin:$PATH" HOME="$backup_test_home" BACKUP_TEST_MARKER="$backup_marker" \
-  BACKUP_DIR="$backup_test_home" "${backup_test_env[@]}" \
-  bash "$ROOT_DIR/scripts/postgres-backup.sh" --current-env >/dev/null 2>&1; then
-  echo "伪 pg_dump 应以测试退出码停止" >&2
+validate_backup_directory "$backup_test_home"
+backup_guard_line="$(rg -n '^validate_backup_directory "\$BACKUP_DIR"' "$ROOT_DIR/scripts/postgres-backup.sh" | cut -d: -f1)"
+work_guard_line="$(rg -n '^validate_encrypted_work_directory ' "$ROOT_DIR/scripts/postgres-backup.sh" | cut -d: -f1)"
+pg_dump_line="$(rg -n '^pg_dump \\' "$ROOT_DIR/scripts/postgres-backup.sh" | cut -d: -f1)"
+[[ -n "$backup_guard_line" && -n "$work_guard_line" && -n "$pg_dump_line" && "$backup_guard_line" -lt "$pg_dump_line" && "$work_guard_line" -lt "$pg_dump_line" ]] || {
+  echo "备份路径和 LUKS 工作目录没有在 pg_dump 前完成验证" >&2
   exit 1
-fi
-[[ -e "$backup_marker" ]] || { echo "专用用户 HOME 与精确备份目录相同时被错误拒绝" >&2; exit 1; }
+}
 
 # Fresh debug databases must provision the exact identities exercised by the
 # smoke test; acceptance may not depend on accounts left in a developer DB.
+rg -Fq 'DefaultAdminPassword = "Admin8801!"' "$ROOT_DIR/backend/constants/system.go"
+rg -Fq '"username":"admin","password":"Admin8801!"' "$ROOT_DIR/scripts/local-smoke.sh"
 for fixture in \
   'demoAgentUsername  = "suyang"' \
   'demoAgentPassword  = "Room8801"' \

@@ -10,6 +10,12 @@ import (
 	"gorm.io/gorm"
 	"strings"
 	"time"
+	"unicode/utf8"
+)
+
+const (
+	maxLoginUsernameRunes  = 50
+	maxLoginWorkspaceRunes = 80
 )
 
 type authService struct {
@@ -79,6 +85,9 @@ func (s *authService) Register(req *vo.RegisterRequest) (*user.User, error) {
 
 // Login 登录
 func (s *authService) Login(username, password, workspace string) (*user.User, string, error) {
+	if err := validateLoginInput(username, password, workspace); err != nil {
+		return nil, "", err
+	}
 	scope, err := loginScopeForWorkspace(s.db, username, workspace, false)
 	if err != nil {
 		return nil, "", err
@@ -120,6 +129,9 @@ func (s *authService) Login(username, password, workspace string) (*user.User, s
 
 // LoginMember 会员端登录（member / agent，不含 admin）
 func (s *authService) LoginMember(username, password, workspace string) (*user.User, string, error) {
+	if err := validateLoginInput(username, password, workspace); err != nil {
+		return nil, "", err
+	}
 	scope, err := loginScopeForWorkspace(s.db, username, workspace, true)
 	if err != nil {
 		return nil, "", err
@@ -150,6 +162,23 @@ func (s *authService) LoginMember(username, password, workspace string) (*user.U
 		return nil, "", errors.NewBusinessError("USER_DISABLED", "所属房间或上级账号已停用")
 	}
 	return s.issueToken(&u)
+}
+
+// validateLoginInput is deliberately called before workspace or account
+// lookup. Besides keeping every login client aligned with the persisted field
+// sizes, this prevents oversized unauthenticated payloads from reaching SQL or
+// bcrypt. Password limits are bytes because bcrypt's boundary is byte based.
+func validateLoginInput(username, password, workspace string) error {
+	if !utf8.ValidString(username) || strings.TrimSpace(username) == "" || utf8.RuneCountInString(username) > maxLoginUsernameRunes {
+		return errors.NewBusinessError("INVALID_USERNAME", "登录帐号不能为空且最多 50 个字符")
+	}
+	if err := utils.ValidatePassword(password); err != nil {
+		return errors.NewBusinessError("INVALID_PASSWORD", "密码长度需为 8–72 字节")
+	}
+	if !utf8.ValidString(workspace) || utf8.RuneCountInString(workspace) > maxLoginWorkspaceRunes {
+		return errors.NewBusinessError("INVALID_WORKSPACE", "所属工作区最多 80 个字符")
+	}
+	return nil
 }
 
 // memberLoginAccountQuery is a defence-in-depth boundary: robot accounts are

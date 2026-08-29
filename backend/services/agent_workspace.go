@@ -42,17 +42,21 @@ func NewAgentWorkspaceService(db *gorm.DB) *AgentWorkspaceService {
 	return &AgentWorkspaceService{db: db}
 }
 
+func agentWorkspaceFinancialBetQuery(db *gorm.DB, workspaceID uint64) *gorm.DB {
+	return excludeRobotProfileBets(db.Model(&bet.Bet{}).Where("workspace_id = ?", workspaceID))
+}
+
 func (s *AgentWorkspaceService) DashboardForWorkspace(workspaceID uint64) (*AgentWorkspaceDashboard, error) {
 	var workspace workspacemodel.Workspace
 	if err := s.db.Where("id = ? AND status = ?", workspaceID, 1).First(&workspace).Error; err != nil {
 		return nil, apperrors.NewBusinessError("WORKSPACE_NOT_FOUND", "房间不存在或已停用")
 	}
 	result := &AgentWorkspaceDashboard{AgentID: workspace.OwnerUserID, RoomCode: workspace.RoomCode, RoomName: workspace.Name, RoomLogo: workspace.Logo}
-	members := s.db.Model(&user.User{}).Where("workspace_id = ? AND role = ? AND remark <> ?", workspaceID, "member", roomActivityRemark)
+	members := excludeRobotProfileUsers(s.db.Model(&user.User{})).Where("workspace_id = ? AND role = ?", workspaceID, "member")
 	if err := members.Count(&result.MemberCount).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&user.User{}).Where("workspace_id = ? AND role = ? AND status = 1 AND remark <> ?", workspaceID, "member", roomActivityRemark).Count(&result.ActiveMemberCount).Error; err != nil {
+	if err := excludeRobotProfileUsers(s.db.Model(&user.User{})).Where("workspace_id = ? AND role = ? AND status = 1", workspaceID, "member").Count(&result.ActiveMemberCount).Error; err != nil {
 		return nil, err
 	}
 	var balance int64
@@ -62,7 +66,7 @@ func (s *AgentWorkspaceService) DashboardForWorkspace(workspaceID uint64) (*Agen
 	result.MemberBalance = centsToAmount(balance)
 	start := startOfDayCST(time.Now())
 	var money struct{ Stake, Payout, Rebate, AgentShare int64 }
-	if err := s.db.Model(&bet.Bet{}).Where("workspace_id = ? AND COALESCE(settled_at,updated_at,created_at) >= ? AND status IN ?", workspaceID, start, []string{"won", "lost"}).
+	if err := agentWorkspaceFinancialBetQuery(s.db, workspaceID).Where("COALESCE(settled_at,updated_at,created_at) >= ? AND status IN ?", start, []string{"won", "lost"}).
 		Select("COALESCE(SUM(amount_cents),0) AS stake, COALESCE(SUM(payout_cents),0) AS payout, COALESCE(SUM(rebate_cents),0) AS rebate, COALESCE(SUM(agent_share_cents),0) AS agent_share").Scan(&money).Error; err != nil {
 		return nil, err
 	}
@@ -70,11 +74,11 @@ func (s *AgentWorkspaceService) DashboardForWorkspace(workspaceID uint64) (*Agen
 	result.TodayNet, result.TodayRebate, result.TodayAgentShare = result.TodayStake-result.TodayPayout, centsToAmount(money.Rebate), centsToAmount(money.AgentShare)
 	result.TodayPlatformProfit = centsToAmount(money.Stake - money.Payout - money.Rebate - money.AgentShare)
 	var pending int64
-	if err := s.db.Model(&bet.Bet{}).Where("workspace_id = ? AND status = ?", workspaceID, "pending").Select("COALESCE(SUM(amount_cents),0)").Scan(&pending).Error; err != nil {
+	if err := agentWorkspaceFinancialBetQuery(s.db, workspaceID).Where("status = ?", "pending").Select("COALESCE(SUM(amount_cents),0)").Scan(&pending).Error; err != nil {
 		return nil, err
 	}
 	result.PendingTurnover = centsToAmount(pending)
-	if err := s.db.Model(&bet.Bet{}).Where("workspace_id = ? AND status = ?", workspaceID, "pending").Count(&result.PendingBets).Error; err != nil {
+	if err := agentWorkspaceFinancialBetQuery(s.db, workspaceID).Where("status = ?", "pending").Count(&result.PendingBets).Error; err != nil {
 		return nil, err
 	}
 	if err := s.db.Model(&application.Application{}).Where("workspace_id = ? AND status = ?", workspaceID, "pending").Count(&result.PendingApplications).Error; err != nil {
@@ -105,7 +109,7 @@ func (s *AgentWorkspaceService) Users(agentID uint64, filter UserListFilter) (*U
 	if filter.PageSize < 1 || filter.PageSize > 100 {
 		filter.PageSize = 20
 	}
-	query := s.db.Model(&user.User{}).Where("parent_agent_id = ? AND remark <> ?", agentID, roomActivityRemark)
+	query := excludeRobotProfileUsers(s.db.Model(&user.User{})).Where("parent_agent_id = ?", agentID)
 	if keyword := strings.TrimSpace(filter.Query); keyword != "" {
 		like := "%" + strings.ToLower(keyword) + "%"
 		query = query.Where("LOWER(username) LIKE ? OR LOWER(nickname) LIKE ? OR CAST(public_id AS TEXT) LIKE ?", like, like, "%"+keyword+"%")

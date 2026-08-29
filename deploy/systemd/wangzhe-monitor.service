@@ -1,0 +1,41 @@
+[Unit]
+Description=Active production checks and alerts for Wangzhe
+After=network-online.target wangzhe-backend.service
+Wants=network-online.target
+OnFailure=wangzhe-ops-failure-alert@%n.service
+
+[Service]
+Type=oneshot
+SuccessExitStatus=2
+User=wangzhe-monitor
+Group=wangzhe-monitor
+ExecStart=/opt/wangzhe/current/scripts/production-monitor.sh /etc/wangzhe/monitor.env
+TimeoutStartSec=5min
+UMask=0077
+StateDirectory=wangzhe-monitor
+StateDirectoryMode=0700
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/var/backups/wangzhe /var/log/nginx /etc/wangzhe/redis-check.env /etc/wangzhe/logical-restore-status-ed25519-public.pem /etc/wangzhe/pitr-restore-status-ed25519-public.pem /etc/wangzhe/backup-provenance-ed25519-public.pem /etc/wangzhe/pitr-provenance-ed25519-public.pem
+ReadWritePaths=/var/lib/wangzhe-monitor
+NoNewPrivileges=true
+PrivateDevices=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+SystemCallArchitectures=native

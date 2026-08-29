@@ -15,6 +15,20 @@ import (
 
 // LoadRoutes 动态加载所有路由
 func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
+	LoadRoutesForMode(r, db, scheduler, gin.Mode())
+}
+
+func adminRoomActivityRunOnceRoute(handler gin.HandlerFunc) Route {
+	return Route{
+		Method: "POST", Pattern: "/admin/room-activity/run-once", Handler: handler,
+		Middlewares: []gin.HandlerFunc{middleware.RobotRunRateLimit()},
+	}
+}
+
+// LoadRoutesForMode keeps security-sensitive route availability tied to the
+// configured server mode. LoadRoutes remains as a compatibility wrapper for
+// tests and local tools that already set Gin's mode explicitly.
+func LoadRoutesForMode(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler, serverMode string) {
 	ws.ConfigureSessionDatabase(db)
 	h := InitHandlers(db, scheduler)
 
@@ -42,6 +56,26 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 		}
 	}
 
+	publicAuthRoutes := []Route{
+		{Method: "POST", Pattern: "/login", Handler: h.AuthHandler.Login, Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit()}},
+		{Method: "POST", Pattern: "/logout", Handler: h.AuthHandler.Logout},
+		{Method: "GET", Pattern: "/session", Handler: h.AuthHandler.Me, Middlewares: []gin.HandlerFunc{middleware.AuthMiddleware()}},
+		{Method: "POST", Pattern: "/session/refresh", Handler: h.AuthHandler.Refresh, Middlewares: []gin.HandlerFunc{middleware.AuthMiddleware()}},
+		{Method: "POST", Pattern: "/member/login", Handler: h.MemberHandler.Login, Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit()}},
+		{Method: "POST", Pattern: "/member/register", Handler: h.MemberHandler.Register, Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit()}},
+		{Method: "POST", Pattern: "/member/logout", Handler: h.MemberHandler.Logout},
+		{Method: "GET", Pattern: "/ws", Handler: ws.HandleConnect, Middlewares: []gin.HandlerFunc{middleware.WSConnectRateLimit()}},
+	}
+	if serverMode != gin.ReleaseMode {
+		// /api/register is the legacy platform-account registration endpoint.
+		// It remains available to debug/test environments only; member signup
+		// continues to use /api/member/register in every mode.
+		publicAuthRoutes = append([]Route{{
+			Method: "POST", Pattern: "/register", Handler: h.AuthHandler.Register,
+			Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit()},
+		}}, publicAuthRoutes...)
+	}
+
 	register([]RouteGroup{
 		{
 			Prefix: "/health",
@@ -53,17 +87,7 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 		},
 		{
 			Prefix: "/api",
-			Routes: []Route{
-				{Method: "POST", Pattern: "/register", Handler: h.AuthHandler.Register, Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit()}},
-				{Method: "POST", Pattern: "/login", Handler: h.AuthHandler.Login, Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit()}},
-				{Method: "POST", Pattern: "/logout", Handler: h.AuthHandler.Logout},
-				{Method: "GET", Pattern: "/session", Handler: h.AuthHandler.Me, Middlewares: []gin.HandlerFunc{middleware.AuthMiddleware()}},
-				{Method: "POST", Pattern: "/session/refresh", Handler: h.AuthHandler.Refresh, Middlewares: []gin.HandlerFunc{middleware.AuthMiddleware()}},
-				{Method: "POST", Pattern: "/member/login", Handler: h.MemberHandler.Login, Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit()}},
-				{Method: "POST", Pattern: "/member/register", Handler: h.MemberHandler.Register, Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit()}},
-				{Method: "POST", Pattern: "/member/logout", Handler: h.MemberHandler.Logout},
-				{Method: "GET", Pattern: "/ws", Handler: ws.HandleConnect, Middlewares: []gin.HandlerFunc{middleware.WSConnectRateLimit()}},
-			},
+			Routes: publicAuthRoutes,
 		},
 		{
 			Prefix:      "/api/member",
@@ -162,7 +186,7 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 				{Method: "POST", Pattern: "/robots/reset", Handler: h.TenantWorkspaceHandler.ResetRobots},
 				{Method: "PATCH", Pattern: "/robots/:id", Handler: h.TenantWorkspaceHandler.UpdateRobot},
 				{Method: "PATCH", Pattern: "/robots/settings", Handler: h.TenantWorkspaceHandler.UpdateRobotSetting},
-				{Method: "POST", Pattern: "/robots/run-once", Handler: h.TenantWorkspaceHandler.RunDirectRobot},
+				{Method: "POST", Pattern: "/robots/run-once", Handler: h.TenantWorkspaceHandler.RunDirectRobot, Middlewares: []gin.HandlerFunc{middleware.RobotRunRateLimit()}},
 				{Method: "GET", Pattern: "/activities", Handler: h.TenantWorkspaceHandler.Activities},
 				{Method: "POST", Pattern: "/activities", Handler: h.TenantWorkspaceHandler.CreateActivity},
 				{Method: "PUT", Pattern: "/activities/:id", Handler: h.TenantWorkspaceHandler.UpdateActivity},
@@ -220,7 +244,7 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 				{Method: "PATCH", Pattern: "/robots/:id", Handler: h.AgentWorkspaceHandler.UpdateRobot},
 				{Method: "GET", Pattern: "/robots/settings", Handler: h.AgentWorkspaceHandler.RobotStatus},
 				{Method: "PATCH", Pattern: "/robots/settings", Handler: h.AgentWorkspaceHandler.UpdateRobotSetting},
-				{Method: "POST", Pattern: "/robots/run-once", Handler: h.AgentWorkspaceHandler.RunRobot},
+				{Method: "POST", Pattern: "/robots/run-once", Handler: h.AgentWorkspaceHandler.RunRobot, Middlewares: []gin.HandlerFunc{middleware.RobotRunRateLimit()}},
 				{Method: "GET", Pattern: "/activities", Handler: h.AgentWorkspaceHandler.Activities},
 				{Method: "POST", Pattern: "/activities", Handler: h.AgentWorkspaceHandler.CreateActivity},
 				{Method: "PUT", Pattern: "/activities/:id", Handler: h.AgentWorkspaceHandler.UpdateActivity},
@@ -320,7 +344,7 @@ func LoadRoutes(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Scheduler) {
 				{Method: "GET", Pattern: "/admin/settings", Handler: h.SettingsHandler.Get},
 				{Method: "PUT", Pattern: "/admin/settings", Handler: h.SettingsHandler.Update},
 				{Method: "GET", Pattern: "/admin/room-activity/status", Handler: h.SettingsHandler.RoomActivityStatus},
-				{Method: "POST", Pattern: "/admin/room-activity/run-once", Handler: h.SettingsHandler.RunRoomActivityOnce},
+				adminRoomActivityRunOnceRoute(h.SettingsHandler.RunRoomActivityOnce),
 				{Method: "GET", Pattern: "/admin/robot-settings", Handler: h.SettingsHandler.RobotSetting},
 				{Method: "PATCH", Pattern: "/admin/robot-settings", Handler: h.SettingsHandler.UpdateRobotSetting},
 				{Method: "GET", Pattern: "/admin/plays/catalog", Handler: h.OddsHandler.Catalog},

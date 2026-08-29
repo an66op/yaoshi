@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Wangzhe upload backup every day
+
+[Timer]
+OnCalendar=*-*-* 03:10:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=10m
+Unit=wangzhe-upload-backup.service
+
+[Install]
+WantedBy=timers.target

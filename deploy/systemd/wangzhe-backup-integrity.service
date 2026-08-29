@@ -1,0 +1,42 @@
+[Unit]
+Description=Daily full local and offsite backup integrity check for Wangzhe
+After=network-online.target wangzhe-backup.service wangzhe-upload-backup.service wangzhe-base-backup.service
+Wants=network-online.target
+OnFailure=wangzhe-ops-failure-alert@%n.service
+
+[Service]
+Type=oneshot
+User=wangzhe-monitor
+Group=wangzhe-monitor
+ExecStart=/opt/wangzhe/current/scripts/production-backup-integrity.sh /etc/wangzhe/monitor.env
+TimeoutStartSec=12h
+Nice=15
+IOSchedulingClass=idle
+UMask=0077
+StateDirectory=wangzhe-monitor
+StateDirectoryMode=0700
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/var/backups/wangzhe /etc/wangzhe/monitor.env /etc/wangzhe/monitor-rclone.conf /etc/wangzhe/backup-provenance-ed25519-public.pem /etc/wangzhe/pitr-provenance-ed25519-public.pem
+ReadWritePaths=/var/lib/wangzhe-monitor
+NoNewPrivileges=true
+PrivateDevices=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+SystemCallArchitectures=native

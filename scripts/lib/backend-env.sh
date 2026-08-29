@@ -41,7 +41,7 @@ load_backend_env() {
   }
   expected_owner="${EUID:-$(id -u)}"
   [[ "$owner" == "$expected_owner" ]] || {
-    echo "环境文件必须属于执行检查的用户（当前 uid=$expected_owner，文件 uid=$owner）" >&2
+    echo "环境文件必须属于执行检查的用户（当前 uid=${expected_owner}，文件 uid=${owner}）" >&2
     return 1
   }
 

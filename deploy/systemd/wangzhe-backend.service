@@ -4,7 +4,7 @@ After=network-online.target postgresql.service redis-server.service
 Wants=network-online.target
 StartLimitIntervalSec=60
 StartLimitBurst=3
-ConditionPathIsExecutable=/opt/wangzhe/current/bin/wangzhe-backend
+OnFailure=wangzhe-ops-failure-alert@%n.service
 
 [Service]
 Type=simple

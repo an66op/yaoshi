@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { memberApi } from '../api/member'
+import {
+  MEMBER_REGISTER_USERNAME_MAX_LENGTH,
+  PASSWORD_MAX_BYTES,
+  PASSWORD_MIN_BYTES,
+  USERNAME_MIN_LENGTH,
+  passwordByteLength,
+  truncateUnicode,
+  unicodeLength,
+} from '../authLimits'
 import { BRAND_NAME } from '../data/brand'
 import type { Theme } from '../types'
 
@@ -27,8 +36,10 @@ export function Register({ onContinue, onBack, theme = 'day' }: Props) {
 
   const submit = async () => {
     const value = username.trim()
-    if (value.length < 3) return setError('帐号至少 3 位')
-    if (new TextEncoder().encode(password).length < 8) return setError('密码至少 8 位')
+    if (unicodeLength(value) < USERNAME_MIN_LENGTH) return setError(`帐号至少 ${USERNAME_MIN_LENGTH} 位`)
+    const passwordBytes = passwordByteLength(password)
+    if (passwordBytes < PASSWORD_MIN_BYTES) return setError(`密码至少 ${PASSWORD_MIN_BYTES} 字节`)
+    if (passwordBytes > PASSWORD_MAX_BYTES) return setError(`密码最多 ${PASSWORD_MAX_BYTES} 字节`)
     const invite = inviteCode.trim().replace(/^u/i, '')
     if (invite && invite.length < 4) return setError('邀请码至少 4 位')
     setLoading(true)
@@ -61,8 +72,8 @@ export function Register({ onContinue, onBack, theme = 'day' }: Props) {
           <h1>创建帐号</h1>
           <p>系统会自动生成显示昵称；创建成功后再选择需要进入的房间。</p>
         </div>
-        <label className="login-field"><span>帐号</span><div><i>◉</i><input autoComplete="username" value={username} onChange={(e) => { setUsername(e.target.value.replace(/\s/g, '')); setError('') }} placeholder="至少 3 位" /></div></label>
-        <label className="login-field"><span>密码</span><div><i>●</i><input type="password" autoComplete="new-password" value={password} onChange={(e) => { setPassword(e.target.value); setError('') }} placeholder="8–72 位" /></div></label>
+        <label className="login-field"><span>帐号</span><div><i>◉</i><input autoComplete="username" value={username} onChange={(e) => { setUsername(truncateUnicode(e.target.value.replace(/\s/g, ''), MEMBER_REGISTER_USERNAME_MAX_LENGTH)); setError('') }} placeholder="3–20 位" /></div></label>
+        <label className="login-field"><span>密码</span><div><i>●</i><input type="password" autoComplete="new-password" maxLength={PASSWORD_MAX_BYTES} value={password} onChange={(e) => { setPassword(e.target.value); setError('') }} placeholder="8–72 字节" /></div></label>
         <label className="login-field"><span>邀请码</span><div><i>礼</i><input value={inviteCode} onChange={(e) => setInviteCode(e.target.value)} placeholder="例如 U1001（至少 4 位，可选）" /></div></label>
         {success && <p className="login-error login-success" role="status">{success}</p>}
         {error && <p className="login-error" role="alert">{error}</p>}

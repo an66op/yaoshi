@@ -1,4 +1,4 @@
-.PHONY: dev health smoke test race verify release production-check production-config-check backup shellcheck readiness-test dev-reset-plan dev-full-reset-plan dev-reset-sentinel-plan
+.PHONY: dev health smoke test race verify release production-check production-config-check backup upload-backup backup-integrity monitor restore-drill pitr-restore-drill shellcheck readiness-test rclone-integration-test dev-reset-plan dev-full-reset-plan dev-reset-sentinel-plan production-test-install production-system-test integration-test e2e-test load-test
 
 RELEASE_GOOS ?= linux
 RELEASE_GOARCH ?= amd64
@@ -23,7 +23,7 @@ race:
 verify: test
 	cd new && npm run lint && npm run build
 	cd new-back && npm run lint && npm run build
-	@if rg -n '123456|Wz888888|WzTenant8801|Room8801' new/dist new-back/dist; then \
+	@if rg -n '123456|Admin8801!|Wz888888|WzTenant8801|Room8801' new/dist new-back/dist; then \
 		echo "生产前端产物包含本地体验密码，拒绝继续" >&2; \
 		exit 1; \
 	fi
@@ -38,9 +38,18 @@ release: verify readiness-test
 	cp -R new/dist/. release/member/
 	cp -R new-back/dist/. release/admin/
 	cp -R deploy/. release/deploy/
-	cp scripts/production-config-check.sh scripts/production-readiness.sh scripts/production-deploy.sh scripts/production-rollback.sh scripts/postgres-backup.sh scripts/release-integrity.sh release/scripts/
-	cp scripts/lib/backend-env.sh scripts/lib/safe-integer.sh scripts/lib/maintenance-edge.sh release/scripts/lib/
+	cp scripts/production-config-check.sh scripts/production-readiness.sh scripts/production-deploy.sh scripts/production-rollback.sh \
+		scripts/postgres-backup.sh scripts/upload-backup.sh scripts/postgres-archive-wal.sh scripts/postgres-base-backup.sh \
+		scripts/postgres-restore-wal.sh scripts/production-restore-drill.sh scripts/production-monitor.sh scripts/production-backup-integrity.sh \
+		scripts/pitr-recovery-source-sync.sh scripts/production-pitr-restore-drill.sh scripts/publish-pitr-drill-status.sh \
+		scripts/production-unit-failure-alert.sh scripts/production-recovery-evidence-check.sh \
+		scripts/redis-production-check.sh scripts/release-integrity.sh release/scripts/
+	cp scripts/lib/backend-env.sh scripts/lib/safe-integer.sh scripts/lib/maintenance-edge.sh \
+		scripts/lib/strict-env.sh scripts/lib/encrypted-backup.sh release/scripts/lib/
 	cp PRODUCTION_OPERATIONS.md release/
+	test -f release/scripts/production-restore-drill.sh -a -f release/scripts/production-recovery-evidence-check.sh \
+		-a -f release/deploy/env/restore-drill.env.example -a -f release/deploy/env/recovery-evidence.env.example \
+		-a -f release/deploy/systemd/wangzhe-restore-drill.service
 	bash scripts/release-integrity.sh generate release
 	@{ command -v sha256sum >/dev/null 2>&1 && sha256sum release/SHA256SUMS || shasum -a 256 release/SHA256SUMS; } | awk '{print "可信清单摘要（部署时使用 EXPECTED_MANIFEST_SHA256）：" $$1}'
 
@@ -53,13 +62,40 @@ production-config-check:
 backup:
 	bash scripts/postgres-backup.sh
 
+upload-backup:
+	bash scripts/upload-backup.sh
+
+backup-integrity:
+	bash scripts/production-backup-integrity.sh
+
+monitor:
+	bash scripts/production-monitor.sh
+
+restore-drill:
+	bash scripts/production-restore-drill.sh
+
+pitr-restore-drill:
+	bash scripts/production-pitr-restore-drill.sh
+
 shellcheck:
 	bash -n scripts/*.sh scripts/lib/*.sh
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		shellcheck -S warning scripts/*.sh scripts/lib/*.sh; \
+	elif [ "$${CI:-}" = "true" ]; then \
+		echo "CI 缺少 ShellCheck，拒绝跳过" >&2; exit 1; \
+	else \
+		echo "shellcheck 未安装，已完成 bash -n；生产构建机应安装 shellcheck"; \
+	fi
 	! rg -n '127\.0\.0\.1:8089|BACKEND_SERVER_ALLOWED_ORIGINS=.*http://' deploy
 
 readiness-test: shellcheck
 	bash scripts/readiness-static-test.sh
+	bash scripts/ops-resilience-static-test.sh
+	bash scripts/recovery-evidence-check-static-test.sh
 	bash scripts/dev-reset-static-test.sh
+
+rclone-integration-test:
+	bash scripts/rclone-offsite-integration-test.sh
 
 dev-reset-plan:
 	@if [ -n "$(ENV_FILE)" ]; then \
@@ -81,3 +117,22 @@ dev-reset-sentinel-plan:
 	else \
 		bash scripts/dev-reset-init-sentinel.sh --dry-run; \
 	fi
+
+production-test-install:
+	cd new && npm ci --ignore-scripts
+	cd new-back && npm ci --ignore-scripts
+	cd tests/e2e && npm ci --ignore-scripts
+	cd tests/system && npm ci --ignore-scripts
+	cd tests/e2e && npx playwright install --with-deps chromium
+
+production-system-test:
+	SYSTEM_TEST_SUITE=all bash scripts/release-system-test.sh
+
+integration-test:
+	SYSTEM_TEST_SUITE=integration bash scripts/release-system-test.sh
+
+e2e-test:
+	SYSTEM_TEST_SUITE=e2e bash scripts/release-system-test.sh
+
+load-test:
+	SYSTEM_TEST_SUITE=load bash scripts/release-system-test.sh

@@ -1,0 +1,44 @@
+# Redis 6.2+ single-host production profile for Wangzhe.  Merge only explicit
+# distro-specific paths (dir/pidfile) instead of copying an old vendor config.
+bind 127.0.0.1 ::1
+protected-mode yes
+port 6379
+tcp-backlog 511
+timeout 0
+tcp-keepalive 60
+supervised systemd
+daemonize no
+
+# Authentication and key/channel isolation are defined in the separately
+# protected ACL file.  The Go application authenticates as wangzhe-app; the
+# default user stays disabled.
+aclfile /etc/redis/wangzhe-users.acl
+# Redis 6.2 otherwise defaults newly reset users to all channels for upgrade
+# compatibility. Keep the global default restrictive as well as each user ACL.
+acl-pubsub-default resetchannels
+
+# Redis carries leases, presence and revocation streams.  Silent eviction is
+# more dangerous than a visible write failure; alert before memory is full.
+maxmemory 1gb
+maxmemory-policy noeviction
+
+# Keep both periodic RDB checkpoints and an fsync-every-second AOF.  Refuse a
+# truncated AOF instead of silently accepting data loss after a broken disk.
+save 900 1
+save 300 10
+save 60 10000
+stop-writes-on-bgsave-error yes
+rdbcompression yes
+rdbchecksum yes
+appendonly yes
+appendfilename "appendonly.aof"
+appendfsync everysec
+no-appendfsync-on-rewrite no
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size 64mb
+aof-load-truncated no
+aof-use-rdb-preamble yes
+
+loglevel notice
+logfile ""
+databases 16

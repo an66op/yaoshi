@@ -26,6 +26,19 @@ func clearSessionCookie(c *gin.Context, scope sessionauth.Scope) {
 	c.Header("Cache-Control", "no-store")
 }
 
+// writeVersionedSessionCookie issues a cookie from the authoritative session
+// generation stored in PostgreSQL. Callers use this after a security-sensitive
+// account mutation that deliberately invalidates the token carried by the
+// current request.
+func writeVersionedSessionCookie(c *gin.Context, scope sessionauth.Scope, userID, authVersion uint64) error {
+	token, err := utils.GenerateToken(userID, authVersion)
+	if err != nil {
+		return err
+	}
+	writeSessionCookie(c, scope, token)
+	return nil
+}
+
 func refreshSessionCookie(c *gin.Context, scope sessionauth.Scope) bool {
 	userID, idOK := c.Get("user_id")
 	authVersion, versionOK := c.Get("auth_version")
@@ -35,12 +48,10 @@ func refreshSessionCookie(c *gin.Context, scope sessionauth.Scope) bool {
 		constants.SendError(c, http.StatusUnauthorized, "登录已失效，请重新登录", nil)
 		return false
 	}
-	token, err := utils.GenerateToken(id, version)
-	if err != nil {
+	if err := writeVersionedSessionCookie(c, scope, id, version); err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "刷新登录状态失败", err)
 		return false
 	}
-	writeSessionCookie(c, scope, token)
 	constants.SendSuccess(c, http.StatusOK, "登录状态已刷新", gin.H{"expires_in": config.GetConfig().JWT.Expire})
 	return true
 }

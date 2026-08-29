@@ -3,6 +3,7 @@ package user
 import (
 	"backend/config"
 	"backend/sessionauth"
+	"backend/utils"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -68,5 +69,38 @@ func TestClearSessionCookieUsesMatchingScope(t *testing.T) {
 	cookies := response.Result().Cookies()
 	if len(cookies) != 1 || cookies[0].Name != sessionauth.ManagementCookieName || cookies[0].MaxAge >= 0 {
 		t.Fatalf("unexpected expired cookie: %#v", cookies)
+	}
+}
+
+func TestWriteVersionedSessionCookieUsesCommittedAuthVersion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previous := config.Config
+	config.Config = &config.Configuration{
+		Server: config.ServerConfig{Mode: "release"},
+		JWT:    config.JWTConfig{Expire: 3600},
+	}
+	t.Cleanup(func() { config.Config = previous })
+	utils.InitJWT("room-activation-cookie-test-secret-long-enough", 3600)
+
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Request = httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/member/room/join", nil)
+	if err := writeVersionedSessionCookie(context, sessionauth.ScopeMember, 42, 9); err != nil {
+		t.Fatalf("writeVersionedSessionCookie: %v", err)
+	}
+
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies = %d, want 1", len(cookies))
+	}
+	claims, err := utils.ParseToken(cookies[0].Value)
+	if err != nil {
+		t.Fatalf("ParseToken: %v", err)
+	}
+	if claims.UserID != 42 || claims.AuthVersion != 9 {
+		t.Fatalf("claims = user %d version %d, want user 42 version 9", claims.UserID, claims.AuthVersion)
+	}
+	if !cookies[0].Secure || !cookies[0].HttpOnly || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("rotated cookie protections are incomplete: %#v headers=%v", cookies[0], response.Header())
 	}
 }

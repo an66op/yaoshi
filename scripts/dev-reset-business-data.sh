@@ -127,7 +127,7 @@ reset_assert_backend_port_stopped
 token_sha256="$(reset_sha256 "$sentinel_token")"
 unset sentinel_token BACKEND_DEVELOPMENT_RESET_SENTINEL_TOKEN
 identity_before="$(reset_verified_identity "$token_sha256" true)"
-IFS=$'\t' read -r server_system_identifier server_address server_port source_user_count source_balance_cents source_ledger_count <<<"$identity_before"
+IFS=$'\t' read -r server_system_identifier server_address server_port _ _ _ <<<"$identity_before"
 
 echo "开始创建重置前完整备份……"
 backup_source="${env_file:---current-env}"

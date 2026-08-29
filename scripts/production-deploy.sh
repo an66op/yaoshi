@@ -11,7 +11,9 @@ Optional environment:
   EXPECTED_MANIFEST_SHA256=<digest copied through a trusted channel>
   APP_ENV=/etc/wangzhe/backend.env
   BACKUP_ENV=/etc/wangzhe/backup.env
-  BACKUP_DIR=/var/backups/wangzhe
+  BACKUP_CRYPTO_ENV=/etc/wangzhe/backup-crypto.env
+  BACKUP_DIR=/var/backups/wangzhe/database
+  PITR_CLUSTER_ID_FILE=/etc/wangzhe/pitr-cluster-id
   READY_TIMEOUT_SECONDS=90
 
 The script always validates configuration and Nginx, creates and verifies a
@@ -28,9 +30,17 @@ fi
 [[ $# -eq 1 ]] || { usage >&2; exit 2; }
 (( EUID == 0 )) || { echo "必须以 root 运行生产发布脚本" >&2; exit 1; }
 
-for command_name in awk cat chmod chown cp curl date dirname env find flock grep id install ln mktemp mv nginx readlink rm runuser sha256sum sleep stat systemctl tr uname; do
+for command_name in awk cat chmod chown cp curl date dirname env find flock grep id install ln mktemp mv nginx readlink rm runuser sha256sum sleep stat systemctl timeout tr uname; do
   command -v "$command_name" >/dev/null 2>&1 || { echo "缺少命令：$command_name" >&2; exit 1; }
 done
+
+systemd_version="$(systemctl --version | awk 'NR == 1 && $1 == "systemd" && $2 ~ /^[0-9]+$/ { print $2 }')"
+[[ "$systemd_version" =~ ^[0-9]+$ ]] || { echo "无法确认 systemd 版本，拒绝生产发布" >&2; exit 1; }
+systemd_version_decimal=$((10#$systemd_version))
+(( systemd_version_decimal >= 249 )) || {
+  echo "systemd ${systemd_version} 低于生产所需的 249（恢复演练状态发布依赖 OnSuccess=）" >&2
+  exit 1
+}
 
 # This entrypoint is a server-side trust anchor. Never execute the copy carried
 # inside an uploaded release archive as root: an attacker who replaced the
@@ -48,8 +58,9 @@ for trusted_dir in /usr/local /usr/local/libexec "$TRUSTED_SCRIPT_DIR" "$TRUSTED
   }
 done
 for trusted_file in \
-  production-deploy.sh production-rollback.sh release-integrity.sh production-config-check.sh production-readiness.sh postgres-backup.sh \
-  lib/backend-env.sh lib/safe-integer.sh lib/maintenance-edge.sh; do
+  production-deploy.sh production-rollback.sh release-integrity.sh production-config-check.sh production-readiness.sh postgres-backup.sh upload-backup.sh redis-production-check.sh \
+  postgres-archive-wal.sh postgres-base-backup.sh production-monitor.sh production-backup-integrity.sh production-recovery-evidence-check.sh \
+  lib/backend-env.sh lib/safe-integer.sh lib/maintenance-edge.sh lib/strict-env.sh lib/encrypted-backup.sh; do
   trusted_path="$TRUSTED_SCRIPT_DIR/$trusted_file"
   [[ -f "$trusted_path" && ! -L "$trusted_path" && "$(stat -c '%u' "$trusted_path")" == "0" ]] || {
     echo "可信部署工具无效或不属于 root：$trusted_path" >&2
@@ -62,7 +73,10 @@ SOURCE_DIR="$(cd "$1" && pwd -P)"
 EXPECTED_MANIFEST_SHA256="${EXPECTED_MANIFEST_SHA256:-}"
 APP_ENV="${APP_ENV:-/etc/wangzhe/backend.env}"
 BACKUP_ENV="${BACKUP_ENV:-/etc/wangzhe/backup.env}"
-BACKUP_DIR="${BACKUP_DIR:-/var/backups/wangzhe}"
+BACKUP_CRYPTO_ENV="${BACKUP_CRYPTO_ENV:-/etc/wangzhe/backup-crypto.env}"
+BACKUP_INTEGRITY_ENV=/etc/wangzhe/monitor.env
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/wangzhe/database}"
+PITR_CLUSTER_ID_FILE="${PITR_CLUSTER_ID_FILE:-/etc/wangzhe/pitr-cluster-id}"
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-90}"
 PUBLIC_URL="${PUBLIC_URL:-https://wz6688.app}"
 ADMIN_URL="${ADMIN_URL:-https://admin.wz6688.app}"
@@ -82,6 +96,14 @@ case "$BACKUP_DIR" in
   /|/opt|/var|/var/backups) echo "备份目录范围过宽：$BACKUP_DIR" >&2; exit 1 ;;
 esac
 [[ "$BACKUP_DIR" == /* ]] || { echo "BACKUP_DIR 必须是绝对路径" >&2; exit 1; }
+[[ -f "$PITR_CLUSTER_ID_FILE" && ! -L "$PITR_CLUSTER_ID_FILE" && "$(stat -c '%u' "$PITR_CLUSTER_ID_FILE")" == 0 && -z "$(find "$PITR_CLUSTER_ID_FILE" -perm /022 -print -quit)" ]] || {
+  echo "PITR 集群标识文件必须是 root 所有且不可被非 root 修改的普通文件" >&2
+  exit 1
+}
+read -r pitr_cluster_id pitr_cluster_extra <"$PITR_CLUSTER_ID_FILE" || { echo "无法读取 PITR 集群标识" >&2; exit 1; }
+[[ "$pitr_cluster_id" =~ ^[0-9]{10,30}$ && -z "${pitr_cluster_extra:-}" ]] || { echo "PITR 集群标识必须是 PostgreSQL system identifier" >&2; exit 1; }
+PITR_WAL_DIR="/var/backups/wangzhe/wal/$pitr_cluster_id"
+PITR_BASEBACKUP_DIR="/var/backups/wangzhe/base/$pitr_cluster_id"
 validate_secure_source_path() {
   local candidate="$1" mode mode_value
   while :; do
@@ -129,9 +151,24 @@ for required_file in \
   scripts/production-readiness.sh \
   scripts/production-rollback.sh \
   scripts/postgres-backup.sh \
+  scripts/upload-backup.sh \
+  scripts/postgres-archive-wal.sh \
+  scripts/postgres-base-backup.sh \
+  scripts/postgres-restore-wal.sh \
+  scripts/pitr-recovery-source-sync.sh \
+  scripts/production-restore-drill.sh \
+  scripts/production-pitr-restore-drill.sh \
+  scripts/publish-pitr-drill-status.sh \
+  scripts/production-unit-failure-alert.sh \
+  scripts/production-monitor.sh \
+  scripts/production-backup-integrity.sh \
+  scripts/production-recovery-evidence-check.sh \
+  scripts/redis-production-check.sh \
   scripts/lib/backend-env.sh \
   scripts/lib/safe-integer.sh \
-  scripts/lib/maintenance-edge.sh; do
+  scripts/lib/maintenance-edge.sh \
+  scripts/lib/strict-env.sh \
+  scripts/lib/encrypted-backup.sh; do
   [[ -f "$SOURCE_DIR/$required_file" ]] || { echo "发布包缺少 $required_file" >&2; exit 1; }
 done
 for executable in \
@@ -141,7 +178,20 @@ for executable in \
   scripts/release-integrity.sh \
   scripts/production-readiness.sh \
   scripts/production-rollback.sh \
-  scripts/postgres-backup.sh; do
+  scripts/postgres-backup.sh \
+  scripts/upload-backup.sh \
+  scripts/postgres-archive-wal.sh \
+  scripts/postgres-base-backup.sh \
+  scripts/postgres-restore-wal.sh \
+  scripts/pitr-recovery-source-sync.sh \
+  scripts/production-restore-drill.sh \
+  scripts/production-pitr-restore-drill.sh \
+  scripts/publish-pitr-drill-status.sh \
+  scripts/production-unit-failure-alert.sh \
+  scripts/production-monitor.sh \
+  scripts/production-backup-integrity.sh \
+  scripts/production-recovery-evidence-check.sh \
+  scripts/redis-production-check.sh; do
   [[ -x "$SOURCE_DIR/$executable" ]] || { echo "发布文件不可执行：$executable" >&2; exit 1; }
 done
 "$TRUSTED_SCRIPT_DIR/release-integrity.sh" verify "$SOURCE_DIR"
@@ -152,13 +202,16 @@ case "$(uname -m)" in
   *) echo "不支持的服务器架构：$(uname -m)" >&2; exit 1 ;;
 esac
 [[ "$release_target" == "$host_target" ]] || {
-  echo "发布包目标为 $release_target，当前服务器需要 $host_target" >&2
+  echo "发布包目标为 ${release_target}，当前服务器需要 $host_target" >&2
   exit 1
 }
 [[ -f "$APP_ENV" && ! -L "$APP_ENV" ]] || { echo "应用环境文件无效：$APP_ENV" >&2; exit 1; }
 [[ -f "$BACKUP_ENV" && ! -L "$BACKUP_ENV" ]] || { echo "备份环境文件无效：$BACKUP_ENV" >&2; exit 1; }
+[[ -f "$BACKUP_CRYPTO_ENV" && ! -L "$BACKUP_CRYPTO_ENV" ]] || { echo "备份加密环境文件无效：$BACKUP_CRYPTO_ENV" >&2; exit 1; }
+[[ -f "$BACKUP_INTEGRITY_ENV" && ! -L "$BACKUP_INTEGRITY_ENV" ]] || { echo "备份完整性环境文件无效：$BACKUP_INTEGRITY_ENV" >&2; exit 1; }
 id wangzhe >/dev/null 2>&1 || { echo "缺少系统用户 wangzhe" >&2; exit 1; }
 id wangzhe-backup >/dev/null 2>&1 || { echo "缺少系统用户 wangzhe-backup" >&2; exit 1; }
+id wangzhe-monitor >/dev/null 2>&1 || { echo "缺少系统用户 wangzhe-monitor" >&2; exit 1; }
 
 exec 9>/run/lock/wangzhe-deploy.lock
 flock -n 9 || { echo "另一个发布或回滚仍在进行" >&2; exit 1; }
@@ -224,9 +277,33 @@ fi
 echo "发布前创建并验证数据库备份"
 runuser --user wangzhe-backup -- \
   env -i PATH=/usr/bin:/bin HOME=/var/backups/wangzhe \
-  BACKUP_DIR="$BACKUP_DIR" BACKUP_RETENTION_DAYS=14 \
   APPLICATION_DATABASE_USER="$BACKEND_DATABASE_USER" \
-  "$TRUSTED_SCRIPT_DIR/postgres-backup.sh" "$BACKUP_ENV"
+  "$TRUSTED_SCRIPT_DIR/postgres-backup.sh" "$BACKUP_ENV" "$BACKUP_CRYPTO_ENV"
+
+echo "发布前创建并验证上传目录备份"
+runuser --user wangzhe-backup -- \
+  env -i PATH=/usr/bin:/bin HOME=/var/backups/wangzhe \
+  "$TRUSTED_SCRIPT_DIR/upload-backup.sh" "$BACKUP_CRYPTO_ENV"
+
+# A local .offsite-ok only proves that one historical upload readback once
+# succeeded. Before installing or switching any candidate, use the dedicated
+# monitor identity and its read/list-only rclone credential to read the remote
+# ciphertext and evidence again. The reused integrity checker validates all
+# four classes (database, uploads, PITR basebackup and every retained WAL),
+# including complete SHA-256 and Ed25519 provenance bindings. Any network,
+# IAM, object-set, digest or signature failure aborts before release mutation.
+echo "发布前实时回读并验签远端四类备份制品"
+timeout 12h runuser --user wangzhe-monitor -- \
+  env -i PATH=/usr/bin:/bin HOME=/var/lib/wangzhe-monitor \
+  "$TRUSTED_SCRIPT_DIR/production-backup-integrity.sh" "$BACKUP_INTEGRITY_ENV"
+
+# A successful upload is not proof that either recovery path still works.
+# Download the independently signed logical and PITR drill status bundles with
+# a dedicated status-only reader and bind them to this production database,
+# object prefixes and PostgreSQL system_identifier. This runs from the
+# root-protected trust anchor before any release directory or link is mutated.
+echo "发布前验证近期逻辑恢复与 PITR 演练证据"
+timeout 10m "$TRUSTED_SCRIPT_DIR/production-recovery-evidence-check.sh"
 
 install -d -o root -g root -m 0755 /opt/wangzhe "$RELEASE_ROOT"
 staging="$RELEASE_ROOT/.staging-$RELEASE_ID-$$"
@@ -286,7 +363,7 @@ systemctl reset-failed wangzhe-backend.service || true
 if ! systemctl restart wangzhe-backend.service; then
   systemctl stop wangzhe-backend.service || true
   echo "新版本启动失败。它可能已经提交迁移，因此保持维护模式、新版本链接并停止服务，不自动启动旧代码。" >&2
-  [[ -n "$previous_target" ]] && echo "上一版仍保存在 $PREVIOUS_LINK；核对迁移兼容性后再人工回滚。" >&2
+  [[ -n "$previous_target" ]] && echo "上一版仍保存在 ${PREVIOUS_LINK}；核对迁移兼容性后再人工回滚。" >&2
   exit 1
 fi
 
@@ -298,7 +375,8 @@ if ! wait_for_backend; then
 fi
 
 if ! env -i PATH=/usr/bin:/bin HOME=/root \
-  BACKEND_URL="http://${BACKEND_SERVER_BIND}:${BACKEND_SERVER_PORT}" BACKUP_DIR="$BACKUP_DIR" ALLOW_MAINTENANCE_503=1 \
+  BACKEND_URL="http://${BACKEND_SERVER_BIND}:${BACKEND_SERVER_PORT}" BACKUP_DIR="$BACKUP_DIR" \
+  PITR_WAL_DIR="$PITR_WAL_DIR" PITR_BASEBACKUP_DIR="$PITR_BASEBACKUP_DIR" ALLOW_MAINTENANCE_503=1 \
   "$TRUSTED_SCRIPT_DIR/production-readiness.sh" "$APP_ENV"; then
   systemctl stop wangzhe-backend.service || true
   echo "完整生产门禁失败；保持维护模式并停止新版本，未盲目切换旧代码" >&2
@@ -314,6 +392,8 @@ fi
 echo "发布成功：$RELEASE_ID"
 echo "当前版本：$target"
 [[ -n "$previous_target" ]] && echo "可回滚版本：$previous_target"
+# Initialized by sourced maintenance-edge.sh.
+# shellcheck disable=SC2154
 if (( maintenance_was_active == 1 )); then
   echo "发布前已有维护标记，已按原样保留。"
 fi

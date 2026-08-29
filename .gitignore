@@ -4,6 +4,8 @@ dist/
 dist-ssr/
 .vite/
 coverage/
+playwright-report/
+test-results/
 release/
 .backups/
 .local-logs/
@@ -20,9 +22,15 @@ backend/config/config.yaml
 *.key
 *.p12
 *.pfx
+*.agekey
+*age-identity*.txt
+rclone.conf
+*-rclone.conf
 .pgpass
 *.dump
 *.dump.sha256
+*.dump.age*
+*.tar.age*
 
 # Go build output
 bin/

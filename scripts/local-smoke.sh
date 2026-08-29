@@ -18,7 +18,7 @@ if [[ "$(printf '%s' "$first_bets" | jq -r '.data.has_more')" == "true" ]]; then
 	[[ "$second_first_id" -gt 0 && "$second_first_id" -lt "$first_last_id" ]]
 fi
 
-admin_token="$(curl -fsS -H 'Content-Type: application/json' -d '{"username":"admin","password":"123456"}' "$API/login" | jq -r '.data.token')"
+admin_token="$(curl -fsS -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin8801!"}' "$API/login" | jq -r '.data.token')"
 reconciliation="$(curl -fsS -H "Authorization: Bearer $admin_token" "$API/admin/reconciliation")"
 [[ "$(printf '%s' "$reconciliation" | jq -r '.code')" == "200" ]]
 

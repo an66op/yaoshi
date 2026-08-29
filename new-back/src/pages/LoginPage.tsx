@@ -17,6 +17,13 @@ import StorefrontRounded from '@mui/icons-material/StorefrontRounded'
 import { useState } from 'react'
 import { adminApi } from '../api'
 import { clearLegacyAdminSession, type AuthUser } from '../auth'
+import {
+  MANAGEMENT_LOGIN_PASSWORD_MAX_BYTES,
+  MANAGEMENT_LOGIN_USERNAME_MAX_RUNES,
+  MANAGEMENT_LOGIN_WORKSPACE_MAX_RUNES,
+  truncateCodePoints,
+  validateManagementLoginInput,
+} from '../loginLimits'
 
 type LoginIdentity = 'platform' | 'tenant' | 'agent'
 
@@ -33,7 +40,7 @@ const identityOptions: Array<{
 ]
 
 const localPresets: Partial<Record<LoginIdentity, { workspace: string; username: string; password: string }>> = import.meta.env.DEV ? {
-  platform: { workspace: '平台', username: 'admin', password: '123456' },
+  platform: { workspace: '平台', username: 'admin', password: 'Admin8801!' },
   tenant: { workspace: '平台', username: 'wangzhetenant', password: 'WzTenant8801' },
   agent: { workspace: 'wangzhetenant', username: 'suyang', password: 'Room8801' },
 } : {}
@@ -61,6 +68,11 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
+    const validationError = validateManagementLoginInput(username, password, workspace)
+    if (validationError) {
+      setError(validationError)
+      return
+    }
     setLoading(true)
     setError('')
     try {
@@ -125,13 +137,13 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
               label={identity === 'agent' ? '所属租户' : '所属平台'}
               helperText={identity === 'agent' ? '代理使用所属租户的登录账号；其他代理可在这里修改' : '平台管理员和租户统一归属平台'}
               value={workspace}
-              onChange={event => setWorkspace(event.target.value)}
+              onChange={event => setWorkspace(truncateCodePoints(event.target.value, MANAGEMENT_LOGIN_WORKSPACE_MAX_RUNES))}
               autoComplete="organization"
               disabled={identity !== 'agent'}
               required
             />
-            <TextField label="登录帐号" value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required />
-            <TextField label="密码" type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required />
+            <TextField label="登录帐号" value={username} onChange={event => { setUsername(truncateCodePoints(event.target.value, MANAGEMENT_LOGIN_USERNAME_MAX_RUNES)); setError('') }} autoComplete="username" required />
+            <TextField label="密码" type="password" value={password} onChange={event => { setPassword(event.target.value); setError('') }} autoComplete="current-password" slotProps={{ htmlInput: { maxLength: MANAGEMENT_LOGIN_PASSWORD_MAX_BYTES } }} required />
             <Button type="submit" variant="contained" size="large" disabled={loading || !username.trim() || !password}>
               {loading ? <CircularProgress size={22} color="inherit" /> : `登录${identityOptions.find(item => item.id === identity)?.label ?? ''}`}
             </Button>

@@ -322,6 +322,19 @@ func (h *memberHandler) JoinRoom(c *gin.Context) {
 		constants.SendSuccess(c, http.StatusAccepted, "入房申请已提交，请等待审核", result)
 		return
 	}
+	// Activating a room membership changes the account's authorization scope.
+	// The database trigger therefore advances auth_version and invalidates the
+	// request token. Reissue from the committed PostgreSQL value so the very
+	// next member request does not fail with a misleading 401.
+	account, err := h.auth.GetByID(userID)
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "刷新入房登录状态失败", err)
+		return
+	}
+	if err := writeVersionedSessionCookie(c, sessionauth.ScopeMember, account.UserID, account.AuthVersion); err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "刷新入房登录状态失败", err)
+		return
+	}
 	constants.SendSuccess(c, http.StatusOK, "已进入房间", result)
 }
 

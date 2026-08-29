@@ -68,7 +68,7 @@ jobs:
       - name: Reject local demo passwords in production assets
         working-directory: ${{ matrix.app }}
         run: |
-          if grep -R -E '123456|Wz888888|WzTenant8801|Room8801' dist; then
+          if grep -R -E '123456|Admin8801!|Wz888888|WzTenant8801|Room8801' dist; then
             echo 'Production assets contain a local demo password.' >&2
             exit 1
           fi
@@ -84,6 +84,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes shellcheck
+          shellcheck --version
       - name: Validate scripts and deployment invariants
         run: make readiness-test
       - name: Reject malformed patches

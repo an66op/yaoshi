@@ -26,10 +26,18 @@ for command_name in go npm curl jq; do
   command -v "$command_name" >/dev/null 2>&1 || { echo "缺少命令：$command_name" >&2; exit 1; }
 done
 
-if command -v pg_isready >/dev/null 2>&1; then
-  pg_isready -h "$BACKEND_DATABASE_HOST" -p "$BACKEND_DATABASE_PORT" -U "$BACKEND_DATABASE_USER" -d "$BACKEND_DATABASE_DBNAME" >/dev/null
-elif [[ -x /Library/PostgreSQL/17/bin/pg_isready ]]; then
-  /Library/PostgreSQL/17/bin/pg_isready -h "$BACKEND_DATABASE_HOST" -p "$BACKEND_DATABASE_PORT" -U "$BACKEND_DATABASE_USER" -d "$BACKEND_DATABASE_DBNAME" >/dev/null
+postgres_ready_cmd="$(command -v pg_isready || true)"
+if [[ -z "$postgres_ready_cmd" ]]; then
+  for postgres_bin_dir in /Library/PostgreSQL/*/bin; do
+    if [[ -x "$postgres_bin_dir/pg_isready" ]]; then
+      postgres_ready_cmd="$postgres_bin_dir/pg_isready"
+      break
+    fi
+  done
+fi
+
+if [[ -n "$postgres_ready_cmd" ]]; then
+  "$postgres_ready_cmd" -h "$BACKEND_DATABASE_HOST" -p "$BACKEND_DATABASE_PORT" -U "$BACKEND_DATABASE_USER" -d "$BACKEND_DATABASE_DBNAME" >/dev/null
 else
   echo "未找到 pg_isready，请先确认 PostgreSQL 已启动" >&2
   exit 1
@@ -50,7 +58,7 @@ start_if_free() {
     exec "$@"
   ) >"$LOG_DIR/$name.log" 2>&1 &
   pids+=("$!")
-  echo "$name 正在启动：端口 $port，日志 $LOG_DIR/$name.log"
+  echo "$name 正在启动：端口 ${port}，日志 $LOG_DIR/$name.log"
 }
 
 start_if_free 8080 backend "$ROOT_DIR/backend" go run main.go

@@ -46,6 +46,9 @@ const upcomingEntertainment: Record<'捕鱼' | '体育' | '真人' | '电子' | 
 
 export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gamesLive, gamesError, onOpenGame, onToggleTheme, onSwitchRoom }: Props) {
   const categoryRailRef = useRef<HTMLDivElement>(null)
+  const roomSwitcherDialogRef = useRef<HTMLElement>(null)
+  const roomSwitcherTriggerRef = useRef<HTMLButtonElement>(null)
+  const roomCodeInputRef = useRef<HTMLInputElement>(null)
   const [announcementOpen, setAnnouncementOpen] = useState(false)
   const [filter, setFilter] = useState<Filter>('彩票')
   const [roomSwitcherOpen, setRoomSwitcherOpen] = useState(false)
@@ -82,6 +85,7 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
   }
 
   const submitRoomCode = () => {
+    if (switchingRoom) return
     const roomCode = roomCodeInput.trim()
     if (!/^\d{5,12}$/.test(roomCode)) {
       setRoomSwitchError('请输入 5–12 位数字房间号')
@@ -128,16 +132,44 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
 
   useEffect(() => {
     if (!roomSwitcherOpen) return
+    const previousBodyOverflow = document.body.style.overflow
+    const roomSwitcherTrigger = roomSwitcherTriggerRef.current
+    document.body.style.overflow = 'hidden'
+    const focusFrame = requestAnimationFrame(() => {
+      const mobileLayout = window.matchMedia('(max-width: 480px), (pointer: coarse)').matches
+      if (mobileLayout) {
+        roomSwitcherDialogRef.current?.querySelector<HTMLButtonElement>('header > button')?.focus()
+        return
+      }
+      roomCodeInputRef.current?.focus()
+    })
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setRoomSwitcherOpen(false)
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(roomSwitcherDialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])') || [])
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', closeOnEscape)
-    return () => window.removeEventListener('keydown', closeOnEscape)
+    return () => {
+      cancelAnimationFrame(focusFrame)
+      document.body.style.overflow = previousBodyOverflow
+      window.removeEventListener('keydown', closeOnEscape)
+      roomSwitcherTrigger?.focus()
+    }
   }, [roomSwitcherOpen])
 
   return <>
     <header className="lobby-hero">
-      <div className="hero-top"><span className="brand-word brand-logo"><img alt={BRAND_NAME} src="/images/wangzhe-header-logo.png" /></span><button className="room-cluster" aria-expanded={roomSwitcherOpen} aria-label={`切换房间，当前房间 ${room}，${roomName}`} onClick={() => { setRoomSwitchError(''); setRoomSwitcherOpen((open) => !open) }}><Icon name="room" /><span className="room-cluster-copy"><b>{room}</b><small>{roomName || '当前房间'}</small></span><Icon name="arrow" /></button><div className="hero-tools"><button className="theme-switch" onClick={onToggleTheme} aria-label="切换昼夜模式">{theme === 'day' ? '☾' : '☀'}</button></div></div>
+      <div className="hero-top"><span className="brand-word brand-logo"><img alt={BRAND_NAME} src="/images/wangzhe-header-logo.png" /></span><button className="room-cluster" aria-expanded={roomSwitcherOpen} aria-haspopup="dialog" aria-label={`切换房间，当前房间 ${room}，${roomName}`} onClick={() => { setRoomSwitchError(''); setRoomSwitcherOpen((open) => !open) }} ref={roomSwitcherTriggerRef}><Icon name="room" /><span className="room-cluster-copy"><b>{room}</b><small>{roomName || '当前房间'}</small></span><Icon name="arrow" /></button><div className="hero-tools"><button className="theme-switch" onClick={onToggleTheme} aria-label="切换昼夜模式">{theme === 'day' ? '☾' : '☀'}</button></div></div>
       {announcements.length > 0 && <button className="announcement lobby-announcement" onClick={() => { setDialogAnnouncements(announcements); setAnnouncementOpen(true) }}><span className="announcement-badge">公告</span><p><b>{announcements[0]?.title || '大厅公告'}</b><small>{roomNotice}</small></p>{announcements.length > 1 && <em className="announcement-count">{announcements.length}</em>}<Icon name="arrow" /></button>}
     </header>
     <section className="lobby-body">
@@ -149,16 +181,39 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
     </section>
     {roomSwitcherOpen && createPortal(
       <div className={`room-switcher-layer theme-${theme}`} role="presentation" onClick={() => setRoomSwitcherOpen(false)}>
-        <section className="room-switcher" role="dialog" aria-modal="true" aria-label="切换房间" onClick={(event) => event.stopPropagation()}>
+        <section aria-labelledby="room-switcher-title" className="room-switcher" ref={roomSwitcherDialogRef} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
           <header>
-            <div><small>ROOM CENTER</small><b>切换房间</b><em>当前 {room} · {roomName || room}</em></div>
-            <button aria-label="关闭房间列表" onClick={() => setRoomSwitcherOpen(false)}>×</button>
+            <div><small>ROOM CENTER</small><b id="room-switcher-title">切换房间</b><em>当前 {room} · {roomName || room}</em></div>
+            <button aria-label="关闭房间列表" onClick={() => setRoomSwitcherOpen(false)} type="button">×</button>
           </header>
-          <form className="room-switcher-entry" onSubmit={(event) => { event.preventDefault(); submitRoomCode() }}>
+          <form className="room-switcher-entry" noValidate onSubmit={(event) => { event.preventDefault(); submitRoomCode() }}>
             <label htmlFor="room-code-input">输入其他房间号</label>
-            <div><input autoComplete="off" disabled={Boolean(switchingRoom)} id="room-code-input" inputMode="numeric" minLength={5} maxLength={12} onChange={(event) => { setRoomCodeInput(event.target.value.replace(/\D/g, '')); setRoomSwitchError('') }} placeholder="例如 88001" value={roomCodeInput} /><button aria-label="进入房间" disabled={Boolean(switchingRoom)} type="submit">{switchingRoom && switchingRoom === roomCodeInput ? '…' : <Icon name="arrow" />}</button></div>
+            <div className="room-switcher-entry-row">
+              <input
+                aria-describedby={roomSwitchError ? 'room-code-error' : undefined}
+                aria-busy={Boolean(switchingRoom)}
+                aria-invalid={Boolean(roomSwitchError) || undefined}
+                autoComplete="off"
+                enterKeyHint="go"
+                id="room-code-input"
+                inputMode="numeric"
+                maxLength={12}
+                minLength={5}
+                onChange={(event) => { setRoomCodeInput(event.currentTarget.value.replace(/\D/g, '').slice(0, 12)); setRoomSwitchError('') }}
+                pattern="[0-9]{5,12}"
+                placeholder="请输入 5–12 位房间号"
+                readOnly={Boolean(switchingRoom)}
+                ref={roomCodeInputRef}
+                spellCheck={false}
+                type="text"
+                value={roomCodeInput}
+              />
+              <button aria-busy={Boolean(switchingRoom)} aria-label={switchingRoom ? '正在进入房间' : '进入输入的房间'} className="room-switcher-submit" disabled={Boolean(switchingRoom)} type="submit">
+                {switchingRoom && switchingRoom === roomCodeInput ? <span aria-hidden="true" className="room-switcher-submit-loading" /> : <Icon name="arrow" />}
+              </button>
+            </div>
           </form>
-          {roomSwitchError && <small className="room-switcher-error">{roomSwitchError}</small>}
+          {roomSwitchError && <small className="room-switcher-error" id="room-code-error" role="alert">{roomSwitchError}</small>}
           <div className="room-switcher-recent-title"><span><b>我的房间</b><small>当前房间置顶 · 最近进入排序</small></span><em>{roomEntries.length} 个房间</em></div>
           <div className="room-switcher-list">{roomEntries.map((item, index) => {
             const disabled = item.status === 'disabled'

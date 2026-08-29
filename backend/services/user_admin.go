@@ -50,6 +50,7 @@ type AdminUser struct {
 	TenantName       string     `json:"tenant_name"`
 	LoginIdentity    string     `json:"login_identity"`
 	Status           int        `json:"status"`
+	Online           bool       `json:"online"`
 	LastLoginAt      *time.Time `json:"last_login_at"`
 	LoginCount       int        `json:"login_count"`
 	CreatedAt        time.Time  `json:"created_at"`
@@ -276,6 +277,7 @@ func (s *UserAdminService) List(filter UserListFilter) (*UserList, error) {
 	for _, row := range rows {
 		items = append(items, adminUser(row))
 	}
+	populateAdminUserPresence(items)
 	if err := s.enrichOwnership(items); err != nil {
 		return nil, err
 	}
@@ -333,6 +335,7 @@ func (s *UserAdminService) Get(id uint64) (*AdminUser, error) {
 	}
 	result := adminUser(row)
 	items := []AdminUser{result}
+	populateAdminUserPresence(items)
 	if err := s.enrichOwnership(items); err != nil {
 		return nil, err
 	}
@@ -1203,6 +1206,19 @@ func adminUser(row user.User) AdminUser {
 		RobotActiveStart: row.RobotActiveStart, RobotActiveEnd: row.RobotActiveEnd,
 		RobotMinBet: centsToAmount(row.RobotMinBetCents), RobotMaxBet: centsToAmount(row.RobotMaxBetCents),
 		WorkspaceID: row.WorkspaceID,
+	}
+}
+
+func populateAdminUserPresence(items []AdminUser) {
+	userIDs := make([]uint64, 0, len(items))
+	for _, item := range items {
+		if item.ID != 0 {
+			userIDs = append(userIDs, item.ID)
+		}
+	}
+	online := ws.OnlineUsers(userIDs)
+	for index := range items {
+		items[index].Online = online[items[index].ID]
 	}
 }
 

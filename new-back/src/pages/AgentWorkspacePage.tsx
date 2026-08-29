@@ -1,7 +1,7 @@
 import {
   Alert, Avatar, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
   Divider, FormControlLabel, List, ListItemButton, ListItemText, MenuItem, Paper, Stack, Switch, Table, TableBody,
-  TableCell, TableContainer, TableHead, TablePagination, TableRow, Tab, Tabs, TextField, Typography,
+  TableCell, TableContainer, TableHead, TablePagination, TableRow, Tab, Tabs, TextField, Typography, Skeleton,
 } from '@mui/material'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import CardGiftcardRounded from '@mui/icons-material/CardGiftcardRounded'
@@ -16,6 +16,7 @@ import { useFeedback } from '../components/feedback'
 import { OperatingReportPanel } from '../components/OperatingReportPanel'
 import { GameOddsNavigation, OddsOverrideGrid } from '../components/OddsEditors'
 import { AdminRedPacketCard, RedPacketForm, type RedPacketCover } from '../components/RedPacketForm'
+import { UserPresenceChip } from '../components/UserPresenceChip'
 import { gameLogo } from '../gameLogos'
 import { MANAGEMENT_WS_EVENT, useManagementWebSocketConnected } from '../hooks/useManagementWebSocket'
 import { prepareRoomLogo } from '../utils/roomLogo'
@@ -79,6 +80,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
   const [reply, setReply] = useState('')
   const [robotRunning, setRobotRunning] = useState(false)
   const [chatMode, setChatMode] = useState<'service' | 'room'>('service')
+  const [transitioningChatMode, setTransitioningChatMode] = useState<'service' | 'room' | null>(null)
   const [redPacketOpen, setRedPacketOpen] = useState(false)
   const [redPacketCount, setRedPacketCount] = useState('10')
   const [redPacketTotal, setRedPacketTotal] = useState('100')
@@ -132,6 +134,8 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
   const markedThroughRef = useRef(new Map<string, number>())
   const loadedConversationRef = useRef<AdminChatConversation | null>(null)
   const connectionStatusInitialized = useRef(false)
+  const loadRequestRef = useRef(0)
+  const chatMessageRequestRef = useRef(0)
   useEffect(() => { selectedRef.current = selected }, [selected])
   const focusConversation = useCallback((target: ChatConversationTarget) => {
     if (!chatSection || chatPageForTarget(target) !== (lotteryChat ? '/lottery-chat' : '/chat')) return
@@ -156,14 +160,17 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
   }, [chatSection, selected])
   useEffect(() => () => setActiveChatConversation(null), [])
 
-  const load = useCallback(async () => {
-    setLoading(true); setError('')
+  const load = useCallback(async (blocking = true) => {
+    const requestID = ++loadRequestRef.current
+    if (blocking) setLoading(true)
+    setError('')
     try {
       const [head, settings, roomGames] = await Promise.all([
         roomApi.dashboard(),
         roomApi.settings(),
         chatSection || section === 'users' ? roomApi.games() : Promise.resolve<WorkspaceGame[]>([]),
       ])
+      if (requestID !== loadRequestRef.current) return
       // System settings are backed by the workspace record and are the public
       // room identity. Do not fall back to the legacy account room_name/logo.
       const authoritativeHead = { ...head, room_name: settings.room_name, room_logo: settings.room_logo }
@@ -174,45 +181,78 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
       if (chatSection || section === 'users') setGames(Array.isArray(roomGames) ? roomGames : [])
       if (section === 'users') {
         const result = await roomApi.users({ query, page: page + 1, pageSize })
+        if (requestID !== loadRequestRef.current) return
         setUsers(Array.isArray(result?.items) ? result.items : []); setTotal(Number(result?.total) || 0)
       }
       if (section === 'applications' || section === 'room-reviews') {
         const result = await roomApi.applications({ query, type: applicationCategory, page: page + 1, pageSize })
+        if (requestID !== loadRequestRef.current) return
         setApplications(Array.isArray(result?.items) ? result.items : []); setTotal(Number(result?.total) || 0)
       }
       if (section === 'bets') {
         const result = await roomApi.bets({ query, page: page + 1, pageSize })
+        if (requestID !== loadRequestRef.current) return
         setBets(Array.isArray(result?.items) ? result.items : []); setTotal(Number(result?.total) || 0)
       }
       if (chatSection) {
         const channel = lotteryChat ? 'lottery' : chatMode
         const result = await roomApi.chatConversations({ query, channel, roomType: channel === 'service' ? 'service' : 'group' })
+        if (requestID !== loadRequestRef.current) return
         const rows = Array.isArray(result?.items) ? result.items : []
+        const current = selectedRef.current
+        const pending = pendingTargetRef.current
+        const targetMatch = pending ? rows.find(row => sameConversation(pending as AdminChatConversation, row)) : undefined
+        const currentMatch = current ? rows.find(row => sameConversation(current, row)) : undefined
+        const nextSelected = targetMatch ?? (currentMatch && current ? current : rows[0] ?? null)
+        if (targetMatch) pendingTargetRef.current = null
         setConversations(rows)
-        setSelected(current => {
-          const pending = pendingTargetRef.current
-          const targetMatch = pending ? rows.find(row => sameConversation(pending as AdminChatConversation, row)) : undefined
-          if (targetMatch) {
-            pendingTargetRef.current = null
-            return targetMatch
-          }
-          if (!current) return rows[0] ?? null
-          const match = rows.find(row => sameConversation(current, row))
-          // A conversation-list refresh must not remount the open timeline.
-          return match ? current : rows[0] ?? null
-        })
+        if (!nextSelected || !sameConversation(current, nextSelected)) {
+          chatMessageRequestRef.current += 1
+          setMessages([])
+          setChatHasMore(false)
+          setChatNextBeforeID(undefined)
+          setChatLoading(Boolean(nextSelected))
+        }
+        setSelected(nextSelected)
       }
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '读取房间数据失败') }
-    finally { setLoading(false) }
+    } catch (reason) {
+      if (requestID === loadRequestRef.current) {
+        setError(reason instanceof Error ? reason.message : '读取房间数据失败')
+        if (chatSection && blocking) {
+          // Do not expose an old conversation beneath a newly selected tab.
+          chatMessageRequestRef.current += 1
+          setConversations([])
+          setSelected(null)
+          setMessages([])
+          setChatHasMore(false)
+          setChatNextBeforeID(undefined)
+          setChatLoading(false)
+        }
+      }
+    }
+    finally {
+      if (requestID === loadRequestRef.current) {
+        setLoading(false)
+        setTransitioningChatMode(null)
+      }
+    }
   }, [applicationCategory, chatMode, chatSection, lotteryChat, page, pageSize, query, roomApi, section])
 
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load])
+  useEffect(() => {
+    if (section !== 'users') return
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void load(false)
+    }, 25_000)
+    return () => window.clearInterval(timer)
+  }, [load, section])
   useEffect(() => {
     if (!lotteryChat) return
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [lotteryChat])
   const loadChatMessages = useCallback(async (conversation: AdminChatConversation, mode: 'initial' | 'latest' | 'older' = 'initial', beforeId?: number) => {
+    const requestID = ++chatMessageRequestRef.current
     setChatLoading(true)
     try {
       const result = await roomApi.chatMessages({
@@ -223,7 +263,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
         beforeId: mode === 'older' ? beforeId : undefined,
         limit: 50,
       })
-      if (!sameConversation(selectedRef.current, conversation)) return
+      if (requestID !== chatMessageRequestRef.current || !sameConversation(selectedRef.current, conversation)) return
       const items = Array.isArray(result?.items) ? result.items : []
       setMessages(current => mode === 'initial' ? mergeAdminChatMessages(items) : mergeAdminChatMessages(current, items))
       if (mode !== 'latest') {
@@ -231,8 +271,8 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
         setChatNextBeforeID(result?.next_before_id)
       }
       setError('')
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '聊天记录暂时未加载') }
-    finally { setChatLoading(false) }
+    } catch (reason) { if (requestID === chatMessageRequestRef.current) setError(reason instanceof Error ? reason.message : '聊天记录暂时未加载') }
+    finally { if (requestID === chatMessageRequestRef.current) setChatLoading(false) }
   }, [roomApi])
 
   useEffect(() => {
@@ -279,7 +319,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
         && data.room_type === current.room_type) {
         void loadChatMessages(current, 'latest')
       }
-      void load()
+      void load(false)
     }
     window.addEventListener(MANAGEMENT_WS_EVENT, onRealtime)
     return () => window.removeEventListener(MANAGEMENT_WS_EVENT, onRealtime)
@@ -290,14 +330,14 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
     const current = selectedRef.current
     if (connectionStatusInitialized.current && current) {
       void loadChatMessages(current, 'latest')
-      void load()
+      void load(false)
     }
     connectionStatusInitialized.current = true
     if (websocketConnected) return
     const timer = window.setInterval(() => {
       const active = selectedRef.current
       if (active) void loadChatMessages(active, 'latest')
-      void load()
+      void load(false)
     }, 15_000)
     return () => window.clearInterval(timer)
   }, [chatSection, load, loadChatMessages, websocketConnected])
@@ -499,12 +539,12 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
     }
   }
   const sendReply = async () => {
-    if (!selected || !reply.trim()) return
+    if (!selected || !reply.trim() || loading || transitioningChatMode) return
     try { const row = await roomApi.replyChat({ scope: selected.scope, room_scope: selected.room_scope, game_id: selected.game_id, room_type: selected.room_type, content: reply.trim() }); setMessages(current => [...current, row]); setReply('') }
     catch (reason) { showMessage(reason instanceof Error ? reason.message : '发送失败', 'error') }
   }
   const openRedPacket = () => {
-    if (lotteryChat || !selected || selected.room_type !== 'group') return
+    if (lotteryChat || loading || transitioningChatMode || !selected || selected.room_type !== 'group') return
     setRedPacketCount('10')
     setRedPacketTotal('100')
     setRedPacketGreeting('恭喜发财')
@@ -516,13 +556,13 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
   const sendRedPacket = async () => {
     const count = Number(redPacketCount)
     const total = Number(redPacketTotal)
-    if (lotteryChat || !selected || !Number.isInteger(count) || count < 1 || total < count * .01) return
+    if (lotteryChat || loading || transitioningChatMode || !selected || !Number.isInteger(count) || count < 1 || total < count * .01) return
     try { const row = await roomApi.sendChatRedPacket({ request_id: redPacketRequestID.current, game_id: selected.game_id, count, total_amount: total, min_daily_turnover: Math.max(0, Number(redPacketMinTurnover) || 0), greeting: redPacketGreeting.trim() || '恭喜发财', cover: redPacketCover }); setMessages(current => mergeAdminChatMessages(current, [row])); redPacketRequestID.current = createRequestId(); setRedPacketOpen(false); showMessage('红包已发送到当前聊天室') }
     catch (reason) { showMessage(reason instanceof Error ? reason.message : '发送红包失败', 'error') }
   }
   return <Box p={{ xs: 1.5, md: 2.5 }}>
     {error && <Alert severity="error" sx={{ mb: 2 }} action={<Button onClick={() => { void load(); const current = selectedRef.current; if (current) void loadChatMessages(current, 'latest') }}>重试</Button>}>{error}</Alert>}
-    {loading && <Box py={1}><CircularProgress size={20} /></Box>}
+    {loading && !chatSection && <Box py={1}><CircularProgress size={20} /></Box>}
 
     {section === 'dashboard' && <>
       <Card sx={{ mb: 2 }}><CardContent><Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ md: 'center' }} gap={1.5}><Avatar src={roomLogo || undefined} variant="rounded" sx={{ width: 64, height: 64, color: '#fff', background: roomLogo ? undefined : identityGradient, fontWeight: 900, fontSize: 24, boxShadow: '0 4px 12px rgba(37,99,235,.22)' }}>{(roomName || '房').slice(0, 1)}</Avatar><Box flex={1}><Typography fontWeight={850}>房间资料</Typography><Typography variant="caption" color="text.secondary">房间号 {dashboard?.room_code || '—'} · 名称和 Logo 会显示给进入该房间的用户</Typography><Stack direction="row" gap={.5} mt={.7}><Button component="label" size="small" startIcon={<PhotoCameraRounded />}>{roomLogo ? '更换 Logo' : '选择 Logo'}<input hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={chooseRoomLogo} /></Button>{roomLogo && <Button color="error" size="small" startIcon={<DeleteOutlineRounded />} onClick={() => setRoomLogo('')}>移除</Button>}</Stack></Box><TextField size="small" label="房间名称" value={roomName} onChange={event => setRoomName(event.target.value)} inputProps={{ maxLength: 30 }} sx={{ width: { xs: '100%', md: 260 } }} /><Button variant="contained" disabled={roomSaving || !dashboard} onClick={() => void saveRoomProfile()}>{roomSaving ? '保存中…' : '保存资料'}</Button></Stack></CardContent></Card>
@@ -534,7 +574,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
 
     {section !== 'dashboard' && !chatSection && section !== 'reports' && <Paper variant="outlined" sx={{ p: 1.3, mb: 1.5 }}><Stack direction="row" gap={1}><TextField size="small" fullWidth placeholder="搜索当前房间数据" value={query} onChange={event => { setQuery(event.target.value); setPage(0) }} onKeyDown={event => { if (event.key === 'Enter') void load() }} /><Button variant="contained" onClick={() => void load()}>查询</Button></Stack></Paper>}
 
-    {section === 'users' && <Card><TableContainer><Table size="small"><TableHead><TableRow><TableCell>用户</TableCell><TableCell>余额</TableCell><TableCell>状态</TableCell><TableCell align="right">操作</TableCell></TableRow></TableHead><TableBody>{users.map(row => <TableRow key={row.id}><TableCell><Stack direction="row" gap={1} alignItems="center"><Avatar src={memberAvatar(row.id, row.robot_avatar || row.avatar)} sx={{ width: 34, height: 34 }}>{(row.nickname || row.username).slice(0, 1)}</Avatar><Box><Typography fontWeight={750}>{row.nickname || row.username}</Typography><Typography variant="caption" color="text.secondary">@{row.username} · {row.public_id}</Typography></Box></Stack></TableCell><TableCell>¥ {money(row.balance)}</TableCell><TableCell><FormControlLabel control={<Switch size="small" checked={row.status === 1} onChange={async () => { await roomApi.setUserStatus(row.id, row.status === 1 ? 0 : 1); await load() }} />} label={row.status === 1 ? '正常' : '停用'} /></TableCell><TableCell align="right"><Stack direction="row" justifyContent="flex-end" gap={.5}><Button size="small" startIcon={<TuneRounded />} onClick={() => void loadUserTrading(row)}>赔率设置</Button><Button size="small" onClick={() => setBalanceUser(row)}>调整余额</Button></Stack></TableCell></TableRow>)}</TableBody></Table></TableContainer><WorkspacePagination total={total} page={page} pageSize={pageSize} onPage={setPage} onPageSize={value => { setPageSize(value); setPage(0) }} /></Card>}
+    {section === 'users' && <Card><TableContainer><Table size="small"><TableHead><TableRow><TableCell>用户</TableCell><TableCell>余额</TableCell><TableCell>在线状态</TableCell><TableCell>账号状态</TableCell><TableCell align="right">操作</TableCell></TableRow></TableHead><TableBody>{users.map(row => <TableRow key={row.id}><TableCell><Stack direction="row" gap={1} alignItems="center"><Avatar src={memberAvatar(row.id, row.robot_avatar || row.avatar)} sx={{ width: 34, height: 34 }}>{(row.nickname || row.username).slice(0, 1)}</Avatar><Box><Typography fontWeight={750}>{row.nickname || row.username}</Typography><Typography variant="caption" color="text.secondary">@{row.username} · {row.public_id}</Typography></Box></Stack></TableCell><TableCell>¥ {money(row.balance)}</TableCell><TableCell><UserPresenceChip online={row.online === true} /></TableCell><TableCell><FormControlLabel control={<Switch size="small" checked={row.status === 1} onChange={async () => { await roomApi.setUserStatus(row.id, row.status === 1 ? 0 : 1); await load() }} />} label={row.status === 1 ? '账号正常' : '账号停用'} /></TableCell><TableCell align="right"><Stack direction="row" justifyContent="flex-end" gap={.5}><Button size="small" startIcon={<TuneRounded />} onClick={() => void loadUserTrading(row)}>赔率设置</Button><Button size="small" onClick={() => setBalanceUser(row)}>调整余额</Button></Stack></TableCell></TableRow>)}</TableBody></Table></TableContainer><WorkspacePagination total={total} page={page} pageSize={pageSize} onPage={setPage} onPageSize={value => { setPageSize(value); setPage(0) }} /></Card>}
 
     {(section === 'applications' || section === 'room-reviews') && <Stack gap={1.25}>
       <Paper variant="outlined" sx={{ borderRadius: 2.5, overflow: 'hidden' }}><Tabs value={applicationCategory} onChange={(_, next: ApplicationCategory) => { setApplicationCategory(next); setQuery(''); setPage(0); setApplications([]) }} variant="fullWidth" sx={{ minHeight: 56, '& .MuiTab-root': { minHeight: 56, fontSize: { xs: 12, sm: 14 }, fontWeight: 800 } }}><Tab value="wallet" label="上下分申请" /><Tab value="join" label="入房申请" /><Tab value="entertainment" label="娱乐上下分" /></Tabs></Paper>
@@ -544,6 +584,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
     {section === 'bets' && <Card><TableContainer><Table size="small"><TableHead><TableRow><TableCell>注单</TableCell><TableCell>玩法</TableCell><TableCell>金额</TableCell><TableCell>赔率</TableCell><TableCell>状态</TableCell></TableRow></TableHead><TableBody>{bets.map(row => <TableRow key={row.id}><TableCell>#{row.id}<Typography variant="caption" display="block" color="text.secondary">{row.game_id} · {row.issue}</Typography></TableCell><TableCell>{row.play_name} · {row.selection}</TableCell><TableCell>¥ {money(row.amount)}</TableCell><TableCell>{row.odds}</TableCell><TableCell>{row.status}</TableCell></TableRow>)}</TableBody></Table></TableContainer><WorkspacePagination total={total} page={page} pageSize={pageSize} onPage={setPage} onPageSize={value => { setPageSize(value); setPage(0) }} /></Card>}
 
     {chatSection && <Paper variant="outlined" sx={{
+      position: 'relative',
       width: '100%',
       maxWidth: 1480,
       mx: 'auto',
@@ -575,7 +616,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
               setMessages([])
               setSelected(conversations.find(item => item.lobby_category?.trim() === next) ?? null)
             }} variant="scrollable" scrollButtons={false} sx={{ minHeight: 34, mb: .7, '& .MuiTab-root': { minWidth: 56, minHeight: 34, px: 1, py: .25, fontSize: 11.5, fontWeight: 850 } }}>{lotteryCategories.map(category => <Tab key={category} value={category} label={category} />)}</Tabs>}
-            {!lotteryChat && <Tabs value={chatMode} onChange={(_, next: 'service' | 'room') => { setChatMode(next); setSelected(null); setMessages([]) }} variant="fullWidth" sx={{ minHeight: 32, mb: .7, '& .MuiTab-root': { minHeight: 32, py: .3, fontSize: 11 } }}>
+            {!lotteryChat && <Tabs value={chatMode} onChange={(_, next: 'service' | 'room') => { if (next === chatMode) return; setRedPacketOpen(false); setTransitioningChatMode(next); setChatMode(next) }} variant="fullWidth" sx={{ minHeight: 32, mb: .7, '& .MuiTab-root': { minHeight: 32, py: .3, fontSize: 11, transition: 'color 160ms ease, background-color 160ms ease' }, '@media (prefers-reduced-motion: reduce)': { '& .MuiTab-root': { transition: 'none' } } }}>
               <Tab value="service" label="在线客服" />
               <Tab value="room" label="房间群聊" />
             </Tabs>}
@@ -607,6 +648,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
               <Typography fontSize={13} fontWeight={750} color="text.secondary">暂无房间会话</Typography>
               <Typography fontSize={11} color="text.disabled" mt={.4}>新消息到达后会显示在这里</Typography>
             </Box>}
+            {conversations.length === 0 && loading && <Stack aria-label="正在加载会话" gap={1} p={.7}>{[0, 1, 2, 3].map(index => <Stack key={index} direction="row" gap={.8} alignItems="center"><Skeleton variant="rounded" width={34} height={34} /><Box flex={1}><Skeleton width={index % 2 ? '48%' : '64%'} height={17} /><Skeleton width="88%" height={15} /></Box></Stack>)}</Stack>}
           </List>
         </CardContent>
       </Box>
@@ -618,7 +660,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
               <Avatar src={lotteryChat ? gameLogo(selected.game_id) : roomDisplayLogo || undefined} variant="rounded" sx={{ width: 39, height: 39, flexShrink: 0, bgcolor: 'background.paper', background: !lotteryChat && !roomDisplayLogo ? identityGradient : undefined, border: lotteryChat ? 1 : 0, borderColor: 'divider', fontWeight: 900 }}>{selected.title.slice(0, 1)}</Avatar>
               <Box minWidth={0}><Typography fontWeight={850} noWrap>{selected.title}</Typography><Typography variant="caption" color="text.secondary" noWrap display="block">{roomDisplayName} · 房间号 {dashboard?.room_code || '—'}</Typography></Box>
             </Stack>
-            {!lotteryChat && <Stack direction="row" gap={.4}>{selected.room_type === 'group' && <Button size="small" color="error" startIcon={<CardGiftcardRounded />} onClick={openRedPacket} sx={{ minWidth: 64 }}>红包</Button>}<Button size="small" color="inherit" onClick={() => { setSelected(null); setMessages([]) }} sx={{ minWidth: 42 }}>收起</Button></Stack>}
+            {!lotteryChat && <Stack direction="row" gap={.4}>{selected.room_type === 'group' && <Button size="small" color="error" startIcon={<CardGiftcardRounded />} disabled={loading || Boolean(transitioningChatMode)} onClick={openRedPacket} sx={{ minWidth: 64 }}>红包</Button>}<Button size="small" color="inherit" onClick={() => { setSelected(null); setMessages([]) }} sx={{ minWidth: 42 }}>收起</Button></Stack>}
           </Box>
           <Divider />
           {lotteryChat && selectedGame && <Box px={{ xs: 1.25, md: 1.65 }} py={1.05} borderBottom={1} borderColor="divider" sx={{ background: theme => theme.palette.mode === 'dark' ? 'linear-gradient(90deg,rgba(14,165,233,.14),rgba(139,92,246,.08))' : 'linear-gradient(90deg,#effbff,#f5f2ff)' }}>
@@ -632,6 +674,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
           <Stack flex={1} minHeight={0} gap={.8} sx={{ overflowY: 'auto', p: 1.15, width: '100%' }}>
             {chatHasMore && <Box textAlign="center"><Button size="small" startIcon={chatLoading ? <CircularProgress size={13} /> : <ArrowUpwardRounded />} disabled={chatLoading || !chatNextBeforeID} onClick={() => void loadChatMessages(selected, 'older', chatNextBeforeID)}>加载更早消息</Button></Box>}
             {selected && messages.length === 0 && !loading && !chatLoading && <Box sx={{ mt: 2.5, textAlign: 'center', color: 'text.secondary' }}><Typography fontWeight={750}>暂无消息</Typography><Typography variant="body2">该聊天室暂时没有历史消息</Typography></Box>}
+            {selected && messages.length === 0 && chatLoading && <Stack aria-label="正在加载聊天记录" gap={1.25} sx={{ width: '100%', pt: .8 }}><Stack direction="row" gap={.8}><Skeleton variant="circular" width={34} height={34} /><Skeleton variant="rounded" width="42%" height={54} /></Stack><Stack direction="row-reverse" gap={.8}><Skeleton variant="circular" width={34} height={34} /><Skeleton variant="rounded" width="56%" height={66} /></Stack><Stack direction="row" gap={.8}><Skeleton variant="circular" width={34} height={34} /><Skeleton variant="rounded" width="34%" height={44} /></Stack></Stack>}
             {messages.map(row => {
               const identity = messageIdentity(row)
               return <Stack key={row.id} direction={row.is_staff ? 'row-reverse' : 'row'} alignSelf={row.is_staff ? 'flex-end' : 'flex-start'} gap={.75} alignItems="flex-start" sx={{ width: 'fit-content', maxWidth: lotteryChat ? { xs: '94%', md: 700 } : { xs: '94%', md: 420 } }}>
@@ -640,12 +683,12 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
               </Stack>
             })}
           </Stack>
-          {selected && <Stack direction="row" alignItems="center" gap={.75} sx={{ p: .85, borderTop: 1, borderColor: 'divider' }}><TextField size="small" fullWidth value={reply} onChange={event => setReply(event.target.value)} placeholder="回复当前会话" onKeyDown={event => { if (event.key === 'Enter') void sendReply() }} /><Button size="small" variant="contained" onClick={() => void sendReply()} sx={{ flex: '0 0 auto', minWidth: 72, height: 36, px: 1.25, whiteSpace: 'nowrap' }}>发送</Button></Stack>}
+          {selected && <Stack direction="row" alignItems="center" gap={.75} sx={{ p: .85, borderTop: 1, borderColor: 'divider' }}><TextField size="small" fullWidth value={reply} disabled={loading || Boolean(transitioningChatMode)} onChange={event => setReply(event.target.value)} placeholder="回复当前会话" onKeyDown={event => { if (event.key === 'Enter') void sendReply() }} /><Button size="small" variant="contained" disabled={loading || !reply.trim() || Boolean(transitioningChatMode)} onClick={() => void sendReply()} sx={{ flex: '0 0 auto', minWidth: 72, height: 36, px: 1.25, whiteSpace: 'nowrap' }}>发送</Button></Stack>}
         </CardContent>
       </Box>}
-    </Box></Paper>}
+    </Box>{loading && transitioningChatMode && <Stack role="status" aria-live="polite" alignItems="center" justifyContent="center" gap={.8} sx={{ position: 'absolute', zIndex: 3, inset: 0, color: 'text.primary', bgcolor: theme => theme.palette.mode === 'dark' ? 'rgba(7,26,46,.34)' : 'rgba(247,251,252,.40)', transition: 'opacity 160ms ease', '@media (prefers-reduced-motion: reduce)': { transition: 'none' } }}><Box sx={{ display: 'flex', alignItems: 'center', gap: .8, px: 1.3, py: .8, border: 1, borderColor: 'divider', borderRadius: 1.2, bgcolor: 'background.paper', boxShadow: 3 }}><CircularProgress size={18} /><Typography fontSize={11.5} fontWeight={800}>{transitioningChatMode === 'service' ? '正在切换到在线客服' : '正在切换到房间群聊'}</Typography></Box></Stack>}</Paper>}
 
-    <Dialog open={!lotteryChat && redPacketOpen} onClose={() => setRedPacketOpen(false)} fullWidth maxWidth="sm" slotProps={{ paper: { sx: { width: 'min(560px, calc(100% - 24px))', maxHeight: 'calc(100dvh - 32px)', borderRadius: 2, overflow: 'hidden' } } }}><DialogTitle sx={{ color: '#fff', background: 'linear-gradient(135deg,#d94b45,#ed7954)' }}><Typography fontSize={18} fontWeight={900}>发送房间红包</Typography><Typography fontSize={10.5} sx={{ opacity: .82 }}>红包会实时发送到当前房间聊天室</Typography></DialogTitle><DialogContent sx={{ pt: '18px !important', bgcolor: 'background.default' }}><RedPacketForm count={redPacketCount} total={redPacketTotal} greeting={redPacketGreeting} cover={redPacketCover} minTurnover={redPacketMinTurnover} onCount={setRedPacketCount} onTotal={setRedPacketTotal} onGreeting={setRedPacketGreeting} onCover={setRedPacketCover} onMinTurnover={setRedPacketMinTurnover} /></DialogContent><DialogActions sx={{ px: 2.5, py: 1.25, bgcolor: 'background.paper' }}><Button size="small" onClick={() => setRedPacketOpen(false)}>取消</Button><Button size="small" variant="contained" color="error" disabled={!Number.isInteger(Number(redPacketCount)) || Number(redPacketCount) < 1 || Number(redPacketTotal) < Number(redPacketCount) * .01 || Number(redPacketMinTurnover) < 0} onClick={() => void sendRedPacket()} sx={{ minWidth: 88, height: 34, px: 1.5 }}>发送红包</Button></DialogActions></Dialog>
+    <Dialog open={!lotteryChat && redPacketOpen} onClose={() => setRedPacketOpen(false)} fullWidth maxWidth="sm" slotProps={{ paper: { sx: { width: 'min(560px, calc(100% - 24px))', maxHeight: 'calc(100dvh - 32px)', borderRadius: 2, overflow: 'hidden' } } }}><DialogTitle sx={{ color: '#fff', background: 'linear-gradient(135deg,#d94b45,#ed7954)' }}><Typography fontSize={18} fontWeight={900}>发送房间红包</Typography><Typography fontSize={10.5} sx={{ opacity: .82 }}>红包会实时发送到当前房间聊天室</Typography></DialogTitle><DialogContent sx={{ pt: '18px !important', bgcolor: 'background.default' }}><RedPacketForm count={redPacketCount} total={redPacketTotal} greeting={redPacketGreeting} cover={redPacketCover} minTurnover={redPacketMinTurnover} onCount={setRedPacketCount} onTotal={setRedPacketTotal} onGreeting={setRedPacketGreeting} onCover={setRedPacketCover} onMinTurnover={setRedPacketMinTurnover} /></DialogContent><DialogActions sx={{ px: 2.5, py: 1.25, bgcolor: 'background.paper' }}><Button size="small" onClick={() => setRedPacketOpen(false)}>取消</Button><Button size="small" variant="contained" color="error" disabled={loading || Boolean(transitioningChatMode) || !Number.isInteger(Number(redPacketCount)) || Number(redPacketCount) < 1 || Number(redPacketTotal) < Number(redPacketCount) * .01 || Number(redPacketMinTurnover) < 0} onClick={() => void sendRedPacket()} sx={{ minWidth: 88, height: 34, px: 1.5 }}>发送红包</Button></DialogActions></Dialog>
     <Dialog open={memberOpen} onClose={() => !memberLoading && setMemberOpen(false)} fullWidth maxWidth="sm">
       <DialogTitle>会员资料</DialogTitle>
       <DialogContent dividers>
@@ -674,40 +717,41 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
       </DialogContent>
       <DialogActions><Button onClick={() => setMemberOpen(false)} disabled={memberLoading}>关闭</Button></DialogActions>
     </Dialog>
-    <Dialog open={Boolean(tradingUser)} onClose={() => !userTradingSaving && setTradingUser(null)} fullWidth maxWidth="lg" slotProps={{ paper: { sx: { borderRadius: 2.5, maxHeight: 'calc(100dvh - 32px)' } } }}>
-      <DialogTitle sx={{ pb: 1 }}>
-        <Typography fontSize={18} fontWeight={900}>会员赔率 · {tradingUser?.nickname || tradingUser?.username}</Typography>
-        <Typography fontSize={10.5} color="text.secondary">房间 {dashboard?.room_code || '—'} 专属配置；会员换到其他房间后，此处配置不会带过去。</Typography>
+    <Dialog open={Boolean(tradingUser)} onClose={() => !userTradingSaving && setTradingUser(null)} fullWidth maxWidth="lg" slotProps={{ paper: { sx: { borderRadius: 1.25, maxHeight: 'calc(100dvh - 24px)' } } }}>
+      <DialogTitle sx={{ px: 1.5, py: 1.1 }}>
+        <Stack direction="row" gap={1} alignItems="center" justifyContent="space-between">
+          <Box minWidth={0}><Typography fontSize={16.5} fontWeight={900} noWrap>会员赔率 · {tradingUser?.nickname || tradingUser?.username}</Typography><Typography fontSize={9.8} color="text.secondary">仅当前房间生效，会员换房后不继承</Typography></Box>
+          <Chip size="small" color="primary" variant="outlined" label={`房间 ${dashboard?.room_code || '—'}`} sx={{ flexShrink: 0, height: 22 }} />
+        </Stack>
       </DialogTitle>
-      <DialogContent dividers sx={{ bgcolor: 'background.default' }}>
+      <DialogContent dividers sx={{ bgcolor: 'background.default', p: '12px !important' }}>
         {userTradingLoading && <Box py={8} textAlign="center"><CircularProgress size={28} /><Typography mt={1} fontSize={12} color="text.secondary">正在读取当前房间赔率…</Typography></Box>}
-        {!userTradingLoading && userTrading && <Stack gap={1.5}>
-          <Alert severity="info">生效顺序：会员单独玩法赔率 ＞ 房间赔率 × 会员倍率 ＞ 平台赔率 × 会员倍率。所有设置只属于当前房间。</Alert>
-          <Paper variant="outlined" sx={{ p: 1.4, borderRadius: 2.2 }}>
-            <Stack direction={{ xs: 'column', md: 'row' }} gap={1.25} alignItems={{ md: 'center' }}>
+        {!userTradingLoading && userTrading && <Stack gap={.9}>
+          <Paper variant="outlined" sx={{ p: 1, borderRadius: 1.1 }}>
+            <Stack direction={{ xs: 'column', md: 'row' }} gap={.8} alignItems={{ md: 'center' }}>
               <Box flex={1}>
                 <Typography fontSize={13} fontWeight={900}>会员赔率倍率</Typography>
-                <Typography fontSize={10} color="text.secondary">用于整体微调继承赔率；已有单独玩法赔率时，以单独赔率为准。</Typography>
+                <Typography fontSize={9.6} color="text.secondary">整体调整继承赔率，单独玩法设置优先。</Typography>
               </Box>
-              <Stack direction="row" gap={.5} flexWrap="wrap" useFlexGap>
-                {oddsMultiplierPresets.map(value => <Button key={value} size="small" variant={Number(userTrading.odds_multiplier || 1) === value ? 'contained' : 'outlined'} onClick={() => { setUserTrading(current => current ? { ...current, odds_multiplier: value } : current); setUserTradingDirty(true) }}>{value.toFixed(2)}×</Button>)}
+              <Stack direction="row" gap={.4} flexWrap="wrap" useFlexGap>
+                {oddsMultiplierPresets.map(value => <Button key={value} size="small" variant={Number(userTrading.odds_multiplier || 1) === value ? 'contained' : 'outlined'} onClick={() => { setUserTrading(current => current ? { ...current, odds_multiplier: value } : current); setUserTradingDirty(true) }} sx={{ minWidth: 53, borderRadius: 1 }}>{value.toFixed(2)}×</Button>)}
               </Stack>
-              <TextField size="small" type="number" label="自定义倍率" value={userTrading.odds_multiplier || 1} onChange={event => { setUserTrading(current => current ? { ...current, odds_multiplier: Number(event.target.value) } : current); setUserTradingDirty(true) }} inputProps={{ min: .5, max: 1.5, step: .01 }} sx={{ width: { xs: '100%', md: 150 } }} />
+              <TextField size="small" type="number" label="自定义倍率" value={userTrading.odds_multiplier || 1} onChange={event => { setUserTrading(current => current ? { ...current, odds_multiplier: Number(event.target.value) } : current); setUserTradingDirty(true) }} inputProps={{ min: .5, max: 1.5, step: .01 }} sx={{ width: { xs: '100%', md: 140 }, '& .MuiOutlinedInput-root': { borderRadius: 1 } }} />
             </Stack>
-          </Paper>
-          <Paper variant="outlined" sx={{ p: 1.4, borderRadius: 2.2 }}>
-            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,minmax(0,1fr))', lg: 'repeat(4,minmax(0,1fr))' }, gap: 1.1 }}>
+            <Divider sx={{ my: .85 }} />
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,minmax(0,1fr))', lg: 'repeat(4,minmax(0,1fr))' }, gap: .7, '& .MuiOutlinedInput-root': { borderRadius: 1 } }}>
               <TextField select size="small" label="飞单模式" value={userTrading.fly.mode} onChange={event => { setUserTrading(current => current ? { ...current, fly: { ...current.fly, mode: event.target.value } } : current); setUserTradingDirty(true) }}><MenuItem value="inherit">跟随房间</MenuItem><MenuItem value="custom">单独比例</MenuItem><MenuItem value="off">关闭飞单</MenuItem></TextField>
               <TextField size="small" type="number" label="飞单比例 %" disabled={userTrading.fly.mode !== 'custom'} value={userTrading.fly.rate} onChange={event => { setUserTrading(current => current ? { ...current, fly: { ...current.fly, rate: Number(event.target.value) } } : current); setUserTradingDirty(true) }} inputProps={{ min: 0, max: 100, step: .01 }} />
               <TextField select size="small" label="返水模式" value={userTrading.rebate.mode} onChange={event => { setUserTrading(current => current ? { ...current, rebate: { ...current.rebate, mode: event.target.value } } : current); setUserTradingDirty(true) }}><MenuItem value="inherit">跟随房间</MenuItem><MenuItem value="custom">会员单独返水</MenuItem><MenuItem value="off">关闭返水</MenuItem></TextField>
               <TextField size="small" type="number" label="返水比例 %" disabled={userTrading.rebate.mode !== 'custom'} value={userTrading.rebate.rate} onChange={event => { setUserTrading(current => current ? { ...current, rebate: { ...current.rebate, rate: Number(event.target.value) } } : current); setUserTradingDirty(true) }} inputProps={{ min: 0, max: 100, step: .01 }} />
             </Box>
           </Paper>
+          <Paper variant="outlined" sx={{ px: 1, py: .6, borderRadius: 1, bgcolor: 'action.hover' }}><Stack direction={{ xs: 'column', sm: 'row' }} gap={.6} alignItems={{ sm: 'center' }}><Chip size="small" color="primary" variant="outlined" label="生效顺序" sx={{ width: 'fit-content', height: 20 }} /><Typography fontSize={10} color="text.secondary">会员单独玩法赔率 ＞ 房间赔率 × 会员倍率 ＞ 平台赔率 × 会员倍率</Typography></Stack></Paper>
           <GameOddsNavigation games={games.map(game => ({ ...game, enabled: game.platform_enabled && game.room_enabled }))} gameId={userTrading.game_id} onSelect={gameId => { if (!tradingUser || gameId === userTrading.game_id) return; if (userTradingDirty) { showMessage('请先保存当前彩种的会员赔率，再切换彩种', 'warning'); return }; void loadUserTrading(tradingUser, gameId) }} />
           <OddsOverrideGrid items={userTrading.odds} level="member" onChange={odds => { setUserTrading(current => current ? { ...current, odds: odds.map(item => ({ ...item, room_odds: item.room_odds ?? item.base_odds })) } : current); setUserTradingDirty(true) }} />
         </Stack>}
       </DialogContent>
-      <DialogActions><Button onClick={() => { setTradingUser(null); setUserTradingDirty(false) }} disabled={userTradingSaving}>取消</Button><Button variant="contained" disabled={userTradingSaving || userTradingLoading || !userTrading || !userTradingDirty} onClick={() => void saveUserTrading()}>{userTradingSaving ? '保存中…' : userTradingDirty ? '保存会员赔率' : '已保存'}</Button></DialogActions>
+      <DialogActions sx={{ px: 1.5, py: .75 }}><Button onClick={() => { setTradingUser(null); setUserTradingDirty(false) }} disabled={userTradingSaving}>取消</Button><Button variant="contained" disabled={userTradingSaving || userTradingLoading || !userTrading || !userTradingDirty} onClick={() => void saveUserTrading()}>{userTradingSaving ? '保存中…' : userTradingDirty ? '保存会员赔率' : '已保存'}</Button></DialogActions>
     </Dialog>
     <Dialog open={Boolean(balanceUser)} onClose={() => setBalanceUser(null)} fullWidth maxWidth="xs"><DialogTitle>调整余额 · {balanceUser?.nickname || balanceUser?.username}</DialogTitle><DialogContent><Stack gap={2} pt={1}><TextField type="number" label="调整金额" helperText="正数为上分，负数为下分" value={amount} onChange={event => setAmount(event.target.value)} /><TextField label="原因" value={remark} onChange={event => setRemark(event.target.value)} /></Stack></DialogContent><DialogActions><Button onClick={() => setBalanceUser(null)}>取消</Button><Button variant="contained" onClick={() => void adjustBalance()}>确认</Button></DialogActions></Dialog>
     <Dialog open={Boolean(reviewing)} onClose={() => !reviewSaving && setReviewing(null)} fullWidth maxWidth="sm"><DialogTitle>{reviewing?.request_type === 'join' ? '审核入房申请' : '审核上下分申请'} #{reviewing?.id}</DialogTitle><DialogContent>{reviewing && <Stack gap={1.5} pt={1}><Paper variant="outlined" sx={{ p: 1.4 }}><Typography fontWeight={850}>{reviewing.username}</Typography><Typography variant="caption" color="text.secondary">{reviewing.request_type === 'join' ? `目标房间 ${reviewing.target_room_code || '当前房间'}` : `申请金额 ¥ ${money(reviewing.requested_amount)}`}</Typography>{reviewing.remark && <Typography fontSize={12} mt={1}>{reviewing.remark}</Typography>}</Paper><Tabs value={reviewDecision} onChange={(_, next: 'approved' | 'rejected') => setReviewDecision(next)} variant="fullWidth"><Tab value="approved" label="通过申请" /><Tab value="rejected" label="拒绝申请" /></Tabs>{reviewDecision === 'approved' && reviewing.request_type === 'join' && <Paper variant="outlined" sx={{ p: 1.4, borderColor: 'primary.light', bgcolor: 'action.hover' }}><Typography fontSize={13} fontWeight={900}>入房赔率倍率</Typography><Typography fontSize={10} color="text.secondary">只写入本房间会员关系；换房后自动采用目标房间对应配置。</Typography><Stack direction="row" gap={.6} flexWrap="wrap" useFlexGap mt={1.2}>{oddsMultiplierPresets.map(value => <Button key={value} size="small" variant={Number(reviewOddsMultiplier) === value ? 'contained' : 'outlined'} onClick={() => setReviewOddsMultiplier(String(value))}>{value.toFixed(2)}×</Button>)}</Stack><TextField fullWidth size="small" type="number" label="自定义倍率" value={reviewOddsMultiplier} onChange={event => setReviewOddsMultiplier(event.target.value)} inputProps={{ min: .5, max: 1.5, step: .01 }} helperText="0.50–1.50；1.00 为正常房间赔率" sx={{ mt: 1.2 }} /></Paper>}{reviewDecision === 'approved' && isBalanceApplication(reviewing) && <><TextField type="number" fullWidth label={reviewing.request_type === 'credit' ? '实际到账金额' : '实际出款金额'} value={reviewReceivedAmount} onChange={event => setReviewReceivedAmount(event.target.value)} helperText={reviewing.request_type === 'credit' ? '余额按实际到账金额增加' : '余额按申请金额扣减，实际出款金额进入审核记录'} inputProps={{ min: .01, step: .01 }} /><Paper variant="outlined" sx={{ p: 1.4 }}><Stack direction="row" justifyContent="space-between"><Typography color="text.secondary" fontSize={12}>变动前余额</Typography><Typography fontWeight={850}>¥ {money(reviewing.user_balance)}</Typography></Stack><Stack direction="row" justifyContent="space-between" mt={.8}><Typography color="text.secondary" fontSize={12}>预计变动后余额</Typography><Typography fontWeight={900} color="primary.main">¥ {money(reviewedBalance(reviewing, Number(reviewReceivedAmount) || 0))}</Typography></Stack></Paper></>}<TextField fullWidth multiline minRows={3} label={reviewDecision === 'rejected' ? '拒绝原因' : '审核备注'} value={reviewRemark} onChange={event => setReviewRemark(event.target.value)} required={reviewDecision === 'rejected'} inputProps={{ maxLength: 500 }} /><Alert severity={reviewDecision === 'approved' ? 'info' : 'warning'}>{reviewDecision === 'approved' ? reviewing.request_type === 'join' ? `通过后会员将进入房间 ${reviewing.target_room_code || '当前房间'}，倍率为 ${(Number(reviewOddsMultiplier) || 1).toFixed(2)}×。` : '通过后立即写入余额与资金流水，不能重复审核。' : '拒绝不会改变余额或房间归属。'}</Alert></Stack>}</DialogContent><DialogActions><Button onClick={() => setReviewing(null)} disabled={reviewSaving}>取消</Button><Button variant="contained" color={reviewDecision === 'approved' ? 'success' : 'error'} disabled={reviewSaving} onClick={() => void review()}>{reviewSaving ? '处理中…' : reviewDecision === 'approved' ? '确认通过' : '确认拒绝'}</Button></DialogActions></Dialog>

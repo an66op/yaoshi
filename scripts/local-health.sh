@@ -9,10 +9,18 @@ PG_PORT="${BACKEND_DATABASE_PORT:-5432}"
 PG_USER="${BACKEND_DATABASE_USER:-postgres}"
 PG_DB="${BACKEND_DATABASE_DBNAME:-backend}"
 
-if command -v pg_isready >/dev/null 2>&1; then
-  pg_isready -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" >/dev/null
-elif [[ -x /Library/PostgreSQL/17/bin/pg_isready ]]; then
-  /Library/PostgreSQL/17/bin/pg_isready -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" >/dev/null
+postgres_ready_cmd="$(command -v pg_isready || true)"
+if [[ -z "$postgres_ready_cmd" ]]; then
+  for postgres_bin_dir in /Library/PostgreSQL/*/bin; do
+    if [[ -x "$postgres_bin_dir/pg_isready" ]]; then
+      postgres_ready_cmd="$postgres_bin_dir/pg_isready"
+      break
+    fi
+  done
+fi
+
+if [[ -n "$postgres_ready_cmd" ]]; then
+  "$postgres_ready_cmd" -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" >/dev/null
 else
   echo "未找到 pg_isready，跳过 PostgreSQL 命令行健康检查"
 fi

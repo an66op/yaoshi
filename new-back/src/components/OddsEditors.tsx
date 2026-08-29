@@ -55,8 +55,8 @@ export function GameOddsNavigation({ games, gameId, onSelect }: {
 
   const gamesInCategory = availableGames.filter(game => (game.lobby_category?.trim() || '未分类') === category)
 
-  return <Paper variant="outlined" sx={{ borderRadius: 2.5, overflow: 'hidden', bgcolor: 'background.paper' }}>
-    <Stack direction="row" gap={.45} px={1} pt={.9} sx={{ overflowX: 'auto', scrollbarWidth: 'thin' }}>
+  return <Paper variant="outlined" sx={{ borderRadius: 1.25, overflow: 'hidden', bgcolor: 'background.paper' }}>
+    <Stack direction="row" gap={.35} px={.75} pt={.6} sx={{ overflowX: 'auto', scrollbarWidth: 'thin' }}>
       {categories.map(item => {
         const selected = item === category
         return <Button
@@ -69,13 +69,13 @@ export function GameOddsNavigation({ games, gameId, onSelect }: {
             if (first && first.id !== gameId) onSelect(first.id)
           }}
           sx={{
-            flex: '0 0 auto', minWidth: 72, whiteSpace: 'nowrap', fontWeight: 850,
-            borderRadius: '10px 10px 0 0', boxShadow: selected ? '0 7px 18px rgba(8,145,178,.18)' : 'none',
+            flex: '0 0 auto', minWidth: 68, minHeight: 30, px: 1, whiteSpace: 'nowrap', fontWeight: 850,
+            borderRadius: '6px 6px 0 0', boxShadow: 'none',
           }}
         >{item}</Button>
       })}
     </Stack>
-    <Stack direction="row" gap={.75} px={1.1} py={1} sx={{ overflowX: 'auto', borderTop: 1, borderColor: 'divider', scrollbarWidth: 'thin' }}>
+    <Stack direction="row" gap={.5} px={.75} py={.65} sx={{ overflowX: 'auto', borderTop: 1, borderColor: 'divider', scrollbarWidth: 'thin' }}>
       {gamesInCategory.map(game => {
         const selected = game.id === gameId
         return <Button
@@ -84,15 +84,15 @@ export function GameOddsNavigation({ games, gameId, onSelect }: {
           variant={selected ? 'outlined' : 'text'}
           endIcon={selected ? <KeyboardArrowRightRounded /> : undefined}
           sx={{
-            flex: '0 0 auto', minWidth: 132, justifyContent: 'flex-start', borderRadius: 2,
-            px: 1, py: .7, color: selected ? 'primary.main' : 'text.primary',
+            flex: '0 0 auto', minWidth: 112, minHeight: 36, justifyContent: 'flex-start', borderRadius: 1,
+            px: .75, py: .45, color: selected ? 'primary.main' : 'text.primary',
             bgcolor: selected ? 'action.selected' : 'transparent', borderColor: selected ? 'primary.main' : 'transparent',
           }}
         >
-          <Avatar src={gameLogo(game.id)} alt="" sx={{ width: 27, height: 27, mr: .75, bgcolor: 'action.hover' }}>{game.name.slice(0, 1)}</Avatar>
+          <Avatar src={gameLogo(game.id)} alt="" sx={{ width: 24, height: 24, mr: .65, bgcolor: 'action.hover' }}>{game.name.slice(0, 1)}</Avatar>
           <Box textAlign="left" minWidth={0}>
             <Typography fontSize={11.5} fontWeight={850} noWrap>{game.name}</Typography>
-            <Typography fontSize={8.8} color="text.secondary" noWrap>{game.source_kind === 'official' ? '官方源' : game.source_kind === 'external' ? '外部源' : '平台彩'}</Typography>
+            <Typography fontSize={8.5} lineHeight={1.1} color="text.secondary" noWrap>{game.source_kind === 'official' ? '官方源' : game.source_kind === 'external' ? '外部源' : '平台彩'}</Typography>
           </Box>
         </Button>
       })}
@@ -125,35 +125,35 @@ export function OddsOverrideGrid({ items, level, onChange }: {
     onChange(next)
   }
 
-  return <Stack gap={1.2}>
+  return <Stack gap={.85}>
     <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
       <Box>
-        <Typography fontWeight={900}>{level === 'member' ? '会员单独赔率' : '当前游戏赔率'}</Typography>
-        <Typography fontSize={10.5} color="text.secondary">留空即{inheritedLabel}；已单独修改的输入框会高亮。</Typography>
+        <Typography fontSize={14} fontWeight={900}>{level === 'member' ? '会员单独赔率' : '当前游戏赔率'}</Typography>
+        <Typography fontSize={10} color="text.secondary">留空即{inheritedLabel}，高亮项为单独设置。</Typography>
       </Box>
-      <Button size="small" startIcon={<RestartAltRounded />} onClick={() => onChange(items.map(item => ({
+      <Button size="small" variant="text" startIcon={<RestartAltRounded />} onClick={() => onChange(items.map(item => ({
         ...item,
         override: null,
         has_override: false,
         effective: level === 'member' ? (item.room_odds ?? item.base_odds) : item.base_odds,
       })))}>全部继承</Button>
     </Stack>
-    {groups.map(([category, rows]) => <Paper key={category} variant="outlined" sx={{ borderRadius: 2.2, overflow: 'hidden' }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" px={1.25} py={.8} bgcolor="action.hover">
-        <Typography fontSize={12} fontWeight={900}>{category}</Typography>
-        <Chip size="small" variant="outlined" label={`${rows.length} 项`} sx={{ height: 20, fontSize: 9 }} />
-      </Stack>
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,minmax(0,1fr))', xl: 'repeat(3,minmax(0,1fr))' }, gap: 1, p: 1 }}>
+    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2,minmax(0,1fr))', xl: 'repeat(3,minmax(0,1fr))' }, gap: .85, alignItems: 'start' }}>
+      {groups.map(([category, rows]) => <Paper key={category} variant="outlined" sx={{ borderRadius: 1.1, overflow: 'hidden' }}>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" px={1} py={.55} bgcolor="action.hover">
+          <Typography fontSize={11.5} fontWeight={900}>{category}</Typography>
+          <Typography fontSize={9.5} color="text.secondary">{rows.length} 项</Typography>
+        </Stack>
         {rows.map(({ item, index }) => {
           const base = level === 'member' ? (item.room_odds ?? item.base_odds) : item.base_odds
-          return <Paper key={item.play_code} variant="outlined" sx={{ p: 1, borderRadius: 1.7, borderColor: item.has_override ? 'primary.main' : 'divider', bgcolor: item.has_override ? 'action.selected' : 'background.paper' }}>
-            <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1} mb={.65}>
-              <Box minWidth={0}>
+          return <Box key={item.play_code} sx={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(112px,145px)', gap: .75, alignItems: 'center', px: 1, py: .7, borderTop: 1, borderColor: 'divider', bgcolor: item.has_override ? 'action.selected' : 'background.paper' }}>
+            <Box minWidth={0}>
+              <Stack direction="row" gap={.45} alignItems="center">
                 <Typography fontSize={11.5} fontWeight={850} noWrap>{item.play_name}</Typography>
-                <Typography fontSize={8.8} color="text.secondary">{item.play_code}</Typography>
-              </Box>
-              <Chip size="small" variant="outlined" label={`${baseLabel} ${base}`} sx={{ height: 20, fontSize: 8.8 }} />
-            </Stack>
+                <Chip size="small" variant="outlined" label={`${baseLabel} ${base}`} sx={{ height: 18, fontSize: 8, '& .MuiChip-label': { px: .55 } }} />
+              </Stack>
+              <Typography fontSize={8.5} lineHeight={1.2} color="text.secondary" noWrap>{item.play_code}</Typography>
+            </Box>
             <TextField
               fullWidth
               size="small"
@@ -163,11 +163,12 @@ export function OddsOverrideGrid({ items, level, onChange }: {
               onChange={event => update(index, event.target.value)}
               inputProps={{ min: 1.001, step: 0.001, 'aria-label': `${item.play_name}${level === 'member' ? '会员' : '房间'}赔率` }}
               slotProps={{ input: { endAdornment: <InputAdornment position="end">倍</InputAdornment> } }}
+              sx={{ '& .MuiOutlinedInput-root': { borderRadius: 1 } }}
             />
-          </Paper>
+          </Box>
         })}
-      </Box>
-    </Paper>)}
+      </Paper>)}
+    </Box>
   </Stack>
 }
 
@@ -184,12 +185,12 @@ export function PlatformOddsGrid({ items, catalog, onChange }: {
     { key: 'max_user_period', label: '会员单期' },
     { key: 'max_period_total', label: '全房单期' },
   ]
-  return <Stack gap={1}>
+  return <Stack gap={.65}>
     {items.map((item, index) => {
       const meta = catalog[item.play_code]
       const modified = typeof meta?.default_odds === 'number' && Math.abs(item.odds - meta.default_odds) > .001
-      return <Paper key={item.play_code} variant="outlined" sx={{ p: 1.1, borderRadius: 2, borderColor: modified ? 'warning.main' : 'divider' }}>
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', lg: 'minmax(170px,1.35fr) repeat(5,minmax(105px,1fr))' }, gap: 1, alignItems: 'center' }}>
+      return <Paper key={item.play_code} variant="outlined" sx={{ p: .75, borderRadius: 1, borderColor: modified ? 'warning.main' : 'divider' }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', lg: 'minmax(155px,1.2fr) repeat(5,minmax(92px,1fr))' }, gap: .65, alignItems: 'center' }}>
           <Box sx={{ gridColumn: { xs: '1 / -1', lg: 'auto' } }}>
             <Stack direction="row" gap={.6} alignItems="center"><Typography fontSize={12.5} fontWeight={900}>{item.play_name}</Typography><Chip size="small" variant="outlined" label={meta?.category || '玩法'} sx={{ height: 19, fontSize: 8.5 }} /></Stack>
             <Typography fontSize={9} color="text.secondary">{item.play_code}{meta?.example ? ` · 例：${meta.example}` : ''}</Typography>
@@ -202,6 +203,7 @@ export function PlatformOddsGrid({ items, catalog, onChange }: {
             value={item[field.key]}
             onChange={event => update(index, { [field.key]: Number(event.target.value) })}
             inputProps={{ min: field.key === 'odds' ? 1.001 : 0, step: field.step ?? 1, 'aria-label': `${item.play_name}${field.label}` }}
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 1 } }}
           />)}
         </Box>
       </Paper>

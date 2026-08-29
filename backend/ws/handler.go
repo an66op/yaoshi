@@ -91,6 +91,7 @@ func writePump(conn *websocket.Conn, client *client, hub *Hub) {
 					websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "登录状态已变化"), time.Now().Add(time.Second))
 				return
 			}
+			hub.touchPresence(client)
 			open, err := client.writeIfOpen(func() error {
 				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				return conn.WriteMessage(websocket.PingMessage, nil)

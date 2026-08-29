@@ -137,37 +137,40 @@ export function LimitsPage() {
   const currentGame = games.find(game => game.id === gameId)
 
   return (
-    <Box p={{ xs: 2, lg: 2.5 }}>
+    <Box p={{ xs: 1.5, lg: 2 }}>
       <PageHeader
         eyebrow="游戏运营 / 风控"
         title="赔率与限额"
         description=""
         actions={
-          <>
-            <Button variant="outlined" startIcon={<MenuBookRounded />} onClick={() => setGuideOpen(true)}>玩法说明</Button>
-            <Button variant="outlined" startIcon={<SyncRounded />} disabled={Boolean(busy) || saving} onClick={() => void syncAllGames()}>{busy === 'sync' ? '同步中…' : '补全全部彩种'}</Button>
-            <Button variant="outlined" startIcon={<RestartAltRounded />} disabled={!gameId || Boolean(busy) || saving} onClick={() => void resetDefaults()}>{busy === 'reset' ? '恢复中…' : '恢复默认'}</Button>
-            <Button variant="contained" startIcon={<SaveRounded />} disabled={!gameId || loading || saving || Boolean(busy)} onClick={() => void save()}>{saving ? '保存中…' : '保存设置'}</Button>
-          </>
+          <Button variant="contained" startIcon={<SaveRounded />} disabled={!gameId || loading || saving || Boolean(busy)} onClick={() => void save()}>{saving ? '保存中…' : '保存设置'}</Button>
         }
       />
 
-      <Alert severity="info" sx={{ mt: 2.5 }}>
-        此处维护平台默认赔率和投注限额。房间可覆盖平台赔率，会员还可在所属房间内设置单独赔率。
-      </Alert>
-      <Box mt={1.5}>
-        <GameOddsNavigation games={games.map(game => ({ ...game, enabled: true }))} gameId={gameId} onSelect={setGameId} />
-      </Box>
-      {currentGame && (
-        <Stack direction="row" gap={1} flexWrap="wrap" mt={1.5}>
-          <Chip size="small" label={`当前：${currentGame.name}`} />
-          <Chip size="small" variant="outlined" label={`${items.length} 个玩法`} />
-          <Chip size="small" variant="outlined" color={currentGame.enabled ? 'success' : 'default'} label={currentGame.enabled ? '运行中' : '已停用'} />
+      <Paper variant="outlined" sx={{ mt: 1.25, p: 1, borderRadius: 1.25 }}>
+        <Stack direction={{ xs: 'column', lg: 'row' }} gap={.8} alignItems={{ lg: 'center' }} mb={.8}>
+          <Box flex={1}>
+            <Typography fontSize={13} fontWeight={900}>平台默认层</Typography>
+            <Typography fontSize={10} color="text.secondary">房间赔率可覆盖平台值，会员单独赔率优先级最高。</Typography>
+          </Box>
+          <Stack direction="row" gap={.5} flexWrap="wrap" useFlexGap>
+            <Button size="small" variant="text" startIcon={<MenuBookRounded />} onClick={() => setGuideOpen(true)}>玩法说明</Button>
+            <Button size="small" variant="outlined" startIcon={<SyncRounded />} disabled={Boolean(busy) || saving} onClick={() => void syncAllGames()}>{busy === 'sync' ? '同步中…' : '补全彩种'}</Button>
+            <Button size="small" variant="outlined" startIcon={<RestartAltRounded />} disabled={!gameId || Boolean(busy) || saving} onClick={() => void resetDefaults()}>{busy === 'reset' ? '恢复中…' : '恢复当前'}</Button>
+          </Stack>
         </Stack>
-      )}
+        <GameOddsNavigation games={games.map(game => ({ ...game, enabled: true }))} gameId={gameId} onSelect={setGameId} />
+        {currentGame && (
+          <Stack direction="row" gap={.6} flexWrap="wrap" mt={.75}>
+            <Chip size="small" color="primary" label={currentGame.name} sx={{ height: 22 }} />
+            <Chip size="small" variant="outlined" label={`${items.length} 个玩法`} sx={{ height: 22 }} />
+            <Chip size="small" variant="outlined" color={currentGame.enabled ? 'success' : 'default'} label={currentGame.enabled ? '运行中' : '已停用'} sx={{ height: 22 }} />
+          </Stack>
+        )}
+      </Paper>
       {error && <Alert severity="error" sx={{ mt: 1.5 }}>{error}</Alert>}
 
-      <Paper variant="outlined" sx={{ mt: 1.5, p: { xs: 1, md: 1.35 }, borderRadius: 2.5 }}>
+      <Paper variant="outlined" sx={{ mt: 1, p: { xs: .75, md: 1 }, borderRadius: 1.25 }}>
         {loading ? <Box minHeight={220} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={24} /></Box>
           : items.length ? <PlatformOddsGrid items={items} catalog={catalogMap} onChange={setItems} />
             : <Stack minHeight={180} alignItems="center" justifyContent="center" color="text.secondary">暂无玩法配置，请选择游戏或补全默认玩法</Stack>}

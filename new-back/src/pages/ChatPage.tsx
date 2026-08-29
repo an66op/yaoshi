@@ -1,4 +1,4 @@
-import { Alert, Avatar, Box, Button, Card, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton, InputAdornment, MenuItem, Paper, Stack, Tab, Tabs, TextField, Tooltip, Typography } from '@mui/material'
+import { Alert, Avatar, Box, Button, Card, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton, InputAdornment, MenuItem, Paper, Skeleton, Stack, Tab, Tabs, TextField, Tooltip, Typography } from '@mui/material'
 import SupportAgentRounded from '@mui/icons-material/SupportAgentRounded'
 import ForumRounded from '@mui/icons-material/ForumRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
@@ -60,6 +60,7 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
   const [hasMore, setHasMore] = useState(false)
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(true)
+  const [transitioningMode, setTransitioningMode] = useState<ChatMode | null>(null)
   const [messageLoading, setMessageLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [redPacketOpen, setRedPacketOpen] = useState(false)
@@ -82,6 +83,8 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
   const markedThroughRef = useRef(new Map<string, number>())
   const redPacketRequestID = useRef(createRequestId())
   const connectionStatusInitialized = useRef(false)
+	const conversationRequestRef = useRef(0)
+	const messageRequestRef = useRef(0)
 	useEffect(() => { selectedRef.current = selected }, [selected])
 	const focusConversation = useCallback((target: ChatConversationTarget) => {
 		if (chatPageForTarget(target) !== (lotteryView ? '/lottery-chat' : '/chat')) return
@@ -124,49 +127,79 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
 	}, [lotteryView, selected?.game_id])
 
   const loadConversations = useCallback(async (preserve = true) => {
+    const requestID = ++conversationRequestRef.current
     if (!roomScope) {
       setConversations([])
       setSelected(null)
       setLoading(false)
+      setTransitioningMode(null)
       return
     }
-    setLoading(true)
+    // Background refreshes should never replace the open conversation with a
+    // spinner. Only an initial load, room change, search, or tab change blocks
+    // interaction while the new dataset is prepared.
+    if (!preserve) setLoading(true)
     setError('')
     try {
       const result = await adminApi.chatConversations({ roomType: mode === 'service' ? 'service' : 'group', roomScope, channel: mode, query: appliedQuery, page: 1, pageSize: 60 })
+      if (requestID !== conversationRequestRef.current) return
       const items = Array.isArray(result?.items) ? result.items : []
+      const current = selectedRef.current
+      const pending = pendingTargetRef.current
+      const targetMatch = pending ? items.find(item => sameConversation(pending as AdminChatConversation, item)) : undefined
+      const currentMatch = current ? items.find(item => sameConversation(current, item)) : undefined
+      const nextSelected = targetMatch ?? (preserve && currentMatch && current ? current : items[0] ?? null)
+      if (targetMatch) pendingTargetRef.current = null
       setConversations(items)
-      setSelected(current => {
-		const pending = pendingTargetRef.current
-		const targetMatch = pending ? items.find(item => sameConversation(pending as AdminChatConversation, item)) : undefined
-		if (targetMatch) {
-			pendingTargetRef.current = null
-			return targetMatch
-		}
-        if (!preserve) return items[0] ?? null
-        const match = current ? items.find(item => sameConversation(current, item)) : undefined
-        // Preserve the selected object identity so a left-list refresh does
-        // not reset and reload the visible timeline.
-        return match && current ? current : items[0] ?? null
-      })
+      if (!nextSelected || !sameConversation(current, nextSelected)) {
+        messageRequestRef.current += 1
+        setMessages([])
+        setHasMore(false)
+        setNextBeforeID(undefined)
+        // Prevent a one-frame "no history" state before the message request
+        // effect starts after selecting the first conversation in the new tab.
+        setMessageLoading(Boolean(nextSelected))
+      }
+      setSelected(nextSelected)
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '读取会话失败')
-    } finally { setLoading(false) }
+      if (requestID === conversationRequestRef.current) {
+        setError(reason instanceof Error ? reason.message : '读取会话失败')
+        if (!preserve) {
+          // A tab/room/search transition must never leave the previous
+          // conversation actionable under the newly selected scope.
+          messageRequestRef.current += 1
+          setConversations([])
+          setSelected(null)
+          setMessages([])
+          setHasMore(false)
+          setNextBeforeID(undefined)
+          setMessageLoading(false)
+        }
+      }
+    } finally {
+      if (requestID === conversationRequestRef.current) {
+        setLoading(false)
+        setTransitioningMode(null)
+      }
+    }
   }, [appliedQuery, mode, roomScope])
 
   const loadMessages = useCallback(async (conversation: AdminChatConversation, beforeId?: number, prepend = false, mergeLatest = false) => {
+    const requestID = ++messageRequestRef.current
     setMessageLoading(true)
     try {
       const result = await adminApi.chatMessages({ scope: conversation.scope, roomScope: conversation.room_scope, gameId: conversation.game_id, roomType: conversation.room_type, beforeId, limit: 50 })
-      if (!sameConversation(selectedRef.current, conversation)) return
+      if (requestID !== messageRequestRef.current || !sameConversation(selectedRef.current, conversation)) return
       const items = Array.isArray(result?.items) ? result.items : []
       setMessages(current => prepend || mergeLatest ? mergeAdminChatMessages(items, current) : mergeAdminChatMessages(items))
       setHasMore(Boolean(result?.has_more))
       setNextBeforeID(result?.next_before_id)
       setError('')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '读取聊天记录失败')
-    } finally { setMessageLoading(false) }
+      if (requestID === messageRequestRef.current) setError(reason instanceof Error ? reason.message : '读取聊天记录失败')
+    } finally {
+      if (requestID === messageRequestRef.current) setMessageLoading(false)
+    }
   }, [])
 
   useEffect(() => { const timer = window.setTimeout(() => void loadConversations(false), 0); return () => window.clearTimeout(timer) }, [loadConversations])
@@ -333,7 +366,7 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
 	}
 
   const reply = async () => {
-    if (!selected || !draft.trim()) return
+    if (!selected || !draft.trim() || loading || transitioningMode) return
     setSaving(true)
     try {
       const message = await adminApi.replyChat({ scope: selected.scope, room_scope: selected.room_scope, game_id: selected.game_id, room_type: selected.room_type, content: draft.trim() })
@@ -368,7 +401,7 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
   }
 
   const openRedPacket = () => {
-    if (view === 'lottery' || !selected || selected.room_type !== 'group') return
+    if (view === 'lottery' || !selected || selected.room_type !== 'group' || loading || transitioningMode) return
     setRedPacketCount('10')
     setRedPacketTotal('100')
     setRedPacketGreeting('恭喜发财')
@@ -381,7 +414,7 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
   const sendRedPacket = async () => {
     const count = Number(redPacketCount)
     const total = Number(redPacketTotal)
-    if (view === 'lottery' || !selected || !Number.isInteger(count) || count < 1 || total < count * .01) return
+    if (view === 'lottery' || !selected || loading || transitioningMode || !Number.isInteger(count) || count < 1 || total < count * .01) return
     setSaving(true)
     try {
       const message = await adminApi.sendChatRedPacket({
@@ -433,7 +466,7 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
           overflow: 'hidden',
         }}>
           <Box px={1.3} py={1.1} borderBottom={1} borderColor="divider">
-            <TextField fullWidth select size="small" label="房间号" value={roomScope} onChange={event => { setMessages([]); setSelected(null); setRoomScope(event.target.value) }}>
+            <TextField fullWidth select size="small" label="房间号" value={roomScope} onChange={event => { setRedPacketOpen(false); setTransitioningMode(mode); setRoomScope(event.target.value) }}>
               {rooms.length ? rooms.map(room => <MenuItem key={room.scope} value={room.scope}><Avatar src={room.room_logo || undefined} variant="rounded" sx={{ width: 26, height: 26, mr: .9, color: '#fff', background: room.room_logo ? undefined : identityGradient, fontSize: 10.5, fontWeight: 900 }}>{(room.room_name || '房').slice(0, 1)}</Avatar>{room.room_code} · {room.room_name || `房间 ${room.room_code}`}{room.kind === 'tenant' ? '（租户直属）' : ''}{room.status === 1 ? '' : '（停用）'}</MenuItem>) : <MenuItem value="" disabled>暂无可用房间</MenuItem>}
             </TextField>
           </Box>
@@ -441,14 +474,15 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
             setLotteryCategory(next)
             setMessages([])
             setSelected(conversations.find(item => item.lobby_category?.trim() === next) ?? null)
-          }} variant="scrollable" scrollButtons={false} sx={{ px: 1.15, minHeight: 38, borderTop: 1, borderBottom: 1, borderColor: 'divider', '& .MuiTab-root': { minWidth: 64, minHeight: 38, px: 1.35, py: .45, fontSize: 12, fontWeight: 850 } }}>{lotteryCategories.map(category => <Tab key={category} value={category} label={category} />)}</Tabs>}</> : <Tabs value={mode} onChange={(_, next: ChatMode) => { setMode(next); setMessages([]); setSelected(null) }} variant="fullWidth">
+          }} variant="scrollable" scrollButtons={false} sx={{ px: 1.15, minHeight: 38, borderTop: 1, borderBottom: 1, borderColor: 'divider', '& .MuiTab-root': { minWidth: 64, minHeight: 38, px: 1.35, py: .45, fontSize: 12, fontWeight: 850 } }}>{lotteryCategories.map(category => <Tab key={category} value={category} label={category} />)}</Tabs>}</> : <Tabs value={mode} onChange={(_, next: ChatMode) => { if (next === mode) return; setRedPacketOpen(false); setTransitioningMode(next); setMode(next) }} variant="fullWidth" sx={{ '& .MuiTab-root': { transition: 'color 160ms ease, background-color 160ms ease' }, '@media (prefers-reduced-motion: reduce)': { '& .MuiTab-root': { transition: 'none' } } }}>
             <Tab value="service" icon={<SupportAgentRounded />} iconPosition="start" label="在线客服" />
             <Tab value="room" icon={<ForumRounded />} iconPosition="start" label="房间群聊" />
           </Tabs>}
           <Box p={1.5}><TextField fullWidth size="small" value={query} placeholder={lotteryView ? '搜索彩种、房间号或消息内容' : '搜索会员、昵称或消息内容'} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') setAppliedQuery(query.trim()) }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRounded fontSize="small" /></InputAdornment> } }} /></Box>
           <Divider />
-          {loading ? <Box p={3} textAlign="center"><CircularProgress size={24} /></Box> : <Box sx={{ flex: 1, minHeight: 0, maxHeight: { xs: 300, md: 'none' }, overflowY: 'auto', overscrollBehavior: 'contain' }}>
-            {visibleConversations.map(item => <Box key={`${item.room_type}:${item.scope}:${item.room_scope}:${item.game_id}`}>
+          <Box sx={{ position: 'relative', flex: 1, minHeight: 0, maxHeight: { xs: 300, md: 'none' }, overflow: 'hidden' }}>
+            <Box aria-busy={loading} sx={{ height: '100%', overflowY: 'auto', overscrollBehavior: 'contain', pointerEvents: loading ? 'none' : 'auto', opacity: loading && conversations.length ? .66 : 1, transition: 'opacity 160ms ease', '@media (prefers-reduced-motion: reduce)': { transition: 'none' } }}>
+              {visibleConversations.map(item => <Box key={`${item.room_type}:${item.scope}:${item.room_scope}:${item.game_id}`}>
               <Box component="div" role="button" tabIndex={0} onClick={() => {
               const next = selectConversation(selected, item, messages)
               setMessages(next.messages)
@@ -456,12 +490,16 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
             }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); const next = selectConversation(selected, item, messages); setMessages(next.messages); setSelected(next.selected) } }} sx={{ display: 'block', width: '100%', border: 0, textAlign: 'left', cursor: 'pointer', px: 1.8, py: lotteryView ? 1.7 : 1.5, bgcolor: selected?.scope === item.scope && selected?.room_scope === item.room_scope && selected?.game_id === item.game_id && selected?.room_type === item.room_type ? 'action.selected' : 'transparent', color: 'inherit', '&:hover': { bgcolor: 'action.hover' } }}>
                 <Stack direction="row" gap={1.1} alignItems="center"><Avatar src={lotteryView ? gameLogo(item.game_id) : undefined} sx={{ bgcolor: item.room_type === 'service' ? 'primary.main' : 'secondary.main', width: lotteryView ? 42 : 38, height: lotteryView ? 42 : 38 }}>{lotteryView ? item.title.slice(0, 1) : item.room_type === 'service' ? <SupportAgentRounded fontSize="small" /> : <ForumRounded fontSize="small" />}</Avatar><Box flex={1} minWidth={0}><Stack direction="row" gap={.5} alignItems="center"><Typography fontSize={lotteryView ? 14 : 12} fontWeight={800} sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</Typography>{item.pinned && <Tooltip title="固定置顶"><PushPinRounded color="primary" sx={{ fontSize: 13, transform: 'rotate(-18deg)' }} /></Tooltip>}{!lotteryView && item.room_type === 'group' && !item.group_chat_enabled && <Tooltip title="群聊已禁言"><VolumeOffRounded color="warning" sx={{ fontSize: 14 }} /></Tooltip>}<Typography ml="auto" fontSize={lotteryView ? 10 : 9} color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>{dateTime(item.latest_at)}</Typography></Stack><Typography fontSize={lotteryView ? 11.5 : 10} color="text.secondary" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.subtitle}</Typography><Typography fontSize={lotteryView ? 12 : 11} mt={.35} color="text.secondary" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{conversationPreview(item)}</Typography></Box></Stack>
               </Box>
-            </Box>)}
-            {!conversations.length && <Box textAlign="center" py={7} color="text.secondary"><ForumRounded sx={{ opacity: .35, fontSize: 36 }} /><Typography fontSize={12}>暂无待处理会话</Typography></Box>}
-          </Box>}
-          <Box px={1.8} py={1} borderTop={1} borderColor="divider"><Typography fontSize={10} color="text.secondary">当前 {conversationCount} 个{lotteryView ? '彩票房间' : '会话'}{!lotteryView && ' · 服务会话仅管理员可查看'}</Typography></Box>
+              </Box>)}
+              {!conversations.length && !loading && <Box textAlign="center" py={7} color="text.secondary"><ForumRounded sx={{ opacity: .35, fontSize: 36 }} /><Typography fontSize={12}>暂无待处理会话</Typography></Box>}
+              {!conversations.length && loading && <Stack aria-label="正在加载会话" gap={1.2} p={1.5}>{[0, 1, 2, 3].map(index => <Stack key={index} direction="row" gap={1.1} alignItems="center"><Skeleton variant="rounded" width={38} height={38} /><Box flex={1}><Skeleton width={index % 2 ? '48%' : '62%'} height={18} /><Skeleton width="86%" height={16} /></Box></Stack>)}</Stack>}
+            </Box>
+            {loading && conversations.length > 0 && <Stack role="status" aria-live="polite" direction="row" alignItems="center" justifyContent="center" gap={.8} sx={{ position: 'absolute', inset: 0, pointerEvents: 'none', color: 'text.secondary' }}><CircularProgress size={18} /><Typography fontSize={11} fontWeight={750}>{transitioningMode === 'service' ? '正在切换到在线客服' : transitioningMode === 'room' ? '正在切换到房间群聊' : '正在更新会话'}</Typography></Stack>}
+          </Box>
+          <Box px={1.8} py={1} borderTop={1} borderColor="divider"><Typography fontSize={10} color="text.secondary">{loading ? '正在读取当前分类…' : `当前 ${conversationCount} 个${lotteryView ? '彩票房间' : '会话'}${!lotteryView ? ' · 服务会话仅管理员可查看' : ''}`}</Typography></Box>
         </Box>
         <Box sx={{
+          position: 'relative',
           minWidth: 0,
           minHeight: { xs: 420, md: 0 },
           height: { md: '100%' },
@@ -510,14 +548,20 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
 				</Stack>
 			})}
             </Stack>}
+            {selected && messageLoading && !messages.length && <Stack aria-label="正在加载聊天记录" gap={1.6} sx={{ width: '100%', maxWidth: 720, mx: 'auto', pt: 1 }}>
+              <Stack direction="row" gap={1} alignItems="flex-start"><Skeleton variant="circular" width={31} height={31} /><Box width="42%"><Skeleton width="38%" height={16} /><Skeleton variant="rounded" width="100%" height={58} /></Box></Stack>
+              <Stack direction="row-reverse" gap={1} alignItems="flex-start"><Skeleton variant="circular" width={31} height={31} /><Box width="54%"><Skeleton width="35%" height={16} sx={{ ml: 'auto' }} /><Skeleton variant="rounded" width="100%" height={72} /></Box></Stack>
+              <Stack direction="row" gap={1} alignItems="flex-start"><Skeleton variant="circular" width={31} height={31} /><Box width="34%"><Skeleton width="42%" height={16} /><Skeleton variant="rounded" width="100%" height={46} /></Box></Stack>
+            </Stack>}
             {selected && !messages.length && !messageLoading && <Box textAlign="center" py={8} color="text.secondary"><Typography fontSize={12}>暂无聊天记录</Typography></Box>}
           </Box>
           <Divider />
-          <Box p={1.4}><Stack direction="row" gap={1} alignItems="flex-end"><TextField fullWidth multiline maxRows={4} placeholder={selected ? '输入回复内容，Enter 发送，Shift + Enter 换行' : '请先选择会话'} disabled={!selected || saving} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void reply() } }} inputProps={{ maxLength: 500 }} /><Button size="small" variant="contained" startIcon={<SendRounded sx={{ fontSize: '17px !important' }} />} disabled={!selected || !draft.trim() || saving} onClick={() => void reply()} sx={{ flex: '0 0 auto', minWidth: 78, height: 40, px: 1.3, whiteSpace: 'nowrap', fontSize: 12 }}>发送</Button></Stack></Box>
+          <Box p={1.4}><Stack direction="row" gap={1} alignItems="flex-end"><TextField fullWidth multiline maxRows={4} placeholder={selected ? '输入回复内容，Enter 发送，Shift + Enter 换行' : '请先选择会话'} disabled={!selected || saving || Boolean(transitioningMode)} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void reply() } }} inputProps={{ maxLength: 500 }} /><Button size="small" variant="contained" startIcon={<SendRounded sx={{ fontSize: '17px !important' }} />} disabled={!selected || !draft.trim() || saving || Boolean(transitioningMode)} onClick={() => void reply()} sx={{ flex: '0 0 auto', minWidth: 78, height: 40, px: 1.3, whiteSpace: 'nowrap', fontSize: 12 }}>发送</Button></Stack></Box>
+          {loading && transitioningMode && <Stack role="status" aria-live="polite" alignItems="center" justifyContent="center" sx={{ position: 'absolute', zIndex: 3, inset: 0, color: 'text.primary', bgcolor: theme => theme.palette.mode === 'dark' ? 'rgba(7,26,46,.34)' : 'rgba(247,251,252,.40)', transition: 'opacity 160ms ease', '@media (prefers-reduced-motion: reduce)': { transition: 'none' } }}><Box sx={{ display: 'flex', alignItems: 'center', gap: .8, px: 1.4, py: .9, border: 1, borderColor: 'divider', borderRadius: 1.2, bgcolor: 'background.paper', boxShadow: 3 }}><CircularProgress size={19} /><Typography fontSize={11.5} fontWeight={800}>{transitioningMode === 'service' ? '正在切换到在线客服' : '正在切换到房间群聊'}</Typography></Box></Stack>}
         </Box>
       </Box>
     </Card>
-    <Dialog open={!lotteryView && redPacketOpen} onClose={() => !saving && setRedPacketOpen(false)} fullWidth maxWidth="sm" slotProps={{ paper: { sx: { width: 'min(560px, calc(100% - 24px))', maxHeight: 'calc(100dvh - 32px)', borderRadius: 2, overflow: 'hidden' } } }}><DialogTitle sx={{ color: '#fff', background: 'linear-gradient(135deg,#d94b45,#ed7954)' }}><Typography fontSize={18} fontWeight={900}>发送房间红包</Typography><Typography fontSize={10.5} sx={{ opacity: .82 }}>红包会实时发送到当前房间聊天室</Typography></DialogTitle><DialogContent sx={{ pt: '18px !important', bgcolor: 'background.default' }}><RedPacketForm count={redPacketCount} total={redPacketTotal} greeting={redPacketGreeting} cover={redPacketCover} minTurnover={redPacketMinTurnover} onCount={setRedPacketCount} onTotal={setRedPacketTotal} onGreeting={setRedPacketGreeting} onCover={setRedPacketCover} onMinTurnover={setRedPacketMinTurnover} /></DialogContent><DialogActions sx={{ px: 2.5, py: 1.25, bgcolor: 'background.paper' }}><Button size="small" onClick={() => setRedPacketOpen(false)}>取消</Button><Button size="small" variant="contained" color="error" disabled={saving || !Number.isInteger(Number(redPacketCount)) || Number(redPacketCount) < 1 || Number(redPacketTotal) < Number(redPacketCount) * .01 || Number(redPacketMinTurnover) < 0} onClick={() => void sendRedPacket()} sx={{ minWidth: 88, height: 34, px: 1.5 }}>{saving ? '发送中…' : '发送红包'}</Button></DialogActions></Dialog>
+    <Dialog open={!lotteryView && redPacketOpen} onClose={() => !saving && setRedPacketOpen(false)} fullWidth maxWidth="sm" slotProps={{ paper: { sx: { width: 'min(560px, calc(100% - 24px))', maxHeight: 'calc(100dvh - 32px)', borderRadius: 2, overflow: 'hidden' } } }}><DialogTitle sx={{ color: '#fff', background: 'linear-gradient(135deg,#d94b45,#ed7954)' }}><Typography fontSize={18} fontWeight={900}>发送房间红包</Typography><Typography fontSize={10.5} sx={{ opacity: .82 }}>红包会实时发送到当前房间聊天室</Typography></DialogTitle><DialogContent sx={{ pt: '18px !important', bgcolor: 'background.default' }}><RedPacketForm count={redPacketCount} total={redPacketTotal} greeting={redPacketGreeting} cover={redPacketCover} minTurnover={redPacketMinTurnover} onCount={setRedPacketCount} onTotal={setRedPacketTotal} onGreeting={setRedPacketGreeting} onCover={setRedPacketCover} onMinTurnover={setRedPacketMinTurnover} /></DialogContent><DialogActions sx={{ px: 2.5, py: 1.25, bgcolor: 'background.paper' }}><Button size="small" onClick={() => setRedPacketOpen(false)}>取消</Button><Button size="small" variant="contained" color="error" disabled={saving || loading || Boolean(transitioningMode) || !Number.isInteger(Number(redPacketCount)) || Number(redPacketCount) < 1 || Number(redPacketTotal) < Number(redPacketCount) * .01 || Number(redPacketMinTurnover) < 0} onClick={() => void sendRedPacket()} sx={{ minWidth: 88, height: 34, px: 1.5 }}>{saving ? '发送中…' : '发送红包'}</Button></DialogActions></Dialog>
 		<Dialog open={Boolean(memberInfo) || memberLoading} onClose={() => !memberLoading && setMemberInfo(null)} fullWidth maxWidth="sm"><DialogTitle>会员资料</DialogTitle><DialogContent dividers>{memberLoading && !memberInfo ? <Box py={5} textAlign="center"><CircularProgress size={26} /><Typography mt={1} fontSize={12} color="text.secondary">正在读取会员与注单资料…</Typography></Box> : memberInfo && <Stack gap={1.5}><Stack direction="row" alignItems="center" gap={1.2}><Avatar src={memberAvatar(memberInfo.id, memberInfo.robot_avatar || memberInfo.avatar)} sx={{ width: 56, height: 56, border: 1, borderColor: 'divider' }}>{(memberInfo.nickname || memberInfo.username).slice(0, 1)}</Avatar><Box minWidth={0} flex={1}><Stack direction="row" alignItems="center" gap={.65} flexWrap="wrap"><Typography fontSize={16} fontWeight={900} noWrap>{memberInfo.nickname || memberInfo.username}</Typography>{memberInfo.public_title?.trim() && <Chip size="small" color="primary" variant="outlined" label={memberInfo.public_title.trim()} />}{memberInfo.badge?.trim() && <Chip size="small" color="warning" variant="outlined" label={memberInfo.badge.trim()} />}{memberInfo.is_robot && <Chip size="small" color="secondary" label="房间机器人" />}</Stack><Typography fontSize={11} color="text.secondary">会员 ID {memberInfo.public_id} · @{memberInfo.username}</Typography></Box><Chip size="small" color={memberInfo.status === 1 ? 'success' : 'default'} label={memberInfo.status === 1 ? '账号正常' : '账号停用'} /></Stack><Box display="grid" gridTemplateColumns={{ xs: '1fr 1fr', sm: 'repeat(4,1fr)' }} gap={1}>{[['可用积分', memberInfo.balance.toLocaleString('zh-CN', { minimumFractionDigits: 2 })], ['总注单', `${memberActivity?.betCount ?? 0} 笔`], ['待结算', `${memberActivity?.pendingCount ?? 0} 笔`], ['登录次数', `${memberInfo.login_count} 次`]].map(([label, value]) => <Paper key={label} variant="outlined" sx={{ p: 1.05 }}><Typography fontSize={9.5} color="text.secondary">{label}</Typography><Typography fontSize={13} fontWeight={900}>{value}</Typography></Paper>)}</Box>{memberActivity && <Paper variant="outlined" sx={{ p: 1.15 }}><Typography fontSize={10} color="text.secondary" mb={.6}>最近 {memberActivity.sampleSize} 笔注单活动</Typography><Stack direction="row" justifyContent="space-between"><Box><Typography fontSize={10} color="text.secondary">投注额</Typography><Typography fontWeight={900}>¥ {memberActivity.recentStake.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</Typography></Box><Box textAlign="right"><Typography fontSize={10} color="text.secondary">派彩额</Typography><Typography fontWeight={900}>¥ {memberActivity.recentPayout.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</Typography></Box></Stack></Paper>}<Divider /><Box display="grid" gridTemplateColumns={{ xs: '1fr', sm: '1fr 1fr' }} columnGap={2.5} rowGap={1}>{[['账号角色', memberInfo.role === 'member' ? '会员' : memberInfo.role], ['风险等级', memberInfo.risk_level === 'normal' ? '正常' : memberInfo.risk_level === 'watch' ? '关注' : '受限'], ['所属房间', `${activeRoomName}${memberInfo.room_code || activeRoom?.room_code ? ` · ${memberInfo.room_code || activeRoom?.room_code}` : ''}`], ['最近登录', dateTime(memberInfo.last_login_at || undefined)], ['注册时间', dateTime(memberInfo.created_at)], ['联系电话', memberInfo.phone || '未填写']].map(([label, value]) => <Stack key={label} direction="row" justifyContent="space-between" gap={1}><Typography color="text.secondary" fontSize={11}>{label}</Typography><Typography fontSize={11} fontWeight={750} textAlign="right">{value}</Typography></Stack>)}</Box>{memberInfo.remark && <Alert severity="info" icon={false}><Typography fontSize={11}><Box component="span" fontWeight={900}>备注：</Box>{memberInfo.remark}</Typography></Alert>}</Stack>}</DialogContent><DialogActions><Button onClick={() => setMemberInfo(null)}>关闭</Button></DialogActions></Dialog>
   </Box>
 }

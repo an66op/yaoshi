@@ -57,6 +57,7 @@ type ShellMenuGroup = { label: string; items: ShellMenuItem[] }
 const adminIcons: Record<string, ReactNode> = {
   '/': <DashboardRounded />, '/tenants': <ApartmentRounded />, '/users': <PeopleAltRounded />, '/members': <PeopleAltRounded />, '/agents': <SupportAgentRounded />,
 	'/robots': <SmartToyRounded />,
+	'/fly-orders': <FlightTakeoffRounded />,
   '/applications': <FactCheckRounded />, '/room-reviews': <CheckCircleRounded />, '/chat': <SupportAgentRounded />, '/lottery-chat': <ForumRounded />, '/reports': <AssessmentRounded />, '/wallet': <AccountBalanceWalletRounded />,
   '/announcements': <CampaignRounded />, '/activities': <CampaignRounded />, '/monitor': <MonitorHeartRounded />, '/bets': <ListAltRounded />, '/results': <ReceiptLongRounded />,
   '/limits': <TuneRounded />, '/board-report': <FlightTakeoffRounded />, '/lottery-network': <PublicRounded />, '/interface-test': <PublicRounded />, '/entertainment': <SportsEsportsRounded />,

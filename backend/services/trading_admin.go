@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"math"
 	"strings"
+	"unicode"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -19,6 +20,21 @@ type TradingAdminService struct{ db *gorm.DB }
 type UserFlyConfig struct {
 	Mode string  `json:"mode"` // inherit / custom / off
 	Rate float64 `json:"rate"`
+}
+
+// UserExternalFollowConfig is preparation metadata for a future connector.
+// Status is intentionally server-owned: without an installed connector this
+// service can only report not_connected and must never suggest an order was
+// sent to, accepted by, or settled on an external platform.
+type UserExternalFollowConfig struct {
+	Status         string  `json:"status"`
+	Capability     string  `json:"capability"`
+	TargetPlatform string  `json:"target_platform"`
+	TargetAccount  string  `json:"target_account"`
+	EndpointLabel  string  `json:"endpoint_label"`
+	SingleLimit    float64 `json:"single_limit"`
+	DailyLimit     float64 `json:"daily_limit"`
+	Remark         string  `json:"remark"`
 }
 
 type UserRebateConfig struct {
@@ -39,30 +55,53 @@ type UserOddsOverrideItem struct {
 }
 
 type UserTradingConfig struct {
-	UserID         uint64                 `json:"user_id"`
-	Username       string                 `json:"username"`
-	OddsMultiplier float64                `json:"odds_multiplier"`
-	Fly            UserFlyConfig          `json:"fly"`
-	Rebate         UserRebateConfig       `json:"rebate"`
-	GameID         string                 `json:"game_id"`
-	GameName       string                 `json:"game_name"`
-	Odds           []UserOddsOverrideItem `json:"odds"`
-	RoomFlyRate    float64                `json:"room_fly_rate"`
-	RoomRebateRate float64                `json:"room_rebate_rate"`
+	UserID         uint64                   `json:"user_id"`
+	WorkspaceID    uint64                   `json:"workspace_id"`
+	Username       string                   `json:"username"`
+	OddsMultiplier float64                  `json:"odds_multiplier"`
+	Fly            UserFlyConfig            `json:"fly"`
+	ExternalFollow UserExternalFollowConfig `json:"external_follow"`
+	Rebate         UserRebateConfig         `json:"rebate"`
+	GameID         string                   `json:"game_id"`
+	GameName       string                   `json:"game_name"`
+	Odds           []UserOddsOverrideItem   `json:"odds"`
+	RoomFlyRate    float64                  `json:"room_fly_rate"`
+	RoomRebateRate float64                  `json:"room_rebate_rate"`
 }
 
 type UpdateUserTradingInput struct {
-	OddsMultiplier *float64 `json:"odds_multiplier"`
-	FlyMode        string   `json:"fly_mode"`
-	FlyRate        float64  `json:"fly_rate"`
-	RebateMode     string   `json:"rebate_mode"`
-	RebateRate     float64  `json:"rebate_rate"`
-	GameID         string   `json:"game_id"`
+	OddsMultiplier *float64                       `json:"odds_multiplier"`
+	FlyMode        string                         `json:"fly_mode"`
+	FlyRate        float64                        `json:"fly_rate"`
+	ExternalFollow *UpdateUserExternalFollowInput `json:"external_follow"`
+	RebateMode     string                         `json:"rebate_mode"`
+	RebateRate     float64                        `json:"rebate_rate"`
+	GameID         string                         `json:"game_id"`
 	Odds           []struct {
 		PlayCode string   `json:"play_code"`
 		Override *float64 `json:"override"`
 	} `json:"odds"`
 }
+
+type UpdateUserExternalFollowInput struct {
+	TargetPlatform string  `json:"target_platform"`
+	TargetAccount  string  `json:"target_account"`
+	EndpointLabel  string  `json:"endpoint_label"`
+	SingleLimit    float64 `json:"single_limit"`
+	DailyLimit     float64 `json:"daily_limit"`
+	Remark         string  `json:"remark"`
+}
+
+type normalizedUserExternalFollow struct {
+	targetPlatform   string
+	targetAccount    string
+	endpointLabel    string
+	singleLimitCents int64
+	dailyLimitCents  int64
+	remark           string
+}
+
+const maxExternalFollowLimitCents int64 = 10_000_000_000
 
 type RoomOddsOverrideItem struct {
 	PlayCode    string   `json:"play_code"`
@@ -224,12 +263,69 @@ func (s *TradingAdminService) Get(userID uint64, gameID string) (*UserTradingCon
 	rebateMode := defaultString(account.RebateMode, "inherit")
 	effectiveRebate, rebateSource := resolveRebate(account, roomRebateRate)
 	return &UserTradingConfig{
-		UserID: account.UserID, Username: account.Username,
+		UserID: account.UserID, WorkspaceID: account.WorkspaceID, Username: account.Username,
 		OddsMultiplier: oddsMultiplier,
 		Fly:            UserFlyConfig{Mode: mode, Rate: account.FlyRate},
+		ExternalFollow: externalFollowConfig(account),
 		Rebate:         UserRebateConfig{Mode: rebateMode, Rate: account.RebateRate, Effective: effectiveRebate, Source: rebateSource},
 		GameID:         limits.GameID, GameName: limits.GameName, Odds: items, RoomFlyRate: roomRate, RoomRebateRate: roomRebateRate,
 	}, nil
+}
+
+func externalFollowConfig(account user.User) UserExternalFollowConfig {
+	return UserExternalFollowConfig{
+		Status:         "not_connected",
+		Capability:     "configuration_only",
+		TargetPlatform: account.FlyTargetPlatform,
+		TargetAccount:  account.FlyTargetAccount,
+		EndpointLabel:  account.FlyEndpointLabel,
+		SingleLimit:    centsToAmount(account.FlySingleLimitCents),
+		DailyLimit:     centsToAmount(account.FlyDailyLimitCents),
+		Remark:         account.FlyConnectionRemark,
+	}
+}
+
+func normalizeUserExternalFollow(input UpdateUserExternalFollowInput) (normalizedUserExternalFollow, error) {
+	var result normalizedUserExternalFollow
+	var err error
+	if result.targetPlatform, err = normalizedFlyText(input.TargetPlatform, "目标平台", 80); err != nil {
+		return result, err
+	}
+	if result.targetAccount, err = normalizedFlyText(input.TargetAccount, "目标账号标识", 120); err != nil {
+		return result, err
+	}
+	if result.endpointLabel, err = normalizedFlyText(input.EndpointLabel, "端点标识", 160); err != nil {
+		return result, err
+	}
+	if result.remark, err = normalizedFlyText(input.Remark, "连接备注", 500); err != nil {
+		return result, err
+	}
+	if result.singleLimitCents, err = nonNegativeMoneyCents(input.SingleLimit, "单笔上限"); err != nil {
+		return result, err
+	}
+	if result.dailyLimitCents, err = nonNegativeMoneyCents(input.DailyLimit, "每日上限"); err != nil {
+		return result, err
+	}
+	if result.singleLimitCents > maxExternalFollowLimitCents || result.dailyLimitCents > maxExternalFollowLimitCents {
+		return result, apperrors.NewBusinessError("INVALID_REQUEST", "连接预配置上限不能超过 100000000")
+	}
+	if result.singleLimitCents > 0 && result.dailyLimitCents > 0 && result.dailyLimitCents < result.singleLimitCents {
+		return result, apperrors.NewBusinessError("INVALID_REQUEST", "每日上限不能小于单笔上限")
+	}
+	return result, nil
+}
+
+func normalizedFlyText(value, label string, limit int) (string, error) {
+	value = strings.TrimSpace(value)
+	if len([]rune(value)) > limit {
+		return "", apperrors.NewBusinessError("INVALID_REQUEST", label+"过长")
+	}
+	for _, char := range value {
+		if unicode.IsControl(char) {
+			return "", apperrors.NewBusinessError("INVALID_REQUEST", label+"不能包含控制字符")
+		}
+	}
+	return value, nil
 }
 
 func (s *TradingAdminService) Update(userID uint64, input UpdateUserTradingInput) (*UserTradingConfig, error) {
@@ -245,15 +341,23 @@ func (s *TradingAdminService) Update(userID uint64, input UpdateUserTradingInput
 	if mode != "inherit" && mode != "custom" && mode != "off" {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "飞单模式不正确")
 	}
-	if input.FlyRate < 0 || input.FlyRate > 100 {
+	if math.IsNaN(input.FlyRate) || math.IsInf(input.FlyRate, 0) || input.FlyRate < 0 || input.FlyRate > 100 {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "飞单比例需在 0-100 之间")
 	}
 	rebateMode := defaultString(strings.TrimSpace(input.RebateMode), "inherit")
 	if rebateMode != "inherit" && rebateMode != "custom" && rebateMode != "off" {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "返水模式不正确")
 	}
-	if input.RebateRate < 0 || input.RebateRate > 100 {
+	if math.IsNaN(input.RebateRate) || math.IsInf(input.RebateRate, 0) || input.RebateRate < 0 || input.RebateRate > 100 {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "返水比例需在 0-100 之间")
+	}
+	var external *normalizedUserExternalFollow
+	if input.ExternalFollow != nil {
+		normalized, normalizeErr := normalizeUserExternalFollow(*input.ExternalFollow)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		external = &normalized
 	}
 	gameID := strings.TrimSpace(input.GameID)
 	err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -266,6 +370,14 @@ func (s *TradingAdminService) Update(userID uint64, input UpdateUserTradingInput
 		}
 		account.FlyMode = mode
 		account.FlyRate = input.FlyRate
+		if external != nil {
+			account.FlyTargetPlatform = external.targetPlatform
+			account.FlyTargetAccount = external.targetAccount
+			account.FlyEndpointLabel = external.endpointLabel
+			account.FlySingleLimitCents = external.singleLimitCents
+			account.FlyDailyLimitCents = external.dailyLimitCents
+			account.FlyConnectionRemark = external.remark
+		}
 		account.RebateMode = rebateMode
 		account.RebateRate = input.RebateRate
 		if err := tx.Save(&account).Error; err != nil {

@@ -284,6 +284,7 @@ func (h *UserAdminHandler) GetTrading(c *gin.Context) {
 		constants.SendError(c, http.StatusInternalServerError, "读取飞单与赔率配置失败", err)
 		return
 	}
+	c.Set("target_workspace_id", result.WorkspaceID)
 	constants.SendSuccess(c, http.StatusOK, "ok", result)
 }
 
@@ -303,5 +304,6 @@ func (h *UserAdminHandler) UpdateTrading(c *gin.Context) {
 		constants.SendError(c, http.StatusInternalServerError, "保存飞单与赔率配置失败", err)
 		return
 	}
-	constants.SendSuccess(c, http.StatusOK, "飞单与单独赔率已保存", result)
+	c.Set("target_workspace_id", result.WorkspaceID)
+	constants.SendSuccess(c, http.StatusOK, "会员飞单与交易配置已保存", result)
 }

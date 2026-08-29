@@ -105,12 +105,13 @@ export function WorkspaceRobotsPage() {
 	}
 
   return <Box p={{ xs: 1.5, md: 2.5 }}>
-    <PageHeader eyebrow="会员与自动化" title="机器人管理" description="" actions={<Button color="warning" variant="outlined" startIcon={<RestartAltRounded />} disabled={loading || saving || !robots.length} onClick={() => setResetOpen(true)}>一键重置昵称与余额</Button>} />
+    <PageHeader eyebrow="会员与自动化" title="机器人管理" description="" />
     {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
     <Card sx={{ mt: 2 }}><CardContent sx={{ p: { xs: 2, md: 2.5 } }}>
-      <Stack direction="row" alignItems="center" gap={1.25} mb={2}>
+      <Stack direction="row" alignItems="center" gap={1.25} mb={2} flexWrap="wrap">
         <Box sx={{ width: 44, height: 44, borderRadius: 2.5, display: 'grid', placeItems: 'center', color: 'white', bgcolor: 'primary.main' }}><SmartToyRounded /></Box>
 		<Box flex={1}><Typography fontWeight={850}>房间自动下注</Typography><Typography variant="caption" color="text.secondary">账号、下注和运行记录只属于当前房间 · 今日 {setting?.today_bets ?? 0}/{setting?.daily_bet_limit ?? 200} · 待结 {setting?.pending_bets ?? 0}/{setting?.max_pending_bets ?? 50}</Typography></Box>
+        <Button color="warning" size="small" variant="outlined" startIcon={<RestartAltRounded />} disabled={loading || saving || !robots.length} onClick={() => setResetOpen(true)}>一键重置昵称与余额</Button>
         <Chip label={setting?.enabled ? '运行中' : '已停用'} color={setting?.enabled ? 'success' : 'default'} />
       </Stack>
       {loading || !setting ? <CircularProgress size={22} /> : <Stack gap={2}>

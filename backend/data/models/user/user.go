@@ -51,6 +51,16 @@ type User struct {
 	// FlyMode: inherit = 跟随房间默认飞单比例; custom = 使用 FlyRate; off = 不飞单
 	FlyMode string  `gorm:"size:20;not null;default:inherit" json:"fly_mode"`
 	FlyRate float64 `gorm:"not null;default:0" json:"fly_rate"` // 百分比，仅 custom 生效
+	// External-follow fields are non-secret preparation metadata for a future
+	// connector. They never imply that an outside platform is connected and
+	// are deliberately kept on the existing member trading record instead of
+	// creating a second, conflicting fly-order policy model.
+	FlyTargetPlatform   string `gorm:"size:80;not null;default:''" json:"-"`
+	FlyTargetAccount    string `gorm:"size:120;not null;default:''" json:"-"`
+	FlyEndpointLabel    string `gorm:"size:160;not null;default:''" json:"-"`
+	FlySingleLimitCents int64  `gorm:"not null;default:0" json:"-"`
+	FlyDailyLimitCents  int64  `gorm:"not null;default:0" json:"-"`
+	FlyConnectionRemark string `gorm:"size:500;not null;default:''" json:"-"`
 
 	// RoomRebateRate is the room default owned by an agent. Members inherit it
 	// unless their RebateMode explicitly overrides or disables the rebate.

@@ -34,8 +34,9 @@ const WorkspaceRobotsPage = lazy(() => import('./pages/WorkspaceRobotsPage').the
 const RoomSettingsPage = lazy(() => import('./pages/RoomSettingsPage').then(module => ({ default: module.RoomSettingsPage })))
 const WorkspaceGamesPage = lazy(() => import('./pages/WorkspaceGamesPage').then(module => ({ default: module.WorkspaceGamesPage })))
 const DataMaintenancePage = lazy(() => import('./pages/DataMaintenancePage').then(module => ({ default: module.DataMaintenancePage })))
+const FlyOrderPage = lazy(() => import('./pages/FlyOrderPage').then(module => ({ default: module.FlyOrderPage })))
 
-const routes = new Set(['/', '/users', '/members', '/robots', '/tenants', '/agents', '/applications', '/room-reviews', '/chat', '/lottery-chat', '/announcements', '/reports', '/wallet', '/activities', '/monitor', '/bets', '/results', '/limits', '/board-report', '/lottery-network', '/interface-test', '/entertainment', '/special-numbers', '/menu-management', '/audit', '/data-maintenance', '/system'])
+const routes = new Set(['/', '/users', '/members', '/robots', '/fly-orders', '/tenants', '/agents', '/applications', '/room-reviews', '/chat', '/lottery-chat', '/announcements', '/reports', '/wallet', '/activities', '/monitor', '/bets', '/results', '/limits', '/board-report', '/lottery-network', '/interface-test', '/entertainment', '/special-numbers', '/menu-management', '/audit', '/data-maintenance', '/system'])
 const currentPath = () => routes.has(window.location.pathname) ? window.location.pathname : '/'
 
 function App() {
@@ -114,6 +115,7 @@ function App() {
   }
 
   const agentPage = path === '/members' ? <AgentWorkspacePage key="members" section="users" />
+		: path === '/fly-orders' ? <FlyOrderPage role="agent" />
     : path === '/room-reviews' ? <AgentWorkspacePage key="room-reviews" section="room-reviews" />
     : path === '/applications' ? <ApplicationsPage />
     : path === '/entertainment' ? <WorkspaceGamesPage />
@@ -131,6 +133,7 @@ function App() {
   const tenantPage = path === '/agents'
     ? <TenantWorkspacePage key="agents" section="agents" />
     : path === '/members' ? <AgentWorkspacePage key="tenant-members" section="users" tenantDirect />
+		: path === '/fly-orders' ? <FlyOrderPage role="tenant" />
     : path === '/applications' ? <ApplicationsPage />
     : path === '/entertainment' ? <WorkspaceGamesPage />
     : path === '/bets' ? <AgentWorkspacePage key="tenant-bets" section="bets" tenantDirect />
@@ -151,6 +154,7 @@ function App() {
     : path === '/users' ? <UsersPage view="accounts" />
     : path === '/members' ? <UsersPage view="members" />
     : path === '/robots' ? <RobotsPage />
+		: path === '/fly-orders' ? <FlyOrderPage role="admin" />
     : path === '/agents' ? <AgentsPage />
     : path === '/tenants' ? <TenantsPage />
     : path === '/lottery-chat' ? <ChatPage key="lottery" view="lottery" />

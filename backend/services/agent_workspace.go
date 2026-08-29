@@ -128,6 +128,7 @@ func (s *AgentWorkspaceService) Users(agentID uint64, filter UserListFilter) (*U
 	for _, row := range rows {
 		items = append(items, adminUser(row))
 	}
+	populateAdminUserPresence(items)
 	return &UserList{Items: items, Total: total, Page: filter.Page, PageSize: filter.PageSize}, nil
 }
 

@@ -23,7 +23,8 @@ export const DEFAULT_ADMIN_MENU: AdminMenuItemConfig[] = [
   { path: '/limits', label: '赔率与回水', group: '彩票运营', order: 120, visible: true },
   { path: '/bets', label: '注单管理', group: '彩票运营', order: 130, visible: true },
   { path: '/monitor', label: '现场监控', group: '彩票运营', order: 140, visible: false },
-	{ path: '/members', label: '会员管理', group: '组织与账号', order: 145, visible: false },
+	{ path: '/members', label: '会员管理', group: '组织与账号', order: 145, visible: true },
+	{ path: '/fly-orders', label: '飞单管理', group: '内容与服务', order: 146, visible: true },
 	{ path: '/robots', label: '机器人管理', group: '内容与服务', order: 147, visible: true },
   { path: '/lottery-chat', label: '彩票室', group: '内容与服务', order: 150, visible: true },
   { path: '/chat', label: '客服与群聊', group: '内容与服务', order: 155, visible: true },
@@ -44,6 +45,7 @@ export const DEFAULT_TENANT_MENU: AdminMenuItemConfig[] = [
   { path: '/applications', label: '申请管理', group: '直属房间', order: 40, visible: true },
   { path: '/entertainment', label: '游戏列表', group: '直属房间', order: 45, visible: true },
   { path: '/bets', label: '注单管理', group: '直属房间', order: 50, visible: true },
+	{ path: '/fly-orders', label: '飞单管理', group: '直属房间', order: 55, visible: true },
   { path: '/lottery-chat', label: '彩票室', group: '直属房间', order: 60, visible: true },
   { path: '/chat', label: '客服与群聊', group: '直属房间', order: 70, visible: true },
   { path: '/robots', label: '机器人管理', group: '直属房间', order: 80, visible: true },
@@ -60,6 +62,7 @@ export const DEFAULT_AGENT_MENU: AdminMenuItemConfig[] = [
   { path: '/applications', label: '申请管理', group: '房间业务', order: 30, visible: true },
   { path: '/entertainment', label: '游戏列表', group: '房间业务', order: 35, visible: true },
   { path: '/bets', label: '注单管理', group: '房间业务', order: 40, visible: true },
+	{ path: '/fly-orders', label: '飞单管理', group: '房间业务', order: 45, visible: true },
   { path: '/lottery-chat', label: '彩票室', group: '房间运营', order: 50, visible: true },
   { path: '/chat', label: '客服与群聊', group: '房间运营', order: 60, visible: true },
   { path: '/robots', label: '机器人管理', group: '房间运营', order: 70, visible: true },
@@ -105,6 +108,7 @@ export function normalizeAdminMenu(value: unknown): AdminMenuItemConfig[] {
   }
   return DEFAULT_ADMIN_MENU.map((fallback) => {
     const candidate = byPath.get(fallback.path)
+    const requiredMemberEntry = fallback.path === '/members'
     const savedLabel = typeof candidate?.label === 'string' ? candidate.label.trim() : ''
     const legacyChatLabel = fallback.path === '/chat' && ['客服与聊天室', '在线客服与群聊'].includes(savedLabel)
     const legacyLotteryLabel = fallback.path === '/lottery-chat' && ['彩票大厅', '彩票聊天室'].includes(savedLabel)
@@ -114,12 +118,16 @@ export function normalizeAdminMenu(value: unknown): AdminMenuItemConfig[] {
     const legacyReportLabel = fallback.path === '/reports' && savedLabel === '经营报表'
     const legacyEntertainmentLabel = fallback.path === '/entertainment' && savedLabel === '游戏与彩种'
     const retiredPath = ['/board-report', '/lottery-network', '/monitor', '/activities', '/special-numbers'].includes(fallback.path)
-    const label = savedLabel && !legacyChatLabel && !legacyLotteryLabel && !legacyApplicationLabel && !legacyResultsLabel && !legacyWalletLabel && !legacyReportLabel && !legacyEntertainmentLabel && !retiredPath
+    const label = savedLabel && !requiredMemberEntry && !legacyChatLabel && !legacyLotteryLabel && !legacyApplicationLabel && !legacyResultsLabel && !legacyWalletLabel && !legacyReportLabel && !legacyEntertainmentLabel && !retiredPath
       ? savedLabel.slice(0, 18)
       : fallback.label
-    const group = typeof candidate?.group === 'string' && candidate.group.trim() ? candidate.group.trim().slice(0, 18) : fallback.group
-    const order = typeof candidate?.order === 'number' && Number.isFinite(candidate.order) ? candidate.order : fallback.order
-    const visible = fallback.path === '/menu-management'
+    const group = requiredMemberEntry
+      ? fallback.group
+      : typeof candidate?.group === 'string' && candidate.group.trim() ? candidate.group.trim().slice(0, 18) : fallback.group
+    const order = requiredMemberEntry
+      ? fallback.order
+      : typeof candidate?.order === 'number' && Number.isFinite(candidate.order) ? candidate.order : fallback.order
+    const visible = fallback.path === '/menu-management' || requiredMemberEntry
       ? true
       : retiredPath
         ? false

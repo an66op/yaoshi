@@ -75,8 +75,19 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
   }
 
   return (
-    <Box minHeight="100vh" display="grid" sx={{ placeItems: 'center', px: 2, background: 'radial-gradient(circle at 20% 20%, #d7f3ef, transparent 36%), radial-gradient(circle at 80% 0%, #c7e4f4, transparent 40%), linear-gradient(160deg, #f4f8fb, #e8f1f6)' }}>
-      <Card sx={{ width: '100%', maxWidth: 420, borderRadius: 3 }}>
+    <Box minHeight="100vh" display="grid" sx={{
+      placeItems: 'center',
+      px: 2,
+      background: theme => theme.palette.mode === 'dark'
+        ? 'radial-gradient(circle at 16% 18%, rgba(20,130,148,.26), transparent 34%), radial-gradient(circle at 86% 4%, rgba(52,87,151,.24), transparent 38%), radial-gradient(circle at 52% 100%, rgba(21,105,108,.16), transparent 42%), linear-gradient(155deg, #04111f 0%, #071a2e 48%, #09243a 100%)'
+        : 'radial-gradient(circle at 20% 20%, #d7f3ef, transparent 36%), radial-gradient(circle at 80% 0%, #c7e4f4, transparent 40%), linear-gradient(160deg, #f4f8fb, #e8f1f6)',
+    }}>
+      <Card sx={{
+        width: '100%',
+        maxWidth: 420,
+        borderRadius: 3,
+        boxShadow: theme => theme.palette.mode === 'dark' ? '0 24px 70px rgba(0,0,0,.48), 0 0 0 1px rgba(85,199,199,.06)' : undefined,
+      }}>
         <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
           <Stack alignItems="center" gap={1} mb={3}>
             <Box sx={{ width: 52, height: 52, borderRadius: 2.5, display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 900, fontSize: 22, background: 'linear-gradient(145deg,#1684ad,#29bdb0)' }}>王</Box>

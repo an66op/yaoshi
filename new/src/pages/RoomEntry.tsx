@@ -18,6 +18,13 @@ export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }:
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
+  const roomDescription = [error && 'room-entry-error', notice && 'room-entry-notice', 'room-entry-hint'].filter(Boolean).join(' ')
+
+  const updateRoom = (value: string) => {
+    setRoom(value)
+    setError('')
+    setNotice('')
+  }
 
   const submit = async () => {
     const value = room.trim()
@@ -41,47 +48,47 @@ export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }:
 
   return (
     <main className={`room-entry-page theme-${theme}`}>
-      <header className="room-entry-hero">
-        <div className="room-entry-top">
-          <img alt={BRAND_NAME} src="/images/king-racing-mark.jpg" />
-          <div><b>{BRAND_NAME}</b><small>王者 · PRIVATE ROOM</small></div>
-        </div>
-      </header>
-      <section className="room-entry-content">
-        <button className="room-entry-back" onClick={onBack}><Icon name="back" />{fromLobby ? '返回大厅' : '返回登录'}</button>
-        <article className="room-entry-card">
-          <div className="room-entry-copy">
-            <small>PRIVATE ROOM</small>
-            <h1>输入房间号</h1>
-            <p>房间号由上级配置并发放给代理；输入后进入对应代理房间。</p>
+      <section className="room-entry-shell">
+        <header className="room-entry-top">
+          <button aria-label={fromLobby ? '返回大厅' : '返回登录'} className="room-entry-back" onClick={onBack} type="button"><Icon name="back" /></button>
+          <div className="room-entry-brand">
+            <img alt="" src="/images/king-racing-mark.jpg" />
+            <span><b>{BRAND_NAME}</b><small>PRIVATE ROOM</small></span>
           </div>
-          <label className="room-entry-field">
+          <span aria-hidden="true" className="room-entry-top-spacer" />
+        </header>
+        <form className="room-entry-card" onSubmit={(event) => { event.preventDefault(); void submit() }}>
+          <div className="room-entry-copy">
+            <h1>输入房间号</h1>
+          </div>
+          <label className="room-entry-field" htmlFor="room-entry-code">
             <span>房间号</span>
-            <div>
+            <div className="room-entry-input-shell">
+              <Icon name="room" />
               <input
+                aria-describedby={roomDescription}
+                aria-invalid={Boolean(error) || undefined}
                 autoComplete="off"
                 autoFocus
+                disabled={loading}
+                id="room-entry-code"
                 inputMode="numeric"
                 maxLength={12}
-                onChange={(event) => { setRoom(event.target.value.replace(/\D/g, '')); setError(''); setNotice('') }}
-                onKeyDown={(event) => event.key === 'Enter' && void submit()}
-                placeholder="例如 88001"
+                onChange={(event) => updateRoom(event.currentTarget.value.replace(/\D/g, '').slice(0, 12))}
+                pattern="[0-9]*"
+                placeholder="请输入数字房间号"
                 value={room}
               />
-              <i>ROOM ID</i>
             </div>
           </label>
-          {error && <p className="room-entry-error" role="alert">{error}</p>}
-          {notice && <p className="room-entry-success" role="status">{notice}</p>}
-          <button className="room-entry-submit" disabled={loading} onClick={() => void submit()}>
-            <span>{loading ? '验证中…' : '进入房间'}</span>
-            <Icon name="arrow" />
+          {error && <p className="room-entry-error" id="room-entry-error" role="alert">{error}</p>}
+          {notice && <p className="room-entry-success" id="room-entry-notice" role="status">{notice}</p>}
+          <button aria-busy={loading} aria-label={loading ? '正在验证房间' : '进入房间'} className="room-entry-submit" disabled={loading} type="submit">
+            <b>{loading ? '验证中…' : '进入房间'}</b>
+            <span><Icon name="arrow" /></span>
           </button>
-        </article>
-        <div className="room-entry-note">
-          <span>代理房间</span>
-          <p>系统会校验房间号并绑定到你的会员账号。</p>
-        </div>
+          <p className="room-entry-hint" id="room-entry-hint">仅支持 5–12 位数字，房间号由上级提供</p>
+        </form>
       </section>
     </main>
   )

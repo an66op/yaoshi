@@ -56,11 +56,12 @@ func prepareEvent(event Event) Event {
 }
 
 type client struct {
-	identity SessionIdentity
-	send     chan []byte
-	done     chan struct{}
-	stateMu  sync.Mutex
-	closed   bool
+	identity      SessionIdentity
+	send          chan []byte
+	done          chan struct{}
+	presenceToken string
+	stateMu       sync.Mutex
+	closed        bool
 }
 
 // closeSession and enqueue share the same lock so a logout that has finished
@@ -140,15 +141,27 @@ func (h *Hub) hasSessionValidator() bool {
 }
 
 func (h *Hub) register(c *client) {
+	if c == nil {
+		return
+	}
 	if c.done == nil {
 		c.done = make(chan struct{})
 	}
 	h.mu.Lock()
-	h.clients[c] = struct{}{}
+	_, existed := h.clients[c]
+	if !existed {
+		h.clients[c] = struct{}{}
+	}
 	h.mu.Unlock()
+	if !existed {
+		h.touchPresence(c)
+	}
 }
 
 func (h *Hub) unregister(c *client) {
+	if c == nil {
+		return
+	}
 	h.mu.Lock()
 	_, existed := h.clients[c]
 	if existed {
@@ -157,6 +170,7 @@ func (h *Hub) unregister(c *client) {
 	h.mu.Unlock()
 	if existed {
 		c.closeSession()
+		removePresence(c)
 	}
 }
 

@@ -552,12 +552,15 @@ function ChatRoom({
           <Icon name="back" />
         </button>
         {room === "group" ? (
-          <b className="chat-room-heading">
-            <span className={`chat-room-avatar ${roomLogo ? "has-image" : ""}`} aria-hidden="true">
-              {roomLogo ? <img alt="" src={roomLogo} /> : displayTitle.slice(0, 1)}
+          <>
+            <b className="chat-room-heading" title={displayTitle}>
+              <strong>{displayTitle}</strong>
+              {roomChatTitle && <small>{roomChatTitle}</small>}
+            </b>
+            <span className={`chat-room-avatar ${roomLogo ? "has-image" : "is-fallback"}`} aria-hidden="true">
+              <img alt="" src={roomLogo || "/images/room-logos/crown-shield.webp"} />
             </span>
-            <span><strong>{displayTitle}</strong>{roomChatTitle && <small>{roomChatTitle}</small>}</span>
-          </b>
+          </>
         ) : <b>{displayTitle}</b>}
       </header>
       {roomSettingsError && <div className="chat-room-settings-error"><ChatRetryState compact message={roomSettingsError} onRetry={() => void loadRoomSettings()} /></div>}

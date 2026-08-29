@@ -344,6 +344,7 @@ export type AdminUser = {
   tenant_name?: string
   login_identity?: string
   status: 0 | 1
+  online: boolean
   last_login_at: string | null
   login_count: number
   created_at: string
@@ -480,9 +481,20 @@ export type RoomResolve = {
 
 export type UserTradingConfig = {
   user_id: number
+	workspace_id: number
   username: string
 	odds_multiplier?: number
   fly: { mode: 'inherit' | 'custom' | 'off' | string; rate: number }
+	external_follow: {
+		status: 'not_connected' | string
+		capability: 'configuration_only' | string
+		target_platform: string
+		target_account: string
+		endpoint_label: string
+		single_limit: number
+		daily_limit: number
+		remark: string
+	}
   rebate: { mode: 'inherit' | 'custom' | 'off' | string; rate: number; effective: number; source: string }
   game_id: string
   game_name: string
@@ -497,6 +509,24 @@ export type UserTradingConfig = {
     effective: number
     has_override: boolean
   }>
+}
+
+export type UpdateUserTradingPayload = {
+	odds_multiplier?: number
+	fly_mode: string
+	fly_rate: number
+	external_follow?: {
+		target_platform: string
+		target_account: string
+		endpoint_label: string
+		single_limit: number
+		daily_limit: number
+		remark: string
+	}
+	rebate_mode: string
+	rebate_rate: number
+	game_id: string
+	odds: Array<{ play_code: string; override: number | null }>
 }
 
 export type RoomTradingConfig = {
@@ -1472,15 +1502,7 @@ export const adminApi = {
     const query = gameId ? `?game_id=${encodeURIComponent(gameId)}` : ''
     return request<UserTradingConfig>(`/admin/users/${id}/trading${query}`)
   },
-  updateUserTrading: (id: number, payload: {
-		odds_multiplier?: number
-    fly_mode: string
-    fly_rate: number
-    rebate_mode: string
-    rebate_rate: number
-    game_id: string
-    odds: Array<{ play_code: string; override: number | null }>
-  }) => request<UserTradingConfig>(`/admin/users/${id}/trading`, { method: 'PUT', body: JSON.stringify(payload) }),
+  updateUserTrading: (id: number, payload: UpdateUserTradingPayload) => request<UserTradingConfig>(`/admin/users/${id}/trading`, { method: 'PUT', body: JSON.stringify(payload) }),
   applications: (params: { query?: string; status?: string; type?: string; date?: string; start?: string; end?: string; workspaceId?: number; page?: number; pageSize?: number }) => {
     const query = new URLSearchParams({
       query: params.query ?? '',
@@ -1677,7 +1699,7 @@ export const tenantApi = {
 	setUserStatus: (id: number, status: 0 | 1) => request<AdminUser>(`/tenant/users/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
 	adjustUserBalance: (id: number, amount: number, remark: string) => request<AdminUser>(`/tenant/users/${id}/balance`, { method: 'POST', body: JSON.stringify({ amount, remark }) }),
 	userTrading: (id: number, gameId?: string) => request<UserTradingConfig>(`/tenant/users/${id}/trading${gameId ? `?game_id=${encodeURIComponent(gameId)}` : ''}`),
-	updateUserTrading: (id: number, payload: { odds_multiplier?: number; fly_mode: string; fly_rate: number; rebate_mode: string; rebate_rate: number; game_id: string; odds: Array<{ play_code: string; override: number | null }> }) => request<UserTradingConfig>(`/tenant/users/${id}/trading`, { method: 'PUT', body: JSON.stringify(payload) }),
+	updateUserTrading: (id: number, payload: UpdateUserTradingPayload) => request<UserTradingConfig>(`/tenant/users/${id}/trading`, { method: 'PUT', body: JSON.stringify(payload) }),
 	bets: (params?: { query?: string; gameId?: string; issue?: string; userId?: number; status?: string; page?: number; pageSize?: number }) => {
 		const query = new URLSearchParams({ query: params?.query ?? '', game_id: params?.gameId ?? 'all', issue: params?.issue ?? '', status: params?.status ?? 'all', page: String(params?.page ?? 1), page_size: String(params?.pageSize ?? 20) })
 		if (params?.userId) query.set('user_id', String(params.userId))
@@ -1745,7 +1767,7 @@ export const agentApi = {
   setUserStatus: (id: number, status: 0 | 1) => request<AdminUser>(`/agent/users/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   adjustUserBalance: (id: number, amount: number, remark: string) => request<AdminUser>(`/agent/users/${id}/balance`, { method: 'POST', body: JSON.stringify({ amount, remark }) }),
   userTrading: (id: number, gameId?: string) => request<UserTradingConfig>(`/agent/users/${id}/trading${gameId ? `?game_id=${encodeURIComponent(gameId)}` : ''}`),
-  updateUserTrading: (id: number, payload: { odds_multiplier?: number; fly_mode: string; fly_rate: number; rebate_mode: string; rebate_rate: number; game_id: string; odds: Array<{ play_code: string; override: number | null }> }) => request<UserTradingConfig>(`/agent/users/${id}/trading`, { method: 'PUT', body: JSON.stringify(payload) }),
+  updateUserTrading: (id: number, payload: UpdateUserTradingPayload) => request<UserTradingConfig>(`/agent/users/${id}/trading`, { method: 'PUT', body: JSON.stringify(payload) }),
   bets: (params?: { query?: string; gameId?: string; issue?: string; userId?: number; status?: string; page?: number; pageSize?: number }) => {
     const query = new URLSearchParams({ query: params?.query ?? '', game_id: params?.gameId ?? 'all', issue: params?.issue ?? '', status: params?.status ?? 'all', page: String(params?.page ?? 1), page_size: String(params?.pageSize ?? 20) })
     if (params?.userId) query.set('user_id', String(params.userId))

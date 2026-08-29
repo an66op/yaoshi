@@ -507,7 +507,7 @@ func (h *WorkspaceHandler) UpdateDirectUserTrading(c *gin.Context) {
 		constants.SendError(c, http.StatusBadRequest, "保存会员赔率失败", err)
 		return
 	}
-	constants.SendSuccess(c, http.StatusOK, "会员赔率与回水已保存", result)
+	constants.SendSuccess(c, http.StatusOK, "会员飞单与交易配置已保存", result)
 }
 
 func (h *WorkspaceHandler) DirectBets(c *gin.Context) {

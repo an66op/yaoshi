@@ -289,3 +289,51 @@ func TestDisconnectAndPublishCannotQueueAfterRevocation(t *testing.T) {
 		t.Fatal("the socket queue changed after disconnect completed")
 	}
 }
+
+func TestHubIsUserOnlineTracksRegistrationAndMultipleConnections(t *testing.T) {
+	hub := NewHub()
+	first := &client{identity: SessionIdentity{UserID: 41, AuthVersion: 2, WorkspaceID: 8801}, send: make(chan []byte, 1)}
+	second := &client{identity: SessionIdentity{UserID: 41, AuthVersion: 2, WorkspaceID: 8801}, send: make(chan []byte, 1)}
+	other := &client{identity: SessionIdentity{UserID: 42, AuthVersion: 1, WorkspaceID: 8801}, send: make(chan []byte, 1)}
+
+	if hub.IsUserOnline(0) || hub.IsUserOnline(41) {
+		t.Fatal("a user without a registered socket was reported online")
+	}
+	hub.register(first)
+	hub.register(second)
+	hub.register(other)
+	if !hub.IsUserOnline(41) || !hub.IsUserOnline(42) {
+		t.Fatal("registered users were not reported online")
+	}
+
+	hub.unregister(first)
+	if !hub.IsUserOnline(41) {
+		t.Fatal("closing one of multiple sockets incorrectly marked the user offline")
+	}
+	hub.unregister(second)
+	if hub.IsUserOnline(41) {
+		t.Fatal("the user remained online after the last socket was removed")
+	}
+	if !hub.IsUserOnline(42) {
+		t.Fatal("unregistering one user affected an unrelated user's presence")
+	}
+}
+
+func TestHubIsUserOnlineClearsAfterCredentialRevocation(t *testing.T) {
+	hub := NewHub()
+	connection := &client{identity: SessionIdentity{UserID: 73, AuthVersion: 6, WorkspaceID: 8801}, send: make(chan []byte, 1)}
+	hub.register(connection)
+	if !hub.IsUserOnline(73) {
+		t.Fatal("registered connection was not reported online")
+	}
+
+	hub.disconnectUserGeneration(73, 6)
+	if hub.IsUserOnline(73) {
+		t.Fatal("revoked connection kept the user online")
+	}
+	select {
+	case <-connection.done:
+	default:
+		t.Fatal("credential revocation did not close the registered connection")
+	}
+}

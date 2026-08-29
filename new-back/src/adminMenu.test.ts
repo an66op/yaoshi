@@ -14,4 +14,20 @@ describe('interface test menu boundary', () => {
     expect(platform.find(item => item.path === '/lottery-network')?.visible).toBe(false)
     expect(platform.find(item => item.path === '/interface-test')?.visible).toBe(true)
   })
+
+  it('exposes one scoped fly-order entry to every management role', () => {
+    expect(normalizeAdminMenu([]).find(item => item.path === '/fly-orders')).toMatchObject({ label: '飞单管理', group: '内容与服务', visible: true })
+    expect(DEFAULT_TENANT_MENU.find(item => item.path === '/fly-orders')).toMatchObject({ label: '飞单管理', visible: true })
+    expect(DEFAULT_AGENT_MENU.find(item => item.path === '/fly-orders')).toMatchObject({ label: '飞单管理', visible: true })
+  })
+
+  it('restores the canonical platform member entry when legacy settings hid or moved it', () => {
+    const platform = normalizeAdminMenu([{ path: '/members', label: '旧会员入口', group: '内容与服务', order: 999, visible: false }])
+    expect(platform.find(item => item.path === '/members')).toMatchObject({
+      label: '会员管理',
+      group: '组织与账号',
+      order: 145,
+      visible: true,
+    })
+  })
 })

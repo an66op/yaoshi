@@ -181,10 +181,10 @@ export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
 		finally { setSaving(false) }
 	}
   const [eyebrow, title] = titles[section]
-  return <Box p={{ xs: 1.5, md: 2.5 }}>
-		<PageHeader eyebrow={eyebrow} title={title} description="" actions={<Stack direction="row" gap={1}>{section === 'content' && <Button variant="outlined" startIcon={<CampaignRounded />} onClick={addAnnouncement}>新增公告</Button>}{section === 'content' && <Button variant="outlined" startIcon={<AddRounded />} onClick={() => setActivityDraft({ ...emptyActivity })}>新增活动</Button>}{section === 'wallet' && <Button variant="outlined" startIcon={<AddRounded />} onClick={() => setChannelDraft({ ...emptyChannel })}>新增收款方式</Button>}<Button variant="contained" startIcon={<SaveRounded />} disabled={!data || saving} onClick={() => void save()}>{saving ? '保存中…' : '保存设置'}</Button></Stack>} />
+  return <Box p={{ xs: 1.5, md: section === 'limits' ? 2 : 2.5 }}>
+			<PageHeader eyebrow={eyebrow} title={title} description="" actions={<Stack direction="row" gap={1}>{section === 'content' && <Button variant="outlined" startIcon={<CampaignRounded />} onClick={addAnnouncement}>新增公告</Button>}{section === 'content' && <Button variant="outlined" startIcon={<AddRounded />} onClick={() => setActivityDraft({ ...emptyActivity })}>新增活动</Button>}{section === 'wallet' && <Button variant="outlined" startIcon={<AddRounded />} onClick={() => setChannelDraft({ ...emptyChannel })}>新增收款方式</Button>}<Button variant="contained" startIcon={<SaveRounded />} disabled={!data || saving} onClick={() => void save()}>{saving ? '保存中…' : '保存设置'}</Button></Stack>} />
     {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
-	    {data && <Card sx={{ mt: 2, maxWidth: section === 'limits' ? 1480 : 1080 }}><CardContent sx={{ p: { xs: 1.5, md: 2.5 } }}><Stack gap={2}>
+		    {data && <Card sx={{ mt: section === 'limits' ? 1.25 : 2, maxWidth: section === 'limits' ? 'none' : 1080, borderRadius: section === 'limits' ? 1.5 : undefined }}><CardContent sx={{ p: section === 'limits' ? { xs: 1, md: 1.25 } : { xs: 1.5, md: 2.5 } }}><Stack gap={section === 'limits' ? 1 : 2}>
       {section === 'room' && <>
         <Typography fontWeight={850}>入房与聊天</Typography>
 				<Box sx={{ p: 1.4, border: 1, borderColor: 'divider', borderRadius: 2.2, bgcolor: data.room_enabled ? 'success.50' : 'action.hover' }}><FormControlLabel sx={{ m: 0 }} control={<Switch checked={data.room_enabled} onChange={event => patch('room_enabled', event.target.checked)} />} label={<Box><Typography fontWeight={850}>{data.room_enabled ? '房间营业中' : '房间已关闭'}</Typography><Typography variant="caption" color="text.secondary">关闭后会员不能进入或下注，管理账号仍可登录修改配置。</Typography></Box>} /></Box>
@@ -222,22 +222,24 @@ export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
 				<Box display="grid" gridTemplateColumns={{ xs: '1fr', lg: 'repeat(2,minmax(0,1fr))' }} gap={1.2}>{activities.map(item => <Card key={item.id} variant="outlined" sx={{ borderRadius: 2.2 }}><CardContent sx={{ p: '14px !important' }}><Stack direction="row" gap={1.2} alignItems="center"><Box flex={1} minWidth={0}><Stack direction="row" gap={.8} alignItems="center"><Typography fontWeight={850} noWrap>{item.title}</Typography><Chip size="small" color={item.status === 'active' ? 'success' : 'default'} label={item.status === 'active' ? '启用' : item.status === 'ended' ? '已结束' : '草稿'} /></Stack><Typography fontSize={11} color="text.secondary" noWrap>{item.subtitle || '暂无副标题'} · 排序 {item.sort_order}</Typography></Box><Button size="small" onClick={() => setActivityDraft({ id: item.id, type: item.type, title: item.title, subtitle: item.subtitle, status: item.status, cover: item.cover, reward: item.reward, sort_order: item.sort_order, config: item.config })}>编辑</Button><Switch size="small" checked={item.status === 'active'} onChange={async event => { await api.setActivityStatus(item.id, event.target.checked ? 'active' : 'draft'); setActivities(await api.activities('all')) }} /><IconButton size="small" color="error" onClick={() => setPendingDelete({ kind: 'activity', id: item.id, label: item.title })}><DeleteOutlineRounded fontSize="small" /></IconButton></Stack></CardContent></Card>)}</Box>
 	      </>}
       {section === 'limits' && <>
-        <Paper variant="outlined" sx={{ p: 1.35, borderRadius: 2.3, bgcolor: 'action.hover' }}>
-				  <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ md: 'center' }} gap={1.5}>
-				    <Box flex={1}><Typography fontWeight={900}>房间规则</Typography><Typography fontSize={10.5} color="text.secondary">这些设置只影响当前房间，会员单独配置仍拥有最高优先级。</Typography></Box>
-				    <Stack direction="row" gap={1.5} flexWrap="wrap"><FormControlLabel control={<Switch checked={data.show_odds} onChange={event => patch('show_odds', event.target.checked)} />} label="显示赔率" /><FormControlLabel control={<Switch checked={data.prediction_enabled} onChange={event => patch('prediction_enabled', event.target.checked)} />} label="预测" /><FormControlLabel control={<Switch checked={data.security_password_check} onChange={event => patch('security_password_check', event.target.checked)} />} label="安全校验" /></Stack>
-				  </Stack>
-				</Paper>
-				<GameOddsNavigation games={games.filter(game => game.platform_enabled).map(game => ({ ...game, enabled: game.platform_enabled }))} gameId={trading?.game_id ?? ''} onSelect={gameId => void loadTrading(gameId)} />
-				{!trading || tradingLoading ? <Box py={5} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={24} /></Box> : <>
-				  <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ md: 'center' }} gap={1.2}>
-				    <Box flex={1}><Typography fontWeight={900}>{trading.game_name}</Typography><Typography fontSize={10.5} color="text.secondary">当前房间 {trading.room_code} · {trading.odds.filter(item => item.has_override).length} 项自定义</Typography></Box>
-				    <TextField size="small" type="number" label="房间默认回水 %" value={trading.rebate_rate} onChange={event => { setTrading(current => current ? { ...current, rebate_rate: Number(event.target.value) } : current); setTradingDirty(true) }} inputProps={{ min: 0, max: 100, step: 0.01 }} sx={{ width: { xs: '100%', md: 210 } }} />
-				    <Button variant="contained" startIcon={<SaveRounded />} disabled={saving || !tradingDirty} onClick={() => void saveTrading()}>{saving ? '保存中…' : tradingDirty ? '保存当前游戏' : '已保存'}</Button>
-				  </Stack>
-				  <OddsOverrideGrid level="room" items={trading.odds} onChange={odds => { setTrading(current => current ? { ...current, odds } : current); setTradingDirty(true) }} />
-				</>}
-				<Alert severity="info">赔率优先级：会员单独赔率 → 当前房间赔率 → 平台默认。用户离开当前房间后，本房间的会员赔率不会带到新房间。</Alert>
+		        <Paper variant="outlined" sx={{ px: 1, py: .7, borderRadius: 1.1, bgcolor: 'action.hover' }}>
+					  <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ md: 'center' }} gap={{ xs: .5, md: 1 }}>
+					    <Box flex={1}><Typography fontSize={13} fontWeight={900}>房间规则</Typography><Typography fontSize={9.8} color="text.secondary">仅作用于当前房间，会员单独配置优先。</Typography></Box>
+					    <Stack direction="row" gap={{ xs: .5, sm: 1 }} flexWrap="wrap" sx={{ '& .MuiFormControlLabel-root': { m: 0 }, '& .MuiFormControlLabel-label': { fontSize: 11.5, fontWeight: 700 } }}><FormControlLabel control={<Switch size="small" checked={data.show_odds} onChange={event => patch('show_odds', event.target.checked)} />} label="显示赔率" /><FormControlLabel control={<Switch size="small" checked={data.prediction_enabled} onChange={event => patch('prediction_enabled', event.target.checked)} />} label="预测" /><FormControlLabel control={<Switch size="small" checked={data.security_password_check} onChange={event => patch('security_password_check', event.target.checked)} />} label="安全校验" /></Stack>
+					  </Stack>
+					</Paper>
+					<GameOddsNavigation games={games.filter(game => game.platform_enabled).map(game => ({ ...game, enabled: game.platform_enabled }))} gameId={trading?.game_id ?? ''} onSelect={gameId => void loadTrading(gameId)} />
+					{!trading || tradingLoading ? <Box py={5} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={24} /></Box> : <>
+					  <Paper variant="outlined" sx={{ p: .8, borderRadius: 1.1 }}>
+					    <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} gap={.8}>
+					      <Box flex={1}><Typography fontSize={13.5} fontWeight={900}>{trading.game_name}</Typography><Typography fontSize={9.8} color="text.secondary">房间 {trading.room_code} · {trading.odds.filter(item => item.has_override).length} 项单独赔率</Typography></Box>
+					      <TextField size="small" type="number" label="默认回水 %" value={trading.rebate_rate} onChange={event => { setTrading(current => current ? { ...current, rebate_rate: Number(event.target.value) } : current); setTradingDirty(true) }} inputProps={{ min: 0, max: 100, step: 0.01 }} sx={{ width: { xs: '100%', sm: 170 }, '& .MuiOutlinedInput-root': { borderRadius: 1 } }} />
+					      <Button size="small" variant="contained" startIcon={<SaveRounded />} disabled={saving || !tradingDirty} onClick={() => void saveTrading()} sx={{ minHeight: 36, whiteSpace: 'nowrap' }}>{saving ? '保存中…' : tradingDirty ? '保存当前游戏' : '已保存'}</Button>
+					    </Stack>
+					  </Paper>
+					  <OddsOverrideGrid level="room" items={trading.odds} onChange={odds => { setTrading(current => current ? { ...current, odds } : current); setTradingDirty(true) }} />
+					</>}
+					<Paper variant="outlined" sx={{ px: 1, py: .65, borderRadius: 1, bgcolor: 'action.hover' }}><Stack direction={{ xs: 'column', sm: 'row' }} gap={.65} alignItems={{ sm: 'center' }}><Chip size="small" color="primary" variant="outlined" label="生效顺序" sx={{ height: 21, width: 'fit-content' }} /><Typography fontSize={10.5} color="text.secondary">会员单独赔率 → 当前房间赔率 → 平台默认；会员换房后不会带走本房配置。</Typography></Stack></Paper>
       </>}
       {section === 'wallet' && <>
         <Typography fontWeight={850}>人工上下分门槛</Typography>

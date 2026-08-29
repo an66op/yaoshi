@@ -74,11 +74,11 @@ func main() {
 		return mapped
 	})
 	gin.SetMode(cfg.Server.Mode)
-	r := gin.Default()
+	r := gin.New()
 	if err := r.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
 		log.Fatalf("受信任代理配置错误: %v", err)
 	}
-	r.Use(api.Cors())
+	r.Use(api.SafeRequestLogger(), gin.Recovery(), api.SecurityHeaders(), api.RequestBodyLimit(), api.Cors())
 	uploadRoot := strings.TrimSpace(os.Getenv("BACKEND_UPLOAD_DIR"))
 	if uploadRoot == "" {
 		uploadRoot = "uploads"
@@ -111,8 +111,9 @@ func main() {
 		Addr:              net.JoinHostPort(cfg.Server.Bind, fmt.Sprintf("%d", cfg.Server.Port)),
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       75 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+		MaxHeaderBytes:    64 << 10,
 	}
 	go func() {
 		if serveErr := server.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {

@@ -6,6 +6,8 @@ export default defineConfig({
   plugins: [react()],
   server: { host: true, port: 5174, strictPort: true },
   build: {
+    // Production artifacts must not publish source paths or component source.
+    sourcemap: false,
     rollupOptions: {
       output: {
         manualChunks(id) {

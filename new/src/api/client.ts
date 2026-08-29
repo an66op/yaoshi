@@ -1,4 +1,4 @@
-import { clearMemberBusinessStorage } from '../utils/businessStorage'
+import { broadcastMemberLogout } from '../utils/businessStorage'
 
 // A phone on the development LAN must call this computer's backend, not its
 // own localhost. Production is served through Nginx on the same origin, where
@@ -24,6 +24,18 @@ export class AuthError extends Error {
   }
 }
 
+function responseErrorMessage(response: Response, value: unknown, fallback: string) {
+  // Never render database/proxy diagnostics returned by an unexpected server
+  // failure. Validation and rate-limit messages remain available to users.
+  if (response.status >= 500) return fallback
+  if (typeof value !== 'string') return fallback
+  const message = [...value].map(character => {
+    const code = character.charCodeAt(0)
+    return code < 32 || code === 127 ? ' ' : character
+  }).join('').trim()
+  return message ? message.slice(0, 240) : fallback
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = init?.signal ? undefined : new AbortController()
   const timeout = controller ? window.setTimeout(() => controller.abort(), 15_000) : undefined
@@ -47,18 +59,18 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     body = JSON.parse(raw) as ApiResponse<T>
   } catch {
     if (response.status === 401) {
-      clearMemberBusinessStorage()
+      broadcastMemberLogout()
       window.dispatchEvent(new CustomEvent('yaotu-member-auth-expired'))
       throw new AuthError('登录状态已失效，请重新登录')
     }
     throw new Error('服务返回了无效响应')
   }
   if (response.status === 401) {
-    clearMemberBusinessStorage()
+    broadcastMemberLogout()
     window.dispatchEvent(new CustomEvent('yaotu-member-auth-expired'))
-    throw new AuthError(body.message || '请先登录')
+    throw new AuthError(responseErrorMessage(response, body.message, '请先登录'))
   }
-  if (!response.ok) throw new Error(body.message || '服务暂时不可用')
+  if (!response.ok) throw new Error(responseErrorMessage(response, body.message, '服务暂时不可用'))
   return body.data
 }
 
@@ -82,7 +94,7 @@ export async function publicRequest<T>(path: string, init?: RequestInit): Promis
   const raw = await response.text()
   let body: ApiResponse<T>
   try { body = JSON.parse(raw) as ApiResponse<T> } catch { throw new Error('服务返回了无效响应') }
-  if (!response.ok) throw new Error(body.message || '服务暂时不可用')
+  if (!response.ok) throw new Error(responseErrorMessage(response, body.message, '服务暂时不可用'))
   return body.data
 }
 

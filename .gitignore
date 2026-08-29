@@ -16,6 +16,13 @@ backend/uploads/
 .env.*
 !.env.example
 backend/config/config.yaml
+*.pem
+*.key
+*.p12
+*.pfx
+.pgpass
+*.dump
+*.dump.sha256
 
 # Go build output
 bin/

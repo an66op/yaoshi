@@ -42,4 +42,32 @@ describe('member API cookie credentials', () => {
     expect(init.credentials).toBe('include')
     expect(new Headers(init.headers).has('Authorization')).toBe(false)
   })
+
+  it('does not expose server diagnostics from 5xx responses', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => JSON.stringify({ code: 500, message: 'pq: password=database-secret', data: null }),
+    }))
+    const { request } = await import('./client')
+
+    await expect(request('/member/me')).rejects.toThrow('服务暂时不可用')
+    await expect(request('/member/me')).rejects.not.toThrow('database-secret')
+  })
+
+  it('broadcasts a credential-free event when authentication expires', async () => {
+    storage.setItem('seven-star-session', JSON.stringify({ account: 'member-a' }))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => JSON.stringify({ code: 401, message: '请先登录', data: null }),
+    }))
+    const { request } = await import('./client')
+
+    await expect(request('/member/me')).rejects.toThrow('请先登录')
+    const authEvent = storage.getItem('yaotu-member-auth-event') ?? ''
+    expect(JSON.parse(authEvent)).toMatchObject({ type: 'logout' })
+    expect(authEvent).not.toContain('member-a')
+    expect(storage.getItem('seven-star-session')).toBeNull()
+  })
 })

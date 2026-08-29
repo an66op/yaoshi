@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  broadcastMemberLogout,
   clearMemberBusinessStorage,
 	LEGACY_MEMBER_TOKEN_KEY,
+  MEMBER_AUTH_EVENT_KEY,
   MEMBER_DEMO_STATE_KEY,
   MEMBER_ROOM_HISTORY_KEY,
   MEMBER_SESSION_KEY,
@@ -55,5 +57,21 @@ describe('clearMemberBusinessStorage', () => {
     expect(clearMemberBusinessStorage(local, session)).toEqual({ theme: null })
 	expect(local.getItem(LEGACY_MEMBER_TOKEN_KEY)).toBeNull()
     expect(local.getItem(MEMBER_DEMO_STATE_KEY)).toBeNull()
+  })
+
+  it('跨标签注销事件不包含账号或凭据', () => {
+    const local = new MemoryStorage()
+    const session = new MemoryStorage()
+    local.setItem(MEMBER_SESSION_KEY, JSON.stringify({ account: 'sensitive-user' }))
+    local.setItem(LEGACY_MEMBER_TOKEN_KEY, 'legacy-secret')
+
+    broadcastMemberLogout(local, session)
+
+    const raw = local.getItem(MEMBER_AUTH_EVENT_KEY) ?? ''
+    expect(JSON.parse(raw)).toMatchObject({ type: 'logout' })
+    expect(raw).not.toContain('sensitive-user')
+    expect(raw).not.toContain('legacy-secret')
+    expect(local.getItem(MEMBER_SESSION_KEY)).toBeNull()
+    expect(local.getItem(LEGACY_MEMBER_TOKEN_KEY)).toBeNull()
   })
 })

@@ -60,12 +60,19 @@ func main() {
 	services.StartSettlementRecovery(rootContext, db)
 
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery(), api.Cors())
+	r.Use(api.SafeRequestLogger(), gin.Recovery(), api.SecurityHeaders(), api.RequestBodyLimit(), api.Cors())
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "drawfeed"}) })
 	api.LoadDrawFeedRoutes(r, db, scheduler)
 
 	port := envInt("DRAWFEED_PORT", 8081)
-	server := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: r, ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       75 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+	}
 	go func() {
 		log.Printf("开奖数据服务已启动，监听端口 %d", port)
 		if serveErr := server.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {

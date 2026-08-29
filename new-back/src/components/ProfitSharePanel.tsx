@@ -9,6 +9,7 @@ import PendingActionsRounded from '@mui/icons-material/PendingActionsRounded'
 import { useCallback, useEffect, useState } from 'react'
 import { adminApi, agentApi, type ProfitShareStatement } from '../api'
 import { useFeedback } from './feedback'
+import { createCsv } from '../utils/csv'
 
 const money = (value: number) => new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
 const dateTime = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
@@ -55,9 +56,8 @@ export function ProfitSharePanel({ agent = false, initialDate = '' }: { agent?: 
   }
 
   const exportStatement = () => {
-    const escape = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`
     const rows = (data?.items ?? []).map(row => [row.biz_date, row.room_code, row.agent_username, row.bet_count, row.turnover, row.payout, row.gross_profit, row.rebate, row.accrued_share, row.paid_share, row.pending_share, statusMeta[row.status]?.label ?? row.status, row.last_transaction_id ?? '', dateTime(row.last_paid_at)])
-    const csv = [['日期', '房间', '代理', '注单数', '有效投注', '派彩', '经营毛利', '会员回水', '应计分成', '已入账', '待分账', '状态', '余额流水号', '最后入账时间'], ...rows].map(row => row.map(escape).join(',')).join('\n')
+    const csv = createCsv([['日期', '房间', '代理', '注单数', '有效投注', '派彩', '经营毛利', '会员回水', '应计分成', '已入账', '待分账', '状态', '余额流水号', '最后入账时间'], ...rows])
     const href = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }))
     const link = document.createElement('a'); link.href = href; link.download = `代理分账_${data?.biz_date || date}.csv`; link.click(); URL.revokeObjectURL(href)
   }

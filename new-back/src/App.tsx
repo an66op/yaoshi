@@ -1,7 +1,7 @@
 import { Box, CircularProgress, CssBaseline, ThemeProvider } from '@mui/material'
 import type { PaletteMode } from '@mui/material'
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import { adminApi } from './api'
+import { adminApi, AuthError } from './api'
 import { ADMIN_AUTH_EVENT_KEY, broadcastAdminLogout, clearLegacyAdminSession, setCurrentUser, type AuthUser } from './auth'
 import { AdminShell } from './components/AdminShell'
 import { FeedbackProvider } from './components/FeedbackProvider'
@@ -38,10 +38,13 @@ const FlyOrderPage = lazy(() => import('./pages/FlyOrderPage').then(module => ({
 
 const routes = new Set(['/', '/users', '/members', '/robots', '/fly-orders', '/tenants', '/agents', '/applications', '/room-reviews', '/chat', '/lottery-chat', '/announcements', '/reports', '/wallet', '/activities', '/monitor', '/bets', '/results', '/limits', '/board-report', '/lottery-network', '/interface-test', '/entertainment', '/special-numbers', '/menu-management', '/audit', '/data-maintenance', '/system'])
 const currentPath = () => routes.has(window.location.pathname) ? window.location.pathname : '/'
+const storedPaletteMode = (): PaletteMode => {
+  try { return window.localStorage.getItem('yaotu-back-theme') === 'dark' ? 'dark' : 'light' } catch { return 'light' }
+}
 
 function App() {
   const [path, setPath] = useState(currentPath)
-  const [mode, setMode] = useState<PaletteMode>(() => window.localStorage.getItem('yaotu-back-theme') === 'dark' ? 'dark' : 'light')
+  const [mode, setMode] = useState<PaletteMode>(storedPaletteMode)
 	const [user, setUser] = useState<AuthUser | null>(null)
 	const [authChecking, setAuthChecking] = useState(true)
   const theme = useMemo(() => createAdminTheme(mode), [mode])
@@ -96,14 +99,25 @@ function App() {
   }, [])
 
   const navigate = (next: string) => { if (next === path) return; window.history.pushState({}, '', next); setPath(next) }
-  const toggleMode = () => setMode(current => { const next = current === 'light' ? 'dark' : 'light'; window.localStorage.setItem('yaotu-back-theme', next); return next })
-  const logout = () => {
+  const toggleMode = () => setMode(current => {
+    const next = current === 'light' ? 'dark' : 'light'
+    try { window.localStorage.setItem('yaotu-back-theme', next) } catch { /* Theme still changes for this tab. */ }
+    return next
+  })
+  const logout = async () => {
+	try {
+	  await adminApi.logout()
+	} catch (reason) {
+	  // An explicit 401 means the server already considers the cookie invalid.
+	  // Transport and 5xx failures keep the current session visible so the UI
+	  // never claims an HttpOnly session was removed when it was not.
+	  if (!(reason instanceof AuthError)) throw reason
+	}
 	broadcastAdminLogout()
     setCurrentUser(null)
     setUser(null)
     window.history.pushState({}, '', '/')
     setPath('/')
-	void adminApi.logout().catch(() => undefined)
   }
 
   if (authChecking) {

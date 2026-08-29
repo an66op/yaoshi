@@ -16,7 +16,11 @@ export function usePersistentState<T>(key: string, fallback: T) {
   })
 
   useEffect(() => {
-    window.localStorage.setItem(key, JSON.stringify(value))
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value))
+    } catch {
+      // Preferences remain valid in memory when storage is unavailable/full.
+    }
     // `storage` does not fire in the same browser tab. Broadcast locally so
     // independent hook instances (app shell, profile sheet, game room) update
     // immediately instead of waiting for a page refresh.

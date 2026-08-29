@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { adminApi, agentApi, type OperatingReport } from '../api'
 import { useFeedback } from './feedback'
 import { ProfitSharePanel } from './ProfitSharePanel'
+import { createCsv } from '../utils/csv'
 
 const money = (value: number) => new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
 const dateTime = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
@@ -55,9 +56,8 @@ export function OperatingReportPanel({ agent = false }: { agent?: boolean }) {
   const reset = () => { const next = initialFilters(agent); setDraft(next); setApplied(next); setPage(0) }
 
   const exportItems = () => {
-    const escape = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`
     const rows = (data?.items ?? []).map(row => [row.id, row.room_scope, row.game_name, row.issue, row.username, row.play_name, row.selection, row.stake, row.payout, row.gross_profit, row.rebate, row.agent_share, row.platform_profit, dateTime(row.settled_at)])
-    const csv = [['注单', '房间', '彩种', '期号', '会员', '玩法', '选择', '有效投注', '派彩', '毛利', '回水', '代理分成', '平台净利', '结算时间'], ...rows].map(row => row.map(escape).join(',')).join('\n')
+    const csv = createCsv([['注单', '房间', '彩种', '期号', '会员', '玩法', '选择', '有效投注', '派彩', '毛利', '回水', '代理分成', '平台净利', '结算时间'], ...rows])
     const href = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }))
     const link = document.createElement('a'); link.href = href; link.download = `经营账单_${data?.summary.period_start ?? today()}_${data?.summary.period_end ?? today()}.csv`; link.click(); URL.revokeObjectURL(href)
   }

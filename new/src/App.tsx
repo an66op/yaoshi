@@ -40,7 +40,7 @@ import { useWebSocket, useWebSocketConnected } from './hooks/useWebSocket'
 import { AuthError } from './api/client'
 import { memberApi } from './api/member'
 import { portalApi } from './api/portal'
-import { clearLoginAnnouncementMarkers, clearMemberBusinessStorage, MEMBER_SESSION_KEY } from './utils/businessStorage'
+import { broadcastMemberLogout, clearLoginAnnouncementMarkers, clearMemberBusinessStorage, MEMBER_AUTH_EVENT_KEY, MEMBER_SESSION_KEY } from './utils/businessStorage'
 import {
   activePromotionTitles,
   configuredHiddenMessageRows,
@@ -108,6 +108,8 @@ function App() {
   const [authenticated, setAuthenticated] = useState(false)
   const [booting, setBooting] = useState(true)
   const [bootError, setBootError] = useState('')
+  const [logoutError, setLogoutError] = useState('')
+  const [loggingOut, setLoggingOut] = useState(false)
   const websocketConnected = useWebSocketConnected()
   const { route, pathname, navigate, replace } = useAppRouter()
   const { fontScale, displayStyle } = useMemberPreferences()
@@ -226,7 +228,8 @@ function App() {
     const onStorage = (event: StorageEvent) => {
 	  // The HttpOnly cookie cannot be read from JavaScript. The non-sensitive
 	  // room-session key is only a cross-tab logout signal, never authority.
-	  if (event.key !== MEMBER_SESSION_KEY || event.newValue !== null && event.newValue !== 'null') return
+      const legacySessionRemoved = event.key === MEMBER_SESSION_KEY && (event.newValue === null || event.newValue === 'null')
+      if (event.key !== MEMBER_AUTH_EVENT_KEY && !legacySessionRemoved) return
 	  setAuthenticated(false)
       setChatUnread(0)
       clearMemberBusinessStorage()
@@ -360,16 +363,31 @@ function App() {
     navigate(pathForRoom())
   }
 
-  const logout = () => {
+  const logout = async () => {
+    if (loggingOut) return
+    setLoggingOut(true)
+    setLogoutError('')
+    try {
+      await memberApi.logout()
+    } catch (reason) {
+      // A 401 means the cookie is no longer accepted. Network/5xx failures
+      // keep the current UI authenticated because JavaScript cannot remove an
+      // HttpOnly cookie and must not claim that logout succeeded.
+      if (!(reason instanceof AuthError)) {
+        setLogoutError('退出未完成，当前登录仍然有效，请检查网络后重试')
+        setLoggingOut(false)
+        return
+      }
+    }
 	setAuthenticated(false)
     setChatUnread(0)
-    clearMemberBusinessStorage()
+    broadcastMemberLogout()
     setSession(null)
     setRoomHistory([])
     setPendingAccount(null)
     setDemo((current) => ({ ...current, checkedIn: false, chatUnread: 0 }))
     navigate(pathForLogin())
-	void memberApi.logout().catch(() => undefined)
+    setLoggingOut(false)
   }
 
   if (booting) {
@@ -377,7 +395,7 @@ function App() {
   }
 
 	if (bootError && session) {
-    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div className="app-content"><div className="app-loading"><p>{bootError}</p><button className="room-entry-back" onClick={() => window.location.reload()}>重新读取账号</button><button className="room-entry-back" onClick={logout}>退出登录</button></div></div></main>
+    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div className="app-content"><div className="app-loading"><p>{logoutError || bootError}</p><button className="room-entry-back" onClick={() => window.location.reload()}>重新读取账号</button><button className="room-entry-back" disabled={loggingOut} onClick={() => void logout()}>{loggingOut ? '退出中…' : '退出登录'}</button></div></div></main>
   }
 
   if (route.kind === 'login') return <Login theme={demo.theme} onContinue={(account, nickname) => void continueLogin(account, nickname)} onRegister={() => navigate(pathForRegister())} />
@@ -403,7 +421,7 @@ function App() {
             navigate(pathForTab('lobby'))
             return
           }
-		  logout()
+		  void logout()
         }}
         onEnter={(room, roomName) => {
           void memberApi.me().then((profile) => {
@@ -466,7 +484,7 @@ function App() {
       ? <Lobby room={activeSession.room} roomName={activeSession.roomName} roomLogo={activeSession.roomLogo} roomHistory={roomHistory} games={liveGames} theme={demo.theme} gamesLive={gamesLive} gamesError={gamesError} onToggleTheme={toggleTheme} onOpenGame={(gameId) => navigate(pathForGame(gameId))} onSwitchRoom={switchRoom} />
       : activeTab === 'shop'
         ? <Wallet balance={activeSession.balance} walletAction={walletAction} returnGameId={walletReturnGameId} onBackToGame={walletReturnGameId ? () => navigate(pathForGame(walletReturnGameId, true)) : undefined} onRefresh={() => void refreshBalance()} onNavigate={navigate} />
-        : <Profile account={displayName} publicId={activeSession.publicId} balance={activeSession.balance} avatarUrl={activeSession.avatar} publicTitle={activeSession.publicTitle} badge={activeSession.badge} theme={demo.theme} onLogout={logout} onResetDemo={resetDemo} onToggleTheme={toggleTheme} onChangeAvatar={async (avatar) => {
+        : <Profile account={displayName} publicId={activeSession.publicId} balance={activeSession.balance} avatarUrl={activeSession.avatar} publicTitle={activeSession.publicTitle} badge={activeSession.badge} theme={demo.theme} onLogout={logout} logoutError={logoutError} loggingOut={loggingOut} onResetDemo={resetDemo} onToggleTheme={toggleTheme} onChangeAvatar={async (avatar) => {
           const profile = await memberApi.updateAvatar(avatar)
           setSession((current) => current ? { ...current, avatar: profile.avatar || avatar, publicTitle: profile.public_title, badge: profile.badge, publicId: profile.public_id, balance: profile.balance } : current)
         }} onChangeNickname={async (nickname) => {

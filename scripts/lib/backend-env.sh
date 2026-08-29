@@ -45,7 +45,17 @@ load_backend_env() {
     return 1
   }
 
+  # An explicit file is authoritative. Clear inherited BACKEND_* variables so
+  # a missing backup/app setting cannot silently fall back to a more privileged
+  # caller environment. Callers that deliberately use current environment
+  # values bypass this loader explicitly (for example --current-env).
+  local inherited_key
+  while IFS= read -r inherited_key; do
+    [[ "$inherited_key" == BACKEND_* ]] && unset "$inherited_key"
+  done < <(compgen -e)
+
   local line key value first last line_number=0
+  local seen_backend_env_keys=$'\n'
   while IFS= read -r line || [[ -n "$line" ]]; do
     line_number=$((line_number + 1))
     line="${line%$'\r'}"
@@ -58,6 +68,11 @@ load_backend_env() {
       echo "环境文件第 $line_number 行包含不允许的变量名：$key" >&2
       return 1
     }
+    [[ "$seen_backend_env_keys" != *$'\n'"$key"$'\n'* ]] || {
+      echo "环境文件第 $line_number 行重复定义变量：$key" >&2
+      return 1
+    }
+    seen_backend_env_keys+="$key"$'\n'
     if (( ${#value} >= 2 )); then
       first="${value:0:1}"
       last="${value: -1}"

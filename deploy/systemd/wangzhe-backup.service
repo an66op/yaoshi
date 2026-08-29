@@ -1,19 +1,41 @@
 [Unit]
 Description=Verified PostgreSQL backup for Wangzhe
 After=postgresql.service
+ConditionPathIsExecutable=/opt/wangzhe/current/scripts/postgres-backup.sh
 
 [Service]
 Type=oneshot
-User=root
-Group=root
+User=wangzhe-backup
+Group=wangzhe-backup
 Environment=BACKUP_DIR=/var/backups/wangzhe
 Environment=BACKUP_RETENTION_DAYS=14
-ExecStart=/opt/wangzhe/scripts/postgres-backup.sh /etc/wangzhe/backend.env
+Environment=APPLICATION_DATABASE_USER=wangzhe
+ExecStart=/opt/wangzhe/current/scripts/postgres-backup.sh /etc/wangzhe/backup.env
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
+UMask=0077
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/var/backups/wangzhe
 NoNewPrivileges=true
+PrivateDevices=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+SystemCallArchitectures=native

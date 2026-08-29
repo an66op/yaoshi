@@ -2,7 +2,6 @@ import { publicRequest, request } from './client'
 import { createRequestId } from '../utils/requestId'
 
 export type LoginResult = {
-	token?: string
   user: {
     id: number
     public_id: number

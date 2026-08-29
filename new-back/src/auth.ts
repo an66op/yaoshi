@@ -30,13 +30,21 @@ export function getStoredUser() {
 
 /** Remove credentials left by pre-cookie versions without touching UI prefs. */
 export function clearLegacyAdminSession(storage: StorageLike = window.localStorage) {
-  storage.removeItem(LEGACY_ADMIN_TOKEN_KEY)
-  storage.removeItem(LEGACY_ADMIN_USER_KEY)
+  try {
+    storage.removeItem(LEGACY_ADMIN_TOKEN_KEY)
+    storage.removeItem(LEGACY_ADMIN_USER_KEY)
+  } catch {
+    // Browser policy may disable storage; cookie logout remains authoritative.
+  }
 }
 
 /** A timestamp-only event synchronizes logout across tabs; it grants no access. */
 export function broadcastAdminLogout(storage: StorageLike = window.localStorage) {
   setCurrentUser(null)
   clearLegacyAdminSession(storage)
-  storage.setItem(ADMIN_AUTH_EVENT_KEY, JSON.stringify({ type: 'logout', at: Date.now() }))
+  try {
+    storage.setItem(ADMIN_AUTH_EVENT_KEY, JSON.stringify({ type: 'logout', at: Date.now() }))
+  } catch {
+    // Storage may be disabled by browser policy; local logout still succeeds.
+  }
 }

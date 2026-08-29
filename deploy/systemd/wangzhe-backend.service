@@ -2,6 +2,9 @@
 Description=Wangzhe lottery application backend
 After=network-online.target postgresql.service redis-server.service
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+ConditionPathIsExecutable=/opt/wangzhe/current/bin/wangzhe-backend
 
 [Service]
 Type=simple
@@ -9,9 +12,11 @@ User=wangzhe
 Group=wangzhe
 WorkingDirectory=/var/lib/wangzhe
 EnvironmentFile=/etc/wangzhe/backend.env
-ExecStart=/opt/wangzhe/bin/wangzhe-backend
+ExecStartPre=/usr/bin/test -d /var/lib/wangzhe/uploads
+ExecStart=/opt/wangzhe/current/bin/wangzhe-backend
 Restart=on-failure
 RestartSec=3
+TimeoutStartSec=90
 TimeoutStopSec=15
 LimitNOFILE=65536
 UMask=0027
@@ -24,17 +29,24 @@ ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/var/lib/wangzhe
 PrivateDevices=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
 ProtectControlGroups=true
 ProtectClock=true
+RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
 AmbientCapabilities=
 LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

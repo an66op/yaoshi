@@ -255,7 +255,7 @@ func OriginAllowed(origin string, allowed []string, mode string) bool {
 
 func normalizeOrigin(raw string) string {
 	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.Fragment != "" {
 		return ""
 	}
 	return strings.ToLower(u.Scheme + "://" + u.Host)
@@ -331,17 +331,20 @@ func validateConfig(cfg *Configuration) error {
 		if len(cfg.Server.AllowedOrigins) == 0 {
 			return fmt.Errorf("release 模式必须显式配置 allowed_origins")
 		}
-		if len(cfg.JWT.Secret) < 32 || isPlaceholderSecret(cfg.JWT.Secret) {
+		if len(cfg.JWT.Secret) < 32 || isPlaceholderSecret(cfg.JWT.Secret) || !hasSufficientSecretVariety(cfg.JWT.Secret) {
 			return fmt.Errorf("release 模式必须配置至少32位的随机 JWT 密钥，不能使用示例或默认值")
 		}
-		if strings.TrimSpace(cfg.Database.Password) == "" || isPlaceholderSecret(cfg.Database.Password) {
-			return fmt.Errorf("release 模式必须配置非默认数据库密码")
+		if len(cfg.Database.Password) < 16 || isPlaceholderSecret(cfg.Database.Password) || !hasSufficientSecretVariety(cfg.Database.Password) {
+			return fmt.Errorf("release 模式必须配置至少16位的随机数据库密码")
 		}
-		if len(cfg.Security.DataEncryptionKey) < 32 || isPlaceholderSecret(cfg.Security.DataEncryptionKey) {
+		if len(cfg.Security.DataEncryptionKey) < 32 || isPlaceholderSecret(cfg.Security.DataEncryptionKey) || !hasSufficientSecretVariety(cfg.Security.DataEncryptionKey) {
 			return fmt.Errorf("release 模式必须配置至少32位的随机数据加密密钥")
 		}
 		if cfg.JWT.Secret == cfg.Security.DataEncryptionKey {
 			return fmt.Errorf("JWT 密钥与数据加密密钥必须独立生成")
+		}
+		if cfg.Database.Password == cfg.JWT.Secret || cfg.Database.Password == cfg.Security.DataEncryptionKey {
+			return fmt.Errorf("数据库密码不得复用 JWT 或数据加密密钥")
 		}
 		if len(cfg.Server.TrustedProxies) == 0 {
 			return fmt.Errorf("release 模式必须显式配置 trusted_proxies")
@@ -367,8 +370,20 @@ func validTrustedProxy(value string) bool {
 	if net.ParseIP(value) != nil {
 		return true
 	}
-	_, _, err := net.ParseCIDR(value)
-	return err == nil
+	_, network, err := net.ParseCIDR(value)
+	if err != nil {
+		return false
+	}
+	ones, bits := network.Mask.Size()
+	// Inspect the parsed mask rather than the raw string so values such as
+	// 203.0.113.7/0 cannot disguise an all-address proxy range. Extremely broad
+	// networks are unsafe too: trusting them lets arbitrary clients forge the
+	// forwarded address used by audit logs and rate limits. /8 and /32 still
+	// permit conventional private IPv4 and IPv6 load-balancer networks.
+	if bits == net.IPv4len*8 {
+		return ones >= 8
+	}
+	return bits == net.IPv6len*8 && ones >= 32
 }
 
 func isLocalDatabaseHost(value string) bool {
@@ -392,6 +407,20 @@ func isPlaceholderSecret(value string) bool {
 	}
 	for _, exact := range []string{"123456", "password", "postgres", "secret"} {
 		if normalized == exact {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSufficientSecretVariety is a deployment guardrail, not an entropy
+// estimator. It rejects obviously repeated/pattern-like values that satisfy a
+// length check while providing almost no effective key space.
+func hasSufficientSecretVariety(value string) bool {
+	distinct := make(map[rune]struct{}, 8)
+	for _, char := range value {
+		distinct[char] = struct{}{}
+		if len(distinct) >= 8 {
 			return true
 		}
 	}

@@ -4,10 +4,162 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/backend-env.sh
 source "$ROOT_DIR/scripts/lib/backend-env.sh"
+# shellcheck source=lib/safe-integer.sh
+source "$ROOT_DIR/scripts/lib/safe-integer.sh"
+# shellcheck source=lib/maintenance-edge.sh
+source "$ROOT_DIR/scripts/lib/maintenance-edge.sh"
 
 fixture_dir="$(mktemp -d)"
 cleanup_fixture() { rm -rf -- "$fixture_dir"; }
 trap cleanup_fixture EXIT INT TERM
+
+arithmetic_marker="$fixture_dir/arithmetic-injection-must-not-run"
+malicious_count='a[$(touch '"$arithmetic_marker"')0]'
+if require_decimal_count "恶意计数" "$malicious_count" >/dev/null 2>&1; then
+  echo "恶意算术表达式被错误接受" >&2
+  exit 1
+fi
+[[ ! -e "$arithmetic_marker" ]] || { echo "计数校验触发了命令替换" >&2; exit 1; }
+[[ "$(require_decimal_count 正常计数 00042)" == "00042" ]]
+(
+  curl() {
+    printf '%s\n' 'HTTP/2 503' 'Strict-Transport-Security: max-age=31536000' 'Content-Security-Policy: default-src '\''self'\''' 'X-Content-Type-Options: nosniff'
+  }
+  verify_maintenance_edge https://wz6688.app https://admin.wz6688.app
+)
+if (
+  curl() {
+    printf '%s\n' 'HTTP/2 200' 'Strict-Transport-Security: max-age=31536000' 'Content-Security-Policy: default-src '\''self'\''' 'X-Content-Type-Options: nosniff'
+  }
+  verify_maintenance_edge https://wz6688.app https://admin.wz6688.app >/dev/null 2>&1
+); then
+  echo "非 503 响应被错误识别为维护模式" >&2
+  exit 1
+fi
+if (
+  curl() {
+    if [[ "$*" == *--resolve* ]]; then
+      printf '%s\n' 'HTTP/2 503' 'Strict-Transport-Security: max-age=31536000' 'Content-Security-Policy: default-src '\''self'\''' 'X-Content-Type-Options: nosniff'
+    else
+      printf '%s\n' 'HTTP/2 200' 'Strict-Transport-Security: max-age=31536000' 'Content-Security-Policy: default-src '\''self'\''' 'X-Content-Type-Options: nosniff'
+    fi
+  }
+  verify_maintenance_edge https://wz6688.app https://admin.wz6688.app >/dev/null 2>&1
+); then
+  echo "公网未维护但本机 Nginx 已维护时被错误放行" >&2
+  exit 1
+fi
+if (
+  curl() {
+    if [[ "$*" == *--resolve* ]]; then
+      printf '%s\n' 'HTTP/2 200' 'Strict-Transport-Security: max-age=31536000' 'Content-Security-Policy: default-src '\''self'\''' 'X-Content-Type-Options: nosniff'
+    else
+      printf '%s\n' 'HTTP/2 503' 'Strict-Transport-Security: max-age=31536000' 'Content-Security-Policy: default-src '\''self'\''' 'X-Content-Type-Options: nosniff'
+    fi
+  }
+  verify_maintenance_edge https://wz6688.app https://admin.wz6688.app >/dev/null 2>&1
+); then
+  echo "本机 Nginx 未维护但公网已维护时被错误放行" >&2
+  exit 1
+fi
+if (
+  curl() {
+    if [[ "$*" == *admin.wz6688.app* ]]; then
+      printf '%s\n' 'HTTP/2 503' 'Strict-Transport-Security: max-age=31536000' 'Content-Security-Policy: default-src '\''self'\''' 'X-Content-Type-Options: nosniff'
+    else
+      printf '%s\n' 'HTTP/2 200' 'Strict-Transport-Security: max-age=31536000' 'Content-Security-Policy: default-src '\''self'\''' 'X-Content-Type-Options: nosniff'
+    fi
+  }
+  verify_maintenance_edge https://wz6688.app https://admin.wz6688.app >/dev/null 2>&1
+); then
+  echo "用户端未维护、管理端已维护时被错误放行" >&2
+  exit 1
+fi
+
+# Exercise the marker ownership helper used by deploy and rollback. An
+# operator-owned marker must survive, an externally removed pre-existing
+# marker must not be recreated, and a failed atomic move must be retryable.
+existing_maintenance_marker="$fixture_dir/existing-maintenance"
+printf '%s\n' 'operator-owned-marker' >"$existing_maintenance_marker"
+capture_maintenance_marker_state "$existing_maintenance_marker"
+[[ "$maintenance_was_active" == 1 && "$maintenance_marker_created" == 0 ]]
+ensure_maintenance_marker "$existing_maintenance_marker"
+finish_maintenance_marker "$existing_maintenance_marker"
+[[ "$(cat "$existing_maintenance_marker")" == "operator-owned-marker" ]] || {
+  echo "预先存在的维护标记被修改或删除" >&2
+  exit 1
+}
+
+removed_maintenance_marker="$fixture_dir/removed-maintenance"
+printf '%s\n' 'operator-owned-marker' >"$removed_maintenance_marker"
+capture_maintenance_marker_state "$removed_maintenance_marker"
+rm -f -- "$removed_maintenance_marker"
+if ensure_maintenance_marker "$removed_maintenance_marker"; then
+  echo "操作开始时已有的维护标记被错误重建" >&2
+  exit 1
+fi
+[[ ! -e "$removed_maintenance_marker" && ! -L "$removed_maintenance_marker" ]]
+
+created_maintenance_marker="$fixture_dir/created-maintenance"
+capture_maintenance_marker_state "$created_maintenance_marker"
+ensure_maintenance_marker "$created_maintenance_marker"
+[[ "$maintenance_was_active" == 0 && "$maintenance_marker_created" == 1 ]]
+maintenance_marker_owned_by "$created_maintenance_marker" "$maintenance_marker_token"
+[[ -z "$(find "$fixture_dir" -maxdepth 1 -name '.created-maintenance.tmp.*' -print -quit)" ]]
+finish_maintenance_marker "$created_maintenance_marker"
+[[ ! -e "$created_maintenance_marker" && ! -L "$created_maintenance_marker" ]]
+
+retry_maintenance_marker="$fixture_dir/retry-maintenance"
+mv_attempt_file="$fixture_dir/maintenance-mv-attempts"
+printf '%s\n' 0 >"$mv_attempt_file"
+mv() {
+  local attempt
+  attempt="$(cat "$mv_attempt_file")"
+  printf '%s\n' "$((attempt + 1))" >"$mv_attempt_file"
+  if (( attempt == 0 )); then
+    return 1
+  fi
+  command mv "$@"
+}
+capture_maintenance_marker_state "$retry_maintenance_marker"
+if ensure_maintenance_marker "$retry_maintenance_marker"; then
+  echo "原子移动失败时维护 helper 被错误识别为成功" >&2
+  exit 1
+fi
+[[ ! -e "$retry_maintenance_marker" && ! -L "$retry_maintenance_marker" ]]
+[[ -z "$(find "$fixture_dir" -maxdepth 1 -name '.retry-maintenance.tmp.*' -print -quit)" ]]
+ensure_maintenance_marker "$retry_maintenance_marker"
+unset -f mv
+[[ "$maintenance_marker_created" == 1 ]]
+maintenance_marker_owned_by "$retry_maintenance_marker" "$maintenance_marker_token"
+finish_maintenance_marker "$retry_maintenance_marker"
+[[ ! -e "$retry_maintenance_marker" && ! -L "$retry_maintenance_marker" ]]
+
+edge_failure_marker="$fixture_dir/edge-failure-maintenance"
+capture_maintenance_marker_state "$edge_failure_marker"
+ensure_maintenance_marker "$edge_failure_marker"
+if (
+  curl() {
+    printf '%s\n' 'HTTP/2 200' 'Strict-Transport-Security: max-age=31536000' 'Content-Security-Policy: default-src '\''self'\''' 'X-Content-Type-Options: nosniff'
+  }
+  verify_maintenance_edge https://wz6688.app https://admin.wz6688.app >/dev/null 2>&1
+); then
+  echo "维护边缘验证失败场景被错误识别为成功" >&2
+  exit 1
+fi
+maintenance_marker_owned_by "$edge_failure_marker" "$maintenance_marker_token" || {
+  echo "维护边缘验证失败后未保持 fail-closed 标记" >&2
+  exit 1
+}
+(
+  curl() {
+    printf '%s\n' 'HTTP/2 503' 'Strict-Transport-Security: max-age=31536000' 'Content-Security-Policy: default-src '\''self'\''' 'X-Content-Type-Options: nosniff'
+  }
+  verify_maintenance_edge https://wz6688.app https://admin.wz6688.app
+)
+maintenance_marker_owned_by "$edge_failure_marker" "$maintenance_marker_token"
+finish_maintenance_marker "$edge_failure_marker"
+[[ ! -e "$edge_failure_marker" && ! -L "$edge_failure_marker" ]]
 
 env_file="$fixture_dir/backend.env"
 marker="$fixture_dir/must-not-exist"
@@ -18,8 +170,13 @@ printf '%s\n' \
 chmod 600 "$env_file"
 (
   cd "$fixture_dir"
+  export BACKEND_JWT_SECRET=must-not-leak-from-caller
+  export BACKEND_URL=http://127.0.0.1:9999
+  readiness_api_url="${BACKEND_URL:-http://127.0.0.1:8080}"
   load_backend_env "$env_file"
   [[ "$BACKEND_DATABASE_PASSWORD" == '$(touch should-not-run)' ]]
+  [[ -z "${BACKEND_JWT_SECRET+x}" ]]
+  [[ -z "${BACKEND_URL+x}" && "$readiness_api_url" == "http://127.0.0.1:9999" ]]
 )
 [[ ! -e "$fixture_dir/should-not-run" && ! -e "$marker" ]]
 
@@ -29,9 +186,268 @@ if (load_backend_env "$env_file" >/dev/null 2>&1); then
   exit 1
 fi
 
+valid_env="$fixture_dir/valid-backend.env"
+cat >"$valid_env" <<'EOF'
+BACKEND_SERVER_PORT=8080
+BACKEND_SERVER_BIND=127.0.0.1
+BACKEND_SERVER_MODE=release
+BACKEND_SERVER_ALLOWED_ORIGINS=https://wz6688.app,https://admin.wz6688.app
+BACKEND_SERVER_TRUSTED_PROXIES=127.0.0.1,::1
+BACKEND_DATABASE_HOST=127.0.0.1
+BACKEND_DATABASE_PORT=5432
+BACKEND_DATABASE_USER=wangzhe
+BACKEND_DATABASE_PASSWORD=correct-horse-battery-staple-2026
+BACKEND_DATABASE_DBNAME=wangzhe
+BACKEND_DATABASE_SSLMODE=disable
+BACKEND_REDIS_ADDR=127.0.0.1:6379
+BACKEND_REDIS_PASSWORD=
+BACKEND_REDIS_DB=0
+BACKEND_REDIS_TLS=false
+BACKEND_REDIS_PREFIX=wangzhe-production
+BACKEND_JWT_SECRET=jwt-secret-that-is-longer-than-thirty-two-characters-A
+BACKEND_JWT_EXPIRE=3600
+BACKEND_SECURITY_DATA_ENCRYPTION_KEY=data-key-that-is-longer-than-thirty-two-characters-B
+BACKEND_UPLOAD_DIR=/var/lib/wangzhe/uploads
+BACKEND_AUDIT_FALLBACK_FILE=/var/lib/wangzhe/audit-fallback.jsonl
+BACKEND_ROOM_ACTIVITY=0
+EOF
+chmod 600 "$valid_env"
+bash "$ROOT_DIR/scripts/production-config-check.sh" "$valid_env" >/dev/null
+
+duplicate_env="$fixture_dir/duplicate.env"
+cp "$valid_env" "$duplicate_env"
+printf '%s\n' 'BACKEND_SERVER_PORT=9090' >>"$duplicate_env"
+chmod 600 "$duplicate_env"
+if bash "$ROOT_DIR/scripts/production-config-check.sh" "$duplicate_env" >/dev/null 2>&1; then
+  echo "重复环境变量被错误接受" >&2
+  exit 1
+fi
+
+weak_env="$fixture_dir/weak.env"
+sed 's/correct-horse-battery-staple-2026/123456/' "$valid_env" >"$weak_env"
+chmod 600 "$weak_env"
+if bash "$ROOT_DIR/scripts/production-config-check.sh" "$weak_env" >/dev/null 2>&1; then
+  echo "生产弱口令被错误接受" >&2
+  exit 1
+fi
+
+remote_redis_env="$fixture_dir/remote-redis.env"
+sed 's/127.0.0.1:6379/redis.internal:6379/' "$valid_env" >"$remote_redis_env"
+chmod 600 "$remote_redis_env"
+if bash "$ROOT_DIR/scripts/production-config-check.sh" "$remote_redis_env" >/dev/null 2>&1; then
+  echo "未启用 TLS 的远程 Redis 被错误接受" >&2
+  exit 1
+fi
+
 ! rg -n '127\.0\.0\.1:8089|BACKEND_SERVER_ALLOWED_ORIGINS=.*http://' "$ROOT_DIR/deploy"
 rg -q 'migrations\.VerifyApplied' "$ROOT_DIR/backend/api/health.go"
 rg -q 'BACKEND_SERVER_BIND=127\.0\.0\.1' "$ROOT_DIR/deploy/env/backend.env.example"
+
+nginx_config="$ROOT_DIR/deploy/nginx/wz6688.app.conf"
+rg -q 'listen 443 ssl http2;' "$nginx_config"
+rg -q 'listen 443 ssl default_server;' "$nginx_config"
+rg -q 'return 444;' "$nginx_config"
+rg -q 'client_max_body_size 1m;' "$nginx_config"
+rg -q 'location = /api/admin/activities/upload' "$nginx_config"
+rg -q 'client_max_body_size 9m;' "$nginx_config"
+[[ "$(rg -c 'if \(-f /etc/wangzhe/maintenance\) \{ return 503; \}' "$nginx_config")" -eq 2 ]]
+rg -q 'location = /api/ws' "$nginx_config"
+safe_log_block="$(sed -n '/log_format wangzhe_safe/,/;$/p' "$nginx_config")"
+grep -q '\$request_method' <<<"$safe_log_block"
+grep -q '\$uri' <<<"$safe_log_block"
+! grep -Eq '\$args([^_A-Za-z0-9]|$)|\$request([^_A-Za-z0-9_]|$)' <<<"$safe_log_block"
+[[ "$(rg -c 'access_log /var/log/nginx/wangzhe-access\.log wangzhe_safe;' "$nginx_config")" -ge 6 ]]
+[[ "$(rg -c 'error_log /dev/null crit;' "$nginx_config")" -eq 2 ]]
+rg -q "connect-src 'self' wss://wz6688\.app" "$nginx_config"
+rg -q "connect-src 'self' wss://admin\.wz6688\.app" "$nginx_config"
+! rg -n "connect-src[^;]*[[:space:]]wss:[[:space:]]*;" "$nginx_config"
+rg -q 'Strict-Transport-Security.*max-age=' "$ROOT_DIR/deploy/nginx/snippets/wangzhe-security-headers.conf"
+rg -q 'ssl_protocols TLSv1\.2 TLSv1\.3;' "$ROOT_DIR/deploy/nginx/snippets/wangzhe-tls.conf"
+rg -q 'openssl x509 -checkend 1209600' "$ROOT_DIR/scripts/production-readiness.sh"
+
+backend_unit="$ROOT_DIR/deploy/systemd/wangzhe-backend.service"
+backup_unit="$ROOT_DIR/deploy/systemd/wangzhe-backup.service"
+rg -q 'ExecStart=/opt/wangzhe/current/bin/wangzhe-backend' "$backend_unit"
+rg -q '^NoNewPrivileges=true$' "$backend_unit"
+rg -q '^ProtectSystem=strict$' "$backend_unit"
+rg -q '^MemoryDenyWriteExecute=true$' "$backend_unit"
+rg -q '^User=wangzhe-backup$' "$backup_unit"
+rg -q '/etc/wangzhe/backup.env' "$backup_unit"
+rg -q '^CapabilityBoundingSet=$' "$backup_unit"
+rg -q '^Environment=APPLICATION_DATABASE_USER=wangzhe$' "$backup_unit"
+
+deploy_script="$ROOT_DIR/scripts/production-deploy.sh"
+rollback_script="$ROOT_DIR/scripts/production-rollback.sh"
+for executable in production-config-check.sh production-deploy.sh production-rollback.sh release-integrity.sh; do
+  [[ -x "$ROOT_DIR/scripts/$executable" ]] || { echo "部署脚本不可执行：$executable" >&2; exit 1; }
+done
+[[ "$(sed -n '3p' "$deploy_script")" == 'export PATH=/usr/sbin:/usr/bin:/sbin:/bin' ]]
+[[ "$(sed -n '3p' "$rollback_script")" == 'export PATH=/usr/sbin:/usr/bin:/sbin:/bin' ]]
+deploy_command_check="$(rg '^for command_name in ' "$deploy_script" | head -n1)"
+rollback_command_check="$(rg '^for command_name in ' "$rollback_script" | head -n1)"
+for required_command in date env sleep; do
+  [[ " $deploy_command_check " == *" $required_command "* ]] || { echo "发布脚本未前置检查命令：$required_command" >&2; exit 1; }
+done
+for required_command in chmod ln mktemp sleep; do
+  [[ " $rollback_command_check " == *" $required_command "* ]] || { echo "回滚脚本未前置检查命令：$required_command" >&2; exit 1; }
+done
+rg -q 'release-integrity\.sh.*verify' "$deploy_script"
+rg -q 'postgres-backup\.sh' "$deploy_script"
+rg -q 'mv -Tf.*CURRENT_LINK' "$deploy_script"
+rg -q 'PREVIOUS_LINK=/opt/wangzhe/previous' "$deploy_script"
+rg -q 'env -i PATH=/usr/bin:/bin HOME=/var/backups/wangzhe' "$deploy_script"
+rg -q 'EXPECTED_MANIFEST_SHA256' "$deploy_script"
+rg -q '/usr/local/libexec/wangzhe' "$deploy_script"
+! rg -q '"\$SOURCE_DIR/scripts/release-integrity\.sh" verify' "$deploy_script"
+rg -q 'RELEASE_ROOT/\.staging-' "$deploy_script"
+rg -q 'mv -T "\$staging" "\$target"' "$deploy_script"
+rg -q 'validate_secure_source_path "\$SOURCE_DIR"' "$deploy_script"
+rg -q 'find "\$SOURCE_DIR" -mindepth 1 ! -user root -print -quit' "$deploy_script"
+owner_fixture="$fixture_dir/non-root-release-entry"
+mkdir -p "$owner_fixture"
+printf '%s\n' artifact >"$owner_fixture/file"
+if (( EUID == 0 )); then
+  chown 65534 "$owner_fixture/file"
+fi
+[[ -n "$(find "$owner_fixture" -mindepth 1 ! -user root -print -quit)" ]] || {
+  echo "内层非 root 所有者负例未被识别" >&2
+  exit 1
+}
+[[ "$(rg -c 'release-integrity\.sh.*verify' "$deploy_script")" -ge 2 ]] || {
+  echo "发布脚本必须在复制前后各校验一次完整性" >&2
+  exit 1
+}
+backup_line="$(rg -n 'postgres-backup\.sh.*BACKUP_ENV' "$deploy_script" | head -n1 | cut -d: -f1)"
+switch_line="$(rg -n 'mv -Tf.*CURRENT_LINK' "$deploy_script" | head -n1 | cut -d: -f1)"
+[[ -n "$backup_line" && -n "$switch_line" && "$backup_line" -lt "$switch_line" ]] || {
+  echo "发布脚本没有保证先备份再切换版本" >&2
+  exit 1
+}
+maintenance_line="$(rg -n 'ensure_maintenance_marker "\$MAINTENANCE_FLAG"' "$deploy_script" | head -n1 | cut -d: -f1)"
+gate_line="$(rg -n 'production-readiness\.sh' "$deploy_script" | tail -n1 | cut -d: -f1)"
+remove_maintenance_line="$(rg -n 'finish_maintenance_marker "\$MAINTENANCE_FLAG"' "$deploy_script" | tail -n1 | cut -d: -f1)"
+[[ -n "$maintenance_line" && -n "$gate_line" && -n "$remove_maintenance_line" && "$maintenance_line" -lt "$switch_line" && "$switch_line" -lt "$gate_line" && "$gate_line" -lt "$remove_maintenance_line" ]] || {
+  echo "发布脚本没有在完整门禁期间保持维护模式" >&2
+  exit 1
+}
+capture_maintenance_line="$(rg -n 'capture_maintenance_marker_state "\$MAINTENANCE_FLAG"' "$deploy_script" | head -n1 | cut -d: -f1)"
+[[ -n "$capture_maintenance_line" && "$capture_maintenance_line" -lt "$backup_line" && "$capture_maintenance_line" -lt "$maintenance_line" ]] || {
+  echo "发布脚本没有在操作前记录维护标记状态" >&2
+  exit 1
+}
+! rg -q 'rm -f -- "\$MAINTENANCE_FLAG"|install .*MAINTENANCE_FLAG' "$deploy_script"
+rg -q 'ALLOW_MAINTENANCE_503=1' "$deploy_script"
+rg -q 'validate_secure_source_path "\$SOURCE_DIR"' "$deploy_script"
+rg -q 'staging_manifest_digest=.*SHA256SUMS' "$deploy_script"
+edge_check_line="$(rg -n 'verify_maintenance_edge "\$PUBLIC_URL" "\$ADMIN_URL"' "$deploy_script" | head -n1 | cut -d: -f1)"
+[[ -n "$edge_check_line" && "$edge_check_line" -lt "$switch_line" ]] || {
+  echo "发布脚本没有在切换版本前实测公网维护模式" >&2
+  exit 1
+}
+
+release_fixture="$fixture_dir/release"
+mkdir -p "$release_fixture/sub"
+printf '%s\n' 'artifact' >"$release_fixture/sub/file"
+bash "$ROOT_DIR/scripts/release-integrity.sh" generate "$release_fixture" >/dev/null
+bash "$ROOT_DIR/scripts/release-integrity.sh" verify "$release_fixture" >/dev/null
+trusted_manifest_digest="$(sha256sum "$release_fixture/SHA256SUMS" | awk '{print $1}')"
+printf '%s\n' 'tampered' >"$release_fixture/sub/file"
+if bash "$ROOT_DIR/scripts/release-integrity.sh" verify "$release_fixture" >/dev/null 2>&1; then
+  echo "被修改的发布包通过了完整性检查" >&2
+  exit 1
+fi
+bash "$ROOT_DIR/scripts/release-integrity.sh" generate "$release_fixture" >/dev/null
+replacement_manifest_digest="$(sha256sum "$release_fixture/SHA256SUMS" | awk '{print $1}')"
+[[ "$replacement_manifest_digest" != "$trusted_manifest_digest" ]] || {
+  echo "整体替换发布包后可信清单摘要没有变化" >&2
+  exit 1
+}
+rm "$release_fixture/sub/file"
+printf '%s\n' 'artifact' >"$release_fixture/real-file"
+ln -s real-file "$release_fixture/symlink-file"
+if bash "$ROOT_DIR/scripts/release-integrity.sh" generate "$release_fixture" >/dev/null 2>&1; then
+  echo "包含符号链接的发布包被错误接受" >&2
+  exit 1
+fi
+rm "$release_fixture/symlink-file" "$release_fixture/real-file"
+newline_file="$release_fixture/"$'bad\nname'
+printf '%s\n' 'artifact' >"$newline_file"
+if bash "$ROOT_DIR/scripts/release-integrity.sh" generate "$release_fixture" >/dev/null 2>&1; then
+  echo "文件名含换行的发布包被错误接受" >&2
+  exit 1
+fi
+
+rg -q '最低版本是 1\.25.*Go 1\.26\.7' "$ROOT_DIR/PRODUCTION_OPERATIONS.md"
+rg -q '生产服务器运行预编译二进制，不需要安装 Go' "$ROOT_DIR/PRODUCTION_OPERATIONS.md"
+rg -q '同一张.*证书.*wz6688\.app.*admin\.wz6688\.app' "$ROOT_DIR/PRODUCTION_OPERATIONS.md"
+rg -q 'chown -R root:root /tmp/wangzhe-release' "$ROOT_DIR/PRODUCTION_OPERATIONS.md"
+rg -Fq 'chmod -R a+rX,go-w /tmp/wangzhe-release' "$ROOT_DIR/PRODUCTION_OPERATIONS.md"
+rg -Fq 'RELEASE_GOOS ?= linux' "$ROOT_DIR/Makefile"
+rg -Fq 'RELEASE_GOARCH ?= amd64' "$ROOT_DIR/Makefile"
+rg -q '^release: verify readiness-test$' "$ROOT_DIR/Makefile"
+rg -Fq 'GOOS=$(RELEASE_GOOS) GOARCH=$(RELEASE_GOARCH)' "$ROOT_DIR/Makefile"
+rg -q 'PGSSLMODE="\$BACKEND_DATABASE_SSLMODE"' "$ROOT_DIR/scripts/production-readiness.sh"
+rg -Fq 'READINESS_API_URL="${BACKEND_URL:-' "$ROOT_DIR/scripts/production-readiness.sh"
+rg -q 'require_decimal_count 开奖源异常数' "$ROOT_DIR/scripts/production-readiness.sh"
+validation_line="$(rg -n 'require_decimal_count 开奖源异常数' "$ROOT_DIR/scripts/production-readiness.sh" | cut -d: -f1)"
+arithmetic_line="$(rg -n '10#\$source_errors == 0' "$ROOT_DIR/scripts/production-readiness.sh" | cut -d: -f1)"
+[[ -n "$validation_line" && -n "$arithmetic_line" && "$validation_line" -lt "$arithmetic_line" ]] || {
+  echo "外部计数没有在 Bash 算术前完成校验" >&2
+  exit 1
+}
+rg -q 'recorded_name.*basename.*recent_backup' "$ROOT_DIR/scripts/production-readiness.sh"
+rg -q 'flock -w "\$LOCK_WAIT_SECONDS"' "$ROOT_DIR/scripts/postgres-backup.sh"
+rg -q '远程 PostgreSQL 备份必须校验证书' "$ROOT_DIR/scripts/postgres-backup.sh"
+rg -q 'release-integrity\.sh.*verify.*candidate' "$ROOT_DIR/scripts/production-rollback.sh"
+rg -q 'CONFIRM_SCHEMA_COMPATIBLE' "$ROOT_DIR/scripts/production-rollback.sh"
+rg -q 'MAINTENANCE_FLAG=/etc/wangzhe/maintenance' "$ROOT_DIR/scripts/production-rollback.sh"
+rg -q 'verify_maintenance_edge "\$PUBLIC_URL" "\$ADMIN_URL"' "$ROOT_DIR/scripts/production-rollback.sh"
+rg -q 'capture_maintenance_marker_state "\$MAINTENANCE_FLAG"' "$ROOT_DIR/scripts/production-rollback.sh"
+rg -q 'ensure_maintenance_marker "\$MAINTENANCE_FLAG"' "$ROOT_DIR/scripts/production-rollback.sh"
+! rg -q 'finish_maintenance_marker "\$MAINTENANCE_FLAG"' "$ROOT_DIR/scripts/production-rollback.sh"
+rg -q 'production-readiness\.sh.*人工删除' "$ROOT_DIR/scripts/production-rollback.sh"
+! rg -q 'rm -f -- "\$MAINTENANCE_FLAG"|install .*MAINTENANCE_FLAG' "$ROOT_DIR/scripts/production-rollback.sh"
+rollback_capture_line="$(rg -n 'capture_maintenance_marker_state "\$MAINTENANCE_FLAG"' "$rollback_script" | head -n1 | cut -d: -f1)"
+rollback_maintenance_line="$(rg -n 'ensure_maintenance_marker "\$MAINTENANCE_FLAG"' "$rollback_script" | head -n1 | cut -d: -f1)"
+rollback_switch_line="$(rg -n 'mv -Tf.*CURRENT_LINK' "$rollback_script" | head -n1 | cut -d: -f1)"
+[[ -n "$rollback_capture_line" && -n "$rollback_maintenance_line" && -n "$rollback_switch_line" && "$rollback_capture_line" -lt "$rollback_maintenance_line" && "$rollback_maintenance_line" -lt "$rollback_switch_line" ]] || {
+  echo "回滚脚本没有在操作前记录状态并在切换版本前进入维护模式" >&2
+  exit 1
+}
+maintenance_helper="$ROOT_DIR/scripts/lib/maintenance-edge.sh"
+rg -Fq 'mktemp "$marker_dir/.${marker_name}.tmp.XXXXXX"' "$maintenance_helper"
+rg -Fq 'mv -n -- "$temporary" "$marker"' "$maintenance_helper"
+rg -Fq 'maintenance_marker_owned_by "$marker" "$maintenance_marker_token"' "$maintenance_helper"
+! rg -q '^rollback_code()' "$deploy_script"
+
+fake_bin="$fixture_dir/fake-bin"
+mkdir -p "$fake_bin"
+printf '%s\n' '#!/bin/sh' 'touch "$BACKUP_TEST_MARKER"' 'exit 77' >"$fake_bin/pg_dump"
+printf '%s\n' '#!/bin/sh' 'exit 0' >"$fake_bin/pg_restore"
+printf '%s\n' '#!/bin/sh' 'exit 0' >"$fake_bin/flock"
+chmod 755 "$fake_bin/pg_dump" "$fake_bin/pg_restore" "$fake_bin/flock"
+backup_test_home="$fixture_dir/backup-home"
+mkdir -p "$backup_test_home"
+backup_marker="$fixture_dir/pg-dump-reached"
+backup_test_env=(
+  BACKEND_DATABASE_HOST=127.0.0.1 BACKEND_DATABASE_PORT=5432
+  BACKEND_DATABASE_USER=backup_test BACKEND_DATABASE_PASSWORD=strong-test-password
+  BACKEND_DATABASE_DBNAME=backup_test BACKEND_DATABASE_SSLMODE=disable
+)
+if env -i PATH="$fake_bin:$PATH" HOME="$backup_test_home" BACKUP_TEST_MARKER="$backup_marker" \
+  BACKUP_DIR=/var/backups "${backup_test_env[@]}" \
+  bash "$ROOT_DIR/scripts/postgres-backup.sh" --current-env >/dev/null 2>&1; then
+  echo "过宽的备份目录被错误接受" >&2
+  exit 1
+fi
+[[ ! -e "$backup_marker" ]] || { echo "过宽目录检查发生得太晚" >&2; exit 1; }
+if env -i PATH="$fake_bin:$PATH" HOME="$backup_test_home" BACKUP_TEST_MARKER="$backup_marker" \
+  BACKUP_DIR="$backup_test_home" "${backup_test_env[@]}" \
+  bash "$ROOT_DIR/scripts/postgres-backup.sh" --current-env >/dev/null 2>&1; then
+  echo "伪 pg_dump 应以测试退出码停止" >&2
+  exit 1
+fi
+[[ -e "$backup_marker" ]] || { echo "专用用户 HOME 与精确备份目录相同时被错误拒绝" >&2; exit 1; }
 
 # Fresh debug databases must provision the exact identities exercised by the
 # smoke test; acceptance may not depend on accounts left in a developer DB.

@@ -27,7 +27,9 @@ type ProfileProps = {
   publicTitle?: string
   badge?: string
   theme: Theme
-  onLogout: () => void
+  onLogout: () => Promise<void>
+  logoutError?: string
+  loggingOut?: boolean
   onResetDemo: () => void
   onToggleTheme: () => void
   onChangeNickname: (nickname: string) => Promise<void>
@@ -48,7 +50,7 @@ const accountRowDefs: SettingRow[] = [
 ]
 
 /** “我的”仅保留资料与设置；资产类服务全部收拢到钱包。 */
-export function Profile({ account, publicId, balance, avatarUrl = '', publicTitle = '', badge = '', theme, onLogout, onResetDemo, onToggleTheme, onChangeNickname, onChangeAvatar }: ProfileProps) {
+export function Profile({ account, publicId, balance, avatarUrl = '', publicTitle = '', badge = '', theme, onLogout, logoutError = '', loggingOut = false, onResetDemo, onToggleTheme, onChangeNickname, onChangeAvatar }: ProfileProps) {
   const [panel, setPanel] = useState<Panel>(null)
   const [avatar, setAvatar] = usePersistentState<AvatarSelection>('seven-star-avatar', { index: 0 })
   const { drawHistoryLimit, defaultBetMode, fontScale, displayStyle } = useMemberPreferences()
@@ -72,7 +74,7 @@ export function Profile({ account, publicId, balance, avatarUrl = '', publicTitl
     ...row,
     hint: theme === 'night' ? '夜间模式' : displayStyle === 'simple' ? '简洁模式' : '白天模式',
   } : row), [displayStyle, theme])
-  return <section className="profile-simple-page"><header className="profile-simple-hero"><b>个人资料</b><button aria-label="打开显示设置" onClick={() => setPanel('theme')}><Icon name="more" /></button><section><button className="profile-simple-avatar" aria-label="修改头像" onClick={() => setPanel('avatar')}><Avatar index={selectedAvatarIndex} src={displayedAvatar} label="当前头像" /><i>编辑</i></button><div className="profile-name-block"><button className="profile-nickname-edit" aria-label="修改昵称" onClick={() => setPanel('nickname')}>修改</button><button className="profile-current-name" aria-label="修改昵称" onClick={() => setPanel('nickname')}><strong>{account}{badge && <i>{badge}</i>}</strong>{publicTitle && <em>{publicTitle}</em>}</button><small>{publicId ? `ID ${publicId} · ` : ''}余额 {balance.toFixed(2)} 元</small></div></section></header><ProfileGroup title="偏好设置" rows={preferenceRows} onSelect={setPanel} /><ProfileGroup title="账户设置" rows={accountRows} onSelect={setPanel} /><button className="profile-logout" onClick={onLogout}>退出登录</button><p className="profile-simple-version">{BRAND_NAME} · 安全服务已开启</p>{panel && <ProfilePanel avatarIndex={selectedAvatarIndex} onAvatarChange={changeAvatar} account={account} onChangeNickname={onChangeNickname} panel={panel} theme={theme} onClose={() => setPanel(null)} onResetDemo={onResetDemo} onToggleTheme={onToggleTheme} />}</section>
+  return <section className="profile-simple-page"><header className="profile-simple-hero"><b>个人资料</b><button aria-label="打开显示设置" onClick={() => setPanel('theme')}><Icon name="more" /></button><section><button className="profile-simple-avatar" aria-label="修改头像" onClick={() => setPanel('avatar')}><Avatar index={selectedAvatarIndex} src={displayedAvatar} label="当前头像" /><i>编辑</i></button><div className="profile-name-block"><button className="profile-nickname-edit" aria-label="修改昵称" onClick={() => setPanel('nickname')}>修改</button><button className="profile-current-name" aria-label="修改昵称" onClick={() => setPanel('nickname')}><strong>{account}{badge && <i>{badge}</i>}</strong>{publicTitle && <em>{publicTitle}</em>}</button><small>{publicId ? `ID ${publicId} · ` : ''}余额 {balance.toFixed(2)} 元</small></div></section></header><ProfileGroup title="偏好设置" rows={preferenceRows} onSelect={setPanel} /><ProfileGroup title="账户设置" rows={accountRows} onSelect={setPanel} /><button className="profile-logout" disabled={loggingOut} onClick={() => void onLogout()}>{loggingOut ? '退出中…' : '退出登录'}</button>{logoutError && <p className="profile-logout-error" role="alert">{logoutError}</p>}<p className="profile-simple-version">{BRAND_NAME} · 安全服务已开启</p>{panel && <ProfilePanel avatarIndex={selectedAvatarIndex} onAvatarChange={changeAvatar} account={account} onChangeNickname={onChangeNickname} panel={panel} theme={theme} onClose={() => setPanel(null)} onResetDemo={onResetDemo} onToggleTheme={onToggleTheme} />}</section>
 }
 
 function ProfileGroup({ title, rows, onSelect }: { title: string; rows: SettingRow[]; onSelect: (panel: Panel) => void }) {

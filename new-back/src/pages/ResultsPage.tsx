@@ -26,6 +26,7 @@ import SearchRounded from "@mui/icons-material/SearchRounded";
 import CloudSyncRounded from "@mui/icons-material/CloudSyncRounded";
 import AccessTimeRounded from "@mui/icons-material/AccessTimeRounded";
 import AutorenewRounded from "@mui/icons-material/AutorenewRounded";
+import { createCsv } from "../utils/csv";
 import { useEffect, useMemo, useState } from "react";
 import {
   adminApi,
@@ -161,9 +162,7 @@ export function ResultsPage() {
       draw.numbers.join(" "),
       draw.numbers.reduce((sum, item) => sum + item, 0),
     ]);
-    const csv = [["期号", "开奖时间", "开奖号码", "总和"], ...rows]
-      .map((row) => row.join(","))
-      .join("\n");
+    const csv = createCsv([["期号", "开奖时间", "开奖号码", "总和"], ...rows]);
     const link = document.createElement("a");
     link.href = URL.createObjectURL(
       new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }),

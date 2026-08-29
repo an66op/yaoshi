@@ -1,0 +1,90 @@
+name: Security and release gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend security
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Test
+        working-directory: backend
+        run: go test ./...
+      - name: Race detector
+        working-directory: backend
+        run: go test -race ./...
+      - name: Static analysis
+        working-directory: backend
+        run: go vet ./...
+      - name: Reachable vulnerability scan
+        working-directory: backend
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+
+  frontend:
+    name: Frontend security (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [new, new-back]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ${{ matrix.app }}/package-lock.json
+      - name: Install locked dependencies
+        working-directory: ${{ matrix.app }}
+        run: npm ci --ignore-scripts
+      - name: Test, lint and build
+        working-directory: ${{ matrix.app }}
+        run: |
+          npm test -- --run
+          npm run lint
+          npm run build
+      - name: Reject local demo passwords in production assets
+        working-directory: ${{ matrix.app }}
+        run: |
+          if grep -R -E '123456|Wz888888|WzTenant8801|Room8801' dist; then
+            echo 'Production assets contain a local demo password.' >&2
+            exit 1
+          fi
+      - name: Dependency audit
+        working-directory: ${{ matrix.app }}
+        run: npm audit --audit-level=high
+
+  deployment-config:
+    name: Deployment configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate scripts and deployment invariants
+        run: make readiness-test
+      - name: Reject malformed patches
+        run: git diff --check

@@ -18,6 +18,7 @@ import {
   configuredHiddenMessageRows,
   visibleNotificationsForRow,
 } from "../utils/notificationVisibility";
+import { resolveActivityAction } from "../utils/activityAction";
 
 type Room = "group" | "service";
 
@@ -978,19 +979,15 @@ type ActivityNotice = {
 
 function openActivityAction(activity?: ActivityItem) {
   const config = activity?.config;
-  const actionType = typeof config?.action_type === "string" ? config.action_type : "none";
-  const actionURL = typeof config?.action_url === "string" ? config.action_url.trim() : "";
-  if (!actionURL || actionType === "none") return false;
-  if (actionType === "internal" && actionURL.startsWith("/")) {
-    window.history.pushState({}, "", actionURL);
+  const action = resolveActivityAction(config?.action_type, config?.action_url, window.location.origin);
+  if (!action) return false;
+  if (action.kind === "internal") {
+    window.history.pushState({}, "", action.href);
     window.dispatchEvent(new PopStateEvent("popstate"));
     return true;
   }
-  if (actionType === "external" && /^https:\/\//i.test(actionURL)) {
-    window.location.assign(actionURL);
-    return true;
-  }
-  return false;
+  window.location.assign(action.href);
+  return true;
 }
 
 function ActivityNoticePage({ onBack, onRefreshUnread }: { onBack: () => void; onRefreshUnread?: () => void }) {

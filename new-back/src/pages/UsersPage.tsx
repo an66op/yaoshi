@@ -33,6 +33,7 @@ import {
 import AddRounded from '@mui/icons-material/AddRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
 import DownloadRounded from '@mui/icons-material/DownloadRounded'
+import { createCsv } from '../utils/csv'
 import EditRounded from '@mui/icons-material/EditRounded'
 import KeyRounded from '@mui/icons-material/KeyRounded'
 import AccountBalanceWalletRounded from '@mui/icons-material/AccountBalanceWalletRounded'
@@ -296,7 +297,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
   const resetFilters = () => { setQuery(''); setStatus('all'); setRole('all'); setPage(0); setApplied({ query: '', status: 'all', role: 'all' }) }
   const exportCsv = () => {
     const rows = users.map(user => [user.public_id, user.username, user.nickname, roleLabels[user.role], user.email, user.phone, user.balance.toFixed(2), user.online === true ? '在线' : '离线', user.status === 1 ? '启用' : '停用', dateTime(user.created_at)])
-    const csv = [['用户 ID', '用户名', '昵称', '角色', '邮箱', '手机', '余额', '在线状态', '账号状态', '创建时间'], ...rows].map(row => row.join(',')).join('\n')
+    const csv = createCsv([['用户 ID', '用户名', '昵称', '角色', '邮箱', '手机', '余额', '在线状态', '账号状态', '创建时间'], ...rows])
     const link = document.createElement('a')
     link.href = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }))
     link.download = memberView ? '会员列表.csv' : '用户账号列表.csv'

@@ -22,6 +22,7 @@ import {
 import DownloadRounded from '@mui/icons-material/DownloadRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
 import InboxRounded from '@mui/icons-material/InboxRounded'
+import { createCsv } from '../utils/csv'
 import { useCallback, useEffect, useState } from 'react'
 import { adminApi, type AdminGame, type BoardReportRow } from '../api'
 import { useFeedback } from './feedback'
@@ -72,12 +73,12 @@ export function BoardReportPanel() {
       return
     }
     const rows = items.map(item => [item.game_name, item.issue, item.bet_count, item.total_amount.toFixed(2), item.fly_amount.toFixed(2), item.status, dateTime(item.draw_at), item.draw_result])
-    const escape = (value: unknown) => `"${String(value).replaceAll('"', '""')}"`
-    const csv = [['游戏类型', '游戏期数', '总注单', '下注总金额', '飞单总金额', '状态', '开奖时间', '开奖结果'], ...rows].map(row => row.map(escape).join(',')).join('\n')
+    const csv = createCsv([['游戏类型', '游戏期数', '总注单', '下注总金额', '飞单总金额', '状态', '开奖时间', '开奖结果'], ...rows])
     const link = document.createElement('a')
     link.href = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }))
     link.download = `board-report-${Date.now()}.csv`
     link.click()
+    URL.revokeObjectURL(link.href)
     showMessage('打盘报表已导出')
   }
 

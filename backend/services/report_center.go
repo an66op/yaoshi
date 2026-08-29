@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"gorm.io/gorm"
 )
@@ -775,7 +776,7 @@ func WriteReportCSV(writer io.Writer, result *ReportCenterResult) error {
 	csvWriter := csv.NewWriter(writer)
 	headers := make([]string, 0, len(result.Columns))
 	for _, column := range result.Columns {
-		headers = append(headers, column.Label)
+		headers = append(headers, reportCSVValue(column.Label))
 	}
 	if err := csvWriter.Write(headers); err != nil {
 		return err
@@ -806,7 +807,7 @@ func (s *ReportCenterService) ExportReportCSV(writer io.Writer, key string, filt
 	csvWriter := csv.NewWriter(writer)
 	headers := make([]string, 0, len(first.Columns))
 	for _, column := range first.Columns {
-		headers = append(headers, column.Label)
+		headers = append(headers, reportCSVValue(column.Label))
 	}
 	if err := csvWriter.Write(headers); err != nil {
 		return err
@@ -846,11 +847,58 @@ func reportCSVValue(value any) string {
 		return ""
 	case time.Time:
 		return item.In(time.FixedZone("CST", 8*60*60)).Format("2006-01-02 15:04:05")
+	case string:
+		return neutralizeCSVFormula(item)
+	case []byte:
+		return neutralizeCSVFormula(string(item))
 	case float64:
 		return strconv.FormatFloat(item, 'f', 2, 64)
+	case float32:
+		return strconv.FormatFloat(float64(item), 'f', 2, 32)
+	case int:
+		return strconv.Itoa(item)
+	case int8:
+		return strconv.FormatInt(int64(item), 10)
+	case int16:
+		return strconv.FormatInt(int64(item), 10)
+	case int32:
+		return strconv.FormatInt(int64(item), 10)
+	case int64:
+		return strconv.FormatInt(item, 10)
+	case uint:
+		return strconv.FormatUint(uint64(item), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(item), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(item), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(item), 10)
+	case uint64:
+		return strconv.FormatUint(item, 10)
 	default:
-		return fmt.Sprint(item)
+		return neutralizeCSVFormula(fmt.Sprint(item))
 	}
+}
+
+// neutralizeCSVFormula prevents spreadsheet applications from interpreting
+// user-controlled text as a formula. Excel may ignore leading spaces, line
+// breaks, tabs, control bytes and Unicode format characters before looking
+// for a formula marker, so inspect the first effective rune rather than only
+// value[0]. Prefixing an apostrophe at the very start keeps the original text
+// intact while forcing spreadsheet text semantics.
+func neutralizeCSVFormula(value string) string {
+	for _, char := range value {
+		if unicode.IsSpace(char) || unicode.IsControl(char) || unicode.In(char, unicode.Cf) {
+			continue
+		}
+		switch char {
+		case '=', '+', '-', '@':
+			return "'" + value
+		default:
+			return value
+		}
+	}
+	return value
 }
 
 func SortedReportGroups() []string {

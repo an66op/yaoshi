@@ -4,6 +4,7 @@ import (
 	"backend/config"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -34,5 +35,8 @@ func TestCorsAllowsCredentialedConfiguredOrigin(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
 		t.Fatalf("allow credentials = %q", got)
+	}
+	if got := recorder.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Idempotency-Key") {
+		t.Fatalf("idempotency header is missing from CORS allow-list: %q", got)
 	}
 }

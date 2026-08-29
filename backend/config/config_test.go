@@ -91,6 +91,30 @@ func TestValidateConfigRejectsReleasePlaceholders(t *testing.T) {
 	if err := validateConfig(cfg); err == nil {
 		t.Fatal("release config accepted the sample data encryption key")
 	}
+
+	cfg = validTestConfig("release")
+	cfg.JWT.Secret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("release config accepted a low-variety JWT secret")
+	}
+
+	cfg = validTestConfig("release")
+	cfg.Security.DataEncryptionKey = "abababababababababababababababab"
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("release config accepted a low-variety data encryption key")
+	}
+
+	cfg = validTestConfig("release")
+	cfg.Database.Password = cfg.JWT.Secret
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("release config accepted a database password reused as the JWT secret")
+	}
+
+	cfg = validTestConfig("release")
+	cfg.Database.Password = "weak-password"
+	if err := validateConfig(cfg); err == nil {
+		t.Fatal("release config accepted a short database password")
+	}
 }
 
 func TestValidateConfigRejectsInvalidOrigins(t *testing.T) {
@@ -116,6 +140,9 @@ func TestValidateConfigReleaseTransportBoundaries(t *testing.T) {
 		{name: "http origin", mutate: func(cfg *Configuration) { cfg.Server.AllowedOrigins = []string{"http://app.example.test"} }},
 		{name: "missing proxy", mutate: func(cfg *Configuration) { cfg.Server.TrustedProxies = nil }},
 		{name: "trust all proxy", mutate: func(cfg *Configuration) { cfg.Server.TrustedProxies = []string{"0.0.0.0/0"} }},
+		{name: "disguised trust all proxy", mutate: func(cfg *Configuration) { cfg.Server.TrustedProxies = []string{"203.0.113.7/0"} }},
+		{name: "overbroad ipv4 proxy", mutate: func(cfg *Configuration) { cfg.Server.TrustedProxies = []string{"128.0.0.0/1"} }},
+		{name: "overbroad ipv6 proxy", mutate: func(cfg *Configuration) { cfg.Server.TrustedProxies = []string{"8000::/1"} }},
 		{name: "remote database without verified TLS", mutate: func(cfg *Configuration) { cfg.Database.Host = "db.example.test"; cfg.Database.SSLMode = "require" }},
 		{name: "reused application keys", mutate: func(cfg *Configuration) { cfg.Security.DataEncryptionKey = cfg.JWT.Secret }},
 	}
@@ -156,5 +183,11 @@ func TestOriginAllowedDevelopmentFallback(t *testing.T) {
 	}
 	if OriginAllowed("http://192.168.31.99:5173", []string{"http://localhost:5173"}, "release") {
 		t.Fatal("private LAN fallback must remain disabled in release mode")
+	}
+}
+
+func TestOriginAllowedRejectsUserInfo(t *testing.T) {
+	if OriginAllowed("https://operator:secret@app.example.test", []string{"https://app.example.test"}, "release") {
+		t.Fatal("origin containing URL user info must not normalize to an allowed origin")
 	}
 }

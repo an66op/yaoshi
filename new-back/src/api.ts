@@ -1303,7 +1303,22 @@ const memberAssetBase = (() => {
 export function resolveApiAsset(value: string) {
   const path = String(value || '').trim()
   if (!path) return ''
-  if (/^(https?:|data:|blob:)/i.test(path)) return path
+  if (/^data:/i.test(path)) return /^data:image\/(?:png|jpe?g|webp|gif);base64,/i.test(path) ? path : ''
+  if (/^blob:/i.test(path)) {
+    try {
+      const target = new URL(path)
+      return target.origin === window.location.origin ? path : ''
+    } catch { return '' }
+  }
+  if (/^https?:/i.test(path)) {
+    try {
+      const target = new URL(path)
+      if (target.username || target.password) return ''
+      if (window.location.protocol === 'https:' && target.protocol !== 'https:') return ''
+      return target.href
+    } catch { return '' }
+  }
+  if (path.startsWith('//') || /^[a-z][a-z\d+.-]*:/i.test(path)) return ''
   if (path.startsWith('/api/')) return `${healthBase}${path}`
   if (path.startsWith('/images/')) return `${memberAssetBase}${path}`
   return path
@@ -1314,6 +1329,19 @@ export class AuthError extends Error {
     super(message)
     this.name = 'AuthError'
   }
+}
+
+function responseErrorMessage(response: Response, value: unknown, fallback: string) {
+  // Server/proxy failures can contain database or infrastructure diagnostics.
+  // Keep actionable validation and throttling messages, but never expose 5xx
+  // response details in the browser UI.
+  if (response.status >= 500) return fallback
+  if (typeof value !== 'string') return fallback
+  const message = [...value].map(character => {
+    const code = character.charCodeAt(0)
+    return code < 32 || code === 127 ? ' ' : character
+  }).join('').trim()
+  return message ? message.slice(0, 240) : fallback
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1349,9 +1377,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (response.status === 401) {
 	broadcastAdminLogout()
     window.dispatchEvent(new CustomEvent('yaotu-auth-expired'))
-    throw new AuthError(body.message || '请先登录')
+    throw new AuthError(responseErrorMessage(response, body.message, '请先登录'))
   }
-  if (!response.ok) throw new Error(body.message || '服务暂时不可用')
+  if (!response.ok) throw new Error(responseErrorMessage(response, body.message, '服务暂时不可用'))
   return body.data
 }
 
@@ -1395,7 +1423,6 @@ export function managementWebSocketURL(ticket: string) {
 }
 
 export type LoginResult = {
-	token?: string
   user: {
     id: number
     username: string

@@ -9,7 +9,7 @@ export class AppErrorBoundary extends Component<Props, State> {
   static getDerivedStateFromError(error: Error): State { return { error } }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('用户端页面渲染失败', error, info.componentStack)
+    if (import.meta.env.DEV) console.error('用户端页面渲染失败', error, info.componentStack)
   }
 
   render() {

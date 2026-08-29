@@ -89,7 +89,7 @@ const pendingApplicationCount = (role: string, stats: ApplicationStats) => {
   return safeCount(categories.wallet) + safeCount(categories.entertainment)
 }
 
-export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogout, children }: { path: string; onNavigate: (path: string) => void; mode: 'light' | 'dark'; onToggleMode: () => void; user: AuthUser; onLogout: () => void; children: ReactNode }) {
+export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogout, children }: { path: string; onNavigate: (path: string) => void; mode: 'light' | 'dark'; onToggleMode: () => void; user: AuthUser; onLogout: () => Promise<void>; children: ReactNode }) {
   const theme = useTheme()
   const desktop = useMediaQuery(theme.breakpoints.up('md'))
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -104,10 +104,24 @@ export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogou
   const [liveAlerts, setLiveAlerts] = useState<ManagementAlert[]>([])
   const [soundEnabled, setSoundEnabled] = useState(false)
   const [pendingApplications, setPendingApplications] = useState(0)
+  const [loggingOut, setLoggingOut] = useState(false)
   const [adminMenu, setAdminMenu] = useState<AdminMenuItemConfig[]>(() => normalizeAdminMenu(DEFAULT_ADMIN_MENU))
 	const [roleMenu, setRoleMenu] = useState<AdminMenuItemConfig[]>(() => user.role === 'tenant' ? DEFAULT_TENANT_MENU : DEFAULT_AGENT_MENU)
   const { now: serverNow, synced: clockSynced, latency } = useServerClock()
   const { showMessage } = useFeedback()
+  const requestLogout = async () => {
+    if (loggingOut) return
+    setProfileAnchor(null)
+    setLoggingOut(true)
+    try {
+      await onLogout()
+      showMessage('已安全退出登录', 'info')
+    } catch {
+      showMessage('退出未完成，当前登录仍然有效，请检查网络后重试', 'error')
+    } finally {
+      setLoggingOut(false)
+    }
+  }
   const visibleGroups = useMemo<ShellMenuGroup[]>(() => createAdminGroups(user.role === 'admin' ? adminMenu : roleMenu), [adminMenu, roleMenu, user.role])
   const navigate = (next: string) => { onNavigate(next); setMobileOpen(false) }
   const pages = useMemo(() => visibleGroups.flatMap(group => group.items).filter(item => item.label.includes(query.trim())), [query, visibleGroups])
@@ -447,7 +461,7 @@ export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogou
       <Menu anchorEl={profileAnchor} open={Boolean(profileAnchor)} onClose={() => setProfileAnchor(null)} slotProps={{ paper: { sx: { minWidth: 180, mt: 1 } } }}>
         <MenuItem onClick={() => { setProfileAnchor(null); navigate('/system') }}><ListItemIcon><PersonRounded fontSize="small" /></ListItemIcon>账户与设置</MenuItem>
         <Divider />
-        <MenuItem onClick={() => { setProfileAnchor(null); onLogout(); showMessage('已退出登录', 'info') }}><ListItemIcon><LogoutRounded fontSize="small" /></ListItemIcon>退出登录</MenuItem>
+        <MenuItem disabled={loggingOut} onClick={() => void requestLogout()}><ListItemIcon><LogoutRounded fontSize="small" /></ListItemIcon>{loggingOut ? '退出中…' : '退出登录'}</MenuItem>
       </Menu>
       <Dialog open={searchOpen} onClose={() => setSearchOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>快速前往</DialogTitle>

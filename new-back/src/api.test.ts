@@ -45,6 +45,29 @@ describe('management API cookie credentials', () => {
     expect(new Headers(init.headers).has('Authorization')).toBe(false)
   })
 
+  it('does not expose server diagnostics from 5xx responses', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      text: async () => JSON.stringify({ code: 503, message: 'redis://user:secret@internal-host', data: null }),
+    }))
+    const { adminApi } = await import('./api')
+
+    await expect(adminApi.me()).rejects.toThrow('服务暂时不可用')
+    await expect(adminApi.me()).rejects.not.toThrow('internal-host')
+  })
+
+  it('rejects executable, credentialed and protocol-relative asset URLs', async () => {
+    const { resolveApiAsset } = await import('./api')
+
+    expect(resolveApiAsset('javascript:alert(1)')).toBe('')
+    expect(resolveApiAsset('//evil.example/cover.png')).toBe('')
+    expect(resolveApiAsset('https://user:secret@cdn.example/cover.png')).toBe('')
+    expect(resolveApiAsset('data:text/html;base64,PHNjcmlwdD4=')).toBe('')
+    expect(resolveApiAsset('https://cdn.example/cover.png')).toBe('https://cdn.example/cover.png')
+    expect(resolveApiAsset('data:image/webp;base64,UklGRg==')).toBe('data:image/webp;base64,UklGRg==')
+  })
+
   it('sends robot reset request id as the audit idempotency header', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

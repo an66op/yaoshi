@@ -3,9 +3,10 @@ import { lotteryApi, type LotteryGame } from '../api/lottery'
 import { WS_EVENT, type WsEvent, useWebSocketConnected } from './useWebSocket'
 import { shouldReloadGameCatalog } from '../utils/gameCatalogEvents'
 import type { Game } from '../types'
+import { SPEED_RACING_TRIO_SRC } from '../data/gameArtwork'
 
 export const gameLogoPaths: Partial<Record<string, string>> = {
-  'speed-racing': '/images/game-logos/speed-racing.png',
+  'speed-racing': SPEED_RACING_TRIO_SRC,
   'speed-fly': '/images/game-logos/speed-fly.png',
   'speed-ssc': '/images/game-logos/speed-ssc.png',
   'sg-fly': '/images/game-logos/sg-fly.png',

@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import type { DrawResult } from '../api/lottery'
 import type { Game } from '../types'
+import { SPEED_RACING_TRIO_SRC } from '../data/gameArtwork'
 
 const racingColors = ['#a8afb4', '#f3c51f', '#1d83d2', '#33383e', '#f07b20', '#35c2c4', '#6144cc', '#b8bec2', '#e33b31', '#921f1d', '#23a74e']
-const racingCarsSrc = '/images/draw-cards/speed-racing-trio.png'
 
 let cachedRacingCars: HTMLImageElement | null = null
 let racingCarsRequest: Promise<HTMLImageElement> | null = null
 
 function supportsRacingArtwork(game: Game) {
-  return game.title.includes('赛车')
+  return game.id === 'speed-racing'
 }
 
 function loadRacingCars() {
@@ -26,7 +26,7 @@ function loadRacingCars() {
       racingCarsRequest = null
       reject(new Error('赛车素材加载失败'))
     }
-    image.src = racingCarsSrc
+    image.src = SPEED_RACING_TRIO_SRC
   })
   return racingCarsRequest
 }
@@ -173,24 +173,38 @@ function paintCurrent(canvas: HTMLCanvasElement, game: Game, draw: DrawResult, r
   ctx.fillText(new Date(draw.draw_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }), 680, 417)
 }
 
-function paintRange(canvas: HTMLCanvasElement, game: Game, draws: DrawResult[]) {
+function paintRange(canvas: HTMLCanvasElement, game: Game, draws: DrawResult[], racingCars: HTMLImageElement | null) {
   const rows = draws.slice(0, 15)
   const width = 720
   const rowHeight = 35
-  const height = 66 + rows.length * rowHeight + 14
+  const showRacingArtwork = Boolean(racingCars && supportsRacingArtwork(game))
+  const headerHeight = showRacingArtwork ? 84 : 44
+  const tableTop = headerHeight + 22
+  const height = tableTop + rows.length * rowHeight + 14
   const ctx = prepareCanvas(canvas, width, height)
   if (!ctx) return
   ctx.fillStyle = '#f6fafb'; ctx.fillRect(0, 0, width, height)
-  ctx.fillStyle = '#123c52'; ctx.fillRect(0, 0, width, 44)
+  const header = ctx.createLinearGradient(0, 0, width, 0)
+  header.addColorStop(0, '#123c52')
+  header.addColorStop(1, '#227f8b')
+  ctx.fillStyle = header; ctx.fillRect(0, 0, width, headerHeight)
   ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.font = '800 18px Arial, sans-serif'
-  ctx.fillText(`${game.title} · 最近 ${rows.length} 期`, 18, 28)
+  ctx.fillText(`${game.title} · 最近 ${rows.length} 期`, 18, showRacingArtwork ? 31 : 28)
+  if (showRacingArtwork && racingCars) {
+    ctx.save()
+    ctx.globalAlpha = .96
+    ctx.shadowColor = 'rgba(0,18,31,.38)'
+    ctx.shadowBlur = 12
+    ctx.drawImage(racingCars, width - 157, 1, 145, 82)
+    ctx.restore()
+  }
   const headers = [['期号', 18], ['号码', 170], ['冠亚和', 520], ['龙虎', 625]] as const
-  ctx.fillStyle = '#e5f1f4'; ctx.fillRect(0, 44, width, 22)
+  ctx.fillStyle = '#e5f1f4'; ctx.fillRect(0, headerHeight, width, 22)
   ctx.fillStyle = '#567582'; ctx.font = '700 12px Arial, sans-serif'
-  headers.forEach(([label, x]) => ctx.fillText(label, x, 59))
+  headers.forEach(([label, x]) => ctx.fillText(label, x, headerHeight + 15))
 
   rows.forEach((draw, rowIndex) => {
-    const y = 66 + rowIndex * rowHeight
+    const y = tableTop + rowIndex * rowHeight
     ctx.fillStyle = rowIndex % 2 ? '#eef5f7' : '#fff'; ctx.fillRect(0, y, width, rowHeight)
     ctx.fillStyle = '#314f5d'; ctx.font = '600 12px Arial, sans-serif'; ctx.textAlign = 'left'
     ctx.fillText(issueLabel(draw.issue), 18, y + 22)
@@ -219,7 +233,7 @@ export function DrawResultCards({ game, draw, draws }: { game: Game; draw: DrawR
 
   useEffect(() => {
     if (currentRef.current) paintCurrent(currentRef.current, game, draw, racingCars)
-    if (rangeRef.current) paintRange(rangeRef.current, game, draws)
+    if (rangeRef.current) paintRange(rangeRef.current, game, draws, racingCars)
   }, [draw, draws, game, racingCars])
 
   useEffect(() => {

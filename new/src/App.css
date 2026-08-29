@@ -238,6 +238,15 @@ button:active {
   height: 100%;
   object-fit: contain;
 }
+.game-logo.racing-trio-artwork {
+  width: 56px;
+  height: 36px;
+  padding: 2px;
+  border: 1px solid #8fdde280;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #0b3b58, #23828f);
+  box-shadow: 0 4px 10px #062c4760;
+}
 .game-lead div {
   display: grid;
   gap: 3px;

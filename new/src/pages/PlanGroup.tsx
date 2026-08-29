@@ -77,7 +77,7 @@ export function PlanLobby({ games, onBack, onSelect }: { games: Game[]; onBack: 
     <div className="plan-game-list">
       {planGames.map(({ game, summary }) => <button className="plan-game-card" key={game.id} onClick={() => onSelect(game.id)}>
         <div className="plan-game-main">
-          <span className="plan-game-logo">{game.logo ? <img alt={`${game.title} Logo`} src={game.logo} /> : game.tag.slice(0, 2)}</span>
+          <span className={`plan-game-logo${game.id === 'speed-racing' ? ' racing-trio-artwork' : ''}`}>{game.logo ? <img alt={`${game.title} Logo`} src={game.logo} /> : game.tag.slice(0, 2)}</span>
           <div><b>{game.title}</b><small><i />{summary.master_count} 位大师 · 后台发布</small></div>
           <em>第 {shortIssue(summary.current_issue)} 期<Icon name="arrow" /></em>
         </div>
@@ -120,7 +120,7 @@ export function PlanDetail({ games, gameId, onBack }: { games: Game[]; gameId?: 
   return <section className="plan-page plan-detail-page">
     <header className="blue-header plan-header"><button aria-label="返回计划群" onClick={onBack}><Icon name="back" /></button><b>{game.title}</b><span aria-hidden="true" /></header>
     <div className="plan-current">
-      <span className="plan-current-logo">{game.logo ? <img alt={`${game.title} Logo`} src={game.logo} /> : game.tag.slice(0, 2)}</span>
+      <span className={`plan-current-logo${game.id === 'speed-racing' ? ' racing-trio-artwork' : ''}`}>{game.logo ? <img alt={`${game.title} Logo`} src={game.logo} /> : game.tag.slice(0, 2)}</span>
       <div><small>{data?.current_issue ? `第 ${shortIssue(data.current_issue)} 期` : '暂无受理期'}</small><b>{loading ? '正在读取' : masters.length ? '本期计划' : '暂无计划'}</b></div>
       <time>{activeMaster ? `更新 ${updateTime(activeMaster.updated_at)}` : ''}</time>
     </div>

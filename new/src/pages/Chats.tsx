@@ -5,7 +5,12 @@ import { Avatar } from "../components/Avatar";
 import { RedPacketDialog } from "../components/Dialogs";
 import { ActionDialog } from "../components/Dialogs";
 import type { ChatView } from "../router";
-import { playNotificationSound } from "../utils/notificationAudio";
+import {
+  isNotificationMuted,
+  playNotificationSound,
+  setNotificationMuted,
+  stopNotificationSounds,
+} from "../utils/notificationAudio";
 import { portalApi, type ActivityItem, type MemberNotification, type RoomSettings } from "../api/portal";
 import { chatApi, type ChatMessage, type ChatPreview } from "../api/chat";
 import { WS_EVENT, type WsEvent, useWebSocketConnected } from "../hooks/useWebSocket";
@@ -148,6 +153,39 @@ async function markNotificationRowsRead(rows: MemberNotification[]) {
   if (!unread.length) return new Set<number>();
   const results = await Promise.allSettled(unread.map((item) => portalApi.markRead(item.id)));
   return new Set(unread.filter((_, index) => results[index].status === "rejected").map((item) => item.id));
+}
+
+function MessageSoundToggle() {
+  const [muted, setMuted] = useState(() => isNotificationMuted());
+
+  const toggle = () => {
+    const nextMuted = !muted;
+    setMuted(nextMuted);
+    setNotificationMuted(nextMuted);
+    if (nextMuted) {
+      stopNotificationSounds();
+      return;
+    }
+    playNotificationSound("message");
+  };
+
+  return (
+    <button
+      className={`message-sound-toggle${muted ? " muted" : ""}`}
+      type="button"
+      aria-label="通知声音"
+      aria-pressed={!muted}
+      title={muted ? "通知声音已静音，点击开启" : "通知声音已开启，点击静音"}
+      onClick={toggle}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M4 9.5h4l5-4v13l-5-4H4v-5Z" />
+        {muted
+          ? <><path d="m16 9 5 6" /><path d="m21 9-5 6" /></>
+          : <><path d="M16 9c1 .8 1.5 1.8 1.5 3s-.5 2.2-1.5 3" /><path d="M19 6.5c1.8 1.5 2.7 3.3 2.7 5.5s-.9 4-2.7 5.5" /></>}
+      </svg>
+    </button>
+  );
 }
 
 function messageTime(value?: string | Date) {
@@ -339,6 +377,7 @@ export function Chats({
     <section className="chat-list">
       <header className="blue-header">
         <b>聊天</b>
+        <MessageSoundToggle />
       </header>
       <div className="chat-subhead">
         <span>消息</span>

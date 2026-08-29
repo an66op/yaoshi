@@ -5,12 +5,7 @@ import { Avatar } from '../components/Avatar'
 import { Icon } from '../components/Icon'
 import { ActionDialog, RedPacketDialog } from '../components/Dialogs'
 import { DrawResultCards } from '../components/DrawResultCards'
-import {
-  isNotificationMuted,
-  playNotificationSound,
-  setNotificationMuted,
-  stopNotificationSounds,
-} from '../utils/notificationAudio'
+import { playNotificationSound } from '../utils/notificationAudio'
 import { CheckIn } from './CheckIn'
 import { parseBetInput, type ParsedBet } from '../utils/betParser'
 import { createRequestId } from '../utils/requestId'
@@ -221,19 +216,7 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
   const [packetReward, setPacketReward] = useState<number | null>(null)
   const [packetOpening, setPacketOpening] = useState(false)
   const [packetError, setPacketError] = useState('')
-  const [notificationMuted, setNotificationMutedState] = useState(() => isNotificationMuted())
   const seenWinningEventsRef = useRef(new Set<string>())
-
-  const toggleNotificationSound = () => {
-    const nextMuted = !notificationMuted
-    setNotificationMutedState(nextMuted)
-    setNotificationMuted(nextMuted)
-    if (nextMuted) {
-      stopNotificationSounds()
-      return
-    }
-    playNotificationSound('message')
-  }
 
   const syncChatScroll = useCallback((node: HTMLElement) => {
     const state = chatScrollState(node)
@@ -905,21 +888,6 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
       <b>{game.title}</b>
       <div className="game-header-right">
         <div className="game-header-meta" aria-label="账户今日统计"><span><em>积分</em><strong>{formatHeaderAmount(balance)}</strong></span>{roomFeatures.showTurnover && <span><em>流水</em><strong>{walletSummary ? formatHeaderAmount(walletSummary.today_turnover) : '—'}</strong></span>}{roomFeatures.showProfit && <span><em>输赢</em><strong>{walletSummary ? formatHeaderAmount(walletSummary.today_profit) : '—'}</strong></span>}{roomFeatures.showRebate && <span><em>回水</em><strong>{walletSummary ? formatHeaderAmount(walletSummary.today_rebate) : '—'}</strong></span>}</div>
-        <button
-          className={`game-chat-sound${notificationMuted ? ' muted' : ''}`}
-          type="button"
-          aria-label={notificationMuted ? '开启通知声音' : '静音通知声音'}
-          aria-pressed={notificationMuted}
-          title={notificationMuted ? '通知声音已静音，点击开启' : '通知声音已开启，点击静音'}
-          onClick={toggleNotificationSound}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 9.5h4l5-4v13l-5-4H4v-5Z" />
-            {notificationMuted
-              ? <><path d="m16 9 5 6" /><path d="m21 9-5 6" /></>
-              : <><path d="M16 9c1 .8 1.5 1.8 1.5 3s-.5 2.2-1.5 3" /><path d="M19 6.5c1.8 1.5 2.7 3.3 2.7 5.5s-.9 4-2.7 5.5" /></>}
-          </svg>
-        </button>
       </div>
     </header>
     <section className="game-info"><div><span aria-label={`当前期号 ${assistantStatus?.issue ?? game.period}`}>{shortIssue(assistantStatus?.issue ?? game.period)}</span><b>{game.due.split('').map((number, index) => <i key={index}>{number}</i>)}</b><small className={`game-acceptance ${acceptance.tone}`}>{acceptance.label}</small></div>{(roomFeatures.showMipai || roomFeatures.showOrders || roomFeatures.showStreak || roomFeatures.showPrediction) && <nav className="game-tool-tabs" aria-label="游戏工具">{roomFeatures.showMipai && <button onClick={() => setDialog('mipai')}>咪牌</button>}{roomFeatures.showOrders && <button onClick={() => setDialog('orders')}>注单</button>}{roomFeatures.showStreak && <button onClick={() => setDialog('trend')}>长龙</button>}{roomFeatures.showPrediction && <button onClick={() => setDialog('forecast')}>预测</button>}</nav>}</section>

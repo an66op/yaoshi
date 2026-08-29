@@ -1049,31 +1049,6 @@ button:active {
   align-items: center;
   gap: 6px;
 }
-.game-header .game-chat-sound {
-  display: grid;
-  place-items: center;
-  width: 29px;
-  height: 29px;
-  padding: 0;
-  border: 1px solid rgba(211, 255, 255, .45);
-  border-radius: 9px;
-  background: rgba(5, 79, 113, .2);
-  color: #efffff;
-  box-shadow: inset 0 1px rgba(255, 255, 255, .16);
-  transition: background .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
-}
-.game-header .game-chat-sound:active {
-  transform: scale(.94);
-}
-.game-header .game-chat-sound.muted {
-  border-color: rgba(201, 226, 231, .32);
-  background: rgba(7, 61, 88, .38);
-  color: #b8d5dc;
-}
-.game-header .game-chat-sound svg {
-  width: 19px;
-  height: 19px;
-}
 .game-header > b {
   overflow: hidden;
   min-width: 0;

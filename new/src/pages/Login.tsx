@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../components/Icon'
+import { SessionCheckNotice } from '../components/SessionStartup'
 import { memberApi } from '../api/member'
 import {
   MEMBER_LOGIN_USERNAME_MAX_LENGTH,
@@ -11,17 +12,41 @@ import {
 } from '../authLimits'
 import { BRAND_NAME, DEMO_ACCOUNT, DEMO_PASSWORD } from '../data/brand'
 import type { Theme } from '../types'
+import { loadTestLogin } from '../utils/testLogin'
 
-type Props = { onContinue: (account: string, nickname: string) => void; onRegister?: () => void; theme?: Theme }
+type Props = { onContinue: (account: string, nickname: string) => void; onRegister?: () => void; theme?: Theme; verificationPending?: boolean }
 
 /** 会员登录：调用后端 /api/member/login */
-export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
+export function Login({ onContinue, onRegister, theme = 'day', verificationPending = false }: Props) {
   const [account, setAccount] = useState(() => import.meta.env.DEV ? DEMO_ACCOUNT : '')
   const [password, setPassword] = useState(() => import.meta.env.DEV ? DEMO_PASSWORD : '')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [testPrefilled, setTestPrefilled] = useState(false)
+  const edited = useRef(false)
+
+  useEffect(() => {
+    if (import.meta.env.DEV) return
+    const request = new AbortController()
+    void loadTestLogin(request.signal).then(preset => {
+      if (!preset || request.signal.aborted || edited.current) return
+      setAccount(preset.username)
+      setPassword(preset.password)
+      setTestPrefilled(true)
+    })
+    return () => request.abort()
+  }, [])
+
+  const markEdited = () => {
+    edited.current = true
+    setTestPrefilled(false)
+    setError('')
+  }
 
   const submit = async () => {
+    // The form may paint immediately, but a refresh must finish its existing
+    // cookie check before starting another login (including keyboard submit).
+    if (verificationPending || loading) return
     const value = account.trim()
     if (unicodeLength(value) < USERNAME_MIN_LENGTH) return setError(`请输入至少 ${USERNAME_MIN_LENGTH} 位帐号`)
     if (!password) return setError('请输入登录密码')
@@ -60,7 +85,7 @@ export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
             <input
               autoComplete="username"
               autoFocus
-              onChange={(event) => { setAccount(truncateUnicode(event.target.value, MEMBER_LOGIN_USERNAME_MAX_LENGTH)); setError('') }}
+              onChange={(event) => { markEdited(); setAccount(truncateUnicode(event.target.value, MEMBER_LOGIN_USERNAME_MAX_LENGTH)) }}
               onKeyDown={(event) => event.key === 'Enter' && void submit()}
               placeholder="输入帐号"
               value={account}
@@ -74,7 +99,7 @@ export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
             <input
               autoComplete="current-password"
               maxLength={PASSWORD_MAX_BYTES}
-              onChange={(event) => { setPassword(event.target.value); setError('') }}
+              onChange={(event) => { markEdited(); setPassword(event.target.value) }}
               onKeyDown={(event) => event.key === 'Enter' && void submit()}
               placeholder="输入登录密码"
               type="password"
@@ -82,14 +107,15 @@ export function Login({ onContinue, onRegister, theme = 'day' }: Props) {
             />
           </div>
         </label>
+        {testPrefilled && <p className="login-test-notice" role="status">测试环境 · 已填充体验账号<small>体验账号公开，仅用于测试，请勿存入真实资金或个人资料。</small></p>}
         {error && <p className="login-error" role="alert">{error}</p>}
-        <button className="login-primary" disabled={loading} onClick={() => void submit()}>
-          {loading ? '登录中…' : '验证并继续'} <Icon name="arrow" />
+        <button className="login-primary" disabled={loading || verificationPending} onClick={() => void submit()}>
+          {verificationPending ? '连接中…' : loading ? '登录中…' : '验证并继续'} <Icon name="arrow" />
         </button>
-        <div className="login-status">
+        {verificationPending ? <SessionCheckNotice className="login-status login-session-status" /> : <div className="login-status">
           <span>✓</span>
           <p>登录后输入房间号 · 房间由上级配置并发放给代理</p>
-        </div>
+        </div>}
         <footer className="login-foot">
           <span>{BRAND_NAME}娱乐</span>
           {onRegister ? <button className="room-entry-back" onClick={onRegister}>没有帐号？注册</button> : <p>安全登录 · 账户信息已加密</p>}

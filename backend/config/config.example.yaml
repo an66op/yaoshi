@@ -14,7 +14,7 @@ database:
   port: 5432
   user: postgres
   password: CHANGE_ME
-  dbname: lottery
+  dbname: wangzhe
   sslmode: require
 
 redis:

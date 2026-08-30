@@ -29,6 +29,13 @@ source "$SCRIPT_DIR/lib/encrypted-backup.sh"
 "$SCRIPT_DIR/production-config-check.sh" "$ENV_FILE"
 load_backend_env "$ENV_FILE"
 
+# Hiding a public test password does not revoke it: both the preset and the
+# published accounts must be disabled before this formal readiness gate passes.
+[[ ! -e /etc/wangzhe/test-login.enabled && ! -L /etc/wangzhe/test-login.enabled ]] || {
+  echo "测试账号填充仍在启用，拒绝正式上线" >&2
+  exit 1
+}
+
 for command_name in awk basename curl find id jq openssl psql runuser sha256sum sort stat tail timeout; do
   command -v "$command_name" >/dev/null 2>&1 || { echo "缺少命令：$command_name" >&2; exit 1; }
 done
@@ -182,6 +189,10 @@ psql_base=(
   --username "$BACKEND_DATABASE_USER"
   --dbname "$BACKEND_DATABASE_DBNAME"
 )
+
+active_test_accounts="$("${psql_base[@]}" --command "SELECT count(*) FROM \"user\" WHERE remark LIKE 'test-site-accounts:v1:%' AND status = 1 AND deleted_at IS NULL;")"
+active_test_accounts="$(require_decimal_count 活跃公开测试账号数 "$active_test_accounts")"
+(( 10#$active_test_accounts == 0 )) || { echo "仍有公开测试账号未停用，拒绝正式上线" >&2; exit 1; }
 
 stale_pending="$("${psql_base[@]}" --command "SELECT count(*) FROM lottery_bets WHERE status IN ('pending','accepted','settling') AND created_at < now() - interval '1 hour';")"
 orphan_bets="$("${psql_base[@]}" --command "SELECT count(*) FROM lottery_bets WHERE workspace_id = 0;")"

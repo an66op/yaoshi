@@ -14,7 +14,7 @@ import {
 import AccountBalanceRounded from '@mui/icons-material/AccountBalanceRounded'
 import BusinessRounded from '@mui/icons-material/BusinessRounded'
 import StorefrontRounded from '@mui/icons-material/StorefrontRounded'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { adminApi } from '../api'
 import { clearLegacyAdminSession, type AuthUser } from '../auth'
 import { createDevLoginPresets, type DevLoginPreset, type LoginIdentity } from '../devLoginPresets'
@@ -25,6 +25,7 @@ import {
   truncateCodePoints,
   validateManagementLoginInput,
 } from '../loginLimits'
+import { loadTestLogin, type ManagementTestLogins } from '../utils/testLogin'
 
 const identityOptions: Array<{
   id: LoginIdentity
@@ -45,21 +46,50 @@ const localPresets: Partial<Record<LoginIdentity, DevLoginPreset>> = import.meta
 const localPreset = (identity: LoginIdentity) => localPresets[identity]
 
 export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }) {
-  const [username, setUsername] = useState(() => localPreset('platform')?.username ?? '')
-  const [password, setPassword] = useState(() => localPreset('platform')?.password ?? '')
-  const [workspace, setWorkspace] = useState(() => localPreset('platform')?.workspace ?? '平台')
+  const [username, setUsername] = useState(() => import.meta.env.DEV ? localPreset('platform')?.username ?? '' : '')
+  const [password, setPassword] = useState(() => import.meta.env.DEV ? localPreset('platform')?.password ?? '' : '')
+  const [workspace, setWorkspace] = useState(() => import.meta.env.DEV ? localPreset('platform')?.workspace ?? '平台' : '平台')
   const [identity, setIdentity] = useState<LoginIdentity>('platform')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [testPresets, setTestPresets] = useState<ManagementTestLogins>({})
+  const [testPrefilled, setTestPrefilled] = useState(false)
+  const edited = useRef(false)
+  const selectedIdentity = useRef<LoginIdentity>('platform')
+
+  useEffect(() => {
+    if (import.meta.env.DEV) return
+    const request = new AbortController()
+    void loadTestLogin(request.signal).then(presets => {
+      if (!presets || request.signal.aborted) return
+      setTestPresets(presets)
+      const preset = presets[selectedIdentity.current]
+      if (!preset || edited.current) return
+      setUsername(preset.username)
+      setPassword(preset.password)
+      setWorkspace(preset.workspace)
+      setTestPrefilled(true)
+    })
+    return () => request.abort()
+  }, [])
+
+  const markEdited = () => {
+    edited.current = true
+    setTestPrefilled(false)
+    setError('')
+  }
 
   const chooseIdentity = (next: LoginIdentity) => {
     const option = identityOptions.find(item => item.id === next)
     if (!option) return
+    selectedIdentity.current = next
+    edited.current = false
     setIdentity(next)
-    setWorkspace(localPreset(next)?.workspace ?? option.workspace)
-    const preset = localPreset(next)
+    const preset = import.meta.env.DEV ? localPreset(next) : testPresets[next]
+    setWorkspace(preset?.workspace ?? option.workspace)
     setUsername(preset?.username ?? '')
     setPassword(preset?.password ?? '')
+    setTestPrefilled(!import.meta.env.DEV && !!preset)
     setError('')
   }
 
@@ -104,6 +134,7 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
             <Typography variant="body2" color="text.secondary">{import.meta.env.DEV ? '选择身份后自动填充本地体验账号' : '请选择身份并输入管理账号'}</Typography>
           </Stack>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+          {testPrefilled && <Alert severity="info" sx={{ mb: 2 }}>测试环境 · 已填充体验账号<Typography component="span" display="block" variant="caption">体验账号公开，仅用于测试，请勿录入真实业务资料。</Typography></Alert>}
           <Stack component="form" gap={2} onSubmit={event => void submit(event)}>
             <Box>
               <Typography component="label" fontSize={13} fontWeight={800} color="text.secondary" display="block" mb={1}>登录身份</Typography>
@@ -134,13 +165,13 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
               label={identity === 'agent' ? '所属租户' : '所属平台'}
               helperText={identity === 'agent' ? '填写所属租户账号；未分配租户时填写“平台”' : '平台管理员和租户统一归属平台'}
               value={workspace}
-              onChange={event => setWorkspace(truncateCodePoints(event.target.value, MANAGEMENT_LOGIN_WORKSPACE_MAX_RUNES))}
+              onChange={event => { markEdited(); setWorkspace(truncateCodePoints(event.target.value, MANAGEMENT_LOGIN_WORKSPACE_MAX_RUNES)) }}
               autoComplete="organization"
               disabled={identity !== 'agent'}
               required
             />
-            <TextField label="登录帐号" value={username} onChange={event => { setUsername(truncateCodePoints(event.target.value, MANAGEMENT_LOGIN_USERNAME_MAX_RUNES)); setError('') }} autoComplete="username" required />
-            <TextField label="密码" type="password" value={password} onChange={event => { setPassword(event.target.value); setError('') }} autoComplete="current-password" slotProps={{ htmlInput: { maxLength: MANAGEMENT_LOGIN_PASSWORD_MAX_BYTES } }} required />
+            <TextField label="登录帐号" value={username} onChange={event => { markEdited(); setUsername(truncateCodePoints(event.target.value, MANAGEMENT_LOGIN_USERNAME_MAX_RUNES)) }} autoComplete="username" required />
+            <TextField label="密码" type="password" value={password} onChange={event => { markEdited(); setPassword(event.target.value) }} autoComplete="current-password" slotProps={{ htmlInput: { maxLength: MANAGEMENT_LOGIN_PASSWORD_MAX_BYTES } }} required />
             <Button type="submit" variant="contained" size="large" disabled={loading || !username.trim() || !password}>
               {loading ? <CircularProgress size={22} color="inherit" /> : `登录${identityOptions.find(item => item.id === identity)?.label ?? ''}`}
             </Button>

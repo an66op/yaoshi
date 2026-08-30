@@ -8,7 +8,9 @@
 make dev
 ```
 
-启动脚本默认使用 `debug` 模式、`localhost:5432/backend` 和 `postgres` 数据库用户；需要其他连接时通过 `BACKEND_DATABASE_*` 环境变量覆盖。脚本导出的环境变量优先于 `backend/config/config.yaml`，不要只修改配置文件而忽略环境变量。
+启动脚本和健康检查默认使用 `localhost:5432/wangzhe`、`postgres` 数据库用户；启动模式默认为 `debug`。需要其他连接时通过 `BACKEND_DATABASE_*` 环境变量覆盖，例如 `BACKEND_DATABASE_DBNAME=my_local_db make dev`，健康检查也需使用同一覆盖值。脚本导出的环境变量优先于 `backend/config/config.yaml`，不要只修改配置文件而忽略环境变量。
+
+`wangzhe` 是数据库名称，不是数据库用户名称。默认值变更不会自动创建、重命名或清空已有数据库；迁移旧本地库时先备份、停止使用该库的服务，完成重命名后同步配置文件及显式环境变量。不要用开发重置脚本代替数据库重命名。
 
 固定地址：
 

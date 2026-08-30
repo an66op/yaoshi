@@ -34,6 +34,7 @@ release: verify readiness-test
 	mkdir -p release/bin release/member release/admin release/deploy release/scripts/lib
 	cd backend && CGO_ENABLED=0 GOOS=$(RELEASE_GOOS) GOARCH=$(RELEASE_GOARCH) go build -trimpath -ldflags="-s -w" -o ../release/bin/wangzhe-backend .
 	cd backend && CGO_ENABLED=0 GOOS=$(RELEASE_GOOS) GOARCH=$(RELEASE_GOARCH) go build -trimpath -ldflags="-s -w" -o ../release/bin/wangzhe-bootstrap-admin ./cmd/bootstrap-admin
+	cd backend && CGO_ENABLED=0 GOOS=$(RELEASE_GOOS) GOARCH=$(RELEASE_GOARCH) go build -trimpath -ldflags="-s -w" -o ../release/bin/wangzhe-test-site-accounts ./cmd/test-site-accounts
 	printf '%s/%s\n' '$(RELEASE_GOOS)' '$(RELEASE_GOARCH)' > release/TARGET
 	cp -R new/dist/. release/member/
 	cp -R new-back/dist/. release/admin/

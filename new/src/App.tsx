@@ -19,7 +19,9 @@ import './wallet.css'
 import './night-polish.css'
 import './appearance.css'
 import './typography.css'
+import './startup.css'
 import { BottomNav } from './components/BottomNav'
+import { SessionStartup } from './components/SessionStartup'
 import { GameRoom } from './pages/GameRoom'
 import { DrawResults } from './pages/DrawResults'
 import { Lobby } from './pages/Lobby'
@@ -393,11 +395,14 @@ function App() {
   }
 
   if (booting) {
-    return <main className={`mobile-app font-scale-${fontScale}`}><div className="app-content"><p className="app-loading">加载中…</p></div></main>
+    // Public sign-in can paint immediately. Keep submission gated until /me
+    // finishes; private routes show no persisted balance, room or messages.
+    if (route.kind === 'login') return <Login theme={demo.theme} verificationPending onContinue={continueLogin} onRegister={() => navigate(pathForRegister())} />
+    return <SessionStartup theme={demo.theme} />
   }
 
 	if (bootError && session) {
-    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div className="app-content"><div className="app-loading"><p>{logoutError || bootError}</p><button className="room-entry-back" onClick={() => window.location.reload()}>重新读取账号</button><button className="room-entry-back" disabled={loggingOut} onClick={() => void logout()}>{loggingOut ? '退出中…' : '退出登录'}</button></div></div></main>
+    return <SessionStartup theme={demo.theme} error={logoutError || bootError} onRetry={() => window.location.reload()} onLogout={() => void logout()} loggingOut={loggingOut} />
   }
 
   if (route.kind === 'login') return <Login theme={demo.theme} onContinue={(account, nickname) => void continueLogin(account, nickname)} onRegister={() => navigate(pathForRegister())} />

@@ -539,6 +539,21 @@ done
 rg -Fq '"username":"suyang","password":"Room8801"' "$ROOT_DIR/scripts/local-smoke.sh"
 rg -Fq '"username":"wangzhetenant","password":"WzTenant8801"' "$ROOT_DIR/scripts/local-smoke.sh"
 rg -Fq 'export BACKEND_SERVER_BIND="${BACKEND_SERVER_BIND:-0.0.0.0}"' "$ROOT_DIR/scripts/local-dev.sh"
-rg -Fq 'export BACKEND_DATABASE_DBNAME="${BACKEND_DATABASE_DBNAME:-backend}"' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'export BACKEND_DATABASE_DBNAME="${BACKEND_DATABASE_DBNAME:-wangzhe}"' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'PG_DB="${BACKEND_DATABASE_DBNAME:-wangzhe}"' "$ROOT_DIR/scripts/local-health.sh"
+rg -q '^  dbname: wangzhe$' "$ROOT_DIR/backend/config/config.example.yaml"
+rg -q '^BACKEND_DATABASE_DBNAME=wangzhe$' "$ROOT_DIR/deploy/env/backend.env.example"
 
 echo "发布配置静态检查通过"
+
+# Test-site credentials are runtime-only, isolated between the two hostnames,
+# off by default and incompatible with formal production acceptance.
+test_login_nginx="$ROOT_DIR/deploy/nginx/wz6688.split-hosts.conf"
+[[ "$(rg -c 'location = /test-login.json' "$test_login_nginx")" == 2 ]]
+[[ "$(rg -c 'if \(!-f /etc/wangzhe/test-login.enabled\)' "$test_login_nginx")" == 2 ]]
+rg -Fq 'alias /etc/wangzhe/test-login/member.json;' "$test_login_nginx"
+rg -Fq 'alias /etc/wangzhe/test-login/admin.json;' "$test_login_nginx"
+rg -Fq 'Cache-Control "no-store, max-age=0"' "$test_login_nginx"
+rg -Fq 'test-site-accounts:v1:%' "$ROOT_DIR/scripts/production-readiness.sh"
+rg -Fq '10#$active_test_accounts == 0' "$ROOT_DIR/scripts/production-readiness.sh"
+rg -Fq '! -e /etc/wangzhe/test-login.enabled' "$ROOT_DIR/scripts/production-readiness.sh"

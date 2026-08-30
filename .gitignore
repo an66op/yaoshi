@@ -18,6 +18,9 @@ backend/uploads/
 .env.*
 !.env.example
 backend/config/config.yaml
+new/public/test-login.json
+new-back/public/test-login.json
+test-site-accounts.json
 *.pem
 *.key
 *.p12

@@ -7,7 +7,7 @@ ADMIN_URL="${ADMIN_URL:-http://127.0.0.1:5174}"
 PG_HOST="${BACKEND_DATABASE_HOST:-localhost}"
 PG_PORT="${BACKEND_DATABASE_PORT:-5432}"
 PG_USER="${BACKEND_DATABASE_USER:-postgres}"
-PG_DB="${BACKEND_DATABASE_DBNAME:-backend}"
+PG_DB="${BACKEND_DATABASE_DBNAME:-wangzhe}"
 
 postgres_ready_cmd="$(command -v pg_isready || true)"
 if [[ -z "$postgres_ready_cmd" ]]; then

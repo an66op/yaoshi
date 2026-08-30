@@ -1,0 +1,71 @@
+/* Startup has the same surface as sign-in; never inherit the unthemed
+   mobile app's legacy navy background or show unverified account data. */
+.session-startup.login-page {
+  min-height: 100dvh;
+  padding: 24px;
+}
+
+.session-startup-card {
+  width: min(350px, 100%);
+  padding: 25px;
+  border-radius: 20px;
+}
+
+.session-startup-card .login-brand {
+  grid-template-columns: 50px minmax(0, 1fr);
+}
+
+.session-check-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #527c89;
+}
+
+.session-check-notice p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.session-check-notice .session-check-spinner {
+  display: block;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: #368ea0;
+  animation: session-check-spin .8s linear infinite;
+}
+
+.session-startup-notice {
+  min-height: 48px;
+  margin-top: 18px;
+  border-radius: 10px;
+  background: #eaf7f7;
+}
+
+.login-session-status {
+  justify-content: flex-start;
+  min-height: 34px;
+}
+
+.login-session-status p { font-size: 10px; }
+.login-primary:disabled { cursor: wait; opacity: .65; box-shadow: none; }
+.session-startup-copy { margin: 22px 0 0; }
+.session-startup-copy h1 { font-size: 19px; }
+.session-startup-copy p { overflow-wrap: anywhere; font-size: 12px; }
+.session-startup-actions { display: grid; gap: 12px; }
+
+.theme-night .session-check-notice { color: #aad0d6; }
+.theme-night .session-check-spinner { color: #73cecf; }
+.theme-night .session-startup-notice { background: #10394e; }
+
+@keyframes session-check-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .session-check-notice .session-check-spinner { animation: none; }
+}

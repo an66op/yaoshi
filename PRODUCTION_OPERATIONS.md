@@ -442,6 +442,20 @@ sudo rm /etc/wangzhe/maintenance
 
 ## 日常巡检
 
+### 独立测试站的账号填充
+
+现有双域名 Nginx 模板支持可关闭的测试站体验账号，不影响正常 release 登录校验。默认不存在 `/etc/wangzhe/test-login.enabled`，两个域名的 `/test-login.json` 都返回 404。只有明确用于测试且可接受访客修改测试数据时才启用；它不属于正式上线配置。
+
+- 使用 `release/bin/wangzhe-test-site-accounts --confirm-test-site --config-file /etc/wangzhe/test-site-accounts.json` 显式创建独立管理员、租户、代理和会员。JSON 必须为执行用户所有的 0600 普通文件，包含 `site` 和四类 `username/password`，租户/代理另有 `room_code/room_name`，会员的 `room_code` 与代理一致。四份密码分别随机生成，不得使用原管理员的私有密码。
+- 命令需以应用用户运行，读取受保护的正式数据库环境配置；不会被启动流程自动调用，没有公开初始化 API。既有同名账号、已停用账号或房间冲突会拒绝，不能重置已有密码。四个人类账号余额为零，不伪造下注、开奖或计划记录；新房间游戏仍默认关闭。
+- 会员域名只读取 `/etc/wangzhe/test-login/member.json`；管理域名只读取同目录的 `admin.json`。格式为 `{"enabled":true,"profiles":{...}}`，会员键为 `member`，管理键为 `platform/tenant/agent`。每项只含账号、密码、必要的 `workspace` 或 `room_code`，严禁放入服务端密钥。目录 root:www-data 0750，文件 root:www-data 0640，不放入源码、public 目录或构建包。
+- 确认四类账号实际登录成功后创建 root 保护的 `test-login.enabled`，校验 Nginx 并重载。响应禁止缓存和索引；前端只填充，不自动登录，也不覆盖手输。DEV 模式保留独立的本地体验配置。
+- 结束测试时先撤下 `test-login.enabled`，再用原私有管理员在后台停用四个带 `test-site-accounts:v1:<site>:<role>` 标记的账号，确认旧会话已失效，最后移走两份公开 JSON。只隐藏填充不等于撤销公开密码。`production-readiness.sh` 会拒绝测试开关或仍启用的受控测试账号；不得绕过此检查宣称正式验收通过。
+
+测试站更新也应先备份数据库、上传文件和配置。单机加密备份仅用于本次回滚，不能替代前述异机备份、PITR 和恢复演练。
+
+### 常规检查
+
 - `/health`、用户端、管理端和 WebSocket 均可用。
 - 开奖源最后成功时间、当前期状态、待结算及异常对账数量正常。
 - 余额流水末值等于会员余额，无负余额，无跨工作区数据。

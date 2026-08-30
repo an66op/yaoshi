@@ -213,6 +213,9 @@
   font-size: 10px;
 }
 .login-success { color: #2eaf7b; }
+.login-test-notice { margin: 12px 0 0; padding: 9px 11px; border: 1px solid #b9ddd9; border-radius: 9px; background: #eefaf7; color: #24685f; font-size: 11px; line-height: 1.6; }
+.login-test-notice small { display: block; margin-top: 2px; font-size: 10px; }
+.theme-night.login-page .login-test-notice { border-color: #4bc4cc48; background: #123e55; color: #a8e2df; }
 .register-back { margin-top: 12px; }
 .register-page {
   display: flex;

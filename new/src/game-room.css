@@ -378,7 +378,14 @@
 .parsed-ticket { margin-top: 8px; }
 .parsed-ticket article { font-size: 12px; line-height: 1.8; }
 .assistant-mention {
-  display: table;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  justify-self: start;
+  align-self: start;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
   margin: 0 0 7px;
   padding: 3px 8px;
   border: 1px solid #7ecff054;
@@ -393,6 +400,7 @@
 .parsed-ticket article strong { display: inline-block; margin: 4px 0 6px; color: #243f4d; }
 .parsed-line { display: block; }
 .parsed-ticket article footer { margin-top: 9px; padding-top: 7px; border-top: 1px solid #e4ecef; color: #168c82; font-weight: 700; }
+.parsed-ticket article footer > span { display: block; }
 .theme-night.game-room .parsed-ticket article strong { color: #efffff; }
 .theme-night.game-room .assistant-mention {
   border-color: #4ac8e659;
@@ -431,16 +439,6 @@
 .theme-night.game-room .settlement-line { background: #12384b; }
 .theme-night.game-room .settlement-line > span { color: #c3e0e5; }
 .theme-night.game-room .personal-settlement article footer { border-top-color: #4bc3cb30; color: #7fe4cb; }
-.persisted-ticket { margin-top: 12px; }
-.persisted-badge { display: inline-flex; margin: 0 0 7px 7px; padding: 2px 6px; border-radius: 999px; background: #e8f6f3; color: #168b80; font-size: 9px; font-style: normal; font-weight: 700; }
-.persisted-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.persisted-line > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.persisted-line > em { flex: 0 0 auto; color: #79909a; font-size: 9px; font-style: normal; }
-.persisted-line > em.won { color: #1a9a78; }
-.persisted-line > em.lost { color: #df6b62; }
-.persisted-line > em.cancelled { color: #9aa6ac; }
-.persisted-more { width: 100%; margin-top: 7px; padding: 6px; border: 0; border-radius: 7px; background: #eaf6f5; color: #18867e; font-size: 10px; }
-.theme-night.game-room .persisted-badge,.theme-night.game-room .persisted-more { background: #164657; color: #8ce8df; }
 
 /* 游戏消息统一时间轴。首次数据尚未齐全时不渲染半份历史，避免先看到
    顶部旧消息再闪到末尾；定位完成前保留真实高度但隐藏内容。 */
@@ -475,44 +473,40 @@
   right: 15px;
   bottom: calc(66px + env(safe-area-inset-bottom));
   display: grid;
-  grid-template-columns: 18px auto;
   place-items: center;
-  gap: 3px;
-  min-width: 57px;
-  height: 34px;
-  padding: 0 9px 0 7px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   border: 1px solid #a9dadd;
-  border-radius: 18px;
+  border-radius: 50%;
   background: #ffffffed;
   color: #0f8290;
-  box-shadow: 0 7px 20px #123d5352;
+  box-shadow: 0 3px 10px #123d5330;
   backdrop-filter: blur(8px);
+}
+.scroll-latest-button::before {
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
+  content: "";
+}
+.scroll-latest-button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
 }
 .scroll-latest-button.keyboard-open {
   bottom: calc(248px + env(safe-area-inset-bottom));
 }
-.scroll-latest-button span {
-  display: grid;
-  place-items: center;
+.scroll-latest-button svg {
   width: 18px;
   height: 18px;
-  border-radius: 50%;
-  background: #1597a1;
-  color: #fff;
-  font-size: 14px;
-  font-weight: 900;
-  line-height: 1;
-}
-.scroll-latest-button small {
-  color: inherit;
-  font-size: 10px;
-  font-weight: 800;
+  pointer-events: none;
 }
 .theme-night.game-room .scroll-latest-button {
   border-color: #4aaeb65e;
   background: #113a50ed;
   color: #baf6f3;
-  box-shadow: 0 8px 22px #0008;
+  box-shadow: 0 3px 10px #0006;
 }
 
 /* 提升下注页阅读性：保留原有布局，仅放大主要文字层级。 */
@@ -800,15 +794,6 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
-}
-.game-switch-sheet > button > span.racing-trio-artwork {
-  width: 54px;
-  height: 36px;
-  padding: 2px;
-  border: 1px solid #7dd7dc70;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #0b3b58, #23828f) !important;
-  box-shadow: 0 3px 9px #12364b40;
 }
 .game-switch-sheet > button > div {
   display: grid;
@@ -2048,12 +2033,11 @@
 .draw-game-picker-trigger i::after { position: absolute; top: 50%; left: 50%; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; content: ""; transform: translate(-50%, -66%) rotate(45deg); transition: transform .16s ease; }
 .draw-game-picker-trigger[aria-expanded="true"] i::after { transform: translate(-50%, -34%) rotate(225deg); }
 .draw-game-picker-menu { position: absolute; z-index: 4; top: calc(100% + 6px); left: 0; right: -88px; display: grid; gap: 3px; max-height: min(320px, 48dvh); overflow-y: auto; padding: 6px; border: 1px solid #bfe2e3; border-radius: 11px; background: #fff; box-shadow: 0 14px 28px #234c5b2b; }
-.draw-game-picker-menu button { display: grid; grid-template-columns: 38px minmax(0, 1fr) 18px; align-items: center; gap: 7px; min-height: 38px; padding: 5px 7px; border: 0; border-radius: 7px; background: transparent; color: #2b5667; text-align: left; }
+.draw-game-picker-menu button { display: grid; grid-template-columns: 24px minmax(0, 1fr) 18px; align-items: center; gap: 7px; min-height: 38px; padding: 5px 7px; border: 0; border-radius: 7px; background: transparent; color: #2b5667; text-align: left; }
 .draw-game-picker-menu button:hover,.draw-game-picker-menu button.active { background: #e7f8f6; color: #117f87; }
 .draw-game-picker-menu button > span { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 7px; color: #fff; font-size: 8px; font-weight: 800; }
-.draw-game-picker-menu button > span.has-image { width: 30px; height: 25px; overflow: hidden; background: #eef8f8; }
+.draw-game-picker-menu button > span.has-image { overflow: hidden; background: transparent; }
 .draw-game-picker-menu button > span.has-image img { display: block; width: 100%; height: 100%; object-fit: contain; }
-.draw-game-picker-menu button > span.racing-trio-artwork { width: 38px; height: 25px; padding: 1px; border: 1px solid #74cbd170; border-radius: 7px; background: linear-gradient(135deg, #0b3b58, #23828f); }
 .draw-game-picker-menu button b { overflow: hidden; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
 .draw-game-picker-menu button i { color: #149696; font-size: 11px; font-style: normal; font-weight: 800; text-align: center; }
 .draw-results-filters select,
@@ -2743,8 +2727,23 @@
 
 /* 顶部四项工具合并为一条轻量分段栏，避免挤压期号与倒计时。 */
 .game-room .game-info {
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
+.game-room .game-info > .game-round-info {
+  min-width: max-content;
+  gap: 10px;
+}
+.game-room .game-round-issue {
+  display: inline-flex;
+  align-items: center;
+}
+.game-room .game-round-issue strong {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 24px;
+}
+.game-room .game-tool-tabs { margin-left: auto; }
 .game-room .game-info > div {
   min-width: 0;
 }
@@ -2868,9 +2867,21 @@
 }
 .game-room .player-bet article {
   border-color: rgba(18, 140, 167, .14);
-  border-radius: 15px 5px 15px 15px;
+  border-radius: 12px 4px 12px 12px;
   background: linear-gradient(135deg, #1196bc, #087fa9);
   color: #fff;
+}
+.game-room .player-bet article,
+.game-room .market-bet p {
+  min-width: 80px;
+  max-width: 100%;
+  min-height: 54px;
+  overflow-wrap: anywhere;
+}
+.game-room .game-chat-content {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .game-room .game-message-time {
   position: absolute;
@@ -2881,6 +2892,7 @@
   color: #8da0a8;
   font-size: 9px;
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
   line-height: 1;
   text-align: right;
   white-space: nowrap;
@@ -2899,7 +2911,6 @@
   border-radius: 10px;
 }
 .game-room .parsed-ticket,
-.game-room .persisted-ticket,
 .game-room .draw-announcement {
   margin-top: 0;
   margin-bottom: 0;
@@ -2950,63 +2961,10 @@
   .game-room .player-bet > div { max-width: min(82%, 274px); }
 }
 
-/* 咪牌、长龙、预测共用的轻量工具弹层。 */
-.mipai-board,
+/* 长龙、预测共用的轻量工具弹层；涂抹样式由独立组件管理。 */
 .trend-board,
 .forecast-board {
   margin-top: 10px;
-}
-.mipai-board {
-  display: grid;
-  gap: 13px;
-  padding: 14px;
-  border: 1px solid #cfe7e9;
-  border-radius: 15px;
-  background: linear-gradient(145deg, #f2fbfb, #e5f5f6);
-}
-.mipai-board > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0;
-  border: 0;
-  color: #66818b;
-  font-size: 11px;
-}
-.mipai-board > header b { color: #138897; font: 800 15px "Rajdhani"; }
-.mipai-balls {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 7px;
-}
-.mipai-balls i {
-  display: grid;
-  place-items: center;
-  width: 31px;
-  height: 31px;
-  border: 1px dashed #94c8cd;
-  border-radius: 7px;
-  background: #dcecee;
-  color: #77929a;
-  font: 800 16px "Rajdhani";
-  font-style: normal;
-  transform: rotateY(180deg);
-  transition: transform .24s ease, background .24s ease;
-}
-.mipai-balls i.revealed { border-style: solid; color: #fff; transform: rotateY(0); }
-.mipai-total { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 0 !important; color: #496874 !important; }
-.mipai-total b { color: #e35f49; font-size: 17px; }
-.mipai-total span { padding: 3px 7px; border-radius: 8px; background: #fff; color: #15838e; font-size: 10px; font-weight: 700; }
-.mipai-replay {
-  justify-self: center;
-  padding: 7px 16px;
-  border: 0;
-  border-radius: 15px;
-  background: #188f9c;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
 }
 .trend-board { display: grid; gap: 6px; max-height: 300px; overflow-y: auto; }
 .trend-board article {
@@ -3044,14 +3002,10 @@
 .forecast-summary span { grid-column: 2; color: #799099; font-size: 10px; }
 .forecast-board > p { margin: 2px 0 0 !important; color: #8a999f !important; font-size: 9px !important; text-align: center; }
 .game-tool-empty { padding: 18px 0; color: #8799a0 !important; text-align: center; }
-.theme-night .mipai-board,
 .theme-night .trend-board article,
 .theme-night .forecast-board article { border-color: #4bc3ca36; background: #103a53; }
-.theme-night .mipai-board > header,
 .theme-night .trend-board article span,
 .theme-night .forecast-board article > small { color: #b8dce2; }
-.theme-night .mipai-total { color: #b8dce2 !important; }
-.theme-night .mipai-total span { background: #17445b; color: #8ce4e0; }
 
 @media (max-width: 390px) {
   .game-room .game-info { gap: 5px; padding-inline: 8px; }
@@ -3059,7 +3013,8 @@
   .game-room .game-info > div > span { font-size: 11px; }
   .game-room .game-info .game-tool-tabs { gap: 0; }
   .game-room .game-info .game-tool-tabs > button { min-width: 27px; height: 23px; padding: 0 3px; font-size: 9px; }
-  .game-room .game-acceptance { display: none; }
+  .game-room .game-info > .game-round-info { gap: 7px; }
+  .game-room .game-round-issue strong { font-size: 11px; }
 }
 
 /* 输入法快捷操作：梭哈和重复只填入草稿；取消会确认撤回本期注单。 */
@@ -3275,6 +3230,25 @@
   gap: 8px;
   margin: 9px -2px 3px;
 }
+.draw-result-artwork-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 2px;
+  color: inherit;
+  font-size: 11px;
+}
+.draw-result-artwork-status button {
+  flex: none;
+  padding: 4px 9px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.draw-result-image-card button:disabled { cursor: wait; }
 .draw-result-image-card {
   overflow: hidden;
   margin: 0;
@@ -3282,38 +3256,6 @@
   border-radius: 10px;
   background: #f8fbfc;
   box-shadow: 0 5px 14px #153d5018;
-}
-.draw-result-image-card figcaption {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 34px;
-  padding: 5px 7px 5px 10px;
-  color: #385966;
-}
-.draw-result-image-card figcaption > b {
-  overflow: hidden;
-  min-width: 0;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: 10px !important;
-}
-.draw-result-image-card figcaption > span {
-  display: flex;
-  flex: none;
-  gap: 5px;
-}
-.draw-result-image-card figcaption button {
-  min-width: 38px;
-  height: 24px;
-  padding: 0 7px;
-  border: 1px solid #b8dfe1;
-  border-radius: 7px;
-  background: #fff;
-  color: #167f89;
-  font-size: 10px;
-  font-weight: 800;
 }
 .draw-image-trigger {
   display: block;
@@ -3323,14 +3265,16 @@
   background: transparent;
   cursor: zoom-in;
 }
+.draw-image-trigger:focus-visible {
+  outline: 3px solid #42a6b9;
+  outline-offset: -3px;
+}
 .draw-result-image-cards canvas {
   display: block;
   width: 100%;
   height: auto;
 }
 .theme-night.game-room .draw-result-image-card { border-color: #55cbd43d; background: #102f46; box-shadow: 0 7px 18px #0006; }
-.theme-night.game-room .draw-result-image-card figcaption { color: #c6e5e8; }
-.theme-night.game-room .draw-result-image-card figcaption button { border-color: #3a6878; background: #163e54; color: #a9eeeb; }
 
 .draw-image-preview-layer {
   position: fixed;

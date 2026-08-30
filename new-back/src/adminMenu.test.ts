@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_AGENT_MENU, DEFAULT_TENANT_MENU, normalizeAdminMenu, normalizeRoleMenu } from './adminMenu'
 
 describe('interface test menu boundary', () => {
+  it('adds plan management to the platform menu, including saved menus predating it', () => {
+    const platform = normalizeAdminMenu([{ path: '/announcements', visible: true }])
+    expect(platform.find(item => item.path === '/plans')).toMatchObject({ label: '计划管理', group: '内容与服务', visible: true })
+  })
+
+  it.each(['tenant', 'agent'] as const)('does not grant %s plan automation through a forged menu entry', role => {
+    const menu = normalizeRoleMenu(role, [{ path: '/plans', label: '计划管理', visible: true }])
+    expect(menu.some(item => item.path === '/plans')).toBe(false)
+    expect(menu.find(item => item.path === '/announcements')?.visible).toBe(true)
+  })
+
   it('exposes interface testing by default only on the platform menu', () => {
     const platform = normalizeAdminMenu([])
     expect(platform.find(item => item.path === '/interface-test')).toMatchObject({ label: '接口测试', visible: true })

@@ -14,7 +14,11 @@ export type AdminGame = {
   issue: string
 	current_issue?: string
 	issue_status?: string
+	accept_at?: string
 	seal_at?: string
+	draw_interval?: number
+	seal_seconds?: number
+	timing_source?: 'upstream' | 'observed' | 'configured' | string
 	latest_numbers?: number[]
 	source_healthy?: boolean
   next_draw_at: string
@@ -763,6 +767,7 @@ export type ReportCenterParams = {
 
 export type PlanRecommendation = {
   id: number
+  source: 'manual' | 'demo'
   workspace_id: number
   game_id: string
   issue: string
@@ -781,7 +786,43 @@ export type PlanRecommendation = {
   updated_at: string
 }
 
-export type PlanRecommendationPayload = Omit<PlanRecommendation, 'id' | 'created_at' | 'updated_at' | 'master_hit_rate'>
+export type PlanRecommendationPayload = Omit<PlanRecommendation, 'id' | 'source' | 'created_at' | 'updated_at' | 'master_hit_rate'>
+
+export type PlanVariantOption = {
+  key: string
+  label: string
+  kind: 'numbers' | 'size' | 'parity' | 'dragon_tiger'
+  periods: number
+  number_count: number
+}
+
+export type PlanPositionOption = { position: number; label: string; opponent_position: number }
+
+export type PlanAutomationConfig = {
+  workspace_id: number
+  enabled: boolean
+  mode: 'demo'
+  game_ids: string[]
+  positions: number[]
+  plan_keys: string[]
+  options: PlanVariantOption[]
+  available_positions: PlanPositionOption[]
+  max_active_streams: number
+  generation_mode?: 'on_visit'
+  stream_ttl_seconds?: number
+  history_default_periods?: number
+  history_max_periods?: number
+  history_retention_periods?: number
+  supported_categories: string[]
+  masters: Array<{ key: string; name: string; title: string; color: string; sort_order: number }>
+  notice: string
+  last_run_at: string | null
+  last_created_count: number
+  last_error: string
+  updated_at: string | null
+}
+
+export type PlanAutomationPayload = Pick<PlanAutomationConfig, 'workspace_id' | 'enabled' | 'mode' | 'game_ids'> & Partial<Pick<PlanAutomationConfig, 'positions' | 'plan_keys'>>
 
 function reportQuery(params: ReportCenterParams) {
   return new URLSearchParams({
@@ -1634,6 +1675,8 @@ export const adminApi = {
   createPlan: (payload: PlanRecommendationPayload) => request<PlanRecommendation>('/admin/plans', { method: 'POST', body: JSON.stringify(payload) }),
   updatePlan: (id: number, payload: PlanRecommendationPayload) => request<PlanRecommendation>(`/admin/plans/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deletePlan: (id: number, workspaceId: number) => request<{ id: number }>(`/admin/plans/${id}?workspace_id=${workspaceId}`, { method: 'DELETE' }),
+  planAutomation: (workspaceId: number) => request<PlanAutomationConfig>(`/admin/plan-automation?workspace_id=${workspaceId}`),
+  updatePlanAutomation: (payload: PlanAutomationPayload) => request<PlanAutomationConfig>('/admin/plan-automation', { method: 'PUT', body: JSON.stringify(payload) }),
   uploadActivityImage: (file: File) => {
     const body = new FormData()
     body.append('file', file)

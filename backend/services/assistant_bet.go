@@ -49,6 +49,11 @@ type AssistantDrawStatus struct {
 	Issue         string     `json:"issue"`
 	Accepting     bool       `json:"accepting"`
 	NextDrawAt    time.Time  `json:"next_draw_at"`
+	AcceptAt      *time.Time `json:"accept_at,omitempty"`
+	SealAt        *time.Time `json:"seal_at,omitempty"`
+	DrawInterval  int        `json:"draw_interval"`
+	SealSeconds   int        `json:"seal_seconds"`
+	TimingSource  string     `json:"timing_source"`
 	LatestIssue   string     `json:"latest_issue,omitempty"`
 	LatestNumbers []int      `json:"latest_numbers,omitempty"`
 	LatestDrawAt  *time.Time `json:"latest_draw_at,omitempty"`
@@ -387,27 +392,43 @@ func (s *BetAssistantService) place(userID uint64, gameID, issue, content, opera
 	}, nil
 }
 
-// Status is read-only. Publishing results remains restricted to the official
-// synchronizer and authenticated administrator endpoints.
+// Status never publishes a draw or settles bets. It may materialize the same
+// immutable-per-room acceptance window as the catalogue and betting gate.
 func (s *BetAssistantService) Status(gameID string) (*AssistantDrawStatus, error) {
+	return s.statusForWorkspace(gameID, 0)
+}
+
+func (s *BetAssistantService) statusForWorkspace(gameID string, workspaceID uint64) (*AssistantDrawStatus, error) {
 	game, err := s.bets.loadGame(gameID)
 	if err != nil {
 		return nil, err
-	}
-	issue, err := s.bets.CurrentIssue(game.ID)
-	if err != nil {
-		return nil, err
-	}
-	status := &AssistantDrawStatus{
-		GameID: game.ID, GameName: game.Name, Issue: issue, NextDrawAt: game.NextDrawAt,
-		SourceName: game.SourceName,
 	}
 	lifecycle, err := s.bets.EnsureCurrentIssue(game)
 	if err != nil {
 		return nil, err
 	}
+	rawSettings, actualWorkspaceID, err := readTimingSettings(s.db, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	status := &AssistantDrawStatus{
+		GameID: game.ID, GameName: game.Name, Issue: lifecycle.Issue,
+		SourceName: game.SourceName, DrawInterval: effectiveDrawInterval(game),
+		SealSeconds: configuredSealSeconds(rawSettings, game.ID), TimingSource: game.TimingSource,
+	}
 	status.IssueStatus = lifecycle.Status
-	status.Accepting = game.Enabled && issueAccepting(lifecycle)
+	if lifecycle.ScheduledDrawAt != nil && lifecycle.Issue != "" {
+		window, err := ensureIssueWindow(s.db, actualWorkspaceID, game, lifecycle.Issue, *lifecycle.ScheduledDrawAt, rawSettings)
+		if err != nil {
+			return nil, err
+		}
+		status.NextDrawAt, status.AcceptAt, status.SealAt = window.ScheduledDrawAt, &window.AcceptAt, &window.SealAt
+		status.DrawInterval, status.SealSeconds = window.DrawInterval, window.SealSeconds
+		if lifecycle.Status != lottery.IssueStatusError && lifecycle.Status != lottery.IssueStatusSettling && lifecycle.Status != lottery.IssueStatusSettled {
+			status.IssueStatus = windowStatus(window, time.Now().UTC())
+		}
+		status.Accepting = game.Enabled && sharedIssueOpen(lifecycle, time.Now().UTC()) && status.IssueStatus == lottery.IssueStatusAccepting
+	}
 	status.SourceHealthy = lifecycle.Status != lottery.IssueStatusError
 	status.SourceError = lifecycle.LastError
 	var latest lottery.Draw
@@ -427,16 +448,16 @@ func (s *BetAssistantService) Status(gameID string) (*AssistantDrawStatus, error
 // not accepting rather than waiting for the final Place transaction to reject
 // a command.
 func (s *BetAssistantService) StatusForUser(userID uint64, gameID string) (*AssistantDrawStatus, error) {
-	status, err := s.Status(gameID)
-	if err != nil {
-		return nil, err
-	}
 	var account user.User
 	if err := s.db.Select("user_id", "workspace_id", "role", "status", "agent_room_code", "parent_agent_id", "parent_tenant_id").
 		First(&account, userID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
 		}
+		return nil, err
+	}
+	status, err := s.statusForWorkspace(gameID, account.WorkspaceID)
+	if err != nil {
 		return nil, err
 	}
 	roomActive, err := accesscontrol.AccountRoomActive(s.db, account)

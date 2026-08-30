@@ -199,7 +199,7 @@ button:active {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 12px 10px;
+  padding: 12px;
   background: linear-gradient(
     105deg,
     color-mix(in srgb, var(--game) 12%, #fff),
@@ -238,15 +238,6 @@ button:active {
   height: 100%;
   object-fit: contain;
 }
-.game-logo.racing-trio-artwork {
-  width: 56px;
-  height: 36px;
-  padding: 2px;
-  border: 1px solid #8fdde280;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #0b3b58, #23828f);
-  box-shadow: 0 4px 10px #062c4760;
-}
 .game-lead div {
   display: grid;
   gap: 3px;
@@ -271,6 +262,36 @@ button:active {
   display: flex;
   gap: 2px;
 }
+.lottery-countdown {
+  display: inline-grid;
+  flex: none;
+  justify-items: start;
+  gap: 4px;
+}
+.lottery-countdown .lottery-countdown-label {
+  color: #238682;
+  font-family: Arial, system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.lottery-countdown:not(.is-compact) .lottery-countdown-label {
+  /* Keep the lobby card height and digit baseline stable across every phase. */
+  min-block-size: 1.2em;
+  white-space: nowrap;
+}
+.lottery-countdown .lottery-countdown-digits {
+  display: flex;
+  gap: 2px;
+}
+.lottery-countdown.is-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.lottery-countdown.is-compact .lottery-countdown-label { flex: none; }
+.game-clock .lottery-countdown { justify-items: end; }
 .game-clock i,
 .game-info i {
   display: grid;
@@ -282,6 +303,34 @@ button:active {
   color: #246987;
   font: 700 19px "Rajdhani";
   font-style: normal;
+}
+.lottery-countdown .lottery-countdown-digits i {
+  width: 18px;
+  height: 24px;
+  font-variant-numeric: tabular-nums;
+}
+.lottery-countdown .lottery-countdown-digits .separator {
+  width: 7px;
+  background: transparent;
+}
+.lottery-countdown.phase-sealed .lottery-countdown-label,
+.lottery-countdown.phase-sealed .lottery-countdown-digits i { color: #a76616; }
+.lottery-countdown.phase-sealed .lottery-countdown-digits i:not(.separator) { background: #fff0d8; }
+.lottery-countdown.phase-error .lottery-countdown-label,
+.lottery-countdown.phase-error .lottery-countdown-digits i { color: #bd554c; }
+.lottery-countdown.phase-unavailable .lottery-countdown-label,
+.lottery-countdown.phase-pending .lottery-countdown-label,
+.lottery-countdown.phase-awaiting_draw .lottery-countdown-label { color: #75848f; }
+.theme-night .lottery-countdown .lottery-countdown-label { color: #8bded8; }
+.theme-night .lottery-countdown .lottery-countdown-digits i:not(.separator) { background: #164156; color: #d6f6f5; }
+.theme-night .lottery-countdown.phase-sealed .lottery-countdown-label,
+.theme-night .lottery-countdown.phase-sealed .lottery-countdown-digits i { color: #f4ca8b; }
+.theme-night .lottery-countdown.phase-sealed .lottery-countdown-digits i:not(.separator) { background: #4d3b24; }
+.theme-night .lottery-countdown.phase-error .lottery-countdown-label,
+.theme-night .lottery-countdown.phase-error .lottery-countdown-digits i { color: #ffafa4; }
+@media (max-width: 390px) {
+  .lottery-countdown .lottery-countdown-digits i { width: 16px; font-size: 18px; }
+  .lottery-countdown .lottery-countdown-digits .separator { width: 6px; }
 }
 .game-card footer {
   display: flex;
@@ -1030,7 +1079,7 @@ button:active {
 
 .game-room {
   display: grid;
-  grid-template-rows: 63px auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: 58px auto auto minmax(0, 1fr) auto auto;
 }
 .game-header {
   display: grid;
@@ -1097,7 +1146,7 @@ button:active {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 9px 11px;
+  padding: 7px 11px;
   background: #fff;
   border-bottom: 1px solid #e7ecef;
 }

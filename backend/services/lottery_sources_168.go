@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -65,14 +67,92 @@ var api168BingoBindings = []struct {
 }
 
 func (s *LotteryService) sync168HighFreq(ctx context.Context) []SourceSyncResult {
+	gameIDs := make([]string, 0, len(api168HighFreqBindings))
+	for _, binding := range api168HighFreqBindings {
+		gameIDs = append(gameIDs, binding.GameID)
+	}
+	enabled, err := s.enabledOfficialGames(gameIDs)
+	if err != nil {
+		return []SourceSyncResult{{GameID: "168-highfreq", Status: "error", Error: err.Error()}}
+	}
 	results := make([]SourceSyncResult, 0, len(api168HighFreqBindings))
 	for _, item := range api168HighFreqBindings {
 		binding := item
-		results = append(results, s.syncOfficialGame(ctx, binding.GameID, func(ctx context.Context) ([]sourceDraw, error) {
-			return fetch168Recent(ctx, binding.Series, binding.LotCode, nil)
-		}))
+		if !enabled[binding.GameID] {
+			results = append(results, SourceSyncResult{GameID: binding.GameID, Status: "ok"})
+			continue
+		}
+		historyIncluded := false
+		result := sync168LatestThenHistory(ctx,
+			func(ctx context.Context) SourceSyncResult {
+				return s.syncOfficialGame(ctx, binding.GameID, func(ctx context.Context) ([]sourceDraw, error) {
+					draws, included, err := fetch168LiveDraws(ctx, binding, request168JSON)
+					historyIncluded = included
+					return draws, err
+				})
+			},
+			func(ctx context.Context) ([]sourceDraw, error) {
+				if historyIncluded {
+					return nil, nil
+				}
+				return fetch168History(ctx, binding.Series, binding.LotCode, nil, time.Now(), request168JSON)
+			},
+			func(ctx context.Context, draws []sourceDraw) (int, error) {
+				return s.importOfficialHistory(ctx, binding.GameID, draws)
+			})
+		results = append(results, result)
 	}
 	return results
+}
+
+func fetch168LiveDraws(ctx context.Context, binding api168Binding, request api168Request) ([]sourceDraw, bool, error) {
+	draws, err := fetch168Latest(ctx, binding.Series, binding.LotCode, nil, request)
+	if err != nil {
+		return nil, false, err
+	}
+	var latest sourceDraw
+	for _, draw := range draws {
+		if latest.DrawAt.IsZero() || draw.DrawAt.After(latest.DrawAt) {
+			latest = draw
+		}
+	}
+	if !latest.DrawAt.IsZero() && validNextSourceIssue(latest.Issue, latest.NextIssue) && latest.NextDrawAt.After(latest.DrawAt) {
+		return draws, false, nil
+	}
+	// If the provider omits its upcoming boundary, enough historic evidence is
+	// still required to infer cadence. A lone latest row must not resurrect an
+	// arbitrary seed interval (for example 180 seconds instead of 75 seconds).
+	history, historyErr := fetch168History(ctx, binding.Series, binding.LotCode, nil, time.Now(), request)
+	draws = mergeSourceDraws(draws, history)
+	if observedDrawInterval(draws) == 0 {
+		return nil, true, errors.Join(fmt.Errorf("尚未取得有效的下一期开奖时间或足够的历史周期"), historyErr)
+	}
+	return draws, true, nil
+}
+
+// Keep the existing bounded two-day recovery pass, but never make a fresh
+// result wait for those slower history requests before publishing its next
+// period. No extra requests, polling loops or detached goroutines are added.
+func sync168LatestThenHistory(ctx context.Context, syncLatest func(context.Context) SourceSyncResult, fetchHistory func(context.Context) ([]sourceDraw, error), importHistory func(context.Context, []sourceDraw) (int, error)) SourceSyncResult {
+	result := syncLatest(ctx)
+	if result.Status != "ok" {
+		return result
+	}
+	draws, fetchErr := fetchHistory(ctx)
+	if len(draws) > 0 {
+		imported, err := importHistory(ctx, draws)
+		if err != nil {
+			fetchErr = errors.Join(fetchErr, err)
+		} else {
+			result.Imported += imported
+		}
+	}
+	if fetchErr != nil {
+		// A backfill failure cannot erase a valid live result or clear an error
+		// written by a newer live sync. The same dates retry on the next pass.
+		log.Printf("历史开奖补采未完成，将在下轮重试: game=%s error=%v", result.GameID, fetchErr)
+	}
+	return result
 }
 
 func (s *LotteryService) sync168MarkSix(ctx context.Context) []SourceSyncResult {
@@ -121,7 +201,7 @@ func (s *LotteryService) sync168Bingo(ctx context.Context) []SourceSyncResult {
 			if len(numbers) == 0 {
 				continue
 			}
-			draws = append(draws, sourceDraw{Issue: row.Issue, Numbers: numbers, DrawAt: row.DrawAt})
+			draws = append(draws, sourceDraw{Issue: row.Issue, Numbers: numbers, DrawAt: row.DrawAt, NextIssue: row.NextIssue, NextDrawAt: row.NextDrawAt})
 		}
 		results = append(results, s.syncOfficialGame(ctx, binding.GameID, func(context.Context) ([]sourceDraw, error) {
 			if len(draws) == 0 {
@@ -134,76 +214,111 @@ func (s *LotteryService) sync168Bingo(ctx context.Context) []SourceSyncResult {
 }
 
 func fetch168Recent(ctx context.Context, series api168Series, lotCode string, transform func([]int) []int) ([]sourceDraw, error) {
-	latestPath, historyPath := api168Paths(series)
+	latest, err := fetch168Latest(ctx, series, lotCode, transform, request168JSON)
+	if err != nil {
+		return nil, err
+	}
+	history, _ := fetch168History(ctx, series, lotCode, transform, time.Now(), request168JSON)
+	return mergeSourceDraws(latest, history), nil
+}
+
+type api168Request func(context.Context, string, *api168Envelope) error
+
+func request168JSON(ctx context.Context, endpoint string, payload *api168Envelope) error {
+	_, err := doJSONRequest(ctx, &http.Client{Timeout: 15 * time.Second}, endpoint, api168Referer, payload)
+	return err
+}
+
+func fetch168Latest(ctx context.Context, series api168Series, lotCode string, transform func([]int) []int, request api168Request) ([]sourceDraw, error) {
+	latestPath, _ := api168Paths(series)
 	if latestPath == "" {
 		return nil, fmt.Errorf("未知 168 彩种系列")
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
-	seen := map[string]struct{}{}
-	result := make([]sourceDraw, 0, 40)
-
-	appendRows := func(rows []api168Row) {
-		for _, row := range rows {
-			issue := strings.TrimSpace(row.IssueText())
-			code := strings.TrimSpace(row.Code)
-			if issue == "" || code == "" {
-				continue
-			}
-			if _, ok := seen[issue]; ok {
-				continue
-			}
-			numbers := parseNumberList(code)
-			if transform != nil {
-				numbers = transform(numbers)
-			}
-			if len(numbers) == 0 {
-				continue
-			}
-			seen[issue] = struct{}{}
-			result = append(result, sourceDraw{
-				Issue:   issue,
-				Numbers: numbers,
-				DrawAt:  parse168DrawTime(row.Time),
-			})
-		}
-	}
-
 	var latestPayload api168Envelope
 	latestURL := api168Base + latestPath + "?lotCode=" + url.QueryEscape(lotCode)
-	if _, err := doJSONRequest(ctx, client, latestURL, api168Referer, &latestPayload); err != nil {
+	if err := request(ctx, latestURL, &latestPayload); err != nil {
 		return nil, fmt.Errorf("168开奖网读取失败: %w", err)
 	}
 	if latestPayload.ErrorCode != 0 {
 		return nil, fmt.Errorf("168开奖网返回错误: %s", latestPayload.Message)
 	}
-	appendRows(latestPayload.Rows())
+	result := sourceDrawsFrom168Rows(latestPayload.Rows(), transform)
 	if len(result) == 0 {
 		return nil, fmt.Errorf("168开奖网未返回开奖记录")
 	}
 
-	if series == api168LHC {
-		var historyPayload api168Envelope
-		historyURL := api168Base + historyPath + "?lotCode=" + url.QueryEscape(lotCode)
-		if _, err := doJSONRequest(ctx, client, historyURL, api168Referer, &historyPayload); err == nil && historyPayload.ErrorCode == 0 {
-			appendRows(historyPayload.Rows())
-		}
-		return result, nil
-	}
+	return result, nil
+}
 
+func fetch168History(ctx context.Context, series api168Series, lotCode string, transform func([]int) []int, now time.Time, request api168Request) ([]sourceDraw, error) {
+	_, historyPath := api168Paths(series)
+	if historyPath == "" {
+		return nil, fmt.Errorf("未知 168 彩种系列")
+	}
+	urls := make([]string, 0, 2)
+	historyURL := api168Base + historyPath + "?lotCode=" + url.QueryEscape(lotCode)
 	location, _ := time.LoadLocation("Asia/Shanghai")
-	for dayOffset := 0; dayOffset < 2; dayOffset++ {
-		date := time.Now().In(location).AddDate(0, 0, -dayOffset).Format("2006-01-02")
+	if series == api168LHC {
+		urls = append(urls, historyURL)
+	} else {
+		for dayOffset := 0; dayOffset < 2; dayOffset++ {
+			date := now.In(location).AddDate(0, 0, -dayOffset).Format("2006-01-02")
+			urls = append(urls, historyURL+"&date="+url.QueryEscape(date))
+		}
+	}
+	var result []sourceDraw
+	var fetchErrors []error
+	for _, endpoint := range urls {
 		var historyPayload api168Envelope
-		historyURL := api168Base + historyPath + "?lotCode=" + url.QueryEscape(lotCode) + "&date=" + url.QueryEscape(date)
-		if _, err := doJSONRequest(ctx, client, historyURL, api168Referer, &historyPayload); err != nil {
+		if err := request(ctx, endpoint, &historyPayload); err != nil {
+			fetchErrors = append(fetchErrors, err)
 			continue
 		}
 		if historyPayload.ErrorCode != 0 {
+			fetchErrors = append(fetchErrors, fmt.Errorf("168历史开奖返回错误: %s", historyPayload.Message))
 			continue
 		}
-		appendRows(historyPayload.Rows())
+		result = mergeSourceDraws(result, sourceDrawsFrom168Rows(historyPayload.Rows(), transform))
 	}
-	return result, nil
+	return result, errors.Join(fetchErrors...)
+}
+
+func sourceDrawsFrom168Rows(rows []api168Row, transform func([]int) []int) []sourceDraw {
+	result := make([]sourceDraw, 0, len(rows))
+	seen := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		issue := strings.TrimSpace(row.IssueText())
+		if issue == "" || strings.TrimSpace(row.Code) == "" || seen[issue] {
+			continue
+		}
+		numbers := parseNumberList(row.Code)
+		if transform != nil {
+			numbers = transform(numbers)
+		}
+		if len(numbers) == 0 {
+			continue
+		}
+		seen[issue] = true
+		result = append(result, sourceDraw{
+			Issue: issue, Numbers: numbers, DrawAt: parse168DrawTime(row.Time),
+			NextIssue: api168IssueText(row.NextIssue), NextDrawAt: parse168DrawTime(row.NextTime),
+		})
+	}
+	return result
+}
+
+func mergeSourceDraws(first, additional []sourceDraw) []sourceDraw {
+	result := make([]sourceDraw, 0, len(first)+len(additional))
+	seen := make(map[string]bool, len(first)+len(additional))
+	for _, group := range [][]sourceDraw{first, additional} {
+		for _, draw := range group {
+			if !seen[draw.Issue] {
+				seen[draw.Issue] = true
+				result = append(result, draw)
+			}
+		}
+	}
+	return result
 }
 
 func api168Paths(series api168Series) (latest, history string) {
@@ -230,9 +345,11 @@ type api168Envelope struct {
 }
 
 type api168Row struct {
-	Issue any    `json:"preDrawIssue"`
-	Time  string `json:"preDrawTime"`
-	Code  string `json:"preDrawCode"`
+	Issue     any    `json:"preDrawIssue"`
+	Time      string `json:"preDrawTime"`
+	Code      string `json:"preDrawCode"`
+	NextIssue any    `json:"drawIssue"`
+	NextTime  string `json:"drawTime"`
 }
 
 func (payload api168Envelope) Rows() []api168Row {
@@ -259,33 +376,43 @@ func parseAPI168Rows(raw json.RawMessage) []api168Row {
 }
 
 func (row api168Row) IssueText() string {
-	switch value := row.Issue.(type) {
+	return api168IssueText(row.Issue)
+}
+
+func api168IssueText(issue any) string {
+	switch value := issue.(type) {
 	case string:
-		return value
+		return strings.TrimSpace(value)
 	case float64:
 		return strconv.FormatInt(int64(value), 10)
 	case json.Number:
 		return value.String()
 	default:
-		return fmt.Sprint(value)
+		return ""
 	}
 }
 
 func parse168DrawTime(value string) time.Time {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return time.Now().UTC()
+		return time.Time{}
 	}
 	location, _ := time.LoadLocation("Asia/Shanghai")
 	if unix, err := strconv.ParseInt(value, 10, 64); err == nil && unix > 1_000_000_000 {
+		if unix >= 1_000_000_000_000 {
+			return time.UnixMilli(unix).UTC()
+		}
 		return time.Unix(unix, 0).In(location).UTC()
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed.UTC()
 	}
 	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02 15:04", "2006-01-02"} {
 		if parsed, err := time.ParseInLocation(layout, value, location); err == nil {
 			return parsed.UTC()
 		}
 	}
-	return time.Now().In(location).UTC()
+	return time.Time{}
 }
 
 func bingoSSCNumbers(offset int) func([]int) []int {

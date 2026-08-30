@@ -6,6 +6,8 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func TestMissingDefaultLobbyCategoriesRecoversPartialWithoutOverwriting(t *testing.T) {
@@ -34,18 +36,115 @@ func TestMissingDefaultLobbyCategoriesRecoversPartialWithoutOverwriting(t *testi
 
 func TestOfficialGameSeedKeepsExplicitDisabledState(t *testing.T) {
 	now := time.Date(2026, 8, 27, 10, 31, 0, 0, time.UTC)
-	game := officialGames[0]
-	game.CreatedAt = now
-	game.UpdatedAt = now
-	game.NextDrawAt = now.Add(time.Duration(game.DrawInterval) * time.Second)
+	for _, template := range officialGames {
+		t.Run(template.ID, func(t *testing.T) {
+			game := template
+			game.CreatedAt = now
+			game.UpdatedAt = now
+			game.NextDrawAt = now.Add(time.Duration(game.DrawInterval) * time.Second)
 
-	values := officialGameSeedValues(game)
-	enabled, ok := values["enabled"].(bool)
-	if !ok || enabled {
-		t.Fatalf("official game enabled seed = %#v, want explicit false", values["enabled"])
+			values := officialGameSeedValues(game)
+			enabled, ok := values["enabled"].(bool)
+			if !ok || enabled {
+				t.Fatalf("official game enabled seed = %#v, want explicit false", values["enabled"])
+			}
+			if values["id"] != game.ID || values["code"] != game.Code {
+				t.Fatalf("official game identity missing from seed values: %#v", values)
+			}
+			if values["lobby_category"] != "" || values["lobby_sort_order"] != 0 {
+				t.Fatalf("official game received an unrequested default classification: %#v", values)
+			}
+		})
 	}
-	if values["id"] != game.ID || values["code"] != game.Code {
-		t.Fatalf("official game identity missing from seed values: %#v", values)
+}
+
+func TestOfficialGameSeedPreservesExplicitPlacementAndOrder(t *testing.T) {
+	game := officialGames[0]
+	game.LobbyCategory = "自定义分类"
+	game.LobbySortOrder = 77
+	values := officialGameSeedValues(game)
+	if values["lobby_category"] != game.LobbyCategory || values["lobby_sort_order"] != game.LobbySortOrder {
+		t.Fatalf("explicit catalog placement changed: %#v", values)
+	}
+
+	// An assigned order is independent of a missing category and must survive
+	// initialization, even for a game that has no default shelf.
+	game.LobbyCategory = ""
+	values = officialGameSeedValues(game)
+	if values["lobby_category"] != "" || values["lobby_sort_order"] != 77 {
+		t.Fatalf("initialization changed the unclassified game or its explicit order: %#v", values)
+	}
+}
+
+func TestDefaultLobbyPlacementClassifiesOnlyConfiguredBuiltInGames(t *testing.T) {
+	ids := make([]string, 0, len(defaultGames)+len(officialGames))
+	for _, game := range defaultGames {
+		ids = append(ids, game.ID)
+	}
+	for _, game := range officialGames {
+		ids = append(ids, game.ID)
+	}
+	if len(ids) != 30 {
+		t.Fatalf("catalog contains %d games, want 30", len(ids))
+	}
+	wantShelves := map[string][]string{
+		"彩票":  {"speed-racing", "speed-fly", "speed-ssc", "sg-fly", "sg-ssc", "fly-racing", "au-lucky-5", "au-lucky-10"},
+		"PC":  {"pc-canada", "canada-28", "canada-20"},
+		"宾果":  {"bingo-mark-six", "bingo-racing-a", "bingo-racing-b", "bingo-ssc-1", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"},
+		"六合彩": {"hong-kong-mark-six", "happy8-mark-six", "new-macau-mark-six", "old-macau-mark-six"},
+	}
+	wantUnclassified := map[string]bool{
+		"official-fc3d": true, "official-kl8": true, "official-pl3": true, "official-qxc": true,
+		"official-tw-super-lotto": true, "official-tw-daily539": true, "official-tw-lotto649": true,
+		"official-tw-bingo": true,
+	}
+	wantCounts := map[string]int{"彩票": 8, "宾果": 7, "PC": 3, "六合彩": 4, "": 8}
+	gotCounts := make(map[string]int)
+	slots := make(map[string]map[int]string)
+	seenIDs := make(map[string]bool)
+	for _, id := range ids {
+		if seenIDs[id] {
+			t.Fatalf("duplicate catalog ID %s", id)
+		}
+		seenIDs[id] = true
+		category, order := defaultLobbyPlacement(id)
+		if wantUnclassified[id] {
+			if category != "" || order != 0 {
+				t.Fatalf("catalog game %s should remain unclassified: %q / %d", id, category, order)
+			}
+			gotCounts[""]++
+			continue
+		}
+		wantIDs := wantShelves[category]
+		if order < 1 || order > len(wantIDs) || wantIDs[order-1] != id {
+			t.Fatalf("catalog game %s has an unexpected default placement: %q / %d", id, category, order)
+		}
+		if slots[category] == nil {
+			slots[category] = make(map[int]string)
+		}
+		if previous, exists := slots[category][order]; exists {
+			t.Fatalf("default shelf %s has a duplicate order %d: %s and %s", category, order, previous, id)
+		}
+		slots[category][order] = id
+		gotCounts[category]++
+	}
+	if !reflect.DeepEqual(gotCounts, wantCounts) {
+		t.Fatalf("default shelf counts = %#v, want %#v", gotCounts, wantCounts)
+	}
+	if category, order := defaultLobbyPlacement("operator-created-game"); category != "" || order != 0 {
+		t.Fatalf("unknown game was forced into a built-in shelf: %q / %d", category, order)
+	}
+}
+
+func TestMissingDefaultLobbyCategoriesRespectsRetiredShelf(t *testing.T) {
+	existing := []lottery.LobbyCategory{
+		{Name: "彩票", SortOrder: 10},
+		{Name: "宾果", SortOrder: 20, DeletedAt: gorm.DeletedAt{Time: time.Now(), Valid: true}},
+		{Name: "PC", SortOrder: 30},
+		{Name: "六合彩", SortOrder: 40},
+	}
+	if missing := missingDefaultLobbyCategories(existing); len(missing) != 0 {
+		t.Fatalf("restart would recreate retired shelves: %#v", missing)
 	}
 }
 

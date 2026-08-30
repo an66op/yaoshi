@@ -67,6 +67,7 @@ type MemberHandler interface {
 	ClaimChatRedPacket(c *gin.Context)
 	ListPlans(c *gin.Context)
 	PlanDetail(c *gin.Context)
+	ActivatePlanStream(c *gin.Context)
 }
 
 type memberHandler struct {
@@ -83,7 +84,7 @@ type memberHandler struct {
 	entertainment   *services.EntertainmentAdminService
 	chat            *services.MemberChatService
 	games           *services.WorkspaceGameService
-	plans           *services.PlanContentService
+	plans           memberPlanService
 }
 
 func NewMemberHandler(db *gorm.DB) MemberHandler {
@@ -135,7 +136,25 @@ func (h *memberHandler) PlanDetail(c *gin.Context) {
 		constants.SendError(c, http.StatusForbidden, "请先进入房间", nil)
 		return
 	}
-	result, err := h.plans.Detail(roomID, c.Param("gameID"))
+	limit, ok := memberPlanHistoryLimit(c)
+	if !ok {
+		return
+	}
+	if c.Param("gameID") == "speed-racing" {
+		position, err := strconv.Atoi(c.DefaultQuery("position", "1"))
+		if err != nil {
+			constants.SendError(c, http.StatusBadRequest, "推荐位置不正确", err)
+			return
+		}
+		result, err := h.plans.StreamDetail(roomID, position, c.DefaultQuery("plan_key", services.DefaultPlanKey), limit)
+		if err != nil {
+			constants.SendError(c, http.StatusBadRequest, "读取彩票计划失败", err)
+			return
+		}
+		constants.SendSuccess(c, http.StatusOK, "ok", result)
+		return
+	}
+	result, err := h.plans.Detail(roomID, c.Param("gameID"), limit)
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "读取彩票计划失败", err)
 		return
@@ -1142,7 +1161,7 @@ func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.Ch
 		return
 	}
 
-	if !strings.Contains(content, "/") && !strings.Contains(content, "梭哈") {
+	if !isRoomBetContent(content) {
 		return
 	}
 	accepted, err := h.assistant.Place(userID, message.GameID, requestedIssue, content, message.Nickname, requestID)
@@ -1185,9 +1204,6 @@ func formatAssistantAccepted(result *services.AssistantBetResult) string {
 	fmt.Fprintf(&body, "【%s - %s】下单成功\n", result.GameName, result.Issue)
 	for _, line := range result.Lines {
 		body.WriteString(line.Label)
-		if line.Odds > 0 {
-			fmt.Fprintf(&body, " · 赔率 %.3f", line.Odds)
-		}
 		body.WriteByte('\n')
 	}
 	fmt.Fprintf(&body, "\n使用：%.2f\n剩余：%.2f", result.Total, result.Balance)
@@ -1209,6 +1225,16 @@ type roomApplicationCommand struct {
 }
 
 var roomApplicationCommandPattern = regexp.MustCompile(`^(申请)?[[:space:]]*(上分|下分)[[:space:]]*[/：:]?[[:space:]]*([0-9]+(\.[0-9]{1,2})?)([[:space:]]+.*)?$`)
+var roomIncompleteBetPattern = regexp.MustCompile(`^(买)?(冠军|亚军|第[三四五六七八九十]名|冠亚(和)?)?[0-9大小单双龙虎#[:space:],，.]*$`)
+var roomBetSemanticPattern = regexp.MustCompile(`[0-9大小单双龙虎冠亚军第名]`)
+
+// Bare numbers/play fragments from the betting keyboard are commands too.
+// They must reach the authoritative parser and receive a failure receipt when
+// the amount is missing. Ordinary conversation remains on the chat boundary.
+func isRoomBetContent(content string) bool {
+	content = strings.TrimSpace(content)
+	return content != "" && (strings.Contains(content, "/") || strings.Contains(content, "梭哈") || (roomBetSemanticPattern.MatchString(content) && roomIncompleteBetPattern.MatchString(content)))
+}
 
 func isRoomCommandRequest(roomType, gameID, content string) bool {
 	if defaultString(strings.TrimSpace(roomType), "group") != "group" || strings.TrimSpace(gameID) == "" || strings.TrimSpace(gameID) == "lobby" {
@@ -1221,7 +1247,7 @@ func isRoomCommandRequest(roomType, gameID, content string) bool {
 	if _, matched := parseRoomApplicationCommand(content); matched {
 		return true
 	}
-	return strings.Contains(content, "/") || strings.Contains(content, "梭哈")
+	return isRoomBetContent(content)
 }
 
 func parseRoomApplicationCommand(content string) (roomApplicationCommand, bool) {

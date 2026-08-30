@@ -59,7 +59,7 @@ const adminIcons: Record<string, ReactNode> = {
 	'/robots': <SmartToyRounded />,
 	'/fly-orders': <FlightTakeoffRounded />,
   '/applications': <FactCheckRounded />, '/room-reviews': <CheckCircleRounded />, '/chat': <SupportAgentRounded />, '/lottery-chat': <ForumRounded />, '/reports': <AssessmentRounded />, '/wallet': <AccountBalanceWalletRounded />,
-  '/announcements': <CampaignRounded />, '/activities': <CampaignRounded />, '/monitor': <MonitorHeartRounded />, '/bets': <ListAltRounded />, '/results': <ReceiptLongRounded />,
+  '/announcements': <CampaignRounded />, '/plans': <FactCheckRounded />, '/activities': <CampaignRounded />, '/monitor': <MonitorHeartRounded />, '/bets': <ListAltRounded />, '/results': <ReceiptLongRounded />,
   '/limits': <TuneRounded />, '/board-report': <FlightTakeoffRounded />, '/lottery-network': <PublicRounded />, '/interface-test': <PublicRounded />, '/entertainment': <SportsEsportsRounded />,
   '/special-numbers': <StarsRounded />, '/menu-management': <ViewListRounded />, '/system': <SettingsRounded />,
 	'/audit': <ReceiptLongRounded />,

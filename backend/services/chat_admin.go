@@ -364,14 +364,10 @@ func (s *ChatAdminService) fillGameIdentity(view *AdminConversation) {
 func (s *ChatAdminService) lotteryRoomEnabled(roomScope, gameID string) bool {
 	workspace, err := WorkspaceByScope(s.db, roomScope)
 	if err != nil || workspace.ID == 0 {
-		return true
+		return false
 	}
-	var setting chat.RoomGameSetting
-	result := s.db.Where("workspace_id = ? AND game_id = ?", workspace.ID, gameID).Limit(1).Find(&setting)
-	if result.Error != nil || result.RowsAffected == 0 {
-		return true
-	}
-	return setting.Enabled
+	enabled, err := WorkspaceGameEnabled(s.db, workspace.ID, gameID)
+	return err == nil && enabled
 }
 
 func (s *ChatAdminService) SetLotteryRoomEnabled(agentID uint64, gameID string, enabled bool) (*LotteryRoomStatus, error) {
@@ -395,6 +391,11 @@ func (s *ChatAdminService) SetLotteryRoomEnabledForWorkspace(workspace workspace
 	if workspace.ID == 0 || gameID == "" {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "房间和彩种不能为空")
 	}
+	// Use persisted ownership, never a caller-supplied owner/scope or an orphan
+	// workspace ID, when writing the room switch and publishing its update.
+	if err := s.db.First(&workspace, workspace.ID).Error; err != nil || !validGameWorkspaceType(workspace.Type) {
+		return nil, apperrors.NewBusinessError("ROOM_NOT_FOUND", "房间不存在")
+	}
 	var game lottery.Game
 	if err := s.db.Where("id = ?", gameID).First(&game).Error; err != nil {
 		return nil, apperrors.NewBusinessError("GAME_NOT_FOUND", "彩种不存在")
@@ -409,7 +410,8 @@ func (s *ChatAdminService) SetLotteryRoomEnabledForWorkspace(workspace workspace
 	// Room game switches are runtime configuration. Notify only this room after
 	// the database write succeeds; members in every other workspace must neither
 	// refresh nor observe which game was changed here.
-	ws.NotifyGameCatalogChanged(workspace.ID, workspace.Scope, workspace.RoomCode, gameID, enabled && game.Enabled)
+	ws.NotifyGameCatalogChanged(workspace.ID, workspace.Scope, workspace.RoomCode, gameID,
+		enabled && game.Enabled && strings.TrimSpace(game.LobbyCategory) != "" && workspace.Status == 1)
 	return &LotteryRoomStatus{AgentID: workspace.OwnerUserID, GameID: gameID, Enabled: enabled}, nil
 }
 

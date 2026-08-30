@@ -29,8 +29,10 @@ import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
 import { adminApi, type AuditLogPage, type RebatePreview, type ReconciliationSummary, type SystemSettings } from '../api'
 import { PageHeader } from '../components/PageHeader'
 import { RoomLogoPicker } from '../components/RoomLogoPicker'
+import { SealSecondsField } from '../components/SealSecondsField'
 import { useFeedback } from '../components/feedback'
 import { prepareRoomLogo } from '../utils/roomLogo'
+import { SEAL_SECONDS_ERROR, isValidSealSeconds } from '../utils/sealSeconds'
 
 const emptySettings = (): SystemSettings => ({
   room_name: '王者大厅',
@@ -93,7 +95,7 @@ const roomDisplayToggles: Array<{ key: keyof SystemSettings['game']; label: stri
   { key: 'show_member_profit', label: '显示会员输赢', caption: '游戏顶部显示今日已结算输赢' },
   { key: 'show_member_rebate', label: '显示会员回水', caption: '游戏顶部显示今日回水' },
   { key: 'web_keyboard_enabled', label: '快捷投注键盘', caption: '关闭后改用手机或电脑系统输入法' },
-  { key: 'show_mipai_tool', label: '咪牌', caption: '显示游戏房间的咪牌工具' },
+  { key: 'show_mipai_tool', label: '咪牌', caption: '显示游戏房间的涂抹刮奖工具' },
   { key: 'show_orders_tool', label: '注单', caption: '显示本彩种注单工具' },
   { key: 'show_streak_tool', label: '长龙', caption: '显示历史长龙走势工具' },
   { key: 'show_prediction_tool', label: '预测', caption: '需同时开启平台预测功能' },
@@ -161,6 +163,10 @@ export function SystemPage() {
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load])
 
   const save = async () => {
+    if (!isValidSealSeconds(settings.game.seal_seconds)) {
+      setError(SEAL_SECONDS_ERROR)
+      return
+    }
     setSaving(true)
     setError('')
     try {
@@ -313,7 +319,7 @@ export function SystemPage() {
           ) : tab === 1 ? (
             <Stack gap={2} maxWidth={820}>
               <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)' }, gap: 2 }}>
-                <TextField type="number" label="封盘秒数" value={settings.game.seal_seconds ?? 30} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, seal_seconds: Number(e.target.value) } }))} />
+                <SealSecondsField scope="platform" value={settings.game.seal_seconds} disabled={saving} onChange={seal_seconds => setSettings(current => ({ ...current, game: { ...current.game, seal_seconds } }))} />
                 <TextField type="number" label="默认可开游戏数" value={settings.game.max_open_games ?? 8} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, max_open_games: Number(e.target.value) } }))} />
                 <TextField type="number" label="默认飞单比例 %" value={settings.game.default_fly_rate ?? 0} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, default_fly_rate: Number(e.target.value) } }))} />
                 <Paper variant="outlined" sx={{ p: 1.2 }}>

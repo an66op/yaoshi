@@ -22,6 +22,8 @@ type Game struct {
 	SortOrder      int        `gorm:"not null;default:0" json:"sort_order"`
 	DrawInterval   int        `gorm:"not null;default:300" json:"draw_interval"`
 	NextDrawAt     time.Time  `json:"next_draw_at"`
+	NextIssue      string     `gorm:"size:64;not null;default:''" json:"next_issue"`
+	TimingSource   string     `gorm:"size:24;not null;default:configured" json:"timing_source"`
 	SourceKind     string     `gorm:"size:20;not null;default:platform" json:"source_kind"`
 	SourceName     string     `gorm:"size:80" json:"source_name"`
 	SourceURL      string     `gorm:"size:320" json:"source_url"`
@@ -62,21 +64,42 @@ const (
 // to the historic draw/bet tables: old records are preserved and can be
 // reconciled without guessing a result or changing a member balance.
 type Issue struct {
-	ID         uint64     `gorm:"primaryKey" json:"id"`
-	GameID     string     `gorm:"size:40;not null;index;uniqueIndex:idx_lottery_issue_game_issue" json:"game_id"`
-	Issue      string     `gorm:"size:64;not null;index;uniqueIndex:idx_lottery_issue_game_issue" json:"issue"`
-	Status     string     `gorm:"size:24;not null;default:pending;index" json:"status"`
-	SourceMode string     `gorm:"size:20;not null;default:platform" json:"source_mode"`
-	AcceptAt   time.Time  `gorm:"not null" json:"accept_at"`
-	SealAt     time.Time  `gorm:"not null;index" json:"seal_at"`
-	DrawAt     *time.Time `json:"draw_at,omitempty"`
-	SettledAt  *time.Time `json:"settled_at,omitempty"`
-	LastError  string     `gorm:"size:500" json:"last_error,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID              uint64     `gorm:"primaryKey" json:"id"`
+	GameID          string     `gorm:"size:40;not null;index;uniqueIndex:idx_lottery_issue_game_issue" json:"game_id"`
+	Issue           string     `gorm:"size:64;not null;index;uniqueIndex:idx_lottery_issue_game_issue" json:"issue"`
+	Status          string     `gorm:"size:24;not null;default:pending;index" json:"status"`
+	SourceMode      string     `gorm:"size:20;not null;default:platform" json:"source_mode"`
+	AcceptAt        time.Time  `gorm:"not null" json:"accept_at"`
+	SealAt          time.Time  `gorm:"not null;index" json:"seal_at"`
+	ScheduledDrawAt *time.Time `json:"scheduled_draw_at,omitempty"`
+	DrawAt          *time.Time `json:"draw_at,omitempty"`
+	SettledAt       *time.Time `json:"settled_at,omitempty"`
+	LastError       string     `gorm:"size:500" json:"last_error,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 func (Issue) TableName() string { return "lottery_issues" }
+
+// IssueWindow freezes one room's cutoff for an issue. The shared result and
+// settlement lock remain on Issue; changing another room's settings must never
+// change this room's accepted betting window. A later refresh may only shorten
+// a materialized window, never reopen or extend it.
+type IssueWindow struct {
+	ID              uint64    `gorm:"primaryKey" json:"id"`
+	WorkspaceID     uint64    `gorm:"not null;uniqueIndex:idx_lottery_issue_window" json:"workspace_id"`
+	GameID          string    `gorm:"size:40;not null;uniqueIndex:idx_lottery_issue_window" json:"game_id"`
+	Issue           string    `gorm:"size:64;not null;uniqueIndex:idx_lottery_issue_window" json:"issue"`
+	AcceptAt        time.Time `gorm:"not null" json:"accept_at"`
+	SealAt          time.Time `gorm:"not null" json:"seal_at"`
+	ScheduledDrawAt time.Time `gorm:"not null" json:"scheduled_draw_at"`
+	DrawInterval    int       `gorm:"not null" json:"draw_interval"`
+	SealSeconds     int       `gorm:"not null" json:"seal_seconds"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+func (IssueWindow) TableName() string { return "lottery_issue_windows" }
 
 // Draw stores immutable, published draw results. Numbers are kept as a small
 // comma-separated value so the schema remains portable between local Postgres

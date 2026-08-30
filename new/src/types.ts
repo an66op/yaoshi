@@ -1,3 +1,5 @@
+import type { LotteryTiming } from './utils/lotteryTiming'
+
 export type Tab = 'lobby' | 'shop' | 'chat' | 'profile'
 export type Theme = 'day' | 'night'
 
@@ -9,7 +11,9 @@ export type Game = {
   lobbyCategory: string
   online: string
   period: string
+  latestIssue: string
   due: string
+  timing: LotteryTiming
   color: string
   logo?: string
   balls: number[]

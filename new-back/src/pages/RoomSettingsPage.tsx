@@ -9,10 +9,12 @@ import { agentApi, tenantApi, type OpsActivity, type PaymentChannel, type Paymen
 import { getStoredUser } from '../auth'
 import { PageHeader } from '../components/PageHeader'
 import { RoomLogoPicker } from '../components/RoomLogoPicker'
+import { SealSecondsField } from '../components/SealSecondsField'
 import { GameOddsNavigation, OddsOverrideGrid } from '../components/OddsEditors'
 import { useFeedback } from '../components/feedback'
 import { PlanManagementPanel } from '../components/PlanManagementPanel'
 import { prepareRoomLogo } from '../utils/roomLogo'
+import { SEAL_SECONDS_ERROR, isValidSealSeconds } from '../utils/sealSeconds'
 
 type Section = 'room' | 'content' | 'limits' | 'wallet'
 type Announcement = SystemSettings['announcements'][number]
@@ -102,6 +104,10 @@ export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
   })
   const save = async () => {
     if (!data) return
+    if (section === 'room' && !isValidSealSeconds(data.game.seal_seconds)) {
+      setError(SEAL_SECONDS_ERROR)
+      return
+    }
     if (section === 'content' && data.announcements.some(item => !item.title.trim() || !item.content.trim())) {
       setError('每条公告都需要填写标题和内容')
       return
@@ -193,6 +199,9 @@ export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
         <Paper variant="outlined" sx={{ p: 1.4, borderRadius: 2.2 }}><RoomLogoPicker value={data.room_logo} fallback={data.room_name || '房'} heading={data.room_name || '当前房间'} description={`${data.chat_nickname || '开奖员'} · 将显示在彩票室和工作人员消息旁`} previewSize={58} onChange={room_logo => patch('room_logo', room_logo)} onUpload={chooseRoomLogo} /></Paper>
         <Stack direction={{ xs: 'column', md: 'row' }} gap={1.5}><TextField fullWidth label="房间名称" value={data.room_name} onChange={event => patch('room_name', event.target.value)} inputProps={{ maxLength: 30 }} /><TextField fullWidth label="客服 / 开奖员头衔" value={data.chat_nickname} onChange={event => patch('chat_nickname', event.target.value)} inputProps={{ maxLength: 80 }} helperText="用于后台发送消息时显示自己的身份" /></Stack>
         <Stack direction={{ xs: 'column', md: 'row' }} gap={1.5}><TextField fullWidth type="number" label="最低发言积分" value={data.min_chat_score} onChange={event => patch('min_chat_score', Number(event.target.value))} /><TextField fullWidth type="number" label="昵称显示长度" value={data.nickname_display_length} onChange={event => patch('nickname_display_length', Number(event.target.value))} /></Stack>
+        <Divider />
+        <Typography fontWeight={850}>投注受理</Typography>
+        <Box sx={{ maxWidth: 560 }}><SealSecondsField scope="room" value={data.game.seal_seconds} disabled={saving} onChange={seal_seconds => setData(current => current ? { ...current, game: { ...current.game, seal_seconds } } : current)} /></Box>
       </>}
 	      {section === 'content' && <>
 	        <Stack direction="row" alignItems="center" gap={1}><PushPinRounded color="primary" fontSize="small" /><Typography fontWeight={850}>消息入口置顶</Typography></Stack>

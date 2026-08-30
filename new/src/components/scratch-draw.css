@@ -1,0 +1,76 @@
+.scratch-draw-board { margin-top: 12px; }
+.scratch-draw-board .scratch-draw-hint,
+.action-modal .scratch-draw-empty {
+  margin: 0 0 10px;
+  color: #698792;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+.scratch-draw-surface {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #c3dfe3;
+  border-radius: 10px;
+  background: #f0f9fa;
+  isolation: isolate;
+}
+.scratch-draw-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--scratch-columns), minmax(18px, 1fr));
+  align-content: center;
+  gap: 3px;
+  min-height: 78px;
+  padding: 14px 6px;
+}
+.scratch-draw-surface.is-revealed { overflow-x: auto; scrollbar-width: thin; }
+.scratch-draw-surface:not(.is-ready):not(.is-revealed) .scratch-draw-grid { visibility: hidden; }
+.scratch-draw-cell { display: grid; justify-items: center; gap: 4px; min-width: 0; }
+.scratch-draw-cell > b.lottery-ball {
+  display: grid;
+  place-items: center;
+  width: min(100%, 36px);
+  height: 30px;
+  border-radius: 5px;
+  font: 800 16px/1 "Rajdhani", sans-serif;
+}
+.scratch-draw-cell > small { color: #8da4ac; font-size: 10px; line-height: 1; }
+.scratch-draw-mask {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.scratch-draw-surface.is-revealed .scratch-draw-mask { visibility: hidden; pointer-events: none; }
+.scratch-draw-board .scratch-draw-total { display: flex; justify-content: center; align-items: center; gap: 6px; margin: 10px 0 0; color: #61828d; font-size: 12px; }
+.scratch-draw-total > b { color: #d87847; font-size: 16px; }
+.scratch-draw-total > span { color: #3a8891; font-size: 11px; }
+.scratch-draw-controls { display: flex; justify-content: center; gap: 10px; margin-top: 12px; }
+.scratch-draw-controls > button {
+  min-height: 38px;
+  padding: 7px 15px;
+  border: 1px solid #badadf;
+  border-radius: 8px;
+  background: #f6fcfc;
+  color: #367e8c;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.scratch-draw-controls > button:last-child { background: #438fa2; border-color: #438fa2; color: #fff; }
+.scratch-draw-controls > button:disabled { opacity: .42; cursor: default; }
+.scratch-draw-controls > button:focus-visible { outline: 2px solid #218eab; outline-offset: 3px; }
+body:has(.theme-night) .scratch-draw-surface { border-color: #31596b; background: #103347; }
+body:has(.theme-night) .scratch-draw-board .scratch-draw-hint,
+body:has(.theme-night) .scratch-draw-board .scratch-draw-total,
+body:has(.theme-night) .action-modal .scratch-draw-empty { color: #a5c2ce; }
+body:has(.theme-night) .scratch-draw-controls > button { border-color: #365c6f; background: #183e54; color: #bedde5; }
+body:has(.theme-night) .scratch-draw-controls > button:last-child { border-color: #3c8295; background: #3c8295; color: #effbff; }
+@media (max-width: 360px) {
+  .scratch-draw-cell > b.lottery-ball { height: 28px; font-size: 14px; }
+}

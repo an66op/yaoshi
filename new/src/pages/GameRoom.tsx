@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Game, Theme } from '../types'
 import { ballTone } from '../data/games'
 import { Avatar } from '../components/Avatar'
 import { Icon } from '../components/Icon'
 import { ActionDialog, RedPacketDialog } from '../components/Dialogs'
 import { DrawResultCards } from '../components/DrawResultCards'
+import { GameChatMessage } from '../components/GameChatMessage'
+import { LotteryCountdown } from '../components/LotteryCountdown'
+import { ScratchDrawDialog } from '../components/ScratchDrawDialog'
+import { ScrollToLatestButton } from '../components/ScrollToLatestButton'
+import { buildGameTimelineEntries, formatGameMessageTime as formatFeedTime, isRoomCommandContent, ticketsForGame, type AcceptedTicket } from '../utils/gameRoomMessages'
 import { playNotificationSound } from '../utils/notificationAudio'
 import { CheckIn } from './CheckIn'
 import { parseBetInput, type ParsedBet } from '../utils/betParser'
@@ -46,23 +51,10 @@ type Props = {
   startWithQuickMenu?: boolean
   onRefreshBalance: () => Promise<void>
 }
-type Dialog = 'mipai' | 'orders' | 'trend' | 'forecast' | 'assist' | 'required' | 'bet-error' | null
+type Dialog = 'scratch' | 'orders' | 'trend' | 'forecast' | 'assist' | 'required' | 'bet-error' | null
 type BetMode = 'quick' | 'dual' | 'numbers'
 type KeyboardShortcut = 'all-in' | 'cancel' | 'credit' | 'check' | 'debit' | 'repeat'
-type AcceptedTicket = { gameId: string; content: string; lines: string[]; total: number; issue: string; acceptedAt: string }
 type WinningPopupData = { id: string; issue: string; amount: number }
-type TimelineEntry =
-  | { kind: 'chat'; key: string; at: number; value: ChatMessage }
-  | { kind: 'draw'; key: string; at: number; value: DrawResult }
-  | { kind: 'settlement'; key: string; at: number; value: MemberNotification }
-  | { kind: 'feed'; key: string; at: number; value: GameFeedItem; index: number }
-  | { kind: 'ticket'; key: string; at: number; value: AcceptedTicket }
-  | { kind: 'persisted'; key: string; at: number; value: MemberBet[] }
-
-function timelineTime(value?: string) {
-  const parsed = new Date(value ?? '').getTime()
-  return Number.isFinite(parsed) ? parsed : 0
-}
 
 function formatHeaderAmount(value: number) {
   return value.toLocaleString('zh-CN', {
@@ -112,38 +104,15 @@ function shortIssue(issue: string) {
 }
 
 function gameAcceptance(game: Game) {
-  if (!game.sourceHealthy) return { label: '开奖源异常 · 已停盘', tone: 'closed' }
-  if (game.issueStatus === 'error') return { label: '本期异常 · 已停盘', tone: 'closed' }
-  if (game.issueStatus === 'sealed') return { label: '已封盘', tone: 'closed' }
-  if (game.issueStatus === 'awaiting_draw') return { label: '等待开奖', tone: 'closed' }
-  if (game.issueStatus === 'settling') return { label: '正在结算', tone: 'closed' }
-  if (game.issueStatus === 'settled') return { label: '正在切换下一期', tone: 'closed' }
-  if (game.issueStatus === 'pending') return { label: '即将开始受理', tone: 'syncing' }
-  const units = game.due.split(':').map(Number)
-  const seconds = units.length === 3
-    ? units[0] * 3600 + units[1] * 60 + units[2]
-    : units.length === 2
-      ? units[0] * 60 + units[1]
-      : Number.NaN
-  if (!Number.isFinite(seconds)) return { label: '状态同步中', tone: 'syncing' }
-  if (seconds <= 0) return { label: '封盘中', tone: 'closed' }
-  if (seconds <= 30) return { label: `${seconds} 秒后封盘`, tone: 'closing' }
-  return { label: '正在受理', tone: 'open' }
+  const { timing } = game
+  return {
+    label: timing.statusLabel,
+    tone: timing.accepting ? 'open' : timing.phase === 'pending' || timing.phase === 'unavailable' ? 'syncing' : 'closed',
+  }
 }
 
 function canAcceptBet(game: Game) {
-  const tone = gameAcceptance(game).tone
-  return tone === 'open' || tone === 'closing'
-}
-
-function isRoomCommandContent(content: string) {
-  const normalized = content.trim()
-  return normalized === '取消'
-    || normalized === '查'
-    || normalized === '重复'
-    || /^(?:申请)?\s*(?:上分|下分)/.test(normalized)
-    || normalized.includes('/')
-    || normalized.includes('梭哈')
+  return game.timing.accepting
 }
 
 function supportsRankedBetBoard(game: Game) {
@@ -375,8 +344,8 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
     setPacketError('')
   }
 
-  // 游戏和期号共同构成一段独立会话。即使组件未来被其他入口复用，
-  // 也不能把上一局的输入、订单回执或弹层带到下一局。
+  // 换期重置未提交输入和弹层，但已经确认的回执属于持久时间线。
+  // 不能因历史接口瞬断把上一期成功回执清掉；仅切换彩种时隔离消息。
   useEffect(() => {
     const previousGameID = gameSessionRef.current.split(':')[0]
     const gameChanged = previousGameID !== game.id
@@ -389,7 +358,7 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
     setHistoryOpen(false)
     setDialog(null)
     setBetError('')
-    setSubmittedBets([])
+    setSubmittedBets((tickets) => ticketsForGame(tickets, game.id))
     setMemberBets([])
     if (gameChanged) setOddsInfo(null)
     setAssistantStatus(null)
@@ -541,8 +510,9 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
       const restored = history.map<AcceptedTicket>((item) => ({
         gameId: item.game_id,
         content: item.content,
-        lines: item.lines.map((line) => line.odds > 0 ? `${line.label} · 赔率 ${oddsLabel(line.odds, 3)}` : line.label),
+        lines: item.lines.map((line) => line.label),
         total: item.total,
+        balance: item.balance,
         issue: item.issue,
         acceptedAt: item.accepted_at,
       }))
@@ -727,8 +697,9 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
       setSubmittedBets((bets) => mergeAcceptedTickets(bets, [{
         gameId: game.id,
         content: accepted.content,
-        lines: accepted.lines.map((line) => line.odds > 0 ? `${line.label} · 赔率 ${oddsLabel(line.odds, 3)}` : line.label),
+        lines: accepted.lines.map((line) => line.label),
         total: accepted.total,
+        balance: accepted.balance,
         issue: accepted.issue,
         acceptedAt: accepted.accepted_at,
       }]))
@@ -813,17 +784,17 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
   const acceptance = gameAcceptance(game)
   const assistantAcceptance = !canAcceptBet(game)
     ? `${acceptance.label}，当前暂停接单。`
-    : assistantStatus
+    : assistantStatus?.issue === game.period
     ? assistantStatus.accepting ? '本期投注受理中，请核对玩法与金额后提交。' : '本期已封盘，请等待下一期开始受理。'
     : `本期${acceptance.label}。`
-  const visibleSubmittedBets = submittedBets.filter((ticket) => {
+  const visibleSubmittedBets = useMemo(() => submittedBets.filter((ticket) => {
     if (ticket.gameId !== game.id) return false
     const ticketBets = memberBets.filter((bet) => bet.issue === ticket.issue)
     // Hide an assistant receipt only when the persisted rows prove the whole
     // ticket was cancelled. A temporary bet-list failure must not hide a newly
     // accepted receipt that already came back from the placement endpoint.
     return ticketBets.length === 0 || ticketBets.some((bet) => bet.status !== 'cancelled')
-  })
+  }), [game.id, memberBets, submittedBets])
   const timelineReady = messagesReady && settlementsReady && betsReady && assistantHistoryReady && feedReady
   const timelineVersion = useMemo(() => [
     gameMessages.map((message) => `chat:${message.id}`).join(','),
@@ -831,8 +802,7 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
     visibleSubmittedBets.map((ticket) => `ticket:${ticket.issue}:${ticket.acceptedAt}:${ticket.content}`).join(','),
     settlementNotices.map((notice) => `settlement:${notice.id}:${notice.created_at}`).join(','),
     draws[0] ? `draw:${draws[0].id}:${draws[0].draw_at}` : '',
-    visibleSubmittedBets.length === 0 ? memberBets.map((bet) => `bet:${bet.id}:${bet.status}`).join(',') : '',
-  ].join('|'), [draws, feedItems, gameMessages, memberBets, settlementNotices, visibleSubmittedBets])
+  ].join('|'), [draws, feedItems, gameMessages, settlementNotices, visibleSubmittedBets])
 
   // First paint is positioned before the browser displays the timeline, so
   // users never see the top and then a visible jump to the newest message.
@@ -890,8 +860,11 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
         <div className="game-header-meta" aria-label="账户今日统计"><span><em>积分</em><strong>{formatHeaderAmount(balance)}</strong></span>{roomFeatures.showTurnover && <span><em>流水</em><strong>{walletSummary ? formatHeaderAmount(walletSummary.today_turnover) : '—'}</strong></span>}{roomFeatures.showProfit && <span><em>输赢</em><strong>{walletSummary ? formatHeaderAmount(walletSummary.today_profit) : '—'}</strong></span>}{roomFeatures.showRebate && <span><em>回水</em><strong>{walletSummary ? formatHeaderAmount(walletSummary.today_rebate) : '—'}</strong></span>}</div>
       </div>
     </header>
-    <section className="game-info"><div><span aria-label={`当前期号 ${assistantStatus?.issue ?? game.period}`}>{shortIssue(assistantStatus?.issue ?? game.period)}</span><b>{game.due.split('').map((number, index) => <i key={index}>{number}</i>)}</b><small className={`game-acceptance ${acceptance.tone}`}>{acceptance.label}</small></div>{(roomFeatures.showMipai || roomFeatures.showOrders || roomFeatures.showStreak || roomFeatures.showPrediction) && <nav className="game-tool-tabs" aria-label="游戏工具">{roomFeatures.showMipai && <button onClick={() => setDialog('mipai')}>咪牌</button>}{roomFeatures.showOrders && <button onClick={() => setDialog('orders')}>注单</button>}{roomFeatures.showStreak && <button onClick={() => setDialog('trend')}>长龙</button>}{roomFeatures.showPrediction && <button onClick={() => setDialog('forecast')}>预测</button>}</nav>}</section>
-    <section className={`draw-history ${historyOpen ? 'open' : ''}${drawPositionLabels.length > 5 ? ' racing-draw-ui' : ''}`}><button className="last-draw" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}><span>上期 {shortIssue(recentDraws[0]?.period ?? game.period)}</span><div>{game.balls.map((number, index) => <b className={ballTone(number)} key={index}>{number}</b>)}</div><small>{drawPositionLabels.length <= 5 && '冠亚 '}<b>{latestMeta.crownResult}</b></small></button><div className="recent-draws" aria-hidden={!historyOpen}><header><span>期数</span><b>{drawPositionLabels.map((label) => <i key={label}>{label}</i>)}</b><small><b>冠亚和</b><i aria-hidden="true">·</i><em>龙虎</em></small></header>{drawsLoading && <p className="recent-draws-loading">加载开奖…</p>}{recentDraws.slice(0, 5).map((draw) => <article key={draw.period}><span>{shortIssue(draw.period)}</span><div>{draw.balls.map((ball, index) => <b className={ballTone(ball)} key={index}>{ball}</b>)}</div><small><b>{draw.crownResult}</b><em>{draw.dragonTiger}</em></small></article>)}<button className="more-draws" onClick={onOpenResults}>查看更多开奖</button></div></section>
+    <section className="game-info">
+      <div className="game-round-info"><span className="game-round-issue" aria-label={`当前期号 ${game.period}`}><strong>{shortIssue(game.period)}</strong></span><LotteryCountdown timing={game.timing} compact /></div>
+      {(roomFeatures.showMipai || roomFeatures.showOrders || roomFeatures.showStreak || roomFeatures.showPrediction) && <nav className="game-tool-tabs" aria-label="游戏工具">{roomFeatures.showMipai && <button onClick={() => setDialog('scratch')}>咪牌</button>}{roomFeatures.showOrders && <button onClick={() => setDialog('orders')}>注单</button>}{roomFeatures.showStreak && <button onClick={() => setDialog('trend')}>长龙</button>}{roomFeatures.showPrediction && <button onClick={() => setDialog('forecast')}>预测</button>}</nav>}
+    </section>
+    <section className={`draw-history ${historyOpen ? 'open' : ''}${drawPositionLabels.length > 5 ? ' racing-draw-ui' : ''}`}><button className="last-draw" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}><span>上期 {shortIssue(game.latestIssue)}</span><div>{game.balls.map((number, index) => <b className={ballTone(number)} key={index}>{number}</b>)}</div><small>{drawPositionLabels.length <= 5 && '冠亚 '}<b>{latestMeta.crownResult}</b></small></button><div className="recent-draws" aria-hidden={!historyOpen}><header><span>期数</span><b>{drawPositionLabels.map((label) => <i key={label}>{label}</i>)}</b><small><b>冠亚和</b><i aria-hidden="true">·</i><em>龙虎</em></small></header>{drawsLoading && <p className="recent-draws-loading">加载开奖…</p>}{recentDraws.slice(0, 5).map((draw) => <article key={draw.period}><span>{shortIssue(draw.period)}</span><div>{draw.balls.map((ball, index) => <b className={ballTone(ball)} key={index}>{ball}</b>)}</div><small><b>{draw.crownResult}</b><em>{draw.dragonTiger}</em></small></article>)}<button className="more-draws" onClick={onOpenResults}>查看更多开奖</button></div></section>
     <section className="bet-chat" ref={chatRef} onScroll={(event) => {
       const node = event.currentTarget
       if (forceBottomRef.current) {
@@ -904,22 +877,22 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
       <p>以上全接，以下无效。</p>
       <div className="admin-message assistant-notice">
         <span className="service-logo draw-assistant-logo"><img alt="开奖助手头像" src="/images/draw-assistant-avatar-v1.jpg" /></span>
-        <div><small>开奖助手 · 24小时在线</small><article><b>【{game.title} - {shortIssue(assistantStatus?.issue ?? game.period)}】</b><hr /><span>{assistantAcceptance}</span><span className="assistant-help-example">多车道示例：1/12345/100#6/大/200#7/67890/100</span><span>每组用 # 分开，可一次提交多个车道。</span></article></div>
+        <div><small>开奖助手 · 24小时在线</small><article><b>【{game.title} - {shortIssue(game.period)}】</b><hr /><span>{assistantAcceptance}</span><span className="assistant-help-example">多车道示例：1/12345/100#6/大/200#7/67890/100</span><span>每组用 # 分开，可一次提交多个车道。</span></article></div>
       </div>
       <div className={`game-timeline ${timelineReady ? (timelinePositioned ? 'ready' : 'positioning') : 'loading'}`} ref={timelineRef}>
         {timelineReady
-          ? <GameTimeline game={game} messages={gameMessages} draws={draws} notices={settlementNotices} feed={feedItems} tickets={visibleSubmittedBets} memberBets={memberBets} nickname={nickname} onOpenOrders={() => setDialog('orders')} />
+          ? <GameTimeline gameId={game.id} gameTitle={game.title} currentIssue={game.period} accepting={game.timing.accepting} messages={gameMessages} draws={draws} notices={settlementNotices} feed={feedItems} tickets={visibleSubmittedBets} nickname={nickname} />
           : <div className="game-timeline-loading"><i /><span>正在载入最新消息…</span></div>}
       </div>
     </section>
-    {showScrollLatest && <button className={`scroll-latest-button${showKeyboard ? ' keyboard-open' : ''}`} type="button" aria-label="回到最新消息" onClick={(event) => { event.stopPropagation(); scrollToLatest() }}><span>↓</span><small>最新</small></button>}
+    {showScrollLatest && <ScrollToLatestButton keyboardOpen={showKeyboard} onScrollToLatest={scrollToLatest} />}
     {showKeyboard && roomFeatures.webKeyboard && <BetKeyboard mode={betMode} odds={playOdds} oddsHidden={oddsHidden} oddsResponseReady={oddsResponseReady} selectedCount={betInput.length} submitting={submitting || sendingMessage} notice={keyboardNotice} onShortcut={handleKeyboardShortcut} onBackspace={removeNumber} onClear={clearSelection} onConfirm={() => void submitInput()} onModeChange={setBetMode} onSelectNumber={appendNumber} onSelectOption={appendOption} showModes={false} />}
     <QuickActions hasRedPacket={Boolean(roomRedPacket)} keyboardOpen={showKeyboard && roomFeatures.webKeyboard} onCheckIn={() => setShowCheckIn(true)} onCustomerService={onOpenService} onOpenRedPacket={openRoomRedPacket} onQuickBet={() => { setShowKeyboard(false); if (supportsRankedBetBoard(game)) setShowQuickBet(true); else { setBetError('该彩种暂未配置详细选号面板，请使用输入框发送开奖助手下单规则。'); setDialog('bet-error') } }} onSwitchGame={() => setShowGameSwitcher(true)} />
     <section className="ticket-strip" onClick={(event) => event.stopPropagation()}>{roomFeatures.webKeyboard && <button aria-label={showKeyboard ? '收起快捷键盘' : '打开快捷键盘'} className="ticket-ime" onClick={toggleKeyboard}><img alt="" src="/icons/lucide/keyboard.svg" /></button>}{roomFeatures.webKeyboard ? <button aria-label="打开投注键盘" className="ticket-selection" onClick={toggleKeyboard}>{betInput || '输入玩法/金额或聊天内容'}</button> : <input aria-label="输入玩法、金额或聊天内容" className="ticket-selection ticket-native-input" autoComplete="off" disabled={submitting || sendingMessage} enterKeyHint="send" placeholder="输入玩法/金额或聊天内容" value={betInput} onChange={(event) => setBetInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void submitInput() } }} />}{betInput ? <button aria-label="发送" className="ticket-add ticket-send" disabled={submitting || sendingMessage} onClick={() => void submitInput()}>{submitting || sendingMessage ? '…' : '发送'}</button> : <button aria-expanded={showAddMenu} aria-label="打开更多功能" className="ticket-add" onClick={() => { setShowKeyboard(false); setShowAddMenu((visible) => !visible) }}><Icon name="plus" /></button>}</section>
     {showAddMenu && <AddMenu onSelect={(action) => onOpenWallet(action)} />}
     {showQuickBet && <FullBetBoard game={game} mode={betMode} submitting={submitting} odds={playOdds} oddsHidden={oddsHidden} oddsResponseReady={oddsResponseReady} onClose={() => setShowQuickBet(false)} onConfirm={(content) => void submitBet(content)} onModeChange={setBetMode} />}
     {showGameSwitcher && <GameSwitcher currentGame={game.id} games={games} onClose={() => setShowGameSwitcher(false)} onSelect={onOpenGame} />}
-    {dialog === 'mipai' && <MipaiDialog game={game} draw={draws[0]} onClose={() => setDialog(null)} />}
+    {dialog === 'scratch' && <ScratchDrawDialog game={game} draw={draws[0]} onClose={() => setDialog(null)} />}
     {dialog === 'orders' && <OrdersDialog bets={memberBets} onCancel={(id) => void cancelBet(id)} onClose={() => setDialog(null)} />}
     {dialog === 'trend' && <TrendDialog game={game} draws={draws} onClose={() => setDialog(null)} />}
     {dialog === 'forecast' && <ForecastDialog game={game} draws={draws} onClose={() => setDialog(null)} />}
@@ -931,78 +904,47 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
   </main>
 }
 
-function GameTimeline({ game, messages, draws, notices, feed, tickets, memberBets, nickname, onOpenOrders }: { game: Game; messages: ChatMessage[]; draws: DrawResult[]; notices: MemberNotification[]; feed: GameFeedItem[]; tickets: AcceptedTicket[]; memberBets: MemberBet[]; nickname: string; onOpenOrders: () => void }) {
+// A clock tick replaces Game, but does not change historical chat content.
+// Keep every field this subtree actually renders as an ordinary memo prop;
+// accepting/issue changes still update the next-period announcement normally.
+export const GameTimeline = memo(function GameTimeline({ gameId, gameTitle, currentIssue, accepting, messages, draws, notices, feed, tickets, nickname }: { gameId: string; gameTitle: string; currentIssue: string; accepting: boolean; messages: ChatMessage[]; draws: DrawResult[]; notices: MemberNotification[]; feed: GameFeedItem[]; tickets: AcceptedTicket[]; nickname: string }) {
   const draw = draws[0]
-  const entries = useMemo(() => {
-    const timeline: TimelineEntry[] = []
-    messages.forEach((message) => timeline.push({ kind: 'chat', key: `chat:${message.id}`, at: timelineTime(message.created_at), value: message }))
-    feed.forEach((item, index) => timeline.push({ kind: 'feed', key: `feed:${item.created_at}:${item.nickname}:${item.detail}`, at: timelineTime(item.created_at), value: item, index }))
-    tickets.forEach((ticket) => timeline.push({ kind: 'ticket', key: `ticket:${ticket.issue}:${ticket.acceptedAt}:${ticket.content}`, at: timelineTime(ticket.acceptedAt), value: ticket }))
-    notices.filter((notice) => notice.game_id === game.id).slice(-8).forEach((notice) => timeline.push({ kind: 'settlement', key: `settlement:${notice.id}`, at: timelineTime(notice.created_at), value: notice }))
-    if (draw) timeline.push({ kind: 'draw', key: `draw:${draw.id}`, at: timelineTime(draw.draw_at), value: draw })
-    if (!tickets.length && memberBets.length) {
-      const latestBetAt = memberBets.reduce((latest, bet) => Math.max(latest, timelineTime(bet.created_at)), 0)
-      timeline.push({ kind: 'persisted', key: `persisted:${memberBets[0]?.id ?? game.id}`, at: latestBetAt, value: memberBets })
-    }
-    const priority: Record<TimelineEntry['kind'], number> = { chat: 0, feed: 1, ticket: 2, persisted: 2, draw: 3, settlement: 4 }
-    return timeline.sort((left, right) => left.at - right.at || priority[left.kind] - priority[right.kind] || left.key.localeCompare(right.key))
-  }, [draw, feed, game.id, memberBets, messages, notices, tickets])
+  const entries = useMemo(() => buildGameTimelineEntries({ gameId, messages, draw, notices, feed, tickets }), [draw, feed, gameId, messages, notices, tickets])
 
   return <div className="game-timeline-items">{entries.map((entry) => {
     if (entry.kind === 'chat') return <GameChatMessage key={entry.key} message={entry.value} nickname={nickname} />
-    if (entry.kind === 'feed') return <GameFeedMessage key={entry.key} game={game} item={entry.value} index={entry.index} />
-    if (entry.kind === 'ticket') return <SubmittedTicketMessage key={entry.key} game={game} ticket={entry.value} nickname={nickname} />
-    if (entry.kind === 'draw') return <DrawAssistantMessage key={entry.key} game={game} draw={entry.value} draws={draws} />
-    if (entry.kind === 'settlement') return <SettlementAssistantMessages key={entry.key} game={game} notices={[entry.value]} nickname={nickname} />
-    return <PersistedBetSummary key={entry.key} game={game} bets={entry.value} nickname={nickname} onOpenOrders={onOpenOrders} />
+    if (entry.kind === 'feed') return <GameFeedMessage key={entry.key} gameTitle={gameTitle} currentIssue={currentIssue} item={entry.value} index={entry.index} />
+    if (entry.kind === 'ticket') return <SubmittedTicketMessage key={entry.key} gameTitle={gameTitle} ticket={entry.value} nickname={nickname} />
+    if (entry.kind === 'draw') return <DrawAssistantMessage key={entry.key} gameTitle={gameTitle} currentIssue={currentIssue} accepting={accepting} draw={entry.value} draws={draws} />
+    return <SettlementAssistantMessages key={entry.key} gameId={gameId} gameTitle={gameTitle} notices={[entry.value]} nickname={nickname} />
   })}</div>
-}
-
-function GameChatMessage({ message, nickname }: { message: ChatMessage; nickname: string }) {
-  if (message.mine) return <div className="player-bet game-chat-message mine"><div><small>{nickname}</small><article><span>{message.content}</span><time className="game-message-time mine">{formatFeedTime(message.created_at)}</time></article></div><Avatar className="player-avatar" index={-1} label="我的头像" /></div>
-  if (['application', 'settlement', 'scoreboard'].includes(message.message_type)) {
-    const [mention, ...content] = message.content.split('\n')
-    const lines = mention.startsWith('@') ? content : [mention, ...content]
-    const tone = message.message_type === 'settlement' ? ' room-settlement-message' : message.message_type === 'scoreboard' ? ' room-scoreboard-message' : ''
-    return <div className={`admin-message application-assistant-message${tone}`}><span className="service-logo draw-assistant-logo"><img alt="开奖助手头像" src="/images/draw-assistant-avatar-v1.jpg" /></span><div><small>开奖助手 · 24小时在线</small><article>{mention.startsWith('@') && <span className="assistant-mention">{mention}</span>}{lines.map((line, index) => index === 0 ? <strong key={`${message.id}-${index}`}>{line}</strong> : line ? <span className={`assistant-response-line${line.startsWith('得分：+') ? ' positive' : line.startsWith('得分：-') ? ' negative' : line.startsWith('[') ? ' player-row' : ''}`} key={`${message.id}-${index}`}>{line}</span> : <i className="assistant-response-gap" key={`${message.id}-${index}`} />)}<time className="game-message-time">{formatFeedTime(message.created_at)}</time></article></div></div>
-  }
-  return <article className="market-bet game-chat-message"><Avatar index={Number(message.public_id ?? message.user_id ?? 0)} label={`${message.nickname}的头像`} /><div><small>{message.nickname}</small><p>{message.content}<time className="game-message-time">{formatFeedTime(message.created_at)}</time></p></div></article>
-}
+})
 
 function QuickActions({ hasRedPacket, keyboardOpen, onSwitchGame, onCustomerService, onQuickBet, onCheckIn, onOpenRedPacket }: { hasRedPacket: boolean; keyboardOpen: boolean; onSwitchGame: () => void; onCustomerService: () => void; onQuickBet: () => void; onCheckIn: () => void; onOpenRedPacket: () => void }) {
   return <div className={`quick-actions${keyboardOpen ? ' keyboard-open' : ''}`}><button aria-label="切换游戏" onClick={onSwitchGame}>⇄</button><button aria-label="联系客服" onClick={onCustomerService}>🎧</button><button aria-label="快捷投注" onClick={onQuickBet}>☷</button><button aria-label="每日签到" className="quick-check-in" onClick={onCheckIn}><span>签</span></button>{hasRedPacket && <button aria-label="领取房间红包" className="quick-red-packet" onClick={onOpenRedPacket}><i aria-hidden="true" /><Icon name="gift" /><small>红包</small></button>}</div>
 }
 
-function GameFeedMessage({ game, item, index }: { game: Game; item: GameFeedItem; index: number }) {
-  return <article className="market-bet"><Avatar index={index} label={`${item.nickname}的头像`} /><div><small>{item.nickname}</small><p><b>【{game.title} · 第 {shortIssue(game.period)} 期】</b><br />{item.detail} · {item.amount} 元<em>已受理</em><time className="game-message-time">{formatFeedTime(item.created_at)}</time></p></div></article>
+function GameFeedMessage({ gameTitle, currentIssue, item, index }: { gameTitle: string; currentIssue: string; item: GameFeedItem; index: number }) {
+  return <article className="market-bet"><Avatar index={index} label={`${item.nickname}的头像`} /><div><small>{item.nickname}</small><p><b>【{gameTitle} · 第 {shortIssue(currentIssue)} 期】</b><br />{item.detail} · {item.amount} 元<em>已受理</em><time className="game-message-time">{formatFeedTime(item.created_at)}</time></p></div></article>
 }
 
-function SubmittedTicketMessage({ game, ticket, nickname }: { game: Game; ticket: AcceptedTicket; nickname: string }) {
+function SubmittedTicketMessage({ gameTitle, ticket, nickname }: { gameTitle: string; ticket: AcceptedTicket; nickname: string }) {
   return <div className="submitted-ticket">
     <div className="player-bet"><div><small>{nickname}</small><article><span>{ticket.content}</span><time className="game-message-time mine">{formatFeedTime(ticket.acceptedAt)}</time></article></div><Avatar className="player-avatar" index={-1} label="我的头像" /></div>
-    <div className="admin-message parsed-ticket"><span className="service-logo draw-assistant-logo"><img alt="开奖助手头像" src="/images/draw-assistant-avatar-v1.jpg" /></span><div><small>开奖助手 · 24小时在线</small><article><span className="assistant-mention">@{nickname}</span><strong>【{game.title} - {shortIssue(ticket.issue)}】下单成功</strong><br />{ticket.lines.map((line) => <span className="parsed-line" key={line}>{line}</span>)}<footer>使用：{ticket.total.toLocaleString('zh-CN')}</footer><time className="game-message-time">{formatFeedTime(ticket.acceptedAt)}</time></article></div></div>
+    <div className="admin-message parsed-ticket"><span className="service-logo draw-assistant-logo"><img alt="开奖助手头像" src="/images/draw-assistant-avatar-v1.jpg" /></span><div><small>开奖助手 · 24小时在线</small><article><span className="assistant-mention">@{nickname}</span><strong>【{gameTitle} - {shortIssue(ticket.issue)}】下单成功</strong><br />{ticket.lines.map((line) => <span className="parsed-line" key={line}>{line}</span>)}<footer><span>使用：{formatHeaderAmount(ticket.total)}</span><span>剩余：{formatHeaderAmount(ticket.balance)}</span></footer><time className="game-message-time">{formatFeedTime(ticket.acceptedAt)}</time></article></div></div>
   </div>
 }
 
-function PersistedBetSummary({ game, bets, nickname, onOpenOrders }: { game: Game; bets: MemberBet[]; nickname: string; onOpenOrders: () => void }) {
-  const latestIssue = bets[0]?.issue ?? game.period
-  const issueBets = bets.filter((bet) => bet.issue === latestIssue)
-  const visible = issueBets.slice(0, 8)
-  const total = issueBets.filter((bet) => bet.status !== 'cancelled').reduce((sum, bet) => sum + bet.amount, 0)
-  const isCurrent = latestIssue === game.period
-  return <div className="admin-message parsed-ticket persisted-ticket"><span className="service-logo draw-assistant-logo"><img alt="开奖助手头像" src="/images/draw-assistant-avatar-v1.jpg" /></span><div><small>开奖助手 · 24小时在线</small><article><span className="assistant-mention">@{nickname}</span><strong>【{game.title} - {shortIssue(latestIssue)}】{isCurrent ? '我的本期注单' : '我的最近注单'}</strong><i className="persisted-badge">历史记录</i>{visible.map((bet) => <span className="parsed-line persisted-line" key={bet.id}><span>{bet.play_name || `第${bet.position}球`} [{bet.selection}/{bet.amount.toFixed(2)}]</span><em className={bet.status}>{betStatusText(bet.status)}</em></span>)}{(issueBets.length > visible.length || bets.length > issueBets.length) && <button className="persisted-more" onClick={onOpenOrders}>查看该彩种全部注单</button>}<footer>共 {issueBets.length} 注 · 使用：{total.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</footer><time className="game-message-time">{formatFeedTime(issueBets[0]?.created_at ?? '')}</time></article></div></div>
-}
-
-function DrawAssistantMessage({ game, draw, draws }: { game: Game; draw: DrawResult; draws: DrawResult[] }) {
+function DrawAssistantMessage({ gameTitle, currentIssue, accepting, draw, draws }: { gameTitle: string; currentIssue: string; accepting: boolean; draw: DrawResult; draws: DrawResult[] }) {
   const meta = crownMeta(draw.numbers)
   return <div className="admin-message draw-announcement">
     <span className="service-logo draw-assistant-logo"><img alt="开奖助手头像" src="/images/draw-assistant-avatar-v1.jpg" /></span>
     <div><small>开奖助手 · 24小时在线</small><article>
-      <strong>【{game.title} - {shortIssue(draw.issue)}】已开奖</strong>
+      <strong>【{gameTitle} - {shortIssue(draw.issue)}】已开奖</strong>
       <div className="draw-announcement-balls">{draw.numbers.map((number, index) => <b className={ballTone(number)} key={`${draw.id}-${index}`}>{number}</b>)}</div>
       <span className="draw-announcement-meta">冠亚和：{meta.crownResult}{meta.dragonTiger ? ` · 龙虎：${meta.dragonTiger}` : ''}</span>
-      <p>本期开奖完成，下一期已经开始受理。</p>
-      <DrawResultCards game={game} draw={draw} draws={draws} />
+      {accepting && currentIssue !== draw.issue && <p>下一期已开始受理。</p>}
+      <DrawResultCards title={gameTitle} draw={draw} draws={draws} />
       <time className="game-message-time">{formatFeedTime(draw.draw_at)}</time>
     </article></div>
   </div>
@@ -1022,8 +964,8 @@ function WinningPopup({ game, data, onClose }: { game: Game; data: WinningPopupD
   </div>
 }
 
-function SettlementAssistantMessages({ game, notices, nickname }: { game: Game; notices: MemberNotification[]; nickname: string }) {
-  const visible = notices.filter((notice) => notice.game_id === game.id).slice(-8)
+function SettlementAssistantMessages({ gameId, gameTitle, notices, nickname }: { gameId: string; gameTitle: string; notices: MemberNotification[]; nickname: string }) {
+  const visible = notices.filter((notice) => notice.game_id === gameId).slice(-8)
   if (!visible.length) return null
   return <div className="settlement-notice-list">{visible.map((notice) => {
     const numbers = notice.draw_numbers ?? []
@@ -1033,7 +975,7 @@ function SettlementAssistantMessages({ game, notices, nickname }: { game: Game; 
       <span className="service-logo draw-assistant-logo"><img alt="开奖助手头像" src="/images/draw-assistant-avatar-v1.jpg" /></span>
       <div><small>开奖助手 · 24小时在线</small><article>
         <span className="assistant-mention">@{nickname}</span>
-        <strong>【{notice.game_name || game.title} - {shortIssue(notice.issue ?? '')}】结算完成</strong>
+        <strong>【{notice.game_name || gameTitle} - {shortIssue(notice.issue ?? '')}】结算完成</strong>
         {numbers.length > 0 && <div className="draw-announcement-balls">{numbers.map((number, index) => <b className={ballTone(number)} key={`${notice.id}-${index}`}>{number}</b>)}</div>}
         {details.length > 0 && <div className="settlement-bet-details">{details.map((detail, index) => <span className="parsed-line settlement-line" key={`${notice.id}-${index}`}>
           <span>{detail.play_name}{detail.selection ? ` · ${detail.selection}` : ''} · {detail.amount.toFixed(2)} 元</span>
@@ -1044,12 +986,6 @@ function SettlementAssistantMessages({ game, notices, nickname }: { game: Game; 
       </article></div>
     </div>
   })}</div>
-}
-
-function formatFeedTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '刚刚'
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
 function BetKeyboard({ mode, odds, oddsHidden, oddsResponseReady, selectedCount, submitting, notice, onShortcut, onModeChange, onBackspace, onClear, onSelectNumber, onSelectOption, onConfirm, showModes }: { mode: BetMode; odds: PlayOdds; oddsHidden: boolean; oddsResponseReady: boolean; selectedCount: number; submitting?: boolean; notice?: string | null; onShortcut: (action: KeyboardShortcut) => void; onModeChange: (mode: BetMode) => void; onBackspace: () => void; onClear: () => void; onSelectNumber: (number: number) => void; onSelectOption: (option: string) => void; onConfirm: () => void; showModes: boolean }) {
@@ -1141,44 +1077,12 @@ function FullBetBoard({ game, mode, submitting, odds, oddsHidden, oddsResponseRe
     return <button className={isPlaySelected(play) ? 'selected' : ''} disabled={!oddsResponseReady || (!oddsHidden && value === null)} key={play} onClick={() => togglePlay(play)}><b>{label}</b><small>{oddsLabel(value, 3, oddsHidden)}</small></button>
   }
   const ballOdds = oddsForPlayCode('ball_1_5', odds)
-  return <div className="full-bet-layer" onClick={submitting ? undefined : onClose}><section className="full-bet-board" onClick={(event) => event.stopPropagation()}><header className="full-bet-header"><button aria-label="返回游戏聊天室" disabled={submitting} onClick={onClose}><Icon name="back" /></button><div><b>{game.title}</b><small>第 {shortIssue(game.period)} 期 · {acceptance.label}</small></div><button className="full-bet-close" aria-label="关闭投注面板" disabled={submitting} onClick={onClose}>×</button></header><div className="full-bet-current"><span>距离截止 {game.due}</span><i className={`full-bet-acceptance ${acceptance.tone}`}>{acceptance.label}</i><div>{game.balls.map((ball, index) => <b className={ballTone(ball)} key={index}>{ball}</b>)}</div></div><div className="full-bet-workspace"><aside>{modeItems.map((item) => <button className={mode === item.id ? 'active' : ''} key={item.id} onClick={() => onModeChange(item.id)}>{item.label}<small>{item.helper}</small></button>)}</aside><section className="full-bet-content"><header><div><b>{mode === 'quick' ? '快捷投注' : mode === 'dual' ? '两面盘' : '号码投注'}</b><small>选择后高亮；再次点击可取消。</small></div><span>{oddsHidden ? <b>赔率已隐藏</b> : <>赔率 <b>{configuredOdds ? '按玩法' : '待配置'}</b></>}</span></header>{mode === 'quick' && <><div className="rank-selector">{ranks.map((item) => <button className={rank === item ? 'active' : ''} key={item} onClick={() => setRank(item)}>{item}</button>)}</div><p className="board-section-title">{rank} · 选择玩法</p><div className="full-bet-options">{rankQuickOptions.map((item) => optionButton(`${rank}${item}`, item))}</div></>}{mode === 'dual' && <div className="full-bet-options">{dualOptions.map((item) => optionButton(item, item))}</div>}{mode === 'numbers' && <><div className="rank-selector">{ranks.map((item) => <button className={rank === item ? 'active' : ''} key={item} onClick={() => setRank(item)}>{item}</button>)}</div><p className="board-section-title">{rank} · 选择号码（末尾金额为每个号码的单注金额）</p><div className="full-bet-numbers">{Array.from({ length: 10 }, (_, index) => index + 1).map((number) => <button className={isNumberSelected(number) ? 'selected' : ''} disabled={!oddsResponseReady || (!oddsHidden && ballOdds === null)} key={number} onClick={() => toggleNumber(number)}><b>{number}</b><small>{oddsLabel(ballOdds, 3, oddsHidden)}</small></button>)}</div></>}</section></div><footer className="full-bet-footer"><div className="full-bet-summary"><button onClick={() => setSelectionDraft('')}>清空选择</button><button className="full-bet-selection-toggle" onClick={() => setSelectionOpen((open) => !open)}><span>已选 <b>{selections.length}</b> 组 · {preparedBet.payloads.length} 注</span><i>{selectionOpen ? '收起' : '查看清单'}</i></button>{selections.length > 0 && <button aria-label="删除最后一组选择" onClick={() => removeSelection(selections.at(-1)?.play ?? '')}>⌫</button>}</div>{selectionOpen && <div className="full-bet-selection-list"><header><b>本次投注清单</b><span>合计 ¥ {preparedBet.total.toFixed(2)}</span></header>{selections.length ? <div>{selections.map((selection, index) => { const selectionBet = parseBetInput(`${selection.play}/${amount}`); return <article key={`${selection.play}-${index}`}><div><b>{selection.label}</b><small>{selectionBet.payloads.map(payloadLabel).join('、')}</small></div><strong>¥ {selectionBet.total.toFixed(2)}</strong><button aria-label={`删除${selection.label}`} onClick={() => removeSelection(selection.play)}>×</button></article> })}</div> : <p>暂未选择玩法或号码</p>}</div>}<div className="amount-pills" aria-label="单注金额">{[20, 50, 100, 200].map((value) => <button className={amount === value ? 'active' : ''} key={value} onClick={() => setAmount(value)}>{value}</button>)}</div><button className="full-bet-confirm" disabled={submitting || !selections.length || !accepting || !selectionsHaveOdds} onClick={() => onConfirm(preparedContent)}>{submitting ? '提交中…' : !accepting ? acceptance.label : !selectionsHaveOdds && selections.length ? '赔率待配置' : '立即投注'} <small>¥ {preparedBet.total.toFixed(2)}</small></button></footer></section></div>
+  return <div className="full-bet-layer" onClick={submitting ? undefined : onClose}><section className="full-bet-board" onClick={(event) => event.stopPropagation()}><header className="full-bet-header"><button aria-label="返回游戏聊天室" disabled={submitting} onClick={onClose}><Icon name="back" /></button><div><b>{game.title}</b><small>第 {shortIssue(game.period)} 期 · {acceptance.label}</small></div><button className="full-bet-close" aria-label="关闭投注面板" disabled={submitting} onClick={onClose}>×</button></header><div className="full-bet-current"><span>{game.timing.phaseLabel} {game.due}</span><i className={`full-bet-acceptance ${acceptance.tone}`}>{acceptance.label}</i><div>{game.balls.map((ball, index) => <b className={ballTone(ball)} key={index}>{ball}</b>)}</div></div><div className="full-bet-workspace"><aside>{modeItems.map((item) => <button className={mode === item.id ? 'active' : ''} key={item.id} onClick={() => onModeChange(item.id)}>{item.label}<small>{item.helper}</small></button>)}</aside><section className="full-bet-content"><header><div><b>{mode === 'quick' ? '快捷投注' : mode === 'dual' ? '两面盘' : '号码投注'}</b><small>选择后高亮；再次点击可取消。</small></div><span>{oddsHidden ? <b>赔率已隐藏</b> : <>赔率 <b>{configuredOdds ? '按玩法' : '待配置'}</b></>}</span></header>{mode === 'quick' && <><div className="rank-selector">{ranks.map((item) => <button className={rank === item ? 'active' : ''} key={item} onClick={() => setRank(item)}>{item}</button>)}</div><p className="board-section-title">{rank} · 选择玩法</p><div className="full-bet-options">{rankQuickOptions.map((item) => optionButton(`${rank}${item}`, item))}</div></>}{mode === 'dual' && <div className="full-bet-options">{dualOptions.map((item) => optionButton(item, item))}</div>}{mode === 'numbers' && <><div className="rank-selector">{ranks.map((item) => <button className={rank === item ? 'active' : ''} key={item} onClick={() => setRank(item)}>{item}</button>)}</div><p className="board-section-title">{rank} · 选择号码（末尾金额为每个号码的单注金额）</p><div className="full-bet-numbers">{Array.from({ length: 10 }, (_, index) => index + 1).map((number) => <button className={isNumberSelected(number) ? 'selected' : ''} disabled={!oddsResponseReady || (!oddsHidden && ballOdds === null)} key={number} onClick={() => toggleNumber(number)}><b>{number}</b><small>{oddsLabel(ballOdds, 3, oddsHidden)}</small></button>)}</div></>}</section></div><footer className="full-bet-footer"><div className="full-bet-summary"><button onClick={() => setSelectionDraft('')}>清空选择</button><button className="full-bet-selection-toggle" onClick={() => setSelectionOpen((open) => !open)}><span>已选 <b>{selections.length}</b> 组 · {preparedBet.payloads.length} 注</span><i>{selectionOpen ? '收起' : '查看清单'}</i></button>{selections.length > 0 && <button aria-label="删除最后一组选择" onClick={() => removeSelection(selections.at(-1)?.play ?? '')}>⌫</button>}</div>{selectionOpen && <div className="full-bet-selection-list"><header><b>本次投注清单</b><span>合计 ¥ {preparedBet.total.toFixed(2)}</span></header>{selections.length ? <div>{selections.map((selection, index) => { const selectionBet = parseBetInput(`${selection.play}/${amount}`); return <article key={`${selection.play}-${index}`}><div><b>{selection.label}</b><small>{selectionBet.payloads.map(payloadLabel).join('、')}</small></div><strong>¥ {selectionBet.total.toFixed(2)}</strong><button aria-label={`删除${selection.label}`} onClick={() => removeSelection(selection.play)}>×</button></article> })}</div> : <p>暂未选择玩法或号码</p>}</div>}<div className="amount-pills" aria-label="单注金额">{[20, 50, 100, 200].map((value) => <button className={amount === value ? 'active' : ''} key={value} onClick={() => setAmount(value)}>{value}</button>)}</div><button className="full-bet-confirm" disabled={submitting || !selections.length || !accepting || !selectionsHaveOdds} onClick={() => onConfirm(preparedContent)}>{submitting ? '提交中…' : !accepting ? acceptance.label : !selectionsHaveOdds && selections.length ? '赔率待配置' : '立即投注'} <small>¥ {preparedBet.total.toFixed(2)}</small></button></footer></section></div>
 }
 
 function OrdersDialog({ bets, onCancel, onClose }: { bets: MemberBet[]; onCancel: (id: number) => void; onClose: () => void }) {
   return <ActionDialog title="我的注单" description={bets.length ? `当前彩种最近 ${bets.length} 条个人注单` : '当前彩种暂无我的注单。'} onClose={onClose}>
     {bets.length > 0 && <div className="my-orders-list">{bets.map((bet) => <article key={bet.id}><header><b>{bet.play_name || bet.selection}</b><span className={`my-order-status ${bet.status}`}>{betStatusText(bet.status)}</span></header><p>第 {shortIssue(bet.issue)} 期 · 赔率 {oddsLabel(bet.odds, 3)}</p><footer><strong>¥ {bet.amount.toFixed(2)}</strong>{bet.status === 'pending' && <button onClick={() => onCancel(bet.id)}>撤单</button>}</footer></article>)}</div>}
-  </ActionDialog>
-}
-
-function MipaiDialog({ game, draw, onClose }: { game: Game; draw?: DrawResult; onClose: () => void }) {
-  const balls = draw?.numbers?.length ? draw.numbers : game.balls
-  const [revealed, setRevealed] = useState(0)
-  const [round, setRound] = useState(0)
-
-  useEffect(() => {
-    setRevealed(0)
-    if (!balls.length) return
-    const timer = window.setInterval(() => {
-      setRevealed((current) => {
-        if (current >= balls.length) {
-          window.clearInterval(timer)
-          return current
-        }
-        return current + 1
-      })
-    }, 260)
-    return () => window.clearInterval(timer)
-  }, [balls.length, draw?.id, round])
-
-  const complete = revealed >= balls.length
-  const total = balls.reduce((sum, ball) => sum + ball, 0)
-  return <ActionDialog title="咪牌" description={`${game.title} · 第 ${shortIssue(draw?.issue ?? game.period)} 期`} confirmLabel="关闭" onClose={onClose}>
-    <section className="mipai-board">
-      <header><span>{complete ? '本期号码已全部揭晓' : `正在揭晓第 ${Math.min(revealed + 1, balls.length)} 个号码`}</span><b>{revealed}/{balls.length}</b></header>
-      <div className="mipai-balls">{balls.map((ball, index) => <i className={`${index < revealed ? `${ballTone(ball)} revealed` : ''}`} key={`${ball}-${index}`}>{index < revealed ? ball : '?'}</i>)}</div>
-      {complete && balls.length === 3 && <p className="mipai-total">{balls.join(' + ')} = <b>{total}</b><span>{total >= 14 ? '大' : '小'} · {total % 2 ? '单' : '双'}</span></p>}
-      <button className="mipai-replay" onClick={() => { setRevealed(0); setRound((current) => current + 1) }}>重新咪牌</button>
-    </section>
   </ActionDialog>
 }
 
@@ -1259,5 +1163,5 @@ function AddMenu({ onSelect }: { onSelect: (action?: WalletActionSlug) => void }
 }
 
 function GameSwitcher({ currentGame, games, onClose, onSelect }: { currentGame: string; games: Game[]; onClose: () => void; onSelect: (id: string) => void }) {
-  return <div className="game-menu-layer game-switch-layer" onClick={onClose}><aside className="game-switch-sheet" onClick={(event) => event.stopPropagation()}><header><b>⇄ 切换游戏</b><button onClick={onClose}>×</button></header>{games.map((item) => <button className={item.id === currentGame ? 'current' : ''} key={item.id} onClick={() => { onClose(); if (item.id !== currentGame) onSelect(item.id) }}><span className={`${item.logo ? 'has-image' : ''}${item.id === 'speed-racing' ? ' racing-trio-artwork' : ''}`} style={{ background: item.logo ? 'transparent' : item.color }}>{item.logo ? <img alt={`${item.title} Logo`} src={item.logo} /> : item.tag.slice(0, 2)}</span><div><b>{item.title}</b><small>第 {item.period} 期</small></div><em>{item.id === currentGame ? '当前游戏' : `剩余 ${item.due}`}</em></button>)}</aside></div>
+  return <div className="game-menu-layer game-switch-layer" onClick={onClose}><aside className="game-switch-sheet" onClick={(event) => event.stopPropagation()}><header><b>⇄ 切换游戏</b><button onClick={onClose}>×</button></header>{games.map((item) => <button className={item.id === currentGame ? 'current' : ''} key={item.id} onClick={() => { onClose(); if (item.id !== currentGame) onSelect(item.id) }}><span className={item.logo ? 'has-image' : ''} style={{ background: item.logo ? 'transparent' : item.color }}>{item.logo ? <img alt={`${item.title} Logo`} src={item.logo} /> : item.tag.slice(0, 2)}</span><div><b>{item.title}</b><small>第 {item.period} 期</small></div><em>{item.id === currentGame ? '当前游戏' : `剩余 ${item.due}`}</em></button>)}</aside></div>
 }

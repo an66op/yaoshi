@@ -1,9 +1,10 @@
 import MeetingRoomRounded from '@mui/icons-material/MeetingRoomRounded'
 import VerifiedUserRounded from '@mui/icons-material/VerifiedUserRounded'
-import { Alert, Avatar, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControlLabel, Stack, Switch, Typography } from '@mui/material'
+import { Alert, Avatar, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControlLabel, Stack, Switch, Tooltip, Typography } from '@mui/material'
 import { useEffect, useMemo, useState } from 'react'
 import { adminApi, type SystemSettings, type WorkspaceGame } from '../api'
 import { gameLogo } from '../gameLogos'
+import { workspaceGameAvailability } from '../utils/workspaceGameAvailability'
 
 type Props = {
   open: boolean
@@ -41,7 +42,7 @@ export function RoomOperationsDialog({ open, title, target, onClose, onSaved }: 
     return () => { active = false; window.clearTimeout(timer) }
   }, [open, targetID, targetKind])
 
-  const activeGames = useMemo(() => games.filter(game => game.platform_enabled && game.room_enabled).length, [games])
+  const activeGames = useMemo(() => games.filter(game => workspaceGameAvailability(game).available).length, [games])
   const save = async () => {
     if (!settings || !target) return
     setSaving(true); setError('')
@@ -54,12 +55,22 @@ export function RoomOperationsDialog({ open, title, target, onClose, onSaved }: 
   }
   const toggleGame = async (game: WorkspaceGame, enabled: boolean) => {
     if (!target) return
+    const availability = workspaceGameAvailability(game)
+    if (enabled && !availability.canEnable) {
+      setError(availability.detail)
+      return
+    }
     setChangingGame(game.id); setError('')
+    let saved = false
     try {
       if (target.kind === 'tenant') await adminApi.setTenantRoomGameStatus(target.id, game.id, enabled)
       else await adminApi.setAgentRoomGameStatus(target.id, game.id, enabled)
-      setGames(current => current.map(item => item.id === game.id ? { ...item, room_enabled: enabled, enabled: item.platform_enabled && enabled } : item))
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '保存游戏状态失败') }
+      saved = true
+      setGames(target.kind === 'tenant' ? await adminApi.tenantRoomGames(target.id) : await adminApi.agentRoomGames(target.id))
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : '保存游戏状态失败'
+      setError(saved ? `开关已保存，但游戏状态刷新失败，请刷新页面确认：${message}` : message)
+    }
     finally { setChangingGame('') }
   }
 
@@ -84,12 +95,20 @@ export function RoomOperationsDialog({ open, title, target, onClose, onSaved }: 
         </Box>
         <Divider />
         <Stack direction="row" alignItems="center" justifyContent="space-between"><Typography fontWeight={900}>房间游戏</Typography><Chip size="small" color="primary" label={`${activeGames}/${games.length} 开放`} /></Stack>
+        <Typography variant="caption" color="text.secondary">分类沿用平台；新房间游戏默认关闭，可按需开启。未分类游戏暂不上架。</Typography>
         <Box display="grid" gridTemplateColumns={{ xs: '1fr', sm: '1fr 1fr' }} gap={1}>
-          {games.map(game => <Stack key={game.id} direction="row" alignItems="center" gap={1.2} sx={{ minWidth: 0, p: 1.1, border: 1, borderColor: 'divider', borderRadius: 2, opacity: game.platform_enabled ? 1 : .55 }}>
-            <Avatar src={gameLogo(game.id)} sx={{ width: 38, height: 38, bgcolor: 'action.hover', color: 'text.secondary', fontSize: 10 }}>{game.name.slice(0, 2)}</Avatar>
-            <Box minWidth={0} flex={1}><Typography fontWeight={800} fontSize={12} noWrap>{game.name}</Typography><Typography variant="caption" color="text.secondary">{game.platform_enabled ? (game.room_enabled ? '本房开放' : '本房关闭') : '平台已关闭'}</Typography></Box>
-            <FormControlLabel sx={{ m: 0 }} control={<Switch size="small" checked={game.platform_enabled && game.room_enabled} disabled={!game.platform_enabled || changingGame === game.id} onChange={(_, checked) => void toggleGame(game, checked)} />} label="" />
-          </Stack>)}
+          {games.map(game => {
+            const availability = workspaceGameAvailability(game)
+            return <Stack key={game.id} direction="row" alignItems="center" gap={1.2} sx={{ minWidth: 0, p: 1.1, border: 1, borderColor: 'divider', borderRadius: 2, opacity: game.platform_enabled ? 1 : .55 }}>
+              <Avatar src={gameLogo(game.id)} sx={{ width: 38, height: 38, bgcolor: 'action.hover', color: 'text.secondary', fontSize: 10 }}>{game.name.slice(0, 2)}</Avatar>
+              <Box minWidth={0} flex={1}>
+                <Typography fontWeight={800} fontSize={12} noWrap>{game.name}</Typography>
+                <Typography variant="caption" display="block" color="text.secondary">{game.lobby_category?.trim() || '未分类'}</Typography>
+                <Typography variant="caption" color={availability.color === 'default' ? 'text.secondary' : `${availability.color}.main`}>{availability.label}</Typography>
+              </Box>
+              <Tooltip title={availability.detail}><span><FormControlLabel sx={{ m: 0 }} control={<Switch size="small" checked={game.room_enabled} disabled={(!availability.canEnable && !game.room_enabled) || changingGame !== ''} onChange={(_, checked) => void toggleGame(game, checked)} inputProps={{ 'aria-label': `${game.name}房间开关` }} />} label="" /></span></Tooltip>
+            </Stack>
+          })}
         </Box>
       </Stack>}
     </DialogContent>

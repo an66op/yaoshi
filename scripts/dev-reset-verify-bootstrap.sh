@@ -333,8 +333,8 @@ BEGIN
      OR (SELECT COUNT(*) FROM lottery_games WHERE source_kind='official') <> 8 THEN
     RAISE EXCEPTION '开奖源分组应为 external 17 / platform 5 / official 8';
   END IF;
-  IF EXISTS (SELECT 1 FROM lottery_games WHERE source_kind='official' AND enabled) THEN
-    RAISE EXCEPTION '8 个官方备选彩种必须保持关闭';
+  IF EXISTS (SELECT 1 FROM lottery_games WHERE source_kind='official' AND (enabled OR lobby_category <> '' OR lobby_sort_order <> 0)) THEN
+    RAISE EXCEPTION '8 个官方备选彩种必须保持关闭、未分类且分类排序为 0';
   END IF;
   IF (SELECT COUNT(*) FROM lottery_lobby_categories WHERE deleted_at IS NULL) <> 4
      OR EXISTS (SELECT 1 FROM lottery_lobby_categories WHERE deleted_at IS NOT NULL) THEN
@@ -343,7 +343,7 @@ BEGIN
   WITH expected(name, sort_order, game_count) AS (VALUES
     ('彩票',10,8::bigint), ('宾果',20,7::bigint), ('PC',30,3::bigint), ('六合彩',40,4::bigint)
   ), actual AS (
-    SELECT category.name, category.sort_order, COUNT(game.id) FILTER (WHERE game.enabled) AS game_count
+    SELECT category.name, category.sort_order, COUNT(game.id) AS game_count
     FROM lottery_lobby_categories category
     LEFT JOIN lottery_games game ON game.lobby_category=category.name
     WHERE category.deleted_at IS NULL
@@ -353,7 +353,7 @@ BEGIN
   FROM expected LEFT JOIN actual USING(name)
   WHERE actual.name IS NULL OR actual.sort_order <> expected.sort_order OR actual.game_count <> expected.game_count;
   IF bad_categories IS NOT NULL THEN
-    RAISE EXCEPTION '分类顺序或开放彩种数不正确：%', bad_categories;
+    RAISE EXCEPTION '默认分类顺序或彩种数不正确：%', bad_categories;
   END IF;
   IF (SELECT COUNT(*) FROM lottery_play_limits) <> 270
      OR EXISTS (

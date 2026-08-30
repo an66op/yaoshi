@@ -124,7 +124,7 @@ function App() {
   // the scaler rebinds to the newly mounted game root as well.
   useFontScale(fontScale, `${pathname}:${booting ? 'booting' : 'ready'}`)
   const activeSession = session && session.account && session.room ? session : null
-  const { games: liveGames, live: gamesLive, error: gamesError, loading: gamesLoading } = useLotteryGames(Boolean(authenticated && activeSession), activeSession?.room ?? '')
+  const { games: liveGames, live: gamesLive, error: gamesError, loading: gamesLoading } = useLotteryGames(Boolean(authenticated && activeSession), activeSession?.room ?? '', route.kind === 'game' ? route.gameId : null)
   const appContentRef = useRef<HTMLDivElement>(null)
   const unreadRefreshIDRef = useRef(0)
 

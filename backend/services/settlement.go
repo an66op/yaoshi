@@ -534,9 +534,11 @@ func (s *BetAdminService) PublishDraw(gameID, issue string, numbers []int, opera
 		return nil, apperrors.NewSystemError("DRAW_CREATE_FAILED", "写入开奖结果失败", create.Error)
 	}
 	_ = s.db.Model(&lottery.Game{}).Where("id = ?", game.ID).Updates(map[string]any{
-		"next_draw_at": now.Add(time.Duration(maxInt(game.DrawInterval, 60)) * time.Second),
-		"sync_status":  "ok",
-		"last_sync_at": now,
+		"next_draw_at":  now.Add(time.Duration(effectiveDrawInterval(game)) * time.Second),
+		"next_issue":    nextIssue(issue),
+		"timing_source": "configured",
+		"sync_status":   "ok",
+		"last_sync_at":  now,
 	}).Error
 	return s.SettleIssue(game.ID, issue, defaultString(operator, "手动开奖结算"))
 }

@@ -29,6 +29,7 @@ export const DEFAULT_ADMIN_MENU: AdminMenuItemConfig[] = [
   { path: '/lottery-chat', label: '彩票室', group: '内容与服务', order: 150, visible: true },
   { path: '/chat', label: '客服与群聊', group: '内容与服务', order: 155, visible: true },
   { path: '/announcements', label: '公告与活动', group: '内容与服务', order: 158, visible: true },
+  { path: '/plans', label: '计划管理', group: '内容与服务', order: 159, visible: true },
   { path: '/activities', label: '活动管理', group: '内容与服务', order: 160, visible: false },
   { path: '/special-numbers', label: '房间靓号', group: '内容与服务', order: 170, visible: false },
   { path: '/menu-management', label: '菜单管理', group: '系统管理', order: 180, visible: true },

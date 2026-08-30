@@ -274,9 +274,6 @@ func (s *MemberChatService) post(userID uint64, roomType, gameID, content string
 		return nil, apperrors.NewBusinessError("CHAT_MUTED", fmt.Sprintf("您已被禁言至 %s：%s", account.MutedUntil.Local().Format("2006-01-02 15:04"), reason))
 	}
 	nickname := defaultString(account.Nickname, account.Username)
-	if roomType == "group" && gameID != "lobby" && account.ParentAgentID != nil && !NewChatAdminService(s.db).LotteryRoomEnabled(*account.ParentAgentID, gameID) {
-		return nil, apperrors.NewBusinessError("LOTTERY_ROOM_CLOSED", "该彩票室已关闭")
-	}
 	row := chat.Message{
 		WorkspaceID: account.WorkspaceID, UserID: userID, Username: account.Username, Nickname: nickname,
 		RoomType: roomType, Scope: scope, RoomScope: roomScope, GameID: gameID, Content: content, MessageType: "text",
@@ -906,6 +903,13 @@ func (s *MemberChatService) chatContext(account user.User, roomType, gameID stri
 	}
 	if !game.Enabled {
 		return "", "", "", apperrors.NewBusinessError("GAME_DISABLED", "该彩种暂未开放")
+	}
+	roomGameEnabled, roomGameErr := WorkspaceGameEnabled(s.db, account.WorkspaceID, game.ID)
+	if roomGameErr != nil {
+		return "", "", "", roomGameErr
+	}
+	if !roomGameEnabled {
+		return "", "", "", apperrors.NewBusinessError("LOTTERY_ROOM_CLOSED", "该彩票室已关闭")
 	}
 	return roomScope, roomScope, game.ID, nil
 }

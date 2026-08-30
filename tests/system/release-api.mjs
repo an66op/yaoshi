@@ -120,6 +120,36 @@ const managementHeaders = { ...jsonHeaders, cookie: managementCookie }
 await json('/api/session', { headers: { cookie: managementCookie } })
 await json('/api/admin/dashboard', { headers: { cookie: managementCookie } })
 
+const platformGamesResponse = await json('/api/admin/games', { headers: { cookie: managementCookie } })
+const platformGames = platformGamesResponse.body.data
+assert(Array.isArray(platformGames) && platformGames.length === 30, 'fresh platform did not expose the complete 30-game catalogue')
+assert(platformGames.every(game => typeof game.lobby_category === 'string' && game.lobby_category.trim()), 'fresh platform catalogue contains an unclassified game')
+const platformGamesByID = new Map(platformGames.map(game => [game.id, game]))
+assert(platformGamesByID.size === platformGames.length, 'fresh platform catalogue contains duplicate game ids')
+const officialGames = platformGames.filter(game => game.source_kind === 'official')
+assert(officialGames.length === 8 && officialGames.every(game => game.enabled === false), 'fresh official catalogue must contain 8 games, all closed by default')
+const fixtureGameID = 'pc-canada'
+assert(platformGamesByID.get(fixtureGameID)?.enabled === true, 'PC Canada fixture is not enabled on the platform')
+assert(platformGamesByID.get(fixtureGameID)?.source_kind === 'platform', 'robot fixture must use a platform game without external draw dependencies')
+
+async function assertRoomGames(ownerID, openGameIDs = []) {
+  const result = await json(`/api/admin/agents/${ownerID}/games`, { headers: { cookie: managementCookie } })
+  const games = result.body.data
+  assert(Array.isArray(games) && games.length === platformGames.length, `agent ${ownerID} did not inherit the complete platform catalogue`)
+  assert(new Set(games.map(game => game.id)).size === games.length, `agent ${ownerID} catalogue contains duplicate game ids`)
+  const opened = new Set(openGameIDs)
+  for (const game of games) {
+    const platform = platformGamesByID.get(game.id)
+    assert(platform, `agent ${ownerID} returned an unknown platform game ${game.id}`)
+    assert(game.lobby_category === platform.lobby_category && game.lobby_sort_order === platform.lobby_sort_order,
+      `agent ${ownerID} did not inherit platform category/order for ${game.id}`)
+    assert(game.platform_enabled === platform.enabled, `agent ${ownerID} misreported the platform switch for ${game.id}`)
+    assert(game.room_enabled === opened.has(game.id), `agent ${ownerID} has an unexpected room switch for ${game.id}`)
+    assert(game.enabled === (platform.enabled && opened.has(game.id)), `agent ${ownerID} misreported effective availability for ${game.id}`)
+  }
+  return games
+}
+
 const agent = await json('/api/admin/agents', {
   method: 'POST', headers: managementHeaders,
   body: JSON.stringify({
@@ -141,8 +171,14 @@ const secondAgent = await json('/api/admin/agents', {
     remark: 'fresh DB robot cap fixture', status: 1,
   }),
 }, [201])
+const secondAgentID = Number(secondAgent.body.data?.id)
 const secondWorkspaceID = Number(secondAgent.body.data?.workspace_id)
+assert(Number.isInteger(secondAgentID) && secondAgentID > 0, 'second agent fixture did not return an id')
 assert(Number.isInteger(secondWorkspaceID) && secondWorkspaceID > 0, 'second agent fixture did not return a workspace id')
+
+// New rooms inherit the platform catalogue, not permission to offer its games.
+await assertRoomGames(agentID)
+await assertRoomGames(secondAgentID)
 
 const enableRobotSetting = workspaceID => raw(`/api/admin/robot-settings?workspace_id=${workspaceID}`, {
   method: 'PATCH', headers: managementHeaders,
@@ -166,6 +202,14 @@ await json(`/api/admin/robot-settings?workspace_id=${enabledWorkspaceID}`, {
 // Exercise the production robot gate against the fresh PostgreSQL database:
 // provisioned profile -> persisted bet -> immutable draw -> settlement.  This
 // catches integration regressions that dry-run SQL/unit tests cannot see.
+// Explicitly opt in to one local platform game; leave the other room closed.
+const openedFixtureGame = await json(`/api/admin/agents/${agentID}/games/${fixtureGameID}/status`, {
+  method: 'PATCH', headers: managementHeaders, body: JSON.stringify({ enabled: true }),
+})
+assert(openedFixtureGame.body.data?.game_id === fixtureGameID && openedFixtureGame.body.data?.enabled === true, 'agent room did not explicitly enable the PC Canada fixture')
+await assertRoomGames(agentID, [fixtureGameID])
+await assertRoomGames(secondAgentID)
+
 await json(`/api/admin/robot-settings?workspace_id=${agentWorkspaceID}`, {
   method: 'PATCH', headers: managementHeaders,
   body: JSON.stringify({ enabled: true, interval_secs: 3600, bets_per_cycle: 1, daily_bet_limit: 1, max_pending_bets: 1 }),
@@ -184,6 +228,7 @@ for (let attempt = 0; attempt < 20 && !robotBet; attempt++) {
   if (!robotBet) await new Promise(resolve => setTimeout(resolve, 100))
 }
 assert(robotBet, 'controlled production robot run did not persist a bet')
+assert(robotBet.game_id === fixtureGameID, 'robot placed a bet outside the explicitly enabled room game')
 assert(robotBet.fly_amount === 0, 'robot bet unexpectedly carried a fly amount')
 assert(robotBet.status === 'pending', 'robot bet was not pending before the test draw')
 
@@ -258,5 +303,12 @@ assert(/HttpOnly/i.test(joinedCookie) && /Secure/i.test(joinedCookie) && /SameSi
 assert(joined.response.headers.get('cache-control') === 'no-store', 'room activation response with a rotated cookie may be cached')
 memberCookie = joinedCookie.split(';', 1)[0]
 await json('/api/member/me', { headers: { cookie: memberCookie } })
+const memberGamesResponse = await json('/api/member/games', { headers: { cookie: memberCookie } })
+const memberGames = memberGamesResponse.body.data
+assert(Array.isArray(memberGames) && memberGames.length === 1 && memberGames[0].id === fixtureGameID,
+  'member catalogue did not contain only the explicitly opened PC Canada game')
+assert(memberGames[0].enabled === true && memberGames[0].lobby_category === platformGamesByID.get(fixtureGameID).lobby_category,
+  'member catalogue lost the effective status or platform category')
+await assertRoomGames(secondAgentID)
 
 process.stdout.write('Fresh release API checks and disposable E2E fixtures are ready.\n')

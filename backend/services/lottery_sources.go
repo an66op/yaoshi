@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -13,8 +14,11 @@ import (
 	"sync"
 	"time"
 
+	"backend/data/models/bet"
 	"backend/data/models/lottery"
+	"backend/ws"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -49,9 +53,11 @@ type SourceSyncResult struct {
 }
 
 type sourceDraw struct {
-	Issue   string
-	Numbers []int
-	DrawAt  time.Time
+	Issue      string
+	Numbers    []int
+	DrawAt     time.Time
+	NextIssue  string
+	NextDrawAt time.Time
 }
 
 // SyncOfficialSources imports public draw results from the official lottery
@@ -135,6 +141,13 @@ func (s *LotteryService) syncTaiwanLatest(ctx context.Context) []SourceSyncResul
 }
 
 func (s *LotteryService) syncOfficialGame(ctx context.Context, gameID string, fetch func(context.Context) ([]sourceDraw, error)) SourceSyncResult {
+	return s.syncOfficialGameWithPublisher(ctx, gameID, fetch, publishOfficialGameChanged)
+}
+
+// The publisher is passed per call, rather than through a mutable global hook.
+// All observers (including draw notifications emitted by settlement) must see
+// a committed next-period schedule and lifecycle when they refresh the game.
+func (s *LotteryService) syncOfficialGameWithPublisher(ctx context.Context, gameID string, fetch func(context.Context) ([]sourceDraw, error), publish func(lottery.Game)) SourceSyncResult {
 	var game lottery.Game
 	if err := s.db.First(&game, "id = ?", gameID).Error; err != nil {
 		return SourceSyncResult{GameID: gameID, Status: "error", Error: err.Error()}
@@ -144,64 +157,209 @@ func (s *LotteryService) syncOfficialGame(ctx context.Context, gameID string, fe
 	if !game.Enabled {
 		return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "ok"}
 	}
+	previous := game
 	// Keep the previous error visible while retrying.  A failed source must not
 	// reopen betting until a complete successful response clears the error.
-	_ = s.db.Model(&game).Update("sync_status", "syncing").Error
+	if err := s.db.Model(&game).Update("sync_status", "syncing").Error; err != nil {
+		return s.recordSyncErrorWithPublisher(gameID, err, publish)
+	}
 	draws, err := fetch(ctx)
 	if err != nil {
-		return s.recordSyncError(gameID, err)
+		return s.recordSyncErrorWithPublisher(gameID, err, publish)
 	}
 	// Validate the complete upstream batch before writing any row. Racing,
 	// flying and Lucky 10 results are permutations of 1..10; accepting a
 	// partial, duplicated or out-of-range result would make the immutable draw
 	// impossible to settle correctly. Doing this before the insert loop also
 	// prevents a response whose later row is malformed from being half-imported.
-	if err := validateOfficialDraws(game, draws); err != nil {
-		return s.recordSyncError(gameID, err)
+	if err := validateSourceDrawBatch(game, draws); err != nil {
+		return s.recordSyncErrorWithPublisher(gameID, err, publish)
+	}
+	schedule, err := scheduleFromDraws(game, draws)
+	if err != nil {
+		return s.recordSyncErrorWithPublisher(gameID, err, publish)
 	}
 	imported := 0
-	latestDraw := sourceDraw{}
-	for _, item := range draws {
-		if item.Issue == "" || len(item.Numbers) == 0 {
-			continue
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// A room operator may disable a game while its HTTP request is in flight.
+		// Re-read under the same lock used by this schedule write before opening
+		// anything, and publish the resulting state only after commit.
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&game, "id = ?", gameID).Error; err != nil {
+			return err
 		}
-		draw := lottery.Draw{GameID: gameID, Issue: item.Issue, Numbers: joinNumbers(item.Numbers), DrawAt: item.DrawAt.UTC()}
-		result := s.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "game_id"}, {Name: "issue"}}, DoNothing: true}).Create(&draw)
-		if result.Error != nil {
-			return s.recordSyncError(gameID, result.Error)
+		if !game.Enabled {
+			return nil
 		}
-		if result.RowsAffected > 0 {
-			imported += int(result.RowsAffected)
-			NewBetAdminService(s.db).SettleImportedDraw(gameID, item.Issue)
+		var importErr error
+		imported, importErr = insertOfficialDraws(tx, gameID, draws)
+		if importErr != nil {
+			return importErr
 		}
-		if latestDraw.DrawAt.IsZero() || item.DrawAt.After(latestDraw.DrawAt) {
-			latestDraw = item
+		if officialScheduleRegresses(game, schedule) {
+			// A cached latest response is still useful for missing historical
+			// draws, but cannot rewind a verified newer issue or declare a failed
+			// live feed healthy. Undo only our own transient syncing marker.
+			if game.SyncStatus == "syncing" && game.LastSyncError == previous.LastSyncError {
+				if err := tx.Model(&game).Update("sync_status", previous.SyncStatus).Error; err != nil {
+					return err
+				}
+			}
+			return nil
 		}
+		now := time.Now().UTC()
+		// The issue and boundary are one schedule, never independent guesses.
+		// A stale response must not move the same expired issue into the future.
+		updates := map[string]any{
+			"sync_status": "ok", "last_sync_at": now, "last_sync_error": "",
+			"next_draw_at": schedule.DrawAt, "next_issue": schedule.Issue,
+			"draw_interval": schedule.Interval, "timing_source": schedule.Source,
+		}
+		if err := tx.Model(&game).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&game, "id = ?", gameID).Error; err != nil {
+			return err
+		}
+		_, err := NewBetAdminService(tx).EnsureCurrentIssue(&game)
+		return err
+	})
+	if err != nil {
+		return s.recordSyncErrorWithPublisher(gameID, err, publish)
 	}
-	now := time.Now().UTC()
-	updates := map[string]any{"sync_status": "ok", "last_sync_at": now, "last_sync_error": ""}
-	// A source can return a perfectly valid draw history while the old next
-	// draw timestamp has already passed.  Advancing it from the freshest draw
-	// prevents the member UI from being stuck at 00:00 / 封盘中 after a restart.
-	if !latestDraw.DrawAt.IsZero() && game.DrawInterval > 0 {
-		next := latestDraw.DrawAt.UTC().Add(time.Duration(game.DrawInterval) * time.Second)
-		if !next.After(now) {
-			missed := now.Sub(latestDraw.DrawAt.UTC()) / (time.Duration(game.DrawInterval) * time.Second)
-			next = latestDraw.DrawAt.UTC().Add((missed + 1) * time.Duration(game.DrawInterval) * time.Second)
-		}
-		updates["next_draw_at"] = next
+	if officialGameCatalogChanged(previous, game) {
+		publish(game)
 	}
-	if err := s.db.Model(&game).Updates(updates).Error; err != nil {
-		return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "error", Error: err.Error()}
-	}
-	if err := s.db.First(&game, "id = ?", gameID).Error; err == nil {
-		_, _ = NewBetAdminService(s.db).EnsureCurrentIssue(&game)
+	if game.Enabled {
+		// Retrying an existing draw is deliberate: a process can stop after the
+		// draw/schedule commit but before settlement. SettleImportedDraw already
+		// makes completely settled periods a no-op, including notifications.
+		settleImportedDrawBatch(s.db, gameID, draws)
 	}
 	latestIssue := ""
 	if len(draws) > 0 {
 		latestIssue = draws[0].Issue
 	}
 	return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "ok", Imported: imported, LatestIssue: latestIssue}
+}
+
+func publishOfficialGameChanged(game lottery.Game) {
+	ws.NotifyGameCatalogChanged(0, "*", "", game.ID, game.Enabled)
+}
+
+func officialGameCatalogChanged(previous, current lottery.Game) bool {
+	return previous.Enabled != current.Enabled || previous.NextIssue != current.NextIssue ||
+		!previous.NextDrawAt.Equal(current.NextDrawAt) || previous.DrawInterval != current.DrawInterval ||
+		previous.TimingSource != current.TimingSource ||
+		sourceHealthyForGame(&previous) != sourceHealthyForGame(&current) ||
+		previous.LastSyncError != current.LastSyncError
+}
+
+func officialScheduleRegresses(game lottery.Game, candidate sourceSchedule) bool {
+	if game.NextIssue == "" || game.NextIssue == candidate.Issue || game.NextDrawAt.IsZero() {
+		return false
+	}
+	// An arbitrary configured seed is not a verified boundary: the first real
+	// upstream/history observation must still be allowed to correct that seed.
+	if game.TimingSource != "upstream" && game.TimingSource != "observed" {
+		return false
+	}
+	return candidate.DrawAt.Before(game.NextDrawAt)
+}
+
+func validateSourceDrawBatch(game lottery.Game, draws []sourceDraw) error {
+	if err := validateOfficialDraws(game, draws); err != nil {
+		return err
+	}
+	for _, draw := range draws {
+		if strings.TrimSpace(draw.Issue) == "" || len(draw.Numbers) == 0 {
+			return fmt.Errorf("缺少有效开奖期号或号码")
+		}
+		if draw.DrawAt.IsZero() {
+			return fmt.Errorf("第 %s 期缺少有效开奖时间", sourceIssueLabel(draw.Issue))
+		}
+	}
+	return nil
+}
+
+func insertOfficialDraws(db *gorm.DB, gameID string, draws []sourceDraw) (int, error) {
+	imported := 0
+	for _, item := range draws {
+		draw := lottery.Draw{GameID: gameID, Issue: item.Issue, Numbers: joinNumbers(item.Numbers), DrawAt: item.DrawAt.UTC()}
+		result := db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "game_id"}, {Name: "issue"}}, DoNothing: true}).Create(&draw)
+		if result.Error != nil {
+			return 0, result.Error
+		}
+		imported += int(result.RowsAffected)
+	}
+	return imported, nil
+}
+
+func settleImportedDrawBatch(db *gorm.DB, gameID string, draws []sourceDraw) {
+	issues := make([]string, 0, len(draws))
+	for _, draw := range draws {
+		issues = append(issues, draw.Issue)
+	}
+	// A two-day backfill can contain thousands of already settled rows. Filter
+	// these in bulk instead of issuing two extra queries for every historic row.
+	var settledIssues, pendingIssues []string
+	if err := db.Model(&lottery.Issue{}).Where("game_id = ? AND issue IN ? AND status = ?", gameID, issues, lottery.IssueStatusSettled).Pluck("issue", &settledIssues).Error; err != nil {
+		log.Printf("开奖结算候选读取失败: game=%s error=%v", gameID, err)
+		return
+	}
+	if err := db.Model(&bet.Bet{}).Distinct("issue").Where("game_id = ? AND issue IN ? AND status = ?", gameID, issues, "pending").Pluck("issue", &pendingIssues).Error; err != nil {
+		log.Printf("待结算期号读取失败: game=%s error=%v", gameID, err)
+		return
+	}
+	settled := make(map[string]bool, len(settledIssues))
+	for _, issue := range settledIssues {
+		settled[issue] = true
+	}
+	for _, issue := range pendingIssues {
+		delete(settled, issue)
+	}
+	service := NewBetAdminService(db)
+	for _, draw := range draws {
+		if !settled[draw.Issue] {
+			service.SettleImportedDraw(gameID, draw.Issue)
+		}
+	}
+}
+
+// History is a backfill, not another live schedule. It must never rewind the
+// next issue or clear a more recent source error while recovering missed draws.
+func (s *LotteryService) importOfficialHistory(ctx context.Context, gameID string, draws []sourceDraw) (int, error) {
+	if len(draws) == 0 {
+		return 0, nil
+	}
+	var game lottery.Game
+	if err := s.db.First(&game, "id = ?", gameID).Error; err != nil {
+		return 0, err
+	}
+	if !game.Enabled {
+		return 0, nil
+	}
+	if err := validateSourceDrawBatch(game, draws); err != nil {
+		return 0, err
+	}
+	imported := 0
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&game, "id = ?", gameID).Error; err != nil {
+			return err
+		}
+		if !game.Enabled {
+			return nil
+		}
+		var err error
+		imported, err = insertOfficialDraws(tx, gameID, draws)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	if game.Enabled {
+		settleImportedDrawBatch(s.db, gameID, draws)
+	}
+	return imported, nil
 }
 
 func validateOfficialDraws(game lottery.Game, draws []sourceDraw) error {
@@ -257,12 +415,19 @@ func (s *LotteryService) enabledOfficialGames(gameIDs []string) (map[string]bool
 }
 
 func (s *LotteryService) recordSyncError(gameID string, syncErr error) SourceSyncResult {
+	return s.recordSyncErrorWithPublisher(gameID, syncErr, publishOfficialGameChanged)
+}
+
+func (s *LotteryService) recordSyncErrorWithPublisher(gameID string, syncErr error, publish func(lottery.Game)) SourceSyncResult {
 	message := limitDBText(syncErr.Error(), 480)
 	var game lottery.Game
 	_ = s.db.First(&game, "id = ?", gameID).Error
-	_ = s.db.Model(&lottery.Game{}).Where("id = ?", gameID).Updates(map[string]any{"sync_status": "error", "last_sync_error": message}).Error
-	if err := s.db.First(&game, "id = ?", gameID).Error; err == nil {
+	previous := game
+	if err := s.db.Model(&lottery.Game{}).Where("id = ?", gameID).Updates(map[string]any{"sync_status": "error", "last_sync_error": message}).Error; err == nil && s.db.First(&game, "id = ?", gameID).Error == nil {
 		_, _ = NewBetAdminService(s.db).EnsureCurrentIssue(&game)
+		if officialGameCatalogChanged(previous, game) {
+			publish(game)
+		}
 	}
 	return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "error", Error: message}
 }

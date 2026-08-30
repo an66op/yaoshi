@@ -32,37 +32,54 @@ type PlanRecommendationInput struct {
 }
 
 type PlanRecommendationView struct {
-	ID            uint64    `json:"id"`
-	WorkspaceID   uint64    `json:"workspace_id"`
-	GameID        string    `json:"game_id"`
-	Issue         string    `json:"issue"`
-	MasterName    string    `json:"master_name"`
-	MasterTitle   string    `json:"master_title"`
-	MasterColor   string    `json:"master_color"`
-	Numbers       []int     `json:"numbers"`
-	Size          string    `json:"size"`
-	Parity        string    `json:"parity"`
-	Result        string    `json:"result"`
-	Note          string    `json:"note"`
-	Enabled       bool      `json:"enabled"`
-	SortOrder     int       `json:"sort_order"`
-	MasterHitRate *float64  `json:"master_hit_rate"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID              uint64    `json:"id"`
+	WorkspaceID     uint64    `json:"workspace_id"`
+	GameID          string    `json:"game_id"`
+	Issue           string    `json:"issue"`
+	MasterName      string    `json:"master_name"`
+	MasterTitle     string    `json:"master_title"`
+	MasterColor     string    `json:"master_color"`
+	Numbers         []int     `json:"numbers"`
+	Size            string    `json:"size"`
+	Parity          string    `json:"parity"`
+	Result          string    `json:"result"`
+	Source          string    `json:"source"`
+	Note            string    `json:"note"`
+	Enabled         bool      `json:"enabled"`
+	SortOrder       int       `json:"sort_order"`
+	MasterHitRate   *float64  `json:"master_hit_rate"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	Position        int       `json:"position,omitempty"`
+	PlanKey         string    `json:"plan_key,omitempty"`
+	Kind            string    `json:"kind,omitempty"`
+	DragonTiger     string    `json:"dragon_tiger,omitempty"`
+	CycleID         uint64    `json:"cycle_id,omitempty"`
+	CyclePeriod     int       `json:"cycle_period,omitempty"`
+	CyclePeriods    int       `json:"cycle_periods,omitempty"`
+	CycleStartIssue string    `json:"cycle_start_issue,omitempty"`
+	CycleStatus     string    `json:"cycle_status,omitempty"`
 }
 
 type PlanGameSummary struct {
 	GameID       string    `json:"game_id"`
 	CurrentIssue string    `json:"current_issue"`
+	LatestIssue  string    `json:"latest_issue"`
+	HistoryOnly  bool      `json:"history_only"`
 	MasterCount  int       `json:"master_count"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type PlanDetail struct {
-	GameID          string                   `json:"game_id"`
-	CurrentIssue    string                   `json:"current_issue"`
-	Recommendations []PlanRecommendationView `json:"recommendations"`
-	History         []PlanRecommendationView `json:"history"`
+	GameID                string                   `json:"game_id"`
+	CurrentIssue          string                   `json:"current_issue"`
+	Recommendations       []PlanRecommendationView `json:"recommendations"`
+	History               []PlanRecommendationView `json:"history"`
+	LatestRecommendations []PlanRecommendationView `json:"latest_recommendations"`
+	GenerationMode        string                   `json:"generation_mode"`
+	AutomationEnabled     bool                     `json:"automation_enabled"`
+	HistoryLimit          int                      `json:"history_limit"`
+	RefreshSeconds        int                      `json:"refresh_seconds"`
 }
 
 type PlanContentService struct{ db *gorm.DB }
@@ -75,15 +92,15 @@ type defaultPlanTemplate struct {
 }
 
 var debugPlanTemplates = []defaultPlanTemplate{
-	{GameID: "speed-racing", MasterName: "青云老师", MasterTitle: "综合趋势", MasterColor: "#2aa9b3", Numbers: "1,5,9", Size: "大", Parity: "单", SortOrder: 10},
-	{GameID: "speed-racing", MasterName: "北斗数据师", MasterTitle: "冷热分析", MasterColor: "#6e70df", Numbers: "2,6,10", Size: "小", Parity: "双", SortOrder: 20},
-	{GameID: "speed-racing", MasterName: "锦鲤计划师", MasterTitle: "节奏追踪", MasterColor: "#e58b45", Numbers: "3,4,8", Size: "大", Parity: "双", SortOrder: 30},
-	{GameID: "canada-28", MasterName: "青云老师", MasterTitle: "综合趋势", MasterColor: "#2aa9b3", Numbers: "3,14,22", Size: "大", Parity: "单", SortOrder: 10},
-	{GameID: "canada-28", MasterName: "北斗数据师", MasterTitle: "冷热分析", MasterColor: "#6e70df", Numbers: "6,11,19", Size: "小", Parity: "双", SortOrder: 20},
-	{GameID: "canada-28", MasterName: "锦鲤计划师", MasterTitle: "节奏追踪", MasterColor: "#e58b45", Numbers: "8,17,25", Size: "大", Parity: "双", SortOrder: 30},
-	{GameID: "au-lucky-10", MasterName: "青云老师", MasterTitle: "综合趋势", MasterColor: "#2aa9b3", Numbers: "1,4,8", Size: "大", Parity: "单", SortOrder: 10},
-	{GameID: "au-lucky-10", MasterName: "北斗数据师", MasterTitle: "冷热分析", MasterColor: "#6e70df", Numbers: "2,5,9", Size: "小", Parity: "双", SortOrder: 20},
-	{GameID: "au-lucky-10", MasterName: "锦鲤计划师", MasterTitle: "节奏追踪", MasterColor: "#e58b45", Numbers: "3,6,10", Size: "大", Parity: "双", SortOrder: 30},
+	{GameID: "speed-racing", MasterName: "1号专家", MasterTitle: "系统自动推荐", MasterColor: "#2aa9b3", Numbers: "1,3,5,7,9", SortOrder: 10},
+	{GameID: "speed-racing", MasterName: "2号专家", MasterTitle: "系统自动推荐", MasterColor: "#6e70df", Numbers: "2,4,6,8,10", SortOrder: 20},
+	{GameID: "speed-racing", MasterName: "3号专家", MasterTitle: "系统自动推荐", MasterColor: "#e58b45", Numbers: "1,2,4,7,10", SortOrder: 30},
+	{GameID: "canada-28", MasterName: "1号专家", MasterTitle: "系统自动推荐", MasterColor: "#2aa9b3", Numbers: "3,14,22", Size: "大", Parity: "单", SortOrder: 10},
+	{GameID: "canada-28", MasterName: "2号专家", MasterTitle: "系统自动推荐", MasterColor: "#6e70df", Numbers: "6,11,19", Size: "小", Parity: "双", SortOrder: 20},
+	{GameID: "canada-28", MasterName: "3号专家", MasterTitle: "系统自动推荐", MasterColor: "#e58b45", Numbers: "8,17,25", Size: "大", Parity: "双", SortOrder: 30},
+	{GameID: "au-lucky-10", MasterName: "1号专家", MasterTitle: "系统自动推荐", MasterColor: "#2aa9b3", Numbers: "1,4,8", Size: "大", Parity: "单", SortOrder: 10},
+	{GameID: "au-lucky-10", MasterName: "2号专家", MasterTitle: "系统自动推荐", MasterColor: "#6e70df", Numbers: "2,5,9", Size: "小", Parity: "双", SortOrder: 20},
+	{GameID: "au-lucky-10", MasterName: "3号专家", MasterTitle: "系统自动推荐", MasterColor: "#e58b45", Numbers: "3,6,10", Size: "大", Parity: "双", SortOrder: 30},
 }
 
 // SeedDebugPlanRecommendations creates local editorial fixtures only for a
@@ -131,7 +148,7 @@ func SeedDebugPlanRecommendations(db *gorm.DB) (int64, error) {
 				WorkspaceID: workspace.ID, GameID: template.GameID, Issue: issue,
 				MasterName: template.MasterName, MasterTitle: template.MasterTitle, MasterColor: template.MasterColor,
 				Numbers: template.Numbers, Size: template.Size, Parity: template.Parity,
-				Result: plan.ResultPending, Enabled: true, SortOrder: template.SortOrder,
+				Result: plan.ResultPending, Source: "demo", Note: PlanDemoNotice, Enabled: true, SortOrder: template.SortOrder,
 			}
 			result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
 			if result.Error != nil {
@@ -174,6 +191,21 @@ func canonicalPlanNumbers(values []int) (string, error) {
 }
 
 func validatePlanInput(input PlanRecommendationInput) (plan.Recommendation, error) {
+	if strings.TrimSpace(input.GameID) == "speed-racing" {
+		if len(input.Numbers) != 5 {
+			return plan.Recommendation{}, apperrors.NewBusinessError("INVALID_REQUEST", "极速赛车推荐必须填写5个不重复的1至10号码")
+		}
+		seen := make(map[int]bool, 5)
+		for _, value := range input.Numbers {
+			if value < 1 || value > 10 || seen[value] {
+				return plan.Recommendation{}, apperrors.NewBusinessError("INVALID_REQUEST", "极速赛车推荐必须填写5个不重复的1至10号码")
+			}
+			seen[value] = true
+		}
+		if strings.TrimSpace(input.Size) != "" || strings.TrimSpace(input.Parity) != "" {
+			return plan.Recommendation{}, apperrors.NewBusinessError("INVALID_REQUEST", "极速赛车只支持号码推荐，不支持大小或单双")
+		}
+	}
 	numbers, err := canonicalPlanNumbers(input.Numbers)
 	if err != nil {
 		return plan.Recommendation{}, err
@@ -247,6 +279,9 @@ func planHitRates(rows []plan.Recommendation) map[string]*float64 {
 	type score struct{ hits, settled int }
 	scores := map[string]score{}
 	for _, row := range rows {
+		if row.Source == "demo" {
+			continue
+		}
 		key := row.GameID + "\x00" + row.MasterName
 		value := scores[key]
 		switch row.Result {
@@ -271,16 +306,38 @@ func planHitRates(rows []plan.Recommendation) map[string]*float64 {
 }
 
 func planView(row plan.Recommendation, rates map[string]*float64) PlanRecommendationView {
+	source := row.Source
+	if source == "" {
+		source = "manual"
+	}
+	rate := rates[row.GameID+"\x00"+row.MasterName]
+	if source == "demo" {
+		rate = nil
+		// Presentation-only aliases keep published numbers, issue identity and
+		// timestamps immutable while old and new automatic rows share a label.
+		for index, previous := range []string{"青云演示师", "北斗演示师", "锦鲤演示师"} {
+			if row.MasterName == previous || row.MasterName == planDemoMasters[index].Name {
+				row.MasterName = planDemoMasters[index].Name
+				row.MasterTitle = planDemoMasters[index].Title
+				break
+			}
+		}
+		row.MasterTitle = "系统自动推荐"
+		row.Note = PlanDemoNotice
+	}
+	if row.GameID == "speed-racing" {
+		row.Size, row.Parity = "", ""
+	}
 	return PlanRecommendationView{
 		ID: row.ID, WorkspaceID: row.WorkspaceID, GameID: row.GameID, Issue: row.Issue,
 		MasterName: row.MasterName, MasterTitle: row.MasterTitle, MasterColor: row.MasterColor,
 		Numbers: parsePlanNumbers(row.Numbers), Size: row.Size, Parity: row.Parity,
-		Result: row.Result, Note: row.Note, Enabled: row.Enabled, SortOrder: row.SortOrder,
-		MasterHitRate: rates[row.GameID+"\x00"+row.MasterName], CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		Result: row.Result, Source: source, Note: row.Note, Enabled: row.Enabled, SortOrder: row.SortOrder,
+		MasterHitRate: rate, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }
 
-// ListAdmin returns room-scoped rows, including disabled content.  The caller
+// ListAdmin returns the latest 300 room-scoped rows, including disabled content. The caller
 // must provide the authenticated room workspace; no browser-selected fallback
 // to a global workspace is allowed.
 func (s *PlanContentService) ListAdmin(workspaceID uint64) ([]PlanRecommendationView, error) {
@@ -288,7 +345,9 @@ func (s *PlanContentService) ListAdmin(workspaceID uint64) ([]PlanRecommendation
 		return nil, err
 	}
 	var rows []plan.Recommendation
-	if err := s.db.Where("workspace_id = ?", workspaceID).Order("game_id, issue DESC, sort_order, id").Find(&rows).Error; err != nil {
+	if err := s.db.Joins("LEFT JOIN lottery_issues AS published_issue ON published_issue.game_id = plan_recommendations.game_id AND published_issue.issue = plan_recommendations.issue").
+		Where("plan_recommendations.workspace_id = ?", workspaceID).
+		Order("published_issue.scheduled_draw_at DESC NULLS LAST, published_issue.id DESC NULLS LAST, plan_recommendations.sort_order, plan_recommendations.id DESC").Limit(300).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	rates := planHitRates(rows)
@@ -303,68 +362,126 @@ func (s *PlanContentService) Catalog(workspaceID uint64) ([]PlanGameSummary, err
 	if err := s.ensureScope(workspaceID, ""); err != nil {
 		return nil, err
 	}
-	var rows []plan.Recommendation
-	if err := s.db.
-		Joins("JOIN lottery_issues AS current_issue ON current_issue.game_id = plan_recommendations.game_id AND current_issue.issue = plan_recommendations.issue AND current_issue.status = ?", lottery.IssueStatusAccepting).
-		Where("plan_recommendations.workspace_id = ? AND plan_recommendations.enabled = ?", workspaceID, true).
-		Order("plan_recommendations.updated_at DESC, plan_recommendations.id DESC").
-		Find(&rows).Error; err != nil {
+	// Retain a shelf for every published game without loading its unbounded
+	// automatic history into the application on every catalog refresh.
+	var summaries []PlanGameSummary
+	if err := s.db.Raw(`WITH latest AS (
+		SELECT DISTINCT ON (recommendation.game_id) recommendation.game_id, recommendation.issue
+		FROM plan_recommendations AS recommendation
+		JOIN lottery_issues AS published_issue ON published_issue.game_id = recommendation.game_id AND published_issue.issue = recommendation.issue
+		WHERE recommendation.workspace_id = ? AND recommendation.enabled = true AND recommendation.deleted_at IS NULL
+		ORDER BY recommendation.game_id, published_issue.scheduled_draw_at DESC NULLS LAST, published_issue.id DESC, recommendation.id DESC
+	) SELECT latest.game_id, latest.issue AS latest_issue, COUNT(DISTINCT recommendation.master_name) AS master_count, MAX(recommendation.updated_at) AS updated_at
+	FROM latest JOIN plan_recommendations AS recommendation ON recommendation.game_id = latest.game_id AND recommendation.issue = latest.issue
+	WHERE recommendation.workspace_id = ? AND recommendation.enabled = true AND recommendation.deleted_at IS NULL
+	GROUP BY latest.game_id, latest.issue`, workspaceID, workspaceID).Scan(&summaries).Error; err != nil {
 		return nil, err
 	}
-	type group struct {
-		issue   string
-		updated time.Time
-		masters map[string]struct{}
-	}
-	groups := map[string]*group{}
-	for _, row := range rows {
-		item, exists := groups[row.GameID]
-		if !exists {
-			item = &group{issue: row.Issue, updated: row.UpdatedAt, masters: map[string]struct{}{}}
-			groups[row.GameID] = item
+	result := make([]PlanGameSummary, 0, len(summaries))
+	for _, item := range summaries {
+		current, err := s.currentOpenPlanIssue(workspaceID, item.GameID)
+		if err != nil {
+			return nil, err
 		}
-		if row.Issue == item.issue {
-			item.masters[row.MasterName] = struct{}{}
-		}
+		item.CurrentIssue, item.HistoryOnly = current, current == "" || current != item.LatestIssue
+		result = append(result, item)
 	}
-	result := make([]PlanGameSummary, 0, len(groups))
-	for gameID, item := range groups {
-		result = append(result, PlanGameSummary{GameID: gameID, CurrentIssue: item.issue, MasterCount: len(item.masters), UpdatedAt: item.updated})
+	result, err := s.appendStreamCatalog(workspaceID, result)
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].UpdatedAt.After(result[j].UpdatedAt) })
 	return result, nil
 }
 
-func (s *PlanContentService) Detail(workspaceID uint64, gameID string) (PlanDetail, error) {
+func (s *PlanContentService) Detail(workspaceID uint64, gameID string, historyLimits ...int) (PlanDetail, error) {
 	if err := s.ensureScope(workspaceID, gameID); err != nil {
 		return PlanDetail{}, err
 	}
-	result := PlanDetail{GameID: strings.TrimSpace(gameID), Recommendations: []PlanRecommendationView{}, History: []PlanRecommendationView{}}
-	var currentIssue lottery.Issue
-	issueError := s.db.Where("game_id = ? AND status = ?", result.GameID, lottery.IssueStatusAccepting).
-		Order("seal_at DESC, id DESC").First(&currentIssue).Error
-	if issueError != nil && issueError != gorm.ErrRecordNotFound {
-		return result, issueError
+	result := PlanDetail{GameID: strings.TrimSpace(gameID), Recommendations: []PlanRecommendationView{}, History: []PlanRecommendationView{}, LatestRecommendations: []PlanRecommendationView{}}
+	result.GenerationMode, result.HistoryLimit, result.RefreshSeconds = "on_visit", planHistoryLimit(historyLimits), 15
+	config, err := NewPlanAutomationService(s.db).Get(workspaceID)
+	if err != nil {
+		return result, err
 	}
-	if issueError == nil {
-		result.CurrentIssue = currentIssue.Issue
+	if planRequestedStreamAllowed(config, gameID, 1, singlePeriodPlanKey) {
+		result.AutomationEnabled, err = planStreamRoomAvailable(s.db, workspaceID, gameID)
+		if err != nil {
+			return result, err
+		}
+	}
+	result.CurrentIssue, err = s.currentOpenPlanIssue(workspaceID, result.GameID)
+	if err != nil {
+		return result, err
 	}
 	var rows []plan.Recommendation
-	if err := s.db.Where("workspace_id = ? AND game_id = ? AND enabled = ?", workspaceID, result.GameID, true).Order("updated_at DESC, sort_order, id").Limit(300).Find(&rows).Error; err != nil {
+	recentIssues := s.db.Model(&plan.Recommendation{}).Select("plan_recommendations.issue").
+		Joins("JOIN lottery_issues AS published_issue ON published_issue.game_id = plan_recommendations.game_id AND published_issue.issue = plan_recommendations.issue").
+		Where("plan_recommendations.workspace_id = ? AND plan_recommendations.game_id = ? AND plan_recommendations.enabled = ?", workspaceID, result.GameID, true).
+		Group("plan_recommendations.issue, published_issue.scheduled_draw_at, published_issue.id").
+		Order("published_issue.scheduled_draw_at DESC NULLS LAST, published_issue.id DESC").Limit(result.HistoryLimit)
+	if err := s.db.Joins("JOIN lottery_issues AS published_issue ON published_issue.game_id = plan_recommendations.game_id AND published_issue.issue = plan_recommendations.issue").
+		Where("plan_recommendations.workspace_id = ? AND plan_recommendations.game_id = ? AND plan_recommendations.enabled = ?", workspaceID, result.GameID, true).
+		Where("plan_recommendations.issue IN (?)", recentIssues).
+		Order("published_issue.scheduled_draw_at DESC NULLS LAST, published_issue.id DESC, plan_recommendations.sort_order, plan_recommendations.id").Limit(300).Find(&rows).Error; err != nil {
 		return result, err
 	}
 	if len(rows) == 0 {
 		return result, nil
 	}
 	rates := planHitRates(rows)
+	seenMasters := map[string]bool{}
 	for _, row := range rows {
 		view := planView(row, rates)
+		masterIdentity := view.Source + "\x00" + view.MasterName
+		if !seenMasters[masterIdentity] {
+			seenMasters[masterIdentity] = true
+			result.LatestRecommendations = append(result.LatestRecommendations, view)
+		}
 		if result.CurrentIssue != "" && row.Issue == result.CurrentIssue {
 			result.Recommendations = append(result.Recommendations, view)
 		}
 		result.History = append(result.History, view)
 	}
 	return result, nil
+}
+
+// A stale status flag is not a current recommendation. Reads never create a
+// lifecycle row or guess the next issue, and respect an earlier room cutoff.
+func (s *PlanContentService) currentOpenPlanIssue(workspaceID uint64, gameID string) (string, error) {
+	now := time.Now().UTC()
+	var issue lottery.Issue
+	err := s.db.Where("game_id = ? AND status = ? AND accept_at <= ? AND seal_at > ? AND draw_at IS NULL", gameID, lottery.IssueStatusAccepting, now, now).
+		Where("NOT EXISTS (SELECT 1 FROM lottery_draws AS published_draw WHERE published_draw.game_id = lottery_issues.game_id AND published_draw.issue = lottery_issues.issue)").
+		Order("seal_at DESC, id DESC").First(&issue).Error
+	if err == gorm.ErrRecordNotFound {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if issue.ScheduledDrawAt != nil {
+		var game lottery.Game
+		if err := s.db.First(&game, "id = ?", gameID).Error; err != nil {
+			return "", err
+		}
+		raw, _, err := readTimingSettings(s.db, workspaceID)
+		if err != nil {
+			return "", err
+		}
+		window := newIssueWindow(workspaceID, &game, issue.Issue, *issue.ScheduledDrawAt, configuredSealSeconds(raw, gameID))
+		var frozen lottery.IssueWindow
+		err = s.db.Where("workspace_id = ? AND game_id = ? AND issue = ?", workspaceID, gameID, issue.Issue).First(&frozen).Error
+		if err == nil {
+			window = shortenIssueWindow(frozen, window)
+		} else if err != gorm.ErrRecordNotFound {
+			return "", err
+		}
+		if windowStatus(&window, now) != lottery.IssueStatusAccepting {
+			return "", nil
+		}
+	}
+	return issue.Issue, nil
 }
 
 func (s *PlanContentService) Create(workspaceID uint64, input PlanRecommendationInput) (PlanRecommendationView, error) {
@@ -379,6 +496,7 @@ func (s *PlanContentService) Create(workspaceID uint64, input PlanRecommendation
 		return PlanRecommendationView{}, err
 	}
 	row.WorkspaceID = workspaceID
+	row.Source = "manual"
 	if err := s.db.Create(&row).Error; err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return PlanRecommendationView{}, apperrors.NewBusinessError("INVALID_REQUEST", "该期该大师的推荐已经存在")
@@ -405,6 +523,12 @@ func (s *PlanContentService) Update(workspaceID, id uint64, input PlanRecommenda
 			return PlanRecommendationView{}, apperrors.NewBusinessError("NOT_FOUND", "推荐不存在")
 		}
 		return PlanRecommendationView{}, err
+	}
+	if row.Source == "demo" {
+		if patch.Result != plan.ResultPending {
+			return PlanRecommendationView{}, apperrors.NewBusinessError("INVALID_REQUEST", "自动推荐不统计命中结果")
+		}
+		patch.Note = PlanDemoNotice
 	}
 	updates := map[string]any{
 		"game_id": patch.GameID, "issue": patch.Issue, "master_name": patch.MasterName,

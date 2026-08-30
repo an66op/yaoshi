@@ -37,35 +37,12 @@ import {
 import { PageHeader } from "../components/PageHeader";
 import { useFeedback } from "../components/feedback";
 import { useServerClock } from "../hooks/useServerClock";
-
-const formatTime = (value: string) =>
-  new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(value));
-const formatClock = (value: number) =>
-  value
-    ? new Intl.DateTimeFormat("zh-CN", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-      }).format(new Date(value))
-    : "正在校准服务器时间";
-const countdown = (value: string | undefined, now: number) => {
-  if (!value || !now) return "等待调度";
-  const seconds = Math.max(
-    0,
-    Math.ceil((new Date(value).getTime() - now) / 1000),
-  );
-  return `${seconds} 秒后检查`;
-};
+import {
+  describeGameSchedule,
+  describeIssueState,
+  formatBeijingDateTime,
+  formatFeedCountdown,
+} from "../utils/drawTiming";
 
 function drawSummary(numbers: number[], gameId: string) {
   const sum = numbers.reduce((total, item) => total + item, 0);
@@ -116,17 +93,28 @@ export function ResultsPage() {
   }, []);
   useEffect(() => {
     if (!gameId) return;
+    let cancelled = false;
     Promise.resolve()
-      .then(() => setLoading(true))
+      .then(() => {
+        if (cancelled) return;
+        setLoading(true);
+        setError("");
+      })
       .then(() => adminApi.draws(gameId))
-      .then(setDraws)
-      .catch((reason) =>
-        setError(reason instanceof Error ? reason.message : "读取失败"),
-      )
-      .finally(() => setLoading(false));
+      .then((next) => {
+        if (!cancelled) setDraws(next);
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "读取失败");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [gameId]);
   useEffect(() => {
     if (!gameId) return;
+    let cancelled = false;
     const refreshLive = () =>
       Promise.all([
         adminApi.draws(gameId),
@@ -134,6 +122,7 @@ export function ResultsPage() {
         adminApi.feedStatus(),
       ])
         .then(([nextDraws, nextGames, status]) => {
+          if (cancelled) return;
           setDraws(nextDraws);
           setGames(nextGames);
           setFeedStatus(status);
@@ -143,11 +132,14 @@ export function ResultsPage() {
       () => void refreshLive(),
       gameId === "official-tw-bingo" ? 5_000 : 10_000,
     );
-    return () => window.clearInterval(timer);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [gameId]);
   const filteredDraws = useMemo(
-    () => draws.filter((draw) => draw.issue.includes(query.trim())),
-    [draws, query],
+    () => draws.filter((draw) => draw.game_id === gameId && draw.issue.includes(query.trim())),
+    [draws, query, gameId],
   );
   const visibleDraws = filteredDraws.slice(
     page * rowsPerPage,
@@ -158,11 +150,11 @@ export function ResultsPage() {
       games.find((item) => item.id === gameId)?.name ?? "开奖结果查询";
     const rows = filteredDraws.map((draw) => [
       draw.issue,
-      formatTime(draw.draw_at),
+      formatBeijingDateTime(draw.draw_at),
       draw.numbers.join(" "),
       draw.numbers.reduce((sum, item) => sum + item, 0),
     ]);
-    const csv = createCsv([["期号", "开奖时间", "开奖号码", "总和"], ...rows]);
+    const csv = createCsv([["期号", "开奖时间（北京时间）", "开奖号码", "总和"], ...rows]);
     const link = document.createElement("a");
     link.href = URL.createObjectURL(
       new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }),
@@ -236,6 +228,8 @@ export function ResultsPage() {
   const currentJob = feedStatus?.jobs.find((job) =>
     job.game_ids.includes(gameId),
   );
+  const schedule = describeGameSchedule(currentGame);
+  const issueState = describeIssueState(currentGame, clockSynced ? now : 0);
   return (
     <Box p={{ xs: 2, lg: 2.5 }}>
       <PageHeader
@@ -257,7 +251,7 @@ export function ResultsPage() {
             <Button
               variant="outlined"
               startIcon={<DownloadRounded />}
-              disabled={!filteredDraws.length}
+              disabled={loading || !filteredDraws.length}
               onClick={exportCsv}
             >
               导出
@@ -280,7 +274,6 @@ export function ResultsPage() {
           mt: 2,
           p: { xs: 1.25, md: 1.5 },
           width: "100%",
-          maxWidth: 980,
           background: (theme) =>
             theme.palette.mode === "dark"
               ? "linear-gradient(135deg,rgba(20,108,143,.24),rgba(31,160,146,.12))"
@@ -313,7 +306,7 @@ export function ResultsPage() {
                 fontWeight={850}
                 letterSpacing={0.5}
               >
-                {formatClock(now)}
+                {clockSynced ? formatBeijingDateTime(now) : "正在校准服务器时间"}
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 北京时间 ·{" "}
@@ -361,12 +354,53 @@ export function ResultsPage() {
                 {currentJob?.mode === "draw-window"
                   ? "开奖窗口高频追踪"
                   : "常规巡检"}{" "}
-                · {countdown(currentJob?.next_run_at, now)}
+                · {formatFeedCountdown(currentJob?.next_run_at, clockSynced ? now : 0)}
+                {" · "}{schedule.interval}{" · "}{schedule.seal}
+                {schedule.source ? ` · ${schedule.source}` : ""}
                 {currentJob?.last_error ? ` · ${currentJob.last_error}` : ""}
               </Typography>
             </Box>
           </Stack>
         </Stack>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))", lg: "repeat(3, minmax(0, 1fr))" },
+            gap: 1.5,
+            mt: 1.5,
+            pt: 1.5,
+            borderTop: "1px solid",
+            borderColor: "divider",
+          }}
+        >
+          <Box minWidth={0}>
+            <Typography variant="caption" color="text.secondary">当前期号 · {currentGame?.name ?? "等待彩种"}</Typography>
+            <Stack direction="row" alignItems="center" gap={1} mt={0.5} flexWrap="wrap">
+              <Typography fontWeight={800} sx={{ fontVariantNumeric: "tabular-nums" }}>
+                {currentGame?.current_issue || "—"}
+              </Typography>
+              <Chip size="small" variant="outlined" color={currentGame?.issue_status === "error" ? "error" : issueState === "受理中" ? "success" : "default"} label={issueState} />
+            </Stack>
+          </Box>
+          <Box minWidth={0}>
+            <Typography variant="caption" color="text.secondary">受理截止 / 封盘时间</Typography>
+            <Typography mt={0.5} fontWeight={700} sx={{ fontVariantNumeric: "tabular-nums" }}>
+              {formatBeijingDateTime(currentGame?.seal_at)}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              受理开始 {formatBeijingDateTime(currentGame?.accept_at)}
+            </Typography>
+          </Box>
+          <Box minWidth={0}>
+            <Typography variant="caption" color="text.secondary">预计开奖时间 · 北京时间</Typography>
+            <Typography mt={0.5} fontWeight={700} sx={{ fontVariantNumeric: "tabular-nums" }}>
+              {formatBeijingDateTime(currentGame?.next_draw_at)}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {currentGame?.source_kind === "official" || currentGame?.source_kind === "external" ? "实际开奖以源站结果为准" : "实际开奖以服务器发布结果为准"}
+            </Typography>
+          </Box>
+        </Box>
       </Card>
       <Card sx={{ mt: 1.5, p: { xs: 1.25, sm: 2 } }}>
         <Stack
@@ -417,7 +451,7 @@ export function ResultsPage() {
             color="text.secondary"
             ml={{ md: "auto" }}
           >
-            当前期号：{currentGame?.issue ?? "—"}
+            最近开奖期号：{currentGame?.issue || "—"}
           </Typography>
         </Stack>
         {currentGame?.source_kind === "official" && (
@@ -436,7 +470,7 @@ export function ResultsPage() {
               </Typography>
               <Typography component="span" variant="body2">
                 {currentGame.last_sync_at
-                  ? `最近同步：${formatTime(currentGame.last_sync_at)}`
+                  ? `最近同步：${formatBeijingDateTime(currentGame.last_sync_at)}`
                   : "等待首次同步"}
               </Typography>
               {currentGame.last_sync_error && (
@@ -463,7 +497,7 @@ export function ResultsPage() {
                 <TableHead>
                   <TableRow>
                     <TableCell>期号</TableCell>
-                    <TableCell>开奖时间</TableCell>
+                    <TableCell>开奖时间（北京时间）</TableCell>
                     <TableCell>开奖号码</TableCell>
                     <TableCell align="center">总和</TableCell>
                     <TableCell align="center">大小</TableCell>
@@ -479,8 +513,8 @@ export function ResultsPage() {
                         <TableCell sx={{ fontSize: 11, fontWeight: 700 }}>
                           {draw.issue}
                         </TableCell>
-                        <TableCell sx={{ fontSize: 11 }}>
-                          {formatTime(draw.draw_at)}
+                        <TableCell sx={{ fontSize: 12, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                          {formatBeijingDateTime(draw.draw_at)}
                         </TableCell>
                         <TableCell>
                           <Stack direction="row" gap={0.6}>

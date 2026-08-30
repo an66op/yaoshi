@@ -26,6 +26,7 @@ const TenantsPage = lazy(() => import('./pages/TenantsPage').then(module => ({ d
 const TenantWorkspacePage = lazy(() => import('./pages/TenantWorkspacePage').then(module => ({ default: module.TenantWorkspacePage })))
 const ChatPage = lazy(() => import('./pages/ChatPage').then(module => ({ default: module.ChatPage })))
 const AnnouncementPage = lazy(() => import('./pages/AnnouncementPage').then(module => ({ default: module.AnnouncementPage })))
+const PlanManagementPage = lazy(() => import('./pages/PlanManagementPage').then(module => ({ default: module.PlanManagementPage })))
 const MenuManagementPage = lazy(() => import('./pages/MenuManagementPage').then(module => ({ default: module.MenuManagementPage })))
 const AgentWorkspacePage = lazy(() => import('./pages/AgentWorkspacePage').then(module => ({ default: module.AgentWorkspacePage })))
 const ManagementPage = lazy(() => import('./pages/ManagementPages').then(module => ({ default: module.ManagementPage })))
@@ -36,7 +37,7 @@ const WorkspaceGamesPage = lazy(() => import('./pages/WorkspaceGamesPage').then(
 const DataMaintenancePage = lazy(() => import('./pages/DataMaintenancePage').then(module => ({ default: module.DataMaintenancePage })))
 const FlyOrderPage = lazy(() => import('./pages/FlyOrderPage').then(module => ({ default: module.FlyOrderPage })))
 
-const routes = new Set(['/', '/users', '/members', '/robots', '/fly-orders', '/tenants', '/agents', '/applications', '/room-reviews', '/chat', '/lottery-chat', '/announcements', '/reports', '/wallet', '/activities', '/monitor', '/bets', '/results', '/limits', '/board-report', '/lottery-network', '/interface-test', '/entertainment', '/special-numbers', '/menu-management', '/audit', '/data-maintenance', '/system'])
+const routes = new Set(['/', '/users', '/members', '/robots', '/fly-orders', '/tenants', '/agents', '/applications', '/room-reviews', '/chat', '/lottery-chat', '/announcements', '/plans', '/reports', '/wallet', '/activities', '/monitor', '/bets', '/results', '/limits', '/board-report', '/lottery-network', '/interface-test', '/entertainment', '/special-numbers', '/menu-management', '/audit', '/data-maintenance', '/system'])
 const currentPath = () => routes.has(window.location.pathname) ? window.location.pathname : '/'
 const storedPaletteMode = (): PaletteMode => {
   try { return window.localStorage.getItem('yaotu-back-theme') === 'dark' ? 'dark' : 'light' } catch { return 'light' }
@@ -174,6 +175,7 @@ function App() {
     : path === '/lottery-chat' ? <ChatPage key="lottery" view="lottery" />
     : path === '/chat' ? <ChatPage key="support" />
     : path === '/announcements' ? <AnnouncementPage />
+    : path === '/plans' ? <PlanManagementPage />
     : path === '/applications' ? <ApplicationsPage />
     : path === '/room-reviews' ? <ApplicationsPage initialCategory="wallet" />
     : path === '/reports' ? <ReportsPage />

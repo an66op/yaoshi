@@ -28,22 +28,18 @@ func TestReleaseBootstrapExcludesLocalFixtures(t *testing.T) {
 	}
 }
 
-func TestDebugBootstrapOrdersPlansAfterIssuesAndWorkspaces(t *testing.T) {
+func TestDebugBootstrapNeverSeedsPlanRecommendations(t *testing.T) {
 	steps, err := bootstrapSteps("debug")
 	if err != nil {
 		t.Fatalf("bootstrapSteps() error = %v", err)
 	}
-	positions := map[bootstrapStep]int{}
-	for index, step := range steps {
-		positions[step] = index
-	}
-	for _, required := range []bootstrapStep{bootstrapLotteryDebug, bootstrapExperienceAccount, bootstrapWorkspaces, bootstrapBaseCatalogs, bootstrapDebugPlans} {
+	for _, required := range []bootstrapStep{bootstrapLotteryDebug, bootstrapExperienceAccount, bootstrapWorkspaces, bootstrapBaseCatalogs} {
 		if !containsBootstrapStep(steps, required) {
 			t.Fatalf("debug bootstrap is missing %q: %#v", required, steps)
 		}
 	}
-	if positions[bootstrapDebugPlans] <= positions[bootstrapLotteryDebug] || positions[bootstrapDebugPlans] <= positions[bootstrapWorkspaces] {
-		t.Fatalf("debug plans must run after issue-capable games and workspaces: %#v", steps)
+	if containsBootstrapStep(steps, bootstrapDebugPlans) {
+		t.Fatalf("debug bootstrap must not publish unrequested room recommendations: %#v", steps)
 	}
 }
 

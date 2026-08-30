@@ -72,10 +72,14 @@ func TestPrivilegedRouteBoundaries(t *testing.T) {
 		"GET /api/admin/robot-workspaces/:id/games",
 		"GET /api/member/plans",
 		"GET /api/member/plans/:gameID",
+		"POST /api/member/plans/:gameID/activate",
 		"GET /api/admin/plans",
 		"POST /api/admin/plans",
 		"PUT /api/admin/plans/:id",
 		"DELETE /api/admin/plans/:id",
+		"GET /api/admin/plan-automation",
+		"PUT /api/admin/plan-automation",
+		"POST /api/admin/plan-automation/preview",
 		"GET /api/tenant/plans",
 		"POST /api/tenant/plans",
 		"PUT /api/tenant/plans/:id",
@@ -108,6 +112,13 @@ func TestPrivilegedRouteBoundaries(t *testing.T) {
 		"GET /api/tenant/rooms/:agentID/games",
 		"GET /api/tenant/rooms/:agentID/plans",
 		"GET /api/agent/rooms/:workspaceID/plans",
+		"GET /api/tenant/plan-automation",
+		"PUT /api/tenant/plan-automation",
+		"POST /api/tenant/plan-automation/preview",
+		"GET /api/agent/plan-automation",
+		"PUT /api/agent/plan-automation",
+		"POST /api/agent/plan-automation/preview",
+		"PUT /api/member/plan-automation",
 	} {
 		if _, ok := registered[forbidden]; ok {
 			t.Errorf("forbidden cross-scope route is registered: %s", forbidden)

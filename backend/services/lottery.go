@@ -31,6 +31,9 @@ type GameSummary struct {
 	BettorCount    int64      `json:"bettor_count,omitempty"`
 	LatestNumbers  []int      `json:"latest_numbers,omitempty"`
 	NextDrawAt     time.Time  `json:"next_draw_at"`
+	DrawInterval   int        `json:"draw_interval"`
+	SealSeconds    int        `json:"seal_seconds"`
+	TimingSource   string     `json:"timing_source"`
 	Turnover       float64    `json:"turnover"`
 	Profit         float64    `json:"profit"`
 	SourceKind     string     `json:"source_kind"`
@@ -41,6 +44,7 @@ type GameSummary struct {
 	LastSyncError  string     `json:"last_sync_error"`
 	ScheduleMode   string     `json:"schedule_mode"`
 	IssueStatus    string     `json:"issue_status"`
+	AcceptAt       *time.Time `json:"accept_at,omitempty"`
 	SealAt         *time.Time `json:"seal_at,omitempty"`
 	SourceHealthy  bool       `json:"source_healthy"`
 }
@@ -68,8 +72,19 @@ func (s *LotteryService) SyncTargetGames() (*SyncTargetResult, error) {
 }
 
 func (s *LotteryService) ListGames() ([]GameSummary, error) {
+	return s.listGamesForWorkspace(0)
+}
+
+// The platform and each room share published draws, not their betting cutoff.
+// Read one room's settings once so every item in this response uses the same
+// configuration snapshot; existing per-issue windows may only become shorter.
+func (s *LotteryService) listGamesForWorkspace(workspaceID uint64) ([]GameSummary, error) {
 	var games []lottery.Game
 	if err := s.db.Order("sort_order asc").Find(&games).Error; err != nil {
+		return nil, err
+	}
+	rawSettings, actualWorkspaceID, err := readTimingSettings(s.db, workspaceID)
+	if err != nil {
 		return nil, err
 	}
 	result := make([]GameSummary, 0, len(games))
@@ -83,15 +98,19 @@ func (s *LotteryService) ListGames() ([]GameSummary, error) {
 		if lifecycleErr != nil {
 			return nil, lifecycleErr
 		}
-		sealAt := lifecycle.SealAt
-		result = append(result, GameSummary{
+		timingSource := game.TimingSource
+		if timingSource == "" {
+			timingSource = "configured"
+		}
+		summary := GameSummary{
 			ID: game.ID, Code: game.Code, Name: game.Name, Category: game.Category,
 			LobbyCategory: game.LobbyCategory, LobbySortOrder: game.LobbySortOrder,
 			Badge: game.Badge, BadgeColor: game.BadgeColor, Enabled: game.Enabled,
-			Issue: draw.Issue, LatestNumbers: parseNumbers(draw.Numbers), NextDrawAt: game.NextDrawAt,
-			SourceKind: game.SourceKind, SourceName: game.SourceName, SourceURL: game.SourceURL,
+			Issue: draw.Issue, LatestNumbers: parseNumbers(draw.Numbers),
+			DrawInterval: effectiveDrawInterval(&game), SealSeconds: configuredSealSeconds(rawSettings, game.ID),
+			TimingSource: timingSource,
+			SourceKind:   game.SourceKind, SourceName: game.SourceName, SourceURL: game.SourceURL,
 			SyncStatus: game.SyncStatus, LastSyncAt: game.LastSyncAt, LastSyncError: game.LastSyncError,
-			IssueStatus: lifecycle.Status, SealAt: &sealAt,
 			// Source health is deliberately derived only from this game's live
 			// synchronizer state.  Settlement/reconciliation health is a separate
 			// administrative signal and can contain old (including robot) debt; it
@@ -108,7 +127,16 @@ func (s *LotteryService) ListGames() ([]GameSummary, error) {
 				}
 				return "interval"
 			}(),
-		})
+		}
+		var window *lottery.IssueWindow
+		if lifecycle != nil && lifecycle.Issue != "" && lifecycle.ScheduledDrawAt != nil && !lifecycle.ScheduledDrawAt.IsZero() {
+			window, err = ensureIssueWindow(s.db, actualWorkspaceID, &game, lifecycle.Issue, *lifecycle.ScheduledDrawAt, rawSettings)
+			if err != nil {
+				return nil, err
+			}
+		}
+		applyGameTimingSummary(&summary, lifecycle, window, time.Now().UTC())
+		result = append(result, summary)
 	}
 	var categories []lottery.LobbyCategory
 	if err := s.db.Order("sort_order asc, id asc").Find(&categories).Error; err != nil {
@@ -136,6 +164,40 @@ func (s *LotteryService) ListGames() ([]GameSummary, error) {
 		return result[i].Name < result[j].Name
 	})
 	return result, nil
+}
+
+// Keep the issue number, countdown boundaries and status in the same snapshot.
+// A platform's earlier seal must not close a room with a later valid cutoff;
+// actual results and error/settlement states always remain authoritative.
+func applyGameTimingSummary(summary *GameSummary, lifecycle *lottery.Issue, window *lottery.IssueWindow, now time.Time) {
+	summary.CurrentIssue, summary.IssueStatus = "", lottery.IssueStatusAwaiting
+	summary.AcceptAt, summary.SealAt, summary.NextDrawAt = nil, nil, time.Time{}
+	if lifecycle == nil {
+		return
+	}
+	summary.CurrentIssue, summary.IssueStatus = lifecycle.Issue, lifecycle.Status
+	if window == nil || window.Issue != lifecycle.Issue || window.GameID != summary.ID ||
+		window.ScheduledDrawAt.IsZero() || window.SealAt.IsZero() || window.SealAt.After(window.ScheduledDrawAt) {
+		switch lifecycle.Status {
+		case lottery.IssueStatusPending, lottery.IssueStatusAccepting, lottery.IssueStatusSealed:
+			summary.IssueStatus = lottery.IssueStatusAwaiting
+		}
+		return
+	}
+	acceptAt, sealAt := window.AcceptAt, window.SealAt
+	summary.AcceptAt, summary.SealAt, summary.NextDrawAt = &acceptAt, &sealAt, window.ScheduledDrawAt
+	summary.DrawInterval = window.DrawInterval
+	summary.SealSeconds = int(window.ScheduledDrawAt.Sub(window.SealAt) / time.Second)
+	switch lifecycle.Status {
+	case lottery.IssueStatusError, lottery.IssueStatusSettling, lottery.IssueStatusSettled:
+		return
+	case lottery.IssueStatusPending, lottery.IssueStatusAccepting, lottery.IssueStatusSealed, lottery.IssueStatusAwaiting:
+		if lifecycle.DrawAt != nil {
+			summary.IssueStatus = lottery.IssueStatusSettling
+			return
+		}
+		summary.IssueStatus = windowStatus(window, now)
+	}
 }
 
 // sourceHealthyForGame reports only the live draw-source state for one game.
@@ -168,6 +230,9 @@ func sourceHealthyForGame(game *lottery.Game) bool {
 	}
 }
 
+// defaultLobbyPlacement is the initial shared shelf configuration, not the
+// source/provider classification. Only the explicitly listed games get a
+// default shelf; other catalog games remain unclassified until configured.
 func defaultLobbyPlacement(gameID string) (string, int) {
 	order := map[string]int{
 		"speed-racing": 1, "speed-fly": 2, "speed-ssc": 3, "sg-fly": 4, "sg-ssc": 5,
@@ -349,13 +414,13 @@ func (s *LotteryService) EnrichForLobby(games []GameSummary) ([]GameSummary, err
 	if len(games) == 0 {
 		return games, nil
 	}
-	betSvc := NewBetAdminService(s.db)
 	for i := range games {
-		issue, err := betSvc.CurrentIssue(games[i].ID)
-		if err != nil {
+		// ListGames already froze this issue together with its countdown. A
+		// second CurrentIssue query can cross a draw and mismatch that snapshot.
+		issue := games[i].CurrentIssue
+		if strings.TrimSpace(issue) == "" {
 			continue
 		}
-		games[i].CurrentIssue = issue
 		var count int64
 		if err := s.db.Model(&bet.Bet{}).Where(
 			"game_id = ? AND issue = ? AND status IN ?",
@@ -495,7 +560,9 @@ func SeedLotteryCatalog(db *gorm.DB, options LotterySeedOptions) error {
 	now := time.Now().UTC().Truncate(time.Minute)
 	return db.Transaction(func(tx *gorm.DB) error {
 		var existingCategories []lottery.LobbyCategory
-		if err := tx.Order("sort_order asc, id asc").Find(&existingCategories).Error; err != nil {
+		// A retired default shelf is still an operator decision. Include its
+		// tombstone in the inventory so restarting does not try to recreate it.
+		if err := tx.Unscoped().Order("sort_order asc, id asc").Find(&existingCategories).Error; err != nil {
 			return err
 		}
 		for _, category := range missingDefaultLobbyCategories(existingCategories) {
@@ -552,6 +619,17 @@ func SeedLotteryCatalog(db *gorm.DB, options LotterySeedOptions) error {
 }
 
 func officialGameSeedValues(game lottery.Game) map[string]any {
+	// This helper is insert-only. Existing rows are protected by ON CONFLICT
+	// DO NOTHING above, so operator assignments (including a deliberate blank)
+	// are never reset on restart. Games outside the default shelf list stay
+	// unclassified without changing their explicit disabled state.
+	if strings.TrimSpace(game.LobbyCategory) == "" {
+		category, sortOrder := defaultLobbyPlacement(game.ID)
+		game.LobbyCategory = category
+		if game.LobbySortOrder == 0 {
+			game.LobbySortOrder = sortOrder
+		}
+	}
 	return map[string]any{
 		"id": game.ID, "code": game.Code, "name": game.Name, "category": game.Category,
 		"lobby_category": game.LobbyCategory, "lobby_sort_order": game.LobbySortOrder,

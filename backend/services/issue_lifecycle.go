@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -16,36 +17,53 @@ func (s *BetAdminService) EnsureCurrentIssue(game *lottery.Game) (*lottery.Issue
 	if game == nil {
 		return nil, apperrors.NewBusinessError("GAME_NOT_FOUND", "游戏不存在")
 	}
-	issueNo, err := s.CurrentIssue(game.ID)
+	issueNo, err := s.currentIssueForGame(game)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC()
-	interval := time.Duration(maxInt(game.DrawInterval, 60)) * time.Second
-	sealAt := game.NextDrawAt.UTC().Add(-3 * time.Second)
-	if game.NextDrawAt.IsZero() {
-		sealAt = now.Add(interval - 3*time.Second)
-	}
-	acceptAt := sealAt.Add(-interval + 3*time.Second)
 	mode := "platform"
 	if game.SourceKind == "external" || game.SourceKind == "official" {
 		mode = "external"
 	}
 
-	row := lottery.Issue{
-		GameID: game.ID, Issue: issueNo, Status: lottery.IssueStatusPending,
-		SourceMode: mode, AcceptAt: acceptAt, SealAt: sealAt,
+	if issueNo == "" || game.NextDrawAt.IsZero() {
+		// An absent upstream schedule is not permission to invent an issue or
+		// start a new interval from the time this endpoint happens to be read.
+		return &lottery.Issue{GameID: game.ID, SourceMode: mode, Status: lottery.IssueStatusAwaiting}, nil
 	}
-	if err := s.db.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "game_id"}, {Name: "issue"}},
-		DoUpdates: clause.Assignments(map[string]any{
-			"source_mode": mode, "accept_at": acceptAt, "seal_at": sealAt,
-		}),
-	}).Create(&row).Error; err != nil {
-		return nil, apperrors.NewSystemError("ISSUE_SAVE_FAILED", "保存期号状态失败", err)
+	var row lottery.Issue
+	readErr := s.db.Where("game_id = ? AND issue = ?", game.ID, issueNo).First(&row).Error
+	if readErr != nil && readErr != gorm.ErrRecordNotFound {
+		return nil, apperrors.NewSystemError("ISSUE_READ_FAILED", "读取期号状态失败", readErr)
 	}
-	if err := s.db.Where("game_id = ? AND issue = ?", game.ID, issueNo).First(&row).Error; err != nil {
-		return nil, apperrors.NewSystemError("ISSUE_READ_FAILED", "读取期号状态失败", err)
+	drawAt := game.NextDrawAt.UTC()
+	if row.ScheduledDrawAt != nil && row.ScheduledDrawAt.Before(drawAt) {
+		drawAt = row.ScheduledDrawAt.UTC()
+	} else if readErr == nil && row.ScheduledDrawAt == nil &&
+		(row.Status == lottery.IssueStatusSealed || row.Status == lottery.IssueStatusAwaiting) && row.SealAt.Before(drawAt) {
+		// Upgrade safety: an old closed issue must stay closed. Its legacy seal
+		// is a conservative upper bound, never a reason to grant more time.
+		drawAt = row.SealAt.UTC()
+	}
+	rawSettings, platformID, err := readTimingSettings(s.db, 0)
+	if err != nil {
+		return nil, err
+	}
+	window, err := ensureIssueWindow(s.db, platformID, game, issueNo, drawAt, rawSettings)
+	if err != nil {
+		return nil, err
+	}
+	drawAt = window.ScheduledDrawAt
+	if readErr == gorm.ErrRecordNotFound {
+		row = lottery.Issue{GameID: game.ID, Issue: issueNo, Status: lottery.IssueStatusPending,
+			SourceMode: mode, AcceptAt: window.AcceptAt, SealAt: window.SealAt, ScheduledDrawAt: &drawAt}
+		if err := s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+			return nil, apperrors.NewSystemError("ISSUE_SAVE_FAILED", "保存期号状态失败", err)
+		}
+		if err := s.db.Where("game_id = ? AND issue = ?", game.ID, issueNo).First(&row).Error; err != nil {
+			return nil, err
+		}
 	}
 
 	status := row.Status
@@ -78,29 +96,45 @@ func (s *BetAdminService) EnsureCurrentIssue(game *lottery.Game) (*lottery.Issue
 	} else if mode == "external" && (game.SyncStatus == "error" || (game.SyncStatus == "syncing" && strings.TrimSpace(game.LastSyncError) != "")) {
 		status = lottery.IssueStatusError
 		lastError = strings.TrimSpace(game.LastSyncError)
-	} else if !now.Before(sealAt) {
-		status = lottery.IssueStatusAwaiting
-		lastError = ""
-	} else if now.Before(acceptAt) {
-		status = lottery.IssueStatusPending
-		lastError = ""
 	} else {
-		status = lottery.IssueStatusAccepting
+		status = windowStatus(window, now)
 		lastError = ""
 	}
 
-	updates := map[string]any{"status": status, "last_error": lastError}
+	updates := map[string]any{}
+	if row.Status != status || row.LastError != lastError {
+		updates["status"], updates["last_error"] = status, lastError
+	}
+	if row.ScheduledDrawAt == nil || !row.ScheduledDrawAt.Equal(drawAt) || !row.SealAt.Equal(window.SealAt) || !row.AcceptAt.Equal(window.AcceptAt) {
+		updates["scheduled_draw_at"] = drawAt
+		updates["seal_at"], updates["accept_at"] = window.SealAt, window.AcceptAt
+	}
 	if row.DrawAt != nil {
 		updates["draw_at"] = row.DrawAt
 	}
 	if row.SettledAt != nil {
 		updates["settled_at"] = row.SettledAt
 	}
-	if err := s.db.Model(&lottery.Issue{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
-		return nil, apperrors.NewSystemError("ISSUE_SAVE_FAILED", "更新期号状态失败", err)
+	if len(updates) > 0 {
+		// A catalogue reader must not overwrite a settlement/source-error state
+		// which changed after its snapshot. In that case return the winner's
+		// durable row instead of reopening an issue from stale local state.
+		updated := s.db.Model(&lottery.Issue{}).
+			Where("id = ? AND status = ? AND updated_at = ?", row.ID, row.Status, row.UpdatedAt).Updates(updates)
+		if updated.Error != nil {
+			return nil, apperrors.NewSystemError("ISSUE_SAVE_FAILED", "更新期号状态失败", updated.Error)
+		}
+		if updated.RowsAffected == 0 {
+			if err := s.db.First(&row, row.ID).Error; err != nil {
+				return nil, err
+			}
+			return &row, nil
+		}
 	}
 	row.Status = status
 	row.LastError = lastError
+	row.ScheduledDrawAt = &drawAt
+	row.AcceptAt, row.SealAt = window.AcceptAt, window.SealAt
 	return &row, nil
 }
 

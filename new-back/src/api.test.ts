@@ -99,4 +99,26 @@ describe('management API cookie credentials', () => {
 
     expect(String(fetchMock.mock.calls[0][0])).toContain('/api/admin/robot-workspaces/37/games')
   })
+
+  it('scopes plan automation reads and saves without exposing administrator generation', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ code: 200, data: {} }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { adminApi, tenantApi, agentApi } = await import('./api')
+    const payload = { workspace_id: 37, enabled: true, mode: 'demo' as const, game_ids: ['speed-racing', 'canada-28'], positions: [1, 2, 10], plan_keys: ['four-period-five-codes', 'size-three-periods'] }
+
+    await adminApi.planAutomation(37)
+    await adminApi.updatePlanAutomation(payload)
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/admin/plan-automation?workspace_id=37')
+    expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/api\/admin\/plan-automation$/)
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'PUT', body: JSON.stringify(payload), credentials: 'include' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(adminApi).not.toHaveProperty('previewPlanAutomation')
+    expect(tenantApi).not.toHaveProperty('updatePlanAutomation')
+    expect(agentApi).not.toHaveProperty('updatePlanAutomation')
+  })
 })

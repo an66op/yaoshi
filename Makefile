@@ -1,4 +1,4 @@
-.PHONY: dev health smoke test race verify release production-check production-config-check backup upload-backup backup-integrity monitor restore-drill pitr-restore-drill shellcheck readiness-test rclone-integration-test dev-reset-plan dev-full-reset-plan dev-reset-sentinel-plan production-test-install production-system-test integration-test e2e-test load-test
+.PHONY: dev health smoke test race verify release production-check production-config-check backup upload-backup backup-integrity monitor restore-drill pitr-restore-drill shellcheck readiness-test rclone-integration-test dev-reset-plan dev-full-reset-plan dev-reset-sentinel-plan production-test-install production-system-test integration-test catalog-integration-test timing-integration-test e2e-test load-test
 
 RELEASE_GOOS ?= linux
 RELEASE_GOARCH ?= amd64
@@ -130,6 +130,14 @@ production-system-test:
 
 integration-test:
 	SYSTEM_TEST_SUITE=integration bash scripts/release-system-test.sh
+
+catalog-integration-test:
+	@test -n "$$BACKEND_CATALOG_TEST_DSN" || { echo "请设置独立空库 BACKEND_CATALOG_TEST_DSN" >&2; exit 1; }
+	cd backend && go test . -run '^TestCatalogDefaults(Fresh|Upgrade)Postgres$$' -count=1 -v
+
+timing-integration-test:
+	@test -n "$$BACKEND_TIMING_TEST_DSN" || { echo "请设置独立空库 BACKEND_TIMING_TEST_DSN" >&2; exit 1; }
+	cd backend && go test ./services -run '^TestLotteryTimingPostgres' -count=1 -v
 
 e2e-test:
 	SYSTEM_TEST_SUITE=e2e bash scripts/release-system-test.sh

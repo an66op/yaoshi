@@ -199,6 +199,9 @@ func ensureTenantWorkspaces(tx *gorm.DB, platform workspacemodel.Workspace) erro
 			if err = tx.Create(&workspace).Error; err != nil {
 				return err
 			}
+			if err = EnsureWorkspaceGameDefaults(tx, workspace); err != nil {
+				return err
+			}
 		} else if err != nil {
 			return err
 		} else {
@@ -288,6 +291,9 @@ func ensureAgentWorkspaces(tx *gorm.DB, platform workspacemodel.Workspace) error
 				Name: name, Logo: account.AgentRoomLogo, Status: account.Status,
 			}
 			if err = tx.Create(&workspace).Error; err != nil {
+				return err
+			}
+			if err = EnsureWorkspaceGameDefaults(tx, workspace); err != nil {
 				return err
 			}
 		} else if err != nil {
@@ -391,6 +397,10 @@ func ensureWorkspaceSettings(tx *gorm.DB, platform workspacemodel.Workspace) err
 		template.WorkspaceID = platform.ID
 		template.RoomCode = PlatformWorkspaceCode
 	}
+	roomGameSettings, err := initialRoomGameSettingsFromPlatform(tx)
+	if err != nil {
+		return err
+	}
 	var workspaces []workspacemodel.Workspace
 	if err := tx.Order("id ASC").Find(&workspaces).Error; err != nil {
 		return err
@@ -440,7 +450,7 @@ func ensureWorkspaceSettings(tx *gorm.DB, platform workspacemodel.Workspace) err
 			clone.RoomNotice = ""
 			clone.AnnouncementsJSON = "[]"
 			clone.QuickRepliesJSON = "[]"
-			clone.GameSettingsJSON = `{"seal_seconds":30,"allow_cancel":true,"default_fly_rate":0,"max_open_games":0}`
+			clone.GameSettingsJSON = roomGameSettings
 			clone.RebateSettingsJSON = `{"enabled":false,"rate_percent":0,"min_turnover":0,"settle_mode":"daily","auto_credit":false}`
 		}
 		clone.CreatedAt = time.Time{}

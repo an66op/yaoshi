@@ -114,19 +114,32 @@ func TestWorkspaceEnabledGamesQueryAppliesRoomSwitch(t *testing.T) {
 	var games []lottery.Game
 	statement := workspaceEnabledGamesQuery(db, 37).Find(&games).Statement
 	sql := statement.SQL.String()
-	for _, fragment := range []string{"lottery_games.enabled =", "NOT EXISTS", "room_game_settings", "room_game.workspace_id =", "room_game.enabled ="} {
+	for _, fragment := range []string{
+		"lottery_games.enabled =", "BTRIM(lottery_games.lobby_category)", "EXISTS (",
+		"game_workspace.id =", "game_workspace.status =", "game_workspace.type IN",
+		"room_game_settings", "room_game.workspace_id = game_workspace.id", "room_game.enabled =",
+	} {
 		if !strings.Contains(sql, fragment) {
 			t.Fatalf("workspace game query omitted %q: %s", fragment, sql)
 		}
 	}
-	want := []any{true, uint64(37), false}
-	if len(statement.Vars) < len(want) {
+	want := []any{true, uint64(37), 1, workspacemodel.TypePlatform, false, workspacemodel.TypeTenant, workspacemodel.TypeAgent, true}
+	if len(statement.Vars) != len(want) {
 		t.Fatalf("workspace game query vars = %#v", statement.Vars)
 	}
 	for index := range want {
 		if statement.Vars[index] != want[index] {
 			t.Fatalf("workspace game query var %d = %#v, want %#v", index, statement.Vars[index], want[index])
 		}
+	}
+}
+
+func TestWorkspaceEnabledGamesQueryRejectsUnscopedRobots(t *testing.T) {
+	db := robotDryRunDB(t)
+	var games []lottery.Game
+	statement := workspaceEnabledGamesQuery(db, 0).Find(&games).Statement
+	if !strings.Contains(statement.SQL.String(), "AND FALSE") {
+		t.Fatalf("unscoped robot game lookup is not fail-closed: %s", statement.SQL.String())
 	}
 }
 

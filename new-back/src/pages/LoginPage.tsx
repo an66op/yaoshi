@@ -17,6 +17,7 @@ import StorefrontRounded from '@mui/icons-material/StorefrontRounded'
 import { useState } from 'react'
 import { adminApi } from '../api'
 import { clearLegacyAdminSession, type AuthUser } from '../auth'
+import { createDevLoginPresets, type DevLoginPreset, type LoginIdentity } from '../devLoginPresets'
 import {
   MANAGEMENT_LOGIN_PASSWORD_MAX_BYTES,
   MANAGEMENT_LOGIN_USERNAME_MAX_RUNES,
@@ -24,8 +25,6 @@ import {
   truncateCodePoints,
   validateManagementLoginInput,
 } from '../loginLimits'
-
-type LoginIdentity = 'platform' | 'tenant' | 'agent'
 
 const identityOptions: Array<{
   id: LoginIdentity
@@ -39,18 +38,16 @@ const identityOptions: Array<{
   { id: 'agent', label: '代理', caption: '管理所属房间', workspace: '', icon: StorefrontRounded },
 ]
 
-const localPresets: Partial<Record<LoginIdentity, { workspace: string; username: string; password: string }>> = import.meta.env.DEV ? {
-  platform: { workspace: '平台', username: 'admin', password: 'Admin8801!' },
-  tenant: { workspace: '平台', username: 'wangzhetenant', password: 'WzTenant8801' },
-  agent: { workspace: 'wangzhetenant', username: 'suyang', password: 'Room8801' },
-} : {}
+const localPresets: Partial<Record<LoginIdentity, DevLoginPreset>> = import.meta.env.DEV
+  ? createDevLoginPresets(true, import.meta.env)
+  : {}
 
 const localPreset = (identity: LoginIdentity) => localPresets[identity]
 
 export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }) {
   const [username, setUsername] = useState(() => localPreset('platform')?.username ?? '')
   const [password, setPassword] = useState(() => localPreset('platform')?.password ?? '')
-  const [workspace, setWorkspace] = useState('平台')
+  const [workspace, setWorkspace] = useState(() => localPreset('platform')?.workspace ?? '平台')
   const [identity, setIdentity] = useState<LoginIdentity>('platform')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -135,7 +132,7 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
             </Box>
             <TextField
               label={identity === 'agent' ? '所属租户' : '所属平台'}
-              helperText={identity === 'agent' ? '代理使用所属租户的登录账号；其他代理可在这里修改' : '平台管理员和租户统一归属平台'}
+              helperText={identity === 'agent' ? '填写所属租户账号；未分配租户时填写“平台”' : '平台管理员和租户统一归属平台'}
               value={workspace}
               onChange={event => setWorkspace(truncateCodePoints(event.target.value, MANAGEMENT_LOGIN_WORKSPACE_MAX_RUNES))}
               autoComplete="organization"

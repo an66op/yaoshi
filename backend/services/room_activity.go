@@ -736,19 +736,6 @@ func (s *RoomActivityService) enabledGames(workspaceID uint64) ([]lottery.Game, 
 	return games, err
 }
 
-func workspaceEnabledGamesQuery(db *gorm.DB, workspaceID uint64) *gorm.DB {
-	query := db.Model(&lottery.Game{}).Where("lottery_games.enabled = ?", true)
-	if workspaceID == 0 {
-		return query
-	}
-	return query.Where(`NOT EXISTS (
-		SELECT 1 FROM room_game_settings AS room_game
-		WHERE room_game.workspace_id = ?
-		  AND room_game.game_id = lottery_games.id
-		  AND room_game.enabled = ?
-	)`, workspaceID, false)
-}
-
 func allowedRobotGames(account user.User, games []lottery.Game) []lottery.Game {
 	configured := []string{}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(account.RobotGameIDsJSON)), &configured); err != nil || len(configured) == 0 {

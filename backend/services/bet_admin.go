@@ -319,6 +319,9 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 		if account.BalanceCents < amountCents {
 			return apperrors.NewBusinessError("INSUFFICIENT_BALANCE", "用户余额不足")
 		}
+		if err := checkWorkspaceIssueWindow(tx, account.WorkspaceID, game, issue); err != nil {
+			return err
+		}
 		roomScope = betRoomScope(account)
 		workspaceID = account.WorkspaceID
 		before := account.BalanceCents
@@ -734,6 +737,9 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 		}
 		if account.BalanceCents < totalCents {
 			return apperrors.NewBusinessError("INSUFFICIENT_BALANCE", "用户余额不足")
+		}
+		if err := checkWorkspaceIssueWindow(tx, account.WorkspaceID, game, issue); err != nil {
+			return err
 		}
 		roomScope = betRoomScope(account)
 		workspaceID = account.WorkspaceID
@@ -1217,6 +1223,16 @@ func (s *BetAdminService) cancel(id uint64, ownerUserID *uint64, operator string
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, row.UserID).Error; err != nil {
 			return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
 		}
+		if ownerUserID != nil {
+			game, err := NewBetAdminService(tx).loadGame(row.GameID)
+			if err != nil {
+				return err
+			}
+			// Use the bet's frozen workspace, not a member's later room switch.
+			if err := checkWorkspaceIssueWindow(tx, row.WorkspaceID, game, row.Issue); err != nil {
+				return err
+			}
+		}
 		before := account.BalanceCents
 		after, ok := safeAddInt64(before, row.AmountCents)
 		if !ok || after < 0 {
@@ -1288,7 +1304,14 @@ func (s *BetAdminService) CancelCurrentIssue(userID uint64, gameID, operator str
 		}
 		var refundCents int64
 		ids := make([]uint64, 0, len(rows))
+		checkedWorkspaces := make(map[uint64]bool)
 		for _, row := range rows {
+			if !checkedWorkspaces[row.WorkspaceID] {
+				if err := checkWorkspaceIssueWindow(tx, row.WorkspaceID, game, issue); err != nil {
+					return err
+				}
+				checkedWorkspaces[row.WorkspaceID] = true
+			}
 			if row.AmountCents <= 0 {
 				return apperrors.NewBusinessError("INVALID_REQUEST", "注单金额异常，无法撤回")
 			}
@@ -1465,16 +1488,38 @@ func (s *BetAdminService) GameMoneyMap() (map[string]gameMoney, error) {
 }
 
 func (s *BetAdminService) CurrentIssue(gameID string) (string, error) {
+	game, err := s.loadGame(gameID)
+	if err != nil {
+		return "", err
+	}
+	return s.currentIssueForGame(game)
+}
+
+// Keep a source-provided issue paired with the schedule on this exact game
+// snapshot. Re-reading just the issue can pair the next sync's issue with the
+// previous sync's draw timestamp in a concurrent request.
+func (s *BetAdminService) currentIssueForGame(game *lottery.Game) (string, error) {
+	if game == nil {
+		return "", apperrors.NewBusinessError("GAME_NOT_FOUND", "游戏不存在")
+	}
+	if issue := strings.TrimSpace(game.NextIssue); issue != "" {
+		return issue, nil
+	}
 	var draw lottery.Draw
-	err := s.db.Where("game_id = ?", gameID).Order("draw_at desc").First(&draw).Error
+	err := s.db.Where("game_id = ?", game.ID).Order("draw_at desc").First(&draw).Error
 	if err == nil && strings.TrimSpace(draw.Issue) != "" {
+		if game.SourceKind == "external" || game.SourceKind == "official" {
+			return inferredNextSourceIssue(draw.Issue, game.NextDrawAt), nil
+		}
 		return nextIssue(draw.Issue), nil
 	}
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return "", apperrors.NewSystemError("DRAW_READ_FAILED", "读取开奖期号失败", err)
 	}
-	now := time.Now().In(time.FixedZone("CST", 8*3600))
-	return now.Format("200601021504"), nil
+	if game.SourceKind == "external" || game.SourceKind == "official" {
+		return "", nil // No fixture/time-derived issue is valid for an external feed.
+	}
+	return initialPlatformIssue(game.NextDrawAt), nil
 }
 
 func (s *BetAdminService) loadGame(gameID string) (*lottery.Game, error) {
@@ -1682,7 +1727,7 @@ func lockAcceptingIssue(db *gorm.DB, gameID, issue string) error {
 	if row.Status == lottery.IssueStatusError {
 		return apperrors.NewBusinessError("SOURCE_UNAVAILABLE", "开奖数据暂时异常，本期已暂停投注")
 	}
-	if row.Status != lottery.IssueStatusAccepting || !time.Now().UTC().Before(row.SealAt.UTC()) {
+	if !sharedIssueOpen(&row, time.Now().UTC()) {
 		return apperrors.NewBusinessError("ISSUE_CLOSED", "当前期已封盘，请等待下一期")
 	}
 	return nil
@@ -1787,7 +1832,7 @@ func validateBetLimitEntries(db *gorm.DB, gameID, issue string, userID uint64, e
 }
 
 func (s *BetAdminService) ensureIssueOpen(game *lottery.Game, issue string) error {
-	current, err := s.CurrentIssue(game.ID)
+	current, err := s.currentIssueForGame(game)
 	if err != nil {
 		return err
 	}
@@ -1798,7 +1843,7 @@ func (s *BetAdminService) ensureIssueOpen(game *lottery.Game, issue string) erro
 	if err != nil {
 		return err
 	}
-	if !issueAccepting(lifecycle) {
+	if !sharedIssueOpen(lifecycle, time.Now().UTC()) {
 		if lifecycle.Status == lottery.IssueStatusError {
 			return apperrors.NewBusinessError("SOURCE_UNAVAILABLE", "开奖数据暂时异常，本期已暂停投注")
 		}

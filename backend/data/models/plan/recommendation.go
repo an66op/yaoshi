@@ -27,6 +27,7 @@ type Recommendation struct {
 	Size        string         `gorm:"size:4;not null;default:''" json:"size"`
 	Parity      string         `gorm:"size:4;not null;default:''" json:"parity"`
 	Result      string         `gorm:"size:16;not null;default:'pending';index" json:"result"`
+	Source      string         `gorm:"size:16;not null;default:'manual'" json:"source"`
 	Note        string         `gorm:"size:500;not null;default:''" json:"note"`
 	Enabled     bool           `gorm:"not null;default:true;index" json:"enabled"`
 	SortOrder   int            `gorm:"not null;default:100" json:"sort_order"`

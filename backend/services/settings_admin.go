@@ -5,6 +5,7 @@ import (
 	"backend/data/models/user"
 	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
+	"backend/ws"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -17,7 +18,7 @@ import (
 type SettingsAdminService struct{ db *gorm.DB }
 
 var defaultGameSettings = map[string]any{
-	"seal_seconds":                      30,
+	"seal_seconds":                      defaultSealSeconds,
 	"allow_cancel":                      true,
 	"default_fly_rate":                  0,
 	"max_open_games":                    8,
@@ -209,6 +210,9 @@ func (s *SettingsAdminService) UpdateRoomIdentityForWorkspace(workspaceID uint64
 }
 
 func (s *SettingsAdminService) UpdateForWorkspace(workspaceID uint64, input UpdateSystemSettingsInput) (*SystemSettingsView, error) {
+	if err := validateGameTimingSettings(input.Game); err != nil {
+		return nil, err
+	}
 	row, err := s.ensure(workspaceID)
 	if err != nil {
 		return nil, err
@@ -255,9 +259,11 @@ func (s *SettingsAdminService) UpdateForWorkspace(workspaceID uint64, input Upda
 	} else {
 		row.RoomNotice = strings.TrimSpace(input.RoomNotice)
 	}
+	previousGameSettings := row.GameSettingsJSON
 	row.GameSettingsJSON = string(normalizeGameSettings(string(input.Game)))
 	row.QuickRepliesJSON = rawOrEmptyArray(input.QuickReplies)
 	row.RebateSettingsJSON = rawOrEmptyObject(input.Rebate)
+	var notificationWorkspace workspacemodel.Workspace
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(row).Error; err != nil {
 			return err
@@ -271,7 +277,14 @@ func (s *SettingsAdminService) UpdateForWorkspace(workspaceID uint64, input Upda
 				return err
 			}
 			workspace.Name, workspace.Logo = row.RoomName, row.RoomLogo
+			notificationWorkspace = workspace
 			if err := syncLegacyAgentRoomIdentity(tx, workspace); err != nil {
+				return err
+			}
+		} else if roomTimingSettingsChanged(previousGameSettings, row.GameSettingsJSON) {
+			// Legacy singleton settings may still be workspace 0. Resolve the
+			// platform explicitly; publishing workspace 0 would reach every room.
+			if err := tx.Where("type = ?", workspacemodel.TypePlatform).Order("id ASC").Limit(1).Find(&notificationWorkspace).Error; err != nil {
 				return err
 			}
 		}
@@ -279,6 +292,7 @@ func (s *SettingsAdminService) UpdateForWorkspace(workspaceID uint64, input Upda
 	}); err != nil {
 		return nil, apperrors.NewSystemError("SETTINGS_SAVE_FAILED", "保存系统设置失败", err)
 	}
+	notifyRoomTimingSettingsChanged(notificationWorkspace, previousGameSettings, row.GameSettingsJSON, ws.NotifyGameCatalogChanged)
 	return toSettingsView(row), nil
 }
 
@@ -330,17 +344,41 @@ func (s *SettingsAdminService) ensure(workspaceID uint64) (*settings.SystemConfi
 		return nil, apperrors.NewSystemError("SETTINGS_READ_FAILED", "读取系统设置失败", err)
 	}
 	if workspaceID > 0 {
-		var workspace workspacemodel.Workspace
-		if err := s.db.First(&workspace, workspaceID).Error; err != nil {
-			return nil, apperrors.NewBusinessError("WORKSPACE_NOT_FOUND", "房间不存在")
-		}
-		row = settings.SystemConfig{
-			WorkspaceID: workspace.ID, RoomName: workspace.Name, RoomLogo: workspace.Logo, RoomCode: workspace.RoomCode,
-			ChatNickname: "客服", ChatAvatar: workspace.Logo, RoomEnabled: true, RequireJoinReview: true, SoundEnabled: true, ShowOdds: true, PredictionEnabled: true,
-			AnnouncementsJSON: "[]", GameSettingsJSON: string(normalizeGameSettings(`{"max_open_games":0}`)),
-			QuickRepliesJSON: "[]", RebateSettingsJSON: `{"enabled":false,"rate_percent":0,"min_turnover":0,"settle_mode":"daily","auto_credit":false}`,
-		}
-		if err := s.db.Create(&row).Error; err != nil {
+		if err := s.db.Transaction(func(tx *gorm.DB) error {
+			// The hierarchy initializer uses the same lock and explicit IDs. Old
+			// databases may have a lagging serial sequence, and two simultaneous
+			// first reads must never overwrite a room's newly-created snapshot.
+			if err := lockPublicRoomCodeRegistry(tx); err != nil {
+				return err
+			}
+			if err := tx.Where("workspace_id = ?", workspaceID).First(&row).Error; err == nil {
+				return nil
+			} else if err != gorm.ErrRecordNotFound {
+				return err
+			}
+			var workspace workspacemodel.Workspace
+			if err := tx.First(&workspace, workspaceID).Error; err != nil {
+				return apperrors.NewBusinessError("WORKSPACE_NOT_FOUND", "房间不存在")
+			}
+			gameSettings, err := initialRoomGameSettingsFromPlatform(tx)
+			if err != nil {
+				return err
+			}
+			var nextID uint
+			if err := tx.Model(&settings.SystemConfig{}).Select("COALESCE(MAX(id), 0) + 1").Scan(&nextID).Error; err != nil {
+				return err
+			}
+			row = settings.SystemConfig{
+				ID: nextID, WorkspaceID: workspace.ID, RoomName: workspace.Name, RoomLogo: workspace.Logo, RoomCode: workspace.RoomCode,
+				ChatNickname: "客服", ChatAvatar: workspace.Logo, RoomEnabled: true, RequireJoinReview: true, SoundEnabled: true, ShowOdds: true, PredictionEnabled: true,
+				AnnouncementsJSON: "[]", GameSettingsJSON: gameSettings,
+				QuickRepliesJSON: "[]", RebateSettingsJSON: `{"enabled":false,"rate_percent":0,"min_turnover":0,"settle_mode":"daily","auto_credit":false}`,
+			}
+			return tx.Create(&row).Error
+		}); err != nil {
+			if app, ok := err.(*apperrors.AppError); ok {
+				return nil, app
+			}
 			return nil, apperrors.NewSystemError("SETTINGS_INIT_FAILED", "初始化房间设置失败", err)
 		}
 		return &row, nil

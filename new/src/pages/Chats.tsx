@@ -865,7 +865,7 @@ function DrawNoticeSummary({ message, detail = false }: { message: MemberNotific
     <div className={detail ? "draw-notice-detail" : "draw-notice-summary"}>
       <div className="draw-notice-heading">
         <div className="draw-notice-game">
-          {gameLogo && <span className={message.game_id === "speed-racing" ? "racing-trio-artwork" : undefined}><img alt={`${message.game_name || "彩票"} Logo`} src={gameLogo} /></span>}
+          {gameLogo && <span><img alt={`${message.game_name || "彩票"} Logo`} src={gameLogo} /></span>}
           <b>{message.game_name || "开奖信息"}</b>
         </div>
         {message.issue && <small>第 {message.issue} 期</small>}

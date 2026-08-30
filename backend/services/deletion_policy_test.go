@@ -44,6 +44,8 @@ func TestGORMDeleteCallsMatchAuditedAllowList(t *testing.T) {
 		"services/member_payment_account.go:&row":            {1, "soft-deleted member receiving account"},
 		"services/notify_admin.go:&notify.Notification{}":    {3, "soft-deleted derived admin notices"},
 		"services/plan_content.go:&plan.Recommendation{}":    {1, "soft-deleted room plan recommendation"},
+		"services/plan_retention.go:&plan.StreamPeriod{}":    {1, "explicit stream-scoped derived period retention: keep newest 20; current-cycle high-water is retained"},
+		"services/plan_retention.go:&plan.StreamCycle{}":     {1, "explicit stream-scoped derived cycle payload cleanup, only unreferenced noncurrent cycles"},
 		"services/odds_admin.go:&odds.PlayLimit{}":           {2, "transactional replace/reset of reconstructable limits"},
 		"services/trading_admin.go:&odds.RoomPlayOdds{}":     {1, "remove an inherited room override"},
 		"services/trading_admin.go:&odds.UserPlayOdds{}":     {1, "remove an inherited member override"},

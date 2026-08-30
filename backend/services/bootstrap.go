@@ -37,7 +37,7 @@ func bootstrapSteps(mode string) ([]bootstrapStep, error) {
 	case "debug":
 		return []bootstrapStep{
 			bootstrapAdmin, bootstrapLotteryDebug, bootstrapExperienceAccount,
-			bootstrapWorkspaces, bootstrapBaseCatalogs, bootstrapDebugPlans,
+			bootstrapWorkspaces, bootstrapBaseCatalogs,
 		}, nil
 	case "release", "test":
 		return []bootstrapStep{
@@ -75,8 +75,6 @@ func Bootstrap(db *gorm.DB, options BootstrapOptions) error {
 			stepErr = EnsureWorkspaceHierarchy(db)
 		case bootstrapBaseCatalogs:
 			stepErr = EnsureBaseCatalogs(db)
-		case bootstrapDebugPlans:
-			_, stepErr = SeedDebugPlanRecommendations(db)
 		}
 		if stepErr != nil {
 			return fmt.Errorf("启动初始化步骤 %s 失败: %w", step, stepErr)

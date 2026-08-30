@@ -264,14 +264,16 @@
 .is-five-code .plan-history-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .is-five-code .plan-history-pick > strong { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
 .is-five-code .plan-history-row > .plan-history-pick.has-numbers i { min-width: 0; padding: 0 3px; }
-.plan-header .plan-switch-button { display: flex; align-items: center; justify-content: center; gap: 4px; width: auto; min-height: 34px; padding: 6px 8px; border: 1px solid #ffffff70; border-radius: 8px; font-size: 11px; font-weight: 700; }
-.plan-header .plan-switch-button svg { width: 14px; height: 14px; }
+.plan-page > .plan-header { display: grid; grid-template-columns: 34px minmax(0,1fr) auto; gap: 10px; }
+.plan-page > .plan-header > b { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.plan-page > .plan-header .plan-switch-button { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 6px; width: auto; min-width: 96px; height: 36px; padding: 0 10px; border: 1px solid #65adb94d; border-radius: 8px; background: #ffffff24; font-size: 12px; font-weight: 700; white-space: nowrap; writing-mode: horizontal-tb; }
+.plan-header .plan-switch-button svg { flex: none; width: 15px; height: 15px; }
+.plan-header .plan-switch-button span { white-space: nowrap; }
 .plan-switch-button:disabled { opacity: .5; }
 .racing-plan-page .plan-current { grid-template-columns: 42px minmax(0,1fr); }
 .racing-plan-page .plan-current > time { grid-column: 2; }
 .racing-plan-stream-status { display: flex; justify-content: space-between; gap: 8px; margin: 0 16px 8px; color: #258797; font-size: 10px; }
 .racing-plan-stream-status small { color: #7a929c; font-size: 9px; }
-.racing-plan-notice { margin: 0 16px 12px; color: #6e8793; font-size: 10px; line-height: 1.6; }
 .racing-plan-message, .racing-plan-activate { margin: 10px 14px; padding: 11px 12px; border: 1px solid #efc383; border-radius: 12px; background: #fff7e8; color: #895d1f; font-size: 11px; line-height: 1.6; }
 .racing-plan-activate p { margin: 0 0 8px; }
 .racing-plan-activate button { min-height: 36px; padding: 7px 14px; border: 0; border-radius: 9px; background: #168eaa; color: #fff; font-weight: 700; }
@@ -280,16 +282,26 @@
 .racing-plan-cycle span { font-size: 10px; }
 .racing-plan-cycle small { grid-column: 1 / -1; color: #73939e; font-size: 9px; overflow-wrap: anywhere; }
 .plan-recommendation > .racing-plan-history-warning { margin-top: 9px; color: #a17429; font-size: 10px; }
-.racing-plan-picks { display: grid; gap: 10px; margin: 12px 0; padding: 13px 10px; border-radius: 12px; background: linear-gradient(135deg,#147d9f,#1aa79e); color: #fff; }
-.racing-plan-picks > small { font-size: 10px; opacity: .85; }
+.racing-plan-page .plan-current, .racing-plan-page .plan-recommendation, .racing-plan-page .plan-history { border-radius: 12px; }
+.racing-plan-picks { display: grid; gap: 10px; margin: 12px 0 0; padding: 12px 10px; border: 1px solid #cee3e8; border-radius: 8px; background: #f4fafb; color: #315a6b; }
+.racing-plan-picks > small { font-size: 10px; }
 .racing-plan-numbers { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0,1fr); gap: 5px; min-width: 0; width: 100%; }
-.racing-plan-numbers i { display: grid; place-items: center; min-width: 0; height: 38px; padding: 0; border: 1px solid #ffffff80; border-radius: 8px; background: #ffffff24; color: #fff; font-size: clamp(16px,4.6vw,23px); font-style: normal; }
+.racing-plan-numbers > .lottery-ball { display: grid; place-items: center; min-width: 0; width: 100%; height: 38px; padding: 0; border: 0; font-size: clamp(16px,4.6vw,23px); font-style: normal; }
 .racing-plan-direction { display: block; padding: 4px 0; font-size: 42px; line-height: 1.25; text-align: center; }
 .racing-plan-history .plan-history-head, .racing-plan-history .plan-history-row { grid-template-columns: minmax(64px,.85fr) minmax(0,1.7fr) 48px; }
 .racing-plan-history .plan-history-row > span { min-width: 0; overflow-wrap: anywhere; }
-.racing-plan-history .plan-history-row > em { padding: 0; color: #78949e; font-size: 8px; text-align: right; }
+.racing-plan-history .plan-history-row > em { padding: 4px 5px; font-size: 10px; text-align: center; white-space: nowrap; }
+.racing-plan-page .plan-outcome { padding: 4px 7px; border-radius: 5px; font-size: 11px; font-weight: 700; line-height: 1.3; }
+.racing-plan-page .plan-outcome.hit { color: #148263; background: #e1f5ec; }
+.racing-plan-page .plan-outcome.miss { color: #be5145; background: #fcede9; }
+.racing-plan-page .plan-outcome.pending { color: #6d8391; background: #edf2f5; }
 .racing-plan-numbers.is-compact { gap: 2px; }
-.racing-plan-history .racing-plan-numbers.is-compact i { min-width: 0; height: 23px; border: 0; border-radius: 4px; padding: 0; background: #278fb7; font-size: 9px; }
+.racing-plan-history .racing-plan-numbers.is-compact > .lottery-ball { height: 23px; font-size: 10px; }
+.racing-plan-draw { display: grid; gap: 7px; margin-top: 12px; padding-top: 10px; border-top: 1px solid #dce9ed; }
+.racing-plan-draw > small { color: #78909b; font-size: 10px; }
+.racing-plan-draw .racing-plan-numbers { gap: 3px; }
+.racing-plan-draw .lottery-ball { height: auto; aspect-ratio: 1; font-size: clamp(10px,2.8vw,14px); }
+.racing-plan-draw .lottery-ball.is-target { outline: 2px solid #2a8c9e; outline-offset: 2px; }
 .racing-plan-direction.is-compact { padding: 0; color: #188a9e; font-size: 23px; text-align: left; }
 .plan-selection-overlay { position: fixed; z-index: 1100; inset: 0; display: flex; justify-content: center; align-items: flex-end; background: #071b35a8; }
 .plan-selection-sheet { display: grid; grid-template-rows: auto minmax(0,1fr) auto; width: min(100%,520px); max-height: min(92dvh,820px); overflow: hidden; border-radius: 20px 20px 0 0; background: #f8fcfd; color: #24495b; box-shadow: 0 -8px 40px #09284145; }
@@ -319,7 +331,12 @@
 .plan-selection-sheet > footer .plan-selection-confirm { border-color: #168fa7; background: linear-gradient(135deg,#168fa7,#22aaa4); color: #fff; }
 @media (min-width: 640px) { .plan-selection-overlay { align-items: center; padding: 20px; } .plan-selection-sheet { border-radius: 20px; } }
 .theme-night .racing-plan-cycle { background: #16455b; color: #b0eced; }
-.theme-night .racing-plan-notice, .theme-night .racing-plan-stream-status small { color: #9fc0cc; }
+.theme-night .racing-plan-stream-status small { color: #9fc0cc; }
+.theme-night .racing-plan-picks { background: #10364a; border-color: #38616f; color: #c3e6ed; }
+.theme-night .racing-plan-draw { border-color: #38616f; }
+.theme-night .racing-plan-page .plan-outcome.hit { background: #173f34; color: #80dbb3; }
+.theme-night .racing-plan-page .plan-outcome.miss { background: #422c2c; color: #f2a195; }
+.theme-night .racing-plan-page .plan-outcome.pending { background: #203f52; color: #a7c4d2; }
 .theme-night .racing-plan-message, .theme-night .racing-plan-activate { border-color: #9b744f; background: #413727; color: #f1d8a9; }
 .theme-night .plan-selection-sheet, .theme-night .plan-selection-sheet > header, .theme-night .plan-selection-sheet > footer { border-color: #376374; background: #0d3048; color: #e1f3f6; }
 .theme-night .plan-position-grid button, .theme-night .plan-type-grid button { border-color: #376374; background: #164359; color: #c3dde5; }

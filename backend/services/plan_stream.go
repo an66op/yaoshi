@@ -288,6 +288,23 @@ func (s *PlanContentService) StreamDetail(workspaceID uint64, position int, key 
 		if err := s.db.Where("stream_id = ?", selected.ID).Order("id DESC").Limit(result.HistoryLimit).Find(&periods).Error; err != nil {
 			return result, err
 		}
+		// One bounded read for the selected stream's displayed periods. Results
+		// are derived from immutable draws, never from publication progress or
+		// an editable hit-rate field, and GET never rewrites the saved picks.
+		issues := make([]string, 0, len(periods))
+		for _, period := range periods {
+			issues = append(issues, period.Issue)
+		}
+		draws := map[string]lottery.Draw{}
+		if len(issues) > 0 {
+			var rows []lottery.Draw
+			if err := s.db.Where("game_id = ? AND issue IN ?", "speed-racing", issues).Find(&rows).Error; err != nil {
+				return result, err
+			}
+			for _, row := range rows {
+				draws[row.Issue] = row
+			}
+		}
 		cycleIDs := []uint64{}
 		for _, period := range periods {
 			cycleIDs = append(cycleIDs, period.CycleID)
@@ -312,6 +329,7 @@ func (s *PlanContentService) StreamDetail(workspaceID uint64, position int, key 
 				pick.Position, pick.PlanKey, pick.Kind = position, key, option.Kind
 				pick.CycleID, pick.CyclePeriod, pick.CyclePeriods, pick.CycleStartIssue, pick.CycleStatus = cycle.ID, period.PeriodIndex, cycle.Periods, cycle.StartIssue, cycle.Status
 				pick.CreatedAt, pick.UpdatedAt = period.CreatedAt, period.CreatedAt
+				pick.Result, pick.DrawNumbers, pick.DrawAt = racingPlanDrawResult(pick, period, draws[period.Issue], time.Now().UTC())
 				result.History = append(result.History, pick)
 				if i == 0 {
 					result.LatestRecommendations = append(result.LatestRecommendations, pick)

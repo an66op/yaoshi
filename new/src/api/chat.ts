@@ -51,10 +51,11 @@ export type ChatMessagePage = {
 export const chatApi = {
   preview: () => request<ChatPreview>('/member/chat/preview'),
   availableRedPacket: () => request<ChatMessage | null>('/member/chat/redpackets/available'),
-  messages: (room_type: 'group' | 'service', game_id = room_type === 'service' ? 'service' : 'lobby', limit = 20, cursor?: { before_id?: number; after_id?: number }) => {
+  messages: (room_type: 'group' | 'service', game_id = room_type === 'service' ? 'service' : 'lobby', limit = 20, cursor?: { before_id?: number; after_id?: number; since?: string }) => {
     const query = new URLSearchParams({ room_type, game_id, limit: String(limit) })
     if (cursor?.before_id) query.set('before_id', String(cursor.before_id))
     if (cursor?.after_id) query.set('after_id', String(cursor.after_id))
+    if (cursor?.since) query.set('since', cursor.since)
     return request<ChatMessagePage>(`/member/chat/messages?${query}`)
   },
   send: (content: string, room_type: 'group' | 'service' = 'group', game_id = room_type === 'service' ? 'service' : 'lobby') =>

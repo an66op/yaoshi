@@ -57,6 +57,8 @@ export type RacingPlanRecommendation = PlanRecommendation & {
   cycle_periods: number
   cycle_start_issue: string
   cycle_status: 'active' | 'completed' | 'interrupted'
+  draw_numbers?: number[]
+  draw_at?: string
 }
 export type RacingPlanDetail = Omit<PlanDetail, 'recommendations' | 'latest_recommendations' | 'history'> & {
   recommendations: RacingPlanRecommendation[]

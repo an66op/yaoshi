@@ -44,23 +44,24 @@ type AssistantBetResult struct {
 }
 
 type AssistantDrawStatus struct {
-	GameID        string     `json:"game_id"`
-	GameName      string     `json:"game_name"`
-	Issue         string     `json:"issue"`
-	Accepting     bool       `json:"accepting"`
-	NextDrawAt    time.Time  `json:"next_draw_at"`
-	AcceptAt      *time.Time `json:"accept_at,omitempty"`
-	SealAt        *time.Time `json:"seal_at,omitempty"`
-	DrawInterval  int        `json:"draw_interval"`
-	SealSeconds   int        `json:"seal_seconds"`
-	TimingSource  string     `json:"timing_source"`
-	LatestIssue   string     `json:"latest_issue,omitempty"`
-	LatestNumbers []int      `json:"latest_numbers,omitempty"`
-	LatestDrawAt  *time.Time `json:"latest_draw_at,omitempty"`
-	SourceName    string     `json:"source_name,omitempty"`
-	IssueStatus   string     `json:"issue_status"`
-	SourceHealthy bool       `json:"source_healthy"`
-	SourceError   string     `json:"source_error,omitempty"`
+	GameID        string         `json:"game_id"`
+	GameName      string         `json:"game_name"`
+	Issue         string         `json:"issue"`
+	Accepting     bool           `json:"accepting"`
+	NextDrawAt    time.Time      `json:"next_draw_at"`
+	AcceptAt      *time.Time     `json:"accept_at,omitempty"`
+	SealAt        *time.Time     `json:"seal_at,omitempty"`
+	DrawInterval  int            `json:"draw_interval"`
+	SealSeconds   int            `json:"seal_seconds"`
+	TimingSource  string         `json:"timing_source"`
+	LatestIssue   string         `json:"latest_issue,omitempty"`
+	LatestNumbers []int          `json:"latest_numbers,omitempty"`
+	LatestDrawAt  *time.Time     `json:"latest_draw_at,omitempty"`
+	SourceName    string         `json:"source_name,omitempty"`
+	IssueStatus   string         `json:"issue_status"`
+	SourceHealthy bool           `json:"source_healthy"`
+	SourceError   string         `json:"source_error,omitempty"`
+	BettingWindow *BettingWindow `json:"betting_window,omitempty"`
 }
 
 // History returns all accepted compact-input requests for server-side actions
@@ -218,6 +219,12 @@ func (s *BetAssistantService) Place(userID uint64, gameID, issue, content, opera
 			}
 		}
 
+		// Resolving an empty issue and PlaceBatch's preflight can both write
+		// timing rows. Acquire Game before those writes in this outer request
+		// transaction, not only inside PlaceBatch's nested transaction.
+		if _, err := lockBettingGame(tx, gameID); err != nil {
+			return err
+		}
 		atomic := &BetAssistantService{
 			db:   tx,
 			bets: &BetAdminService{db: tx, suppressNotifications: true},
@@ -355,7 +362,7 @@ func (s *BetAssistantService) place(userID uint64, gameID, issue, content, opera
 	}
 	requestedIssue := strings.TrimSpace(issue)
 	if requestedIssue == "" {
-		requestedIssue, err = s.bets.CurrentIssue(game.ID)
+		requestedIssue, err = s.bets.BettingIssue(game.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -429,8 +436,13 @@ func (s *BetAssistantService) statusForWorkspace(gameID string, workspaceID uint
 		}
 		status.Accepting = game.Enabled && sharedIssueOpen(lifecycle, time.Now().UTC()) && status.IssueStatus == lottery.IssueStatusAccepting
 	}
-	status.SourceHealthy = lifecycle.Status != lottery.IssueStatusError
+	status.SourceHealthy = sourceHealthyForGame(game) && lifecycle.Status != lottery.IssueStatusError
 	status.SourceError = lifecycle.LastError
+	status.BettingWindow, err = s.bets.nextBettingWindow(game, lifecycle, actualWorkspaceID, rawSettings)
+	if err != nil {
+		return nil, err
+	}
+	status.Accepting = status.SourceHealthy && (status.Accepting || status.BettingWindow != nil)
 	var latest lottery.Draw
 	if err := s.db.Where("game_id = ?", game.ID).Order("draw_at desc").First(&latest).Error; err == nil {
 		status.LatestIssue = latest.Issue
@@ -468,13 +480,16 @@ func (s *BetAssistantService) StatusForUser(userID uint64, gameID string) (*Assi
 	if err != nil {
 		return nil, err
 	}
-	status.Accepting = status.Accepting && roomActive && gameEnabled
+	status.Accepting = status.Accepting && account.Status == 1 && roomActive && gameEnabled
+	if !status.Accepting {
+		status.BettingWindow = nil
+	}
 	return status, nil
 }
 
 var assistantPositionPlay = regexp.MustCompile(`^(10|[1-9])/?([大小单双龙虎])$`)
 var assistantPositionNumbers = regexp.MustCompile(`^(10|[1-9])/([0-9]+)$`)
-var assistantRankPlay = regexp.MustCompile(`^(冠军|亚军|第三名|第四名|第五名|第六名|第七名|第八名|第九名|第十名)/?([0-9大小单双龙虎])$`)
+var assistantRankPlay = regexp.MustCompile(`^(冠军|亚军|第三名|第四名|第五名|第六名|第七名|第八名|第九名|第十名)/?([0-9大小单双龙虎]+)$`)
 
 var assistantRanks = map[string]int{
 	"冠军": 1, "亚军": 2, "第三名": 3, "第四名": 4, "第五名": 5, "第六名": 6,
@@ -552,6 +567,9 @@ func assistantSegmentEntries(parts []string) ([]assistantEntry, error) {
 
 func assistantPositions(raw string) ([]int, bool) {
 	raw = strings.TrimSpace(raw)
+	if position, ok := assistantRanks[raw]; ok {
+		return []int{position}, true
+	}
 	if raw == "10" || raw == "0" {
 		return []int{10}, true
 	}
@@ -652,14 +670,7 @@ func assistantPlayEntries(play string) ([]assistantEntry, error) {
 		return []assistantEntry{{position: position, selection: selection, playCode: playCode, playName: playName}}, nil
 	}
 	if match := assistantRankPlay.FindStringSubmatch(play); len(match) == 3 {
-		selection := match[2]
-		playCode := "ball_1_5"
-		if selection == "大" || selection == "小" || selection == "单" || selection == "双" {
-			playCode = "two_sided"
-		} else if selection == "龙" || selection == "虎" {
-			playCode = "dragon_tiger"
-		}
-		return []assistantEntry{{position: assistantRanks[match[1]], selection: selection, playCode: playCode, playName: play}}, nil
+		return assistantSelectionsForPositions([]int{assistantRanks[match[1]]}, match[2])
 	}
 	if strings.HasPrefix(play, "冠亚和") || strings.HasPrefix(play, "冠亚") {
 		selection := strings.TrimPrefix(play, "冠亚和")
@@ -765,15 +776,15 @@ func mergeAssistantLines(lines []AssistantBetLine) []AssistantBetLine {
 
 func assistantLineLabel(line AssistantBetLine) string {
 	if line.PlayCode == "sum" {
-		return fmt.Sprintf("冠亚和[%s/%.2f]", line.Selection, line.Amount)
+		return fmt.Sprintf("冠亚和[%s/%s]", line.Selection, FormatBetAmount(line.Amount))
 	}
 	names := []string{"冠军", "亚军", "第三名", "第四名", "第五名", "第六名", "第七名", "第八名", "第九名", "第十名"}
 	position := strconv.Itoa(line.Position)
 	if line.Position >= 1 && line.Position <= len(names) {
 		position = names[line.Position-1]
-		return fmt.Sprintf("%s[%s/%.2f]", position, line.Selection, line.Amount)
+		return fmt.Sprintf("%s[%s/%s]", position, line.Selection, FormatBetAmount(line.Amount))
 	}
-	return fmt.Sprintf("第%s名[%s/%.2f]", position, line.Selection, line.Amount)
+	return fmt.Sprintf("第%s名[%s/%s]", position, line.Selection, FormatBetAmount(line.Amount))
 }
 
 func allDigits(value string) bool {

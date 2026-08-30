@@ -82,4 +82,19 @@ describe('mapLotteryGame timing', () => {
     expect(game.logo).toBe('/images/game-logos/speed-racing.png')
     expect(game.balls).toEqual([])
   })
+
+  it('separates the visible drawing issue from the server-confirmed betting issue', () => {
+    const payload: LotteryGame = { ...remote, issue_status: 'awaiting_draw', betting_window: {
+      issue: '54776110', issue_status: 'accepting', accept_at: new Date(drawMs).toISOString(),
+      next_draw_at: new Date(drawMs + 90_000).toISOString(), seal_at: new Date(drawMs + 70_000).toISOString(),
+      draw_interval: 90, seal_seconds: 20,
+    } }
+    expect(mapLotteryGame(payload, drawMs + 1000)).toMatchObject({
+      period: '54776109', latestIssue: '54776108', timing: { phase: 'awaiting_draw', accepting: false },
+      betting: { issue: '54776110', timing: { accepting: true, due: '01:09' } },
+    })
+    expect(mapLotteryGame(payload, drawMs + 70_000).betting?.timing.accepting).toBe(false)
+    expect(mapLotteryGame({ ...payload, source_healthy: false }, drawMs + 1000).betting).toBeUndefined()
+    expect(mapLotteryGame({ ...payload, betting_window: null }, drawMs + 1000).betting).toBeUndefined()
+  })
 })

@@ -4,6 +4,7 @@ import { Icon } from '../components/Icon'
 import { betsApi, type MemberBet } from '../api/bets'
 import { memberApi, type BalanceRecord, type InviteInfo, type MemberApplication, type MemberPaymentAccount, type RebatePreview, type WalletChannel, type WalletSummary } from '../api/member'
 import { pathForWallet, type WalletActionSlug } from '../router'
+import { balanceRecordLabel } from '../utils/balanceRecordLabels'
 
 type WalletAction = '上分申请' | '下分申请' | '收款方式' | '申请记录' | '娱乐额度' | '游戏记录' | '竞猜列表' | '积分账变' | '自助回水' | '福利报表' | '红包报表' | '邀请好友'
 
@@ -39,12 +40,6 @@ const applicationStatus: Record<string, { label: string; tone: string }> = {
   pending: { label: '审核中', tone: 'pending' },
   approved: { label: '已通过', tone: 'success' },
   rejected: { label: '未通过', tone: 'danger' },
-}
-
-const recordTypeLabel: Record<string, string> = {
-  manual: '人工调整', credit: '上分到账', debit: '下分扣除',
-  settlement: '注单结算', checkin: '每日签到', activity: '活动奖励',
-  invite: '邀请奖励', redpacket: '红包奖励', rebate: '回水返利',
 }
 
 const quickAmounts = [100, 500, 1000, 2000]
@@ -494,7 +489,7 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
         <WalletPage title="积分账变" hint={history.length ? `已加载 ${history.length} 条` : undefined} onBack={goHome}>
           {subpageLoading ? <EmptyHint text="正在读取账变记录…" /> : history.length ? history.map((item) => (
             <article className="wallet-row wallet-ledger-row" key={item.id}>
-              <div><b>{recordTypeLabel[item.type] ?? item.type}</b><small>{item.remark || formatDate(item.created_at)}</small></div>
+              <div><b>{balanceRecordLabel(item.type)}</b><small>{item.remark || formatDate(item.created_at)}</small></div>
               <aside><strong className={item.amount >= 0 ? 'is-income' : 'is-expense'}>{item.amount >= 0 ? '+' : '-'}{formatMoney(item.amount)}</strong><small>结余 {formatMoney(item.after)}</small></aside>
             </article>
           )) : <EmptyHint text="暂无账变记录" />}
@@ -565,7 +560,7 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
           )}
           {subpageLoading ? <EmptyHint text="正在读取福利记录…" /> : history.length ? history.map((item) => (
             <article className="wallet-row" key={item.id}>
-              <b>{recordTypeLabel[item.type] ?? item.type} +{formatMoney(item.amount)}</b>
+              <b>{balanceRecordLabel(item.type)} +{formatMoney(item.amount)}</b>
               <small>{item.remark || formatDate(item.created_at)}</small>
             </article>
           )) : !rebate && <EmptyHint text="暂无福利记录" />}

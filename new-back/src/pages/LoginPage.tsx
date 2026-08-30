@@ -21,7 +21,6 @@ import { createDevLoginPresets, type DevLoginPreset, type LoginIdentity } from '
 import {
   MANAGEMENT_LOGIN_PASSWORD_MAX_BYTES,
   MANAGEMENT_LOGIN_USERNAME_MAX_RUNES,
-  MANAGEMENT_LOGIN_WORKSPACE_MAX_RUNES,
   truncateCodePoints,
   validateManagementLoginInput,
 } from '../loginLimits'
@@ -31,12 +30,11 @@ const identityOptions: Array<{
   id: LoginIdentity
   label: string
   caption: string
-  workspace: string
   icon: typeof AccountBalanceRounded
 }> = [
-  { id: 'platform', label: '平台管理员', caption: '管理全平台', workspace: '平台', icon: AccountBalanceRounded },
-  { id: 'tenant', label: '租户', caption: '开通并管理房间', workspace: '平台', icon: BusinessRounded },
-  { id: 'agent', label: '代理', caption: '管理所属房间', workspace: '', icon: StorefrontRounded },
+  { id: 'platform', label: '平台管理员', caption: '管理全平台', icon: AccountBalanceRounded },
+  { id: 'tenant', label: '租户', caption: '开通并管理房间', icon: BusinessRounded },
+  { id: 'agent', label: '代理', caption: '管理所属房间', icon: StorefrontRounded },
 ]
 
 const localPresets: Partial<Record<LoginIdentity, DevLoginPreset>> = import.meta.env.DEV
@@ -48,7 +46,6 @@ const localPreset = (identity: LoginIdentity) => localPresets[identity]
 export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }) {
   const [username, setUsername] = useState(() => import.meta.env.DEV ? localPreset('platform')?.username ?? '' : '')
   const [password, setPassword] = useState(() => import.meta.env.DEV ? localPreset('platform')?.password ?? '' : '')
-  const [workspace, setWorkspace] = useState(() => import.meta.env.DEV ? localPreset('platform')?.workspace ?? '平台' : '平台')
   const [identity, setIdentity] = useState<LoginIdentity>('platform')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -67,7 +64,6 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
       if (!preset || edited.current) return
       setUsername(preset.username)
       setPassword(preset.password)
-      setWorkspace(preset.workspace)
       setTestPrefilled(true)
     })
     return () => request.abort()
@@ -86,7 +82,6 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
     edited.current = false
     setIdentity(next)
     const preset = import.meta.env.DEV ? localPreset(next) : testPresets[next]
-    setWorkspace(preset?.workspace ?? option.workspace)
     setUsername(preset?.username ?? '')
     setPassword(preset?.password ?? '')
     setTestPrefilled(!import.meta.env.DEV && !!preset)
@@ -95,7 +90,7 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
-    const validationError = validateManagementLoginInput(username, password, workspace)
+    const validationError = validateManagementLoginInput(username, password)
     if (validationError) {
       setError(validationError)
       return
@@ -103,7 +98,9 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
     setLoading(true)
     setError('')
     try {
-      const result = await adminApi.login(username.trim(), password, workspace.trim())
+      // Identity buttons select a test profile/presentation only. The server
+      // resolves the real role and ownership from the authenticated account.
+      const result = await adminApi.login(username.trim(), password)
 	  clearLegacyAdminSession()
       onSuccess(result.user)
     } catch (reason) {
@@ -161,15 +158,6 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
                 })}
               </ToggleButtonGroup>
             </Box>
-            <TextField
-              label={identity === 'agent' ? '所属租户' : '所属平台'}
-              helperText={identity === 'agent' ? '填写所属租户账号；未分配租户时填写“平台”' : '平台管理员和租户统一归属平台'}
-              value={workspace}
-              onChange={event => { markEdited(); setWorkspace(truncateCodePoints(event.target.value, MANAGEMENT_LOGIN_WORKSPACE_MAX_RUNES)) }}
-              autoComplete="organization"
-              disabled={identity !== 'agent'}
-              required
-            />
             <TextField label="登录帐号" value={username} onChange={event => { markEdited(); setUsername(truncateCodePoints(event.target.value, MANAGEMENT_LOGIN_USERNAME_MAX_RUNES)) }} autoComplete="username" required />
             <TextField label="密码" type="password" value={password} onChange={event => { markEdited(); setPassword(event.target.value) }} autoComplete="current-password" slotProps={{ htmlInput: { maxLength: MANAGEMENT_LOGIN_PASSWORD_MAX_BYTES } }} required />
             <Button type="submit" variant="contained" size="large" disabled={loading || !username.trim() || !password}>

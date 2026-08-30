@@ -53,8 +53,8 @@ describe('plan group publications', () => {
     const html = renderToStaticMarkup(<PlanDetail games={[game]} gameId={game.id} onBack={() => {}} />)
     for (const row of masters) expect(html).toContain(row.master_name)
     expect(html).toContain('历史计划，非本期推荐')
-    expect(html).toContain('系统自动生成，仅供娱乐参考，不保证命中。')
-    expect(html).toContain('不统计命中率')
+    expect(html).not.toContain('系统自动生成，仅供娱乐参考，不保证命中。')
+    expect(html).toContain('系统自动推荐')
     expect(html).not.toContain('历史命中率 100%')
     expect(html).toContain('冠军 · 四期五码')
     expect(html).not.toContain('演示')
@@ -127,17 +127,14 @@ describe('plan group publications', () => {
     expect(html).not.toContain('aria-label="推荐号码')
     expect(html).not.toContain('本期计划</em>')
   })
-  it('retains the other game modes and their original three-number data', () => {
+  it('hides other game entrypoints without rendering or activating their data', () => {
     const otherGame = { ...game, id: 'au-lucky-10', title: '澳洲幸运10' }
     const otherRow = { ...master, game_id: otherGame.id, numbers: [1, 3, 10] }
     feed.detail = { game_id: otherGame.id, current_issue: '100', recommendations: [otherRow], latest_recommendations: [otherRow], history: [otherRow] }
     const html = renderToStaticMarkup(<PlanDetail games={[otherGame]} gameId={otherGame.id} onBack={() => {}} />)
-    expect(html).toContain('plan-mode-tabs')
-    expect(html).toContain('大小')
-    expect(html).toContain('单双')
-    expect(html).toContain('aria-label="推荐号码 1、3、10"')
-    expect(html).not.toContain('is-five-code')
-    expect(html).not.toContain('演示')
+    expect(html).toContain('暂时仅开放极速赛车计划')
+    expect(html).not.toContain('plan-mode-tabs')
+    expect(html).not.toContain('aria-label="推荐号码')
   })
   it('shows only six actual racing periods and never mixes another selection into history', () => {
     const detail = racingPlanDetail()
@@ -152,7 +149,7 @@ describe('plan group publications', () => {
     expect(html).not.toContain('wrong-position')
     expect((html.match(/class="plan-history-row"/g) || []).length).toBe(6)
   })
-  it('bounds other game history to six periods of the selected game, expert, and source', () => {
+  it('does not expose another game history through a saved deep link', () => {
     const otherGame = { ...game, id: 'speed-fly', title: '极速飞艇' }
     const row = { ...master, game_id: otherGame.id }
     const history = Array.from({ length: 12 }, (_, index) => ({ ...row, id: 100 + index, issue: `saved-${20 - index}` }))
@@ -160,10 +157,34 @@ describe('plan group publications', () => {
     history.unshift({ ...row, id: 998, source: 'manual', issue: 'wrong-source' })
     feed.detail = { game_id: otherGame.id, current_issue: '100', recommendations: [row], latest_recommendations: [row], history }
     const html = renderToStaticMarkup(<PlanDetail games={[otherGame]} gameId={otherGame.id} onBack={() => {}} />)
-    expect(html).toContain('最近 6 期发布记录')
+    expect(html).toContain('暂时仅开放极速赛车计划')
     expect(html).not.toContain('saved-14')
     expect(html).not.toContain('wrong-game')
     expect(html).not.toContain('wrong-source')
-    expect((html.match(/class="plan-history-row"/g) || []).length).toBe(6)
+    expect((html.match(/class="plan-history-row"/g) || []).length).toBe(0)
+  })
+  it('lists only speed racing even when the server retains other configured games', () => {
+    const otherGame = { ...game, id: 'speed-fly', title: '极速飞艇' }
+    feed.catalog.push({ ...feed.catalog[0], game_id: otherGame.id })
+    const html = renderToStaticMarkup(<PlanLobby games={[game, otherGame]} onBack={() => {}} onSelect={() => {}} />)
+    expect(html).toContain('极速赛车')
+    expect(html).not.toContain('极速飞艇')
+    expect((html.match(/class="plan-game-card"/g) || []).length).toBe(1)
+  })
+  it('uses draw ball colors and real hit/miss states independently from cycle progress', () => {
+    const detail = racingPlanDetail()
+    detail.recommendations[0].result = 'hit'
+    detail.recommendations[0].draw_numbers = [1, 6, 3, 4, 5, 2, 7, 8, 9, 10]
+    detail.history = [detail.recommendations[0], { ...detail.recommendations[0], id: 900, issue: '99', result: 'miss', cycle_status: 'completed' }]
+    feed.racing = detail
+    const html = renderToStaticMarkup(<PlanDetail games={[game]} gameId={game.id} onBack={() => {}} />)
+    expect(html).toContain('class="lottery-ball ball-1"')
+    expect(html).toContain('class="lottery-ball ball-10"')
+    expect(html).toContain('class="plan-outcome hit">中<')
+    expect(html).toContain('class="plan-outcome miss">不中<')
+    expect(html).toContain('aria-label="开奖号码 1、6、3、4、5、2、7、8、9、10"')
+    expect(html).not.toContain('本轮已全部发布')
+    expect(html).toContain('<span>切换计划</span>')
+    expect(html).toContain('aria-haspopup="dialog"')
   })
 })

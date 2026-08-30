@@ -11,7 +11,7 @@ export function truncateCodePoints(value: string, maxLength: number): string {
   return Array.from(value).slice(0, maxLength).join('')
 }
 
-export function validateManagementLoginInput(username: string, password: string, workspace: string): string {
+export function validateManagementLoginInput(username: string, password: string, workspace = ''): string {
   const account = username.trim()
   if (!account) return '请输入登录帐号'
   if (Array.from(username).length > MANAGEMENT_LOGIN_USERNAME_MAX_RUNES) {

@@ -231,7 +231,7 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 	}
 	issue := strings.TrimSpace(input.Issue)
 	if issue == "" {
-		issue, err = s.CurrentIssue(game.ID)
+		issue, err = s.BettingIssue(game.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -265,7 +265,7 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 	var roomScope string
 	var workspaceID uint64
 	err = s.db.Transaction(func(tx *gorm.DB) error {
-		if err := lockAcceptingIssue(tx, game.ID, issue); err != nil {
+		if err := lockBettingIssue(tx, game.ID, issue); err != nil {
 			return err
 		}
 		var account user.User
@@ -466,6 +466,13 @@ func (s *BetAdminService) PlaceIdempotent(input PlaceBetInput, requestID string)
 			}
 		}
 
+		// Place performs lifecycle/window materialization before its nested
+		// financial transaction. Hold the game first in this outer transaction
+		// too, so a source sync cannot hold Game while waiting for our Issue.
+		// Completed idempotent receipts above deliberately bypass these locks.
+		if _, err := lockBettingGame(tx, input.GameID); err != nil {
+			return err
+		}
 		input.LedgerReference = directBetRequestReference(row.ID)
 		placed, err := (&BetAdminService{db: tx, suppressNotifications: true}).Place(input)
 		if err != nil {
@@ -615,7 +622,7 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 	}
 	issue := strings.TrimSpace(inputs[0].Issue)
 	if issue == "" {
-		issue, err = s.CurrentIssue(game.ID)
+		issue, err = s.BettingIssue(game.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -676,7 +683,7 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 	var roomScope string
 	var workspaceID uint64
 	err = s.db.Transaction(func(tx *gorm.DB) error {
-		if err := lockAcceptingIssue(tx, game.ID, issue); err != nil {
+		if err := lockBettingIssue(tx, game.ID, issue); err != nil {
 			return err
 		}
 		var account user.User
@@ -1266,20 +1273,31 @@ func (s *BetAdminService) cancel(id uint64, ownerUserID *uint64, operator string
 
 // CancelCurrentIssue atomically cancels all of one member's pending bets in
 // the current accepting issue and refunds their combined stake exactly once.
-func (s *BetAdminService) CancelCurrentIssue(userID uint64, gameID, operator string) (*CancelIssueResult, error) {
-	game, err := s.loadGame(gameID)
-	if err != nil {
-		return nil, err
+// New clients freeze the issue they confirmed; legacy callers may omit it.
+func (s *BetAdminService) CancelCurrentIssue(userID uint64, gameID, operator string, expectedIssues ...string) (*CancelIssueResult, error) {
+	expectedIssue := ""
+	if len(expectedIssues) > 0 {
+		expectedIssue = strings.TrimSpace(expectedIssues[0])
 	}
-	issue, err := s.CurrentIssue(game.ID)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &CancelIssueResult{GameID: game.ID, Issue: issue}
+	result := &CancelIssueResult{}
 	roomScope := ""
 	workspaceID := uint64(0)
-	err = s.db.Transaction(func(tx *gorm.DB) error {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Resolve and validate one target while retaining the same Game lock as
+		// placement/source synchronization. Never re-resolve after comparison.
+		game, err := lockBettingGame(tx, gameID)
+		if err != nil {
+			return err
+		}
+		target, err := NewBetAdminService(tx).bettingIssueForGame(game, nil)
+		if err != nil {
+			return err
+		}
+		issue := target.Issue
+		if expectedIssue != "" && expectedIssue != issue {
+			return apperrors.NewBusinessError("ISSUE_MISMATCH", "期号已变更，请核对最新一期后再撤单")
+		}
+		result.GameID, result.Issue = game.ID, issue
 		// Serializes cancellation with placement and rejects a click that arrives
 		// after sealing. Settlement can therefore never race a member refund.
 		if err := lockAcceptingIssue(tx, game.ID, issue); err != nil {
@@ -1365,7 +1383,7 @@ func (s *BetAdminService) CancelCurrentIssue(userID uint64, gameID, operator str
 		return nil, apperrors.NewSystemError("BET_CANCEL_FAILED", "撤回本期注单失败", err)
 	}
 	if recipients, recipientsErr := betScopeRecipients(s.db, roomScope); recipientsErr == nil {
-		ws.NotifyBetFeed(recipients, workspaceID, game.ID, issue, roomScope)
+		ws.NotifyBetFeed(recipients, workspaceID, result.GameID, result.Issue, roomScope)
 	}
 	ws.NotifyUser(userID, "balance", map[string]any{"workspace_id": workspaceID, "balance": result.Balance})
 	return result, nil
@@ -1832,16 +1850,15 @@ func validateBetLimitEntries(db *gorm.DB, gameID, issue string, userID uint64, e
 }
 
 func (s *BetAdminService) ensureIssueOpen(game *lottery.Game, issue string) error {
-	current, err := s.currentIssueForGame(game)
+	if !sourceHealthyForGame(game) {
+		return apperrors.NewBusinessError("SOURCE_UNAVAILABLE", "开奖数据暂时异常，本期已暂停投注")
+	}
+	lifecycle, err := s.bettingIssueForGame(game, nil)
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(issue) != current {
+	if strings.TrimSpace(issue) != lifecycle.Issue {
 		return apperrors.NewBusinessError("ISSUE_MISMATCH", "期号已变更，请刷新页面后重试")
-	}
-	lifecycle, err := s.EnsureCurrentIssue(game)
-	if err != nil {
-		return err
 	}
 	if !sharedIssueOpen(lifecycle, time.Now().UTC()) {
 		if lifecycle.Status == lottery.IssueStatusError {

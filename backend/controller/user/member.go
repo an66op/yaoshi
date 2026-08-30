@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -451,8 +452,8 @@ func (h *memberHandler) CancelBet(c *gin.Context) {
 }
 
 // CancelCurrentIssueBets withdraws every still-pending ticket owned by the
-// member in the server-authoritative current issue. The client never supplies
-// an issue number, so a stale screen cannot accidentally cancel another issue.
+// member in one server-authoritative issue. New clients include the confirmed
+// issue so a delayed request cannot silently cancel a different period.
 func (h *memberHandler) CancelCurrentIssueBets(c *gin.Context) {
 	userID, ok := memberUserID(c)
 	if !ok {
@@ -460,6 +461,7 @@ func (h *memberHandler) CancelCurrentIssueBets(c *gin.Context) {
 	}
 	var request struct {
 		GameID string `json:"game_id" binding:"required"`
+		Issue  string `json:"issue" binding:"omitempty,max=64"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		constants.SendError(c, http.StatusBadRequest, "请选择要撤回的彩种", err)
@@ -467,7 +469,7 @@ func (h *memberHandler) CancelCurrentIssueBets(c *gin.Context) {
 	}
 	username, _ := c.Get("username")
 	operatorName, _ := username.(string)
-	result, err := h.bets.CancelCurrentIssue(userID, request.GameID, operatorName)
+	result, err := h.bets.CancelCurrentIssue(userID, request.GameID, operatorName, request.Issue)
 	if err != nil {
 		if apperrors.IsBusinessError(err) {
 			constants.SendError(c, http.StatusBadRequest, "本期注单未撤回", err)
@@ -989,7 +991,16 @@ func (h *memberHandler) ListChatMessages(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	beforeID, _ := strconv.ParseUint(c.Query("before_id"), 10, 64)
 	afterID, _ := strconv.ParseUint(c.Query("after_id"), 10, 64)
-	result, err := h.chat.List(userID, c.DefaultQuery("room_type", "group"), c.DefaultQuery("game_id", "lobby"), limit, beforeID, afterID)
+	var since time.Time
+	if raw := c.Query("since"); raw != "" {
+		var err error
+		since, err = time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			constants.SendError(c, http.StatusBadRequest, "消息起始时间格式不正确", nil)
+			return
+		}
+	}
+	result, err := h.chat.List(userID, c.DefaultQuery("room_type", "group"), c.DefaultQuery("game_id", "lobby"), limit, beforeID, afterID, since)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取聊天消息失败", err)
 		return
@@ -1087,17 +1098,26 @@ func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.Ch
 	if status != nil && strings.TrimSpace(status.GameName) != "" {
 		gameName = status.GameName
 	}
+	bettingIssue := roomCommandBettingIssue(status)
 
 	post := func(body string) {
 		_, _ = h.chat.PostAssistant(message.RoomScope, message.GameID, mention+strings.TrimSpace(body), message.ID)
 	}
 	switch content {
 	case "取消":
-		if requestedIssue != "" && (status == nil || status.Issue != requestedIssue) {
+		if requestedIssue != "" && bettingIssue != requestedIssue {
 			post("撤单失败，期号已经切换，请核对最新一期后再操作。")
 			return
 		}
-		cancelled, err := h.bets.CancelCurrentIssue(userID, message.GameID, message.Nickname)
+		expectedIssue := requestedIssue
+		if expectedIssue == "" {
+			expectedIssue = bettingIssue
+		}
+		if expectedIssue == "" {
+			post("撤单失败，期号尚未同步，请稍后重试。")
+			return
+		}
+		cancelled, err := h.bets.CancelCurrentIssue(userID, message.GameID, message.Nickname, expectedIssue)
 		if err != nil {
 			post("撤单失败，" + roomCommandError(err))
 			return
@@ -1106,14 +1126,12 @@ func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.Ch
 		return
 	case "查":
 		issue := requestedIssue
-		if status != nil {
-			if issue == "" {
-				issue = status.Issue
-			}
+		if issue == "" {
+			issue = bettingIssue
 		}
 		if issue == "" {
 			var err error
-			issue, err = h.bets.CurrentIssue(message.GameID)
+			issue, err = h.bets.BettingIssue(message.GameID)
 			if err != nil {
 				post("查询失败，请稍后再试。")
 				return
@@ -1134,13 +1152,13 @@ func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.Ch
 		var total float64
 		for _, item := range bets.Items {
 			label := roomBetPositionLabel(item.Position, item.PlayCode, item.PlayName)
-			fmt.Fprintf(&body, "%s [%s/%.2f]\n", label, item.Selection, item.Amount)
+			fmt.Fprintf(&body, "%s [%s/%s]\n", label, item.Selection, services.FormatBetAmount(item.Amount))
 			total += item.Amount
 		}
 		if len(bets.Items) == 0 {
 			body.WriteString("本期暂无注单\n")
 		}
-		fmt.Fprintf(&body, "当期使用积分：%.2f\n剩余积分：%.2f", total, profile.Balance)
+		fmt.Fprintf(&body, "当期使用积分：%s\n剩余积分：%.2f", services.FormatBetAmount(total), profile.Balance)
 		post(body.String())
 		return
 	case "重复":
@@ -1182,6 +1200,16 @@ func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.Ch
 	post(formatAssistantAccepted(accepted))
 }
 
+func roomCommandBettingIssue(status *services.AssistantDrawStatus) string {
+	if status == nil {
+		return ""
+	}
+	if status.BettingWindow != nil {
+		return status.BettingWindow.Issue
+	}
+	return status.Issue
+}
+
 func roomBetPositionLabel(position int, playCode, playName string) string {
 	if playCode == "sum" {
 		return "冠亚和"
@@ -1202,11 +1230,11 @@ func formatAssistantAccepted(result *services.AssistantBetResult) string {
 	}
 	var body strings.Builder
 	fmt.Fprintf(&body, "【%s - %s】下单成功\n", result.GameName, result.Issue)
-	for _, line := range result.Lines {
-		body.WriteString(line.Label)
+	for _, line := range services.AssistantReceiptLines(result.Lines) {
+		body.WriteString(line)
 		body.WriteByte('\n')
 	}
-	fmt.Fprintf(&body, "\n使用：%.2f\n剩余：%.2f", result.Total, result.Balance)
+	fmt.Fprintf(&body, "\n使用：%s\n剩余：%.2f", services.FormatBetAmount(result.Total), result.Balance)
 	return body.String()
 }
 

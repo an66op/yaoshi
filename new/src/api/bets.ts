@@ -1,5 +1,6 @@
 import { request } from './client'
 import { createRequestId } from '../utils/requestId'
+import type { LotteryBettingWindow } from '../utils/lotteryTiming'
 
 export type MemberBet = {
   id: number
@@ -57,6 +58,7 @@ export type AssistantDrawStatus = {
   game_name: string
   issue: string
   accepting: boolean
+  betting_window?: LotteryBettingWindow | null
   next_draw_at: string
   latest_issue?: string
   latest_numbers?: number[]
@@ -115,9 +117,9 @@ export const betsApi = {
   assistantHistory: (gameId: string, limit = 20) => request<AssistantBetResult[]>(`/member/games/${encodeURIComponent(gameId)}/assistant/history?limit=${limit}`),
   assistantPlace: (gameId: string, payload: { issue?: string; content: string; request_id?: string }) =>
     request<AssistantBetResult>(`/member/games/${encodeURIComponent(gameId)}/assistant/bets`, { method: 'POST', body: JSON.stringify(payload) }),
-  cancelCurrent: (gameId: string) => request<CancelIssueResult>('/member/bets/cancel-current', {
+  cancelCurrent: (gameId: string, issue?: string) => request<CancelIssueResult>('/member/bets/cancel-current', {
     method: 'POST',
-    body: JSON.stringify({ game_id: gameId }),
+    body: JSON.stringify({ game_id: gameId, issue }),
   }),
   cancel: (id: number) => request<MemberBet>(`/member/bets/${id}/cancel`, { method: 'POST' }),
 }

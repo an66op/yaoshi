@@ -5,6 +5,24 @@ import type { Game } from '../types'
 // the title. It must not be used as a game Logo or gated on a specific game ID.
 const racingColors = ['#a8afb4', '#f3c51f', '#1d83d2', '#33383e', '#f07b20', '#35c2c4', '#6144cc', '#b8bec2', '#e33b31', '#921f1d', '#23a74e']
 
+export const CURRENT_DRAW_CARD_SIZE = { width: 720, height: 450 } as const
+const RECENT_DRAW_ROW_LIMIT = 15
+const RECENT_DRAW_HEADER_HEIGHT = 84
+const RECENT_DRAW_ROW_HEIGHT = 35
+const RECENT_DRAW_TABLE_TOP = RECENT_DRAW_HEADER_HEIGHT + 22
+
+export function recentDrawCardSize(drawCount: number) {
+  const rows = Math.min(RECENT_DRAW_ROW_LIMIT, Math.max(0, drawCount))
+  return { width: 720, height: RECENT_DRAW_TABLE_TOP + rows * RECENT_DRAW_ROW_HEIGHT + 14 }
+}
+
+export function releaseDrawCardCanvas(canvas: HTMLCanvasElement) {
+  // Clearing pixels retains the allocation; resetting dimensions releases it.
+  // Display size is independently reserved through the canvas aspect-ratio.
+  if (canvas.width !== 0) canvas.width = 0
+  if (canvas.height !== 0) canvas.height = 0
+}
+
 function drawBall(ctx: CanvasRenderingContext2D, value: number, x: number, y: number, size: number) {
   ctx.fillStyle = racingColors[value] ?? '#1596a7'
   ctx.beginPath()
@@ -60,8 +78,7 @@ function drawPodiumMarker(ctx: CanvasRenderingContext2D, value: number, x: numbe
 }
 
 export function paintCurrentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game, 'title'>, draw: DrawResult, racingCars: CanvasImageSource | null, pixelRatio = 1) {
-  const width = 720
-  const height = 450
+  const { width, height } = CURRENT_DRAW_CARD_SIZE
   const ctx = prepareCanvas(canvas, width, height, pixelRatio)
   if (!ctx) return
   const background = ctx.createLinearGradient(0, 0, width, height)
@@ -148,13 +165,12 @@ export function paintCurrentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game,
 }
 
 export function paintRecentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game, 'title'>, draws: DrawResult[], racingCars: CanvasImageSource | null, pixelRatio = 1) {
-  const rows = draws.slice(0, 15)
-  const width = 720
-  const rowHeight = 35
+  const rows = draws.slice(0, RECENT_DRAW_ROW_LIMIT)
+  const { width, height } = recentDrawCardSize(rows.length)
+  const rowHeight = RECENT_DRAW_ROW_HEIGHT
   // Reserve the same artwork space before and after loading to avoid layout jumps.
-  const headerHeight = 84
-  const tableTop = headerHeight + 22
-  const height = tableTop + rows.length * rowHeight + 14
+  const headerHeight = RECENT_DRAW_HEADER_HEIGHT
+  const tableTop = RECENT_DRAW_TABLE_TOP
   const ctx = prepareCanvas(canvas, width, height, pixelRatio)
   if (!ctx) return
   ctx.fillStyle = '#f6fafb'; ctx.fillRect(0, 0, width, height)

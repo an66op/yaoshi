@@ -17,36 +17,37 @@ import (
 type LotteryService struct{ db *gorm.DB }
 
 type GameSummary struct {
-	ID             string     `json:"id"`
-	Code           string     `json:"code"`
-	Name           string     `json:"name"`
-	Category       string     `json:"category"`
-	LobbyCategory  string     `json:"lobby_category"`
-	LobbySortOrder int        `json:"lobby_sort_order"`
-	Badge          string     `json:"badge"`
-	BadgeColor     string     `json:"badge_color"`
-	Enabled        bool       `json:"enabled"`
-	Issue          string     `json:"issue"`
-	CurrentIssue   string     `json:"current_issue,omitempty"`
-	BettorCount    int64      `json:"bettor_count,omitempty"`
-	LatestNumbers  []int      `json:"latest_numbers,omitempty"`
-	NextDrawAt     time.Time  `json:"next_draw_at"`
-	DrawInterval   int        `json:"draw_interval"`
-	SealSeconds    int        `json:"seal_seconds"`
-	TimingSource   string     `json:"timing_source"`
-	Turnover       float64    `json:"turnover"`
-	Profit         float64    `json:"profit"`
-	SourceKind     string     `json:"source_kind"`
-	SourceName     string     `json:"source_name"`
-	SourceURL      string     `json:"source_url"`
-	SyncStatus     string     `json:"sync_status"`
-	LastSyncAt     *time.Time `json:"last_sync_at"`
-	LastSyncError  string     `json:"last_sync_error"`
-	ScheduleMode   string     `json:"schedule_mode"`
-	IssueStatus    string     `json:"issue_status"`
-	AcceptAt       *time.Time `json:"accept_at,omitempty"`
-	SealAt         *time.Time `json:"seal_at,omitempty"`
-	SourceHealthy  bool       `json:"source_healthy"`
+	ID             string         `json:"id"`
+	Code           string         `json:"code"`
+	Name           string         `json:"name"`
+	Category       string         `json:"category"`
+	LobbyCategory  string         `json:"lobby_category"`
+	LobbySortOrder int            `json:"lobby_sort_order"`
+	Badge          string         `json:"badge"`
+	BadgeColor     string         `json:"badge_color"`
+	Enabled        bool           `json:"enabled"`
+	Issue          string         `json:"issue"`
+	CurrentIssue   string         `json:"current_issue,omitempty"`
+	BettorCount    int64          `json:"bettor_count,omitempty"`
+	LatestNumbers  []int          `json:"latest_numbers,omitempty"`
+	NextDrawAt     time.Time      `json:"next_draw_at"`
+	DrawInterval   int            `json:"draw_interval"`
+	SealSeconds    int            `json:"seal_seconds"`
+	TimingSource   string         `json:"timing_source"`
+	Turnover       float64        `json:"turnover"`
+	Profit         float64        `json:"profit"`
+	SourceKind     string         `json:"source_kind"`
+	SourceName     string         `json:"source_name"`
+	SourceURL      string         `json:"source_url"`
+	SyncStatus     string         `json:"sync_status"`
+	LastSyncAt     *time.Time     `json:"last_sync_at"`
+	LastSyncError  string         `json:"last_sync_error"`
+	ScheduleMode   string         `json:"schedule_mode"`
+	IssueStatus    string         `json:"issue_status"`
+	AcceptAt       *time.Time     `json:"accept_at,omitempty"`
+	SealAt         *time.Time     `json:"seal_at,omitempty"`
+	SourceHealthy  bool           `json:"source_healthy"`
+	BettingWindow  *BettingWindow `json:"betting_window,omitempty"`
 }
 
 type LobbyCategorySummary struct {
@@ -136,6 +137,10 @@ func (s *LotteryService) listGamesForWorkspace(workspaceID uint64) ([]GameSummar
 			}
 		}
 		applyGameTimingSummary(&summary, lifecycle, window, time.Now().UTC())
+		summary.BettingWindow, err = NewBetAdminService(s.db).nextBettingWindow(&game, lifecycle, actualWorkspaceID, rawSettings)
+		if err != nil {
+			return nil, err
+		}
 		result = append(result, summary)
 	}
 	var categories []lottery.LobbyCategory

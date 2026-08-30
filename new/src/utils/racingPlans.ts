@@ -45,7 +45,9 @@ export function racingPlanProgress(row: RacingPlanRecommendation) {
   return `第 ${row.cycle_period} / ${row.cycle_periods} 期`
 }
 
-export const racingPlanCycleStatus = (row: RacingPlanRecommendation) => row.cycle_status === 'completed' ? '本轮已全部发布' : row.cycle_status === 'interrupted' ? '本轮已中断' : '本轮发布中'
+// Publication progress and draw outcome are independent. Even a completed
+// cycle remains pending until the server can grade its actual draw.
+export const racingPlanResultLabel = (row: RacingPlanRecommendation) => row.result === 'hit' ? '中' : row.result === 'miss' ? '不中' : '待开奖'
 
 export function racingPlanDirection(row: RacingPlanRecommendation) {
   return row.kind === 'size' ? row.size : row.kind === 'parity' ? row.parity : row.kind === 'dragon_tiger' ? row.dragon_tiger : ''

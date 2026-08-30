@@ -13,7 +13,9 @@ describe('game chat presentation', () => {
     const content = '@王者玩家\n【极速飞艇 - 54776105】下单成功\n冠军[4/352.00] · 赔率 9.900\n\n使用：352.00\n剩余：10035483.00'
     const html = renderToStaticMarkup(<GameChatMessage message={{ ...base, content }} nickname="王者玩家" />)
     expect(html.match(/class="assistant-mention"/g)).toHaveLength(1)
-    expect(html).toContain('冠军[4/352.00]')
+    expect(html).toContain('冠军[4/352]')
+    expect(html).toContain('使用：352')
+    expect(html).not.toContain('使用：352.00')
     expect(html).toContain('剩余：10035483.00')
     expect(html).not.toContain('赔率')
     expect(html).not.toContain('我的本期注单')

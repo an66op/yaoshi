@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { lotteryApi, type LotteryGame } from '../api/lottery'
 import { WS_EVENT, type WsEvent, useWebSocketConnected } from './useWebSocket'
 import { shouldReloadGameCatalog } from '../utils/gameCatalogEvents'
-import { readServerClock, resolveLotteryTiming, sampleServerClock, type ServerClockSample } from '../utils/lotteryTiming'
+import { readServerClock, resolveLotteryBetting, resolveLotteryTiming, sampleServerClock, type ServerClockSample } from '../utils/lotteryTiming'
 import { createRefreshLoop } from '../utils/refreshLoop'
 import { gameCatalogRefreshDelay } from '../utils/gameCatalogRefresh'
 import type { Game } from '../types'
@@ -67,6 +67,7 @@ export const mapLotteryGame = (item: LotteryGame, nowMs: number): Game => {
     latestIssue: item.issue || '—',
     due: timing.due,
     timing,
+    betting: resolveLotteryBetting(item, nowMs),
     color: resolvedBadgeColor(item),
     logo: gameLogoPaths[item.id],
     // Missing draw data is an empty state. Zero-filled balls look like a real

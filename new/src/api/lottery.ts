@@ -1,4 +1,5 @@
 import { publicRequest, request } from './client'
+import type { LotteryBettingWindow } from '../utils/lotteryTiming'
 
 export type LotteryGame = {
   id: string
@@ -27,6 +28,7 @@ export type LotteryGame = {
   issue_status: string
   seal_at?: string | null
   source_healthy: boolean
+  betting_window?: LotteryBettingWindow | null
 }
 
 export type ServerClock = {

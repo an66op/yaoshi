@@ -1495,7 +1495,7 @@ export const adminApi = {
     if (!response.ok) throw new Error('后端离线')
     return true
   },
-  login: (username: string, password: string, workspace = '') => request<LoginResult>('/login', { method: 'POST', body: JSON.stringify({ username, password, workspace }) }),
+  login: (username: string, password: string) => request<LoginResult>('/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
 	me: () => request<LoginResult['user']>('/session'),
 	refreshSession: () => request<{ expires_in: number }>('/session/refresh', { method: 'POST' }),
 	logout: async () => {

@@ -110,6 +110,7 @@ export type MemberNotificationPage = {
 }
 
 export type GameFeedItem = {
+  issue?: string
   nickname: string
   detail: string
   amount: number

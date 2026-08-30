@@ -34,6 +34,7 @@ vi.mock('react', async importOriginal => ({
 }))
 vi.mock('../utils/testLogin', () => ({ loadTestLogin: runtime.loadTestLogin }))
 vi.mock('../api', () => ({ adminApi: { login: runtime.login } }))
+vi.mock('../auth', () => ({ clearLegacyAdminSession: vi.fn() }))
 
 type FormElement = ReactElement<{
   children?: ReactNode
@@ -41,6 +42,8 @@ type FormElement = ReactElement<{
   'aria-label'?: string
   value?: string
   severity?: string
+  component?: string
+  onSubmit?: (event: { preventDefault: () => void }) => void
   onChange?: (event: { target: { value: string } }, next?: string) => void
 }>
 
@@ -92,7 +95,7 @@ describe('management runtime test login lifecycle', () => {
       ready = render()
       expect(field(ready, 'username').props.value).toBe(presets[identity].username)
       expect(field(ready, 'current-password').props.value).toBe(presets[identity].password)
-      expect(field(ready, 'organization').props.value).toBe(presets[identity].workspace)
+      expect(field(ready, 'organization')).toBeUndefined()
       expect(find(ready, node => node.props.severity === 'info')).toBeDefined()
     }
     expect(runtime.login).not.toHaveBeenCalled()
@@ -105,9 +108,9 @@ describe('management runtime test login lifecycle', () => {
     await Promise.resolve()
     const ready = render()
     expect(field(ready, 'username').props.value).toBe('test-agent')
-    expect(field(ready, 'organization').props.value).toBe('test-tenant')
+    expect(field(ready, 'organization')).toBeUndefined()
   })
-  it.each(['username', 'current-password', 'organization'])('preserves manual edits to %s during a pending response', async name => {
+  it.each(['username', 'current-password'])('preserves manual edits to %s during a pending response', async name => {
     let resolve!: (value: unknown) => void
     runtime.loadTestLogin.mockImplementation(() => new Promise(done => { resolve = done }))
     const initial = render()
@@ -148,5 +151,21 @@ describe('management runtime test login lifecycle', () => {
     const initial = render()
     expect(field(initial, 'username').props.value).toBe('admin')
     expect(runtime.loadTestLogin).not.toHaveBeenCalled()
+  })
+
+  it.each(['platform', 'tenant', 'agent'] as const)('authenticates %s with account/password only and trusts the server role', async identity => {
+    runtime.loadTestLogin.mockResolvedValue(presets)
+    const user = { id: 22, role: 'agent', username: 'real-account' }
+    runtime.login.mockResolvedValue({ user })
+    props.onSuccess.mockClear()
+    render(); await Promise.resolve()
+    choose(render(), identity)
+    const ready = render()
+    find(ready, node => node.props.component === 'form')!.props.onSubmit!({ preventDefault: vi.fn() })
+    await Promise.resolve(); await Promise.resolve()
+    expect(runtime.login).toHaveBeenCalledWith(presets[identity].username, presets[identity].password)
+    expect(runtime.login.mock.calls[0]).toHaveLength(2)
+    expect(props.onSuccess).toHaveBeenCalledWith(user)
+    expect(field(ready, 'organization')).toBeUndefined()
   })
 })

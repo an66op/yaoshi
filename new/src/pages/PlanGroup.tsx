@@ -6,7 +6,11 @@ import type { Game } from '../types'
 import { usePlanCatalog, usePlanDetail, useRacingPlanStream } from '../hooks/usePlanFeed'
 import { displayedPlanMasters, planIsCurrent, planResultLabel, recentPlanHistory } from '../utils/planPresentation'
 import { PlanSelectionSheet } from '../components/PlanSelectionSheet'
-import { racingPlanCycleStatus, racingPlanDirection, racingPlanHistory, racingPlanIsCurrent, racingPlanMasters, racingPlanPositionLabel, racingPlanProgress } from '../utils/racingPlans'
+import { racingPlanResultLabel, racingPlanDirection, racingPlanHistory, racingPlanIsCurrent, racingPlanMasters, racingPlanPositionLabel, racingPlanProgress } from '../utils/racingPlans'
+
+// Temporarily narrow the member entrypoints, without changing room switches,
+// deleting other games' publications, or their administration configuration.
+const MEMBER_PLAN_GAMES: readonly string[] = ['speed-racing']
 
 type PlanMode = 'combo' | 'numbers' | 'size' | 'parity'
 
@@ -55,7 +59,7 @@ export function PlanLobby({ games, onBack, onSelect }: { games: Game[]; onBack: 
   // Chats is keyed by the authenticated room, so room switches unmount this feed.
   const { data: catalog, loading, error } = usePlanCatalog()
 
-  const planGames = useMemo(() => (catalog ?? []).map(summary => {
+  const planGames = useMemo(() => (catalog ?? []).filter(summary => MEMBER_PLAN_GAMES.includes(summary.game_id)).map(summary => {
     const game = games.find(item => item.id === summary.game_id)
     return game ? { game, summary } : null
   }).filter((item): item is { game: Game; summary: PlanGameSummary } => Boolean(item)), [catalog, games])
@@ -85,13 +89,14 @@ export function PlanLobby({ games, onBack, onSelect }: { games: Game[]; onBack: 
 type PlanDetailProps = { games: Game[]; gameId?: string; onBack: () => void }
 
 export function PlanDetail(props: PlanDetailProps) {
+  if (!MEMBER_PLAN_GAMES.includes(props.gameId ?? '')) return <section className="plan-page"><header className="blue-header plan-header"><button aria-label="返回计划群" onClick={props.onBack}><Icon name="back" /></button><b>计划群</b><span /></header><p className="plan-empty">暂时仅开放极速赛车计划。</p></section>
   return props.gameId === 'speed-racing' ? <RacingPlanDetail {...props} /> : <LegacyPlanDetail {...props} />
 }
 
 function RacingPlanPick({ row, compact = false }: { row: RacingPlanRecommendation; compact?: boolean }) {
   const direction = racingPlanDirection(row)
   return row.kind === 'numbers'
-    ? <strong className={`racing-plan-numbers${compact ? ' is-compact' : ''}`} aria-label={`推荐号码 ${row.numbers.join('、')}`}>{row.numbers.map((number, index) => <i key={`${number}-${index}`}>{number}</i>)}</strong>
+    ? <strong className={`racing-plan-numbers${compact ? ' is-compact' : ''}`} aria-label={`推荐号码 ${row.numbers.join('、')}`}>{row.numbers.map((number, index) => <b className={ballTone(number)} key={`${number}-${index}`}>{number}</b>)}</strong>
     : <strong className={`racing-plan-direction${compact ? ' is-compact' : ''}`}>{direction || '等待发布'}</strong>
 }
 
@@ -114,14 +119,13 @@ function RacingPlanDetail({ games, onBack }: PlanDetailProps) {
   if (!game) return <section className="plan-page"><header className="blue-header"><button aria-label="返回计划群" onClick={onBack}><Icon name="back" /></button><b>计划详情</b><span /></header><p className="plan-empty">该彩票计划暂未开放。</p></section>
 
   return <section className="plan-page plan-detail-page racing-plan-page">
-    <header className="blue-header plan-header"><button aria-label="返回计划群" onClick={onBack}><Icon name="back" /></button><b>{game.title}</b><button type="button" className="plan-switch-button" disabled={!data || activating} onClick={openSelector}><Icon name="switch" />切换计划</button></header>
+    <header className="blue-header plan-header"><button aria-label="返回计划群" onClick={onBack}><Icon name="back" /></button><b>{game.title}</b><button type="button" className="plan-switch-button" aria-label="切换计划" aria-haspopup="dialog" aria-expanded={selectorOpen} disabled={!data || activating} onClick={openSelector}><Icon name="switch" /><span>切换计划</span></button></header>
     <div className="plan-current">
       <span className="plan-current-logo">{game.logo ? <img alt={`${game.title} Logo`} src={game.logo} /> : game.tag.slice(0, 2)}</span>
       <div><small>当前计划</small><b>{positionLabel} · {planLabel}</b><small>{loading ? '正在读取独立计划…' : current ? `第 ${shortIssue(activeMaster.issue)} 期` : '等待本期计划'}</small></div>
       <time>{activeMaster ? `更新 ${updateTime(activeMaster.updated_at)}` : ''}</time>
     </div>
     {data && <div className="racing-plan-stream-status"><span>{!data.stream.allowed ? '当前计划暂未开放 · 只读记录' : data.automation_enabled ? '本页可见时每 15 秒更新' : '自动推荐已关闭 · 只读记录'}</span><small>访问中 {data.stream.active_count} / {data.stream.max_active}</small></div>}
-    <p className="racing-plan-notice">{data?.notice || '系统自动生成，仅供娱乐参考，不保证命中。'}</p>
     {error && <p className="racing-plan-message" role="alert">{error}</p>}
     {data && !data.stream.allowed && <p className="racing-plan-message">当前名次或计划类型未开放，请切换其他已开放计划，或联系房间管理员。</p>}
     {!selectorOpen && activationError && <p className="racing-plan-message" role="alert">{activationError}</p>}
@@ -132,18 +136,18 @@ function RacingPlanDetail({ games, onBack }: PlanDetailProps) {
       </div>
       {activeMaster && <article className="plan-recommendation racing-plan-recommendation">
         <header><div><small>{activeMaster.master_name} · {positionLabel}</small><b>{planLabel}</b></div><em>{current ? '本期计划' : '历史计划'}</em></header>
-        <div className="racing-plan-cycle"><b>发布进度 · {racingPlanProgress(activeMaster)}</b><span>{racingPlanCycleStatus(activeMaster)}</span><small>起始期号 {shortIssue(activeMaster.cycle_start_issue)} · 进度为已发布期数，不代表已开奖次数</small></div>
+        <div className="racing-plan-cycle"><b>{racingPlanProgress(activeMaster)}</b><span className={`plan-outcome ${activeMaster.result}`}>{racingPlanResultLabel(activeMaster)}</span><small>起始期号 {shortIssue(activeMaster.cycle_start_issue)}</small></div>
         {!current && <p className="racing-plan-history-warning" role="note">历史计划，非本期推荐；仅展示当前所选名次与类型的最近发布。</p>}
         <div className="racing-plan-picks"><small>第 {shortIssue(activeMaster.issue)} 期 · {activeMaster.kind === 'numbers' ? `${activeMaster.numbers.length}码推荐` : option?.kind === 'dragon_tiger' ? `${positionLabel} vs ${racingPlanPositionLabel(position?.opponent_position ?? 11 - selection.position)}` : '推荐方向'}</small><RacingPlanPick row={activeMaster} /></div>
-        <p>自动推荐不统计命中率。</p>
+        {activeMaster.draw_numbers?.length === 10 && <div className="racing-plan-draw"><small>本期开奖号码</small><div className="racing-plan-numbers" aria-label={`开奖号码 ${activeMaster.draw_numbers.join('、')}`}>{activeMaster.draw_numbers.map((number, index) => <b className={`${ballTone(number)}${index + 1 === selection.position ? ' is-target' : ''}`} key={index}>{number}</b>)}</div></div>}
       </article>}
       <section className="plan-history racing-plan-history">
         <header><b>最近 6 期发布记录</b><span>{positionLabel} · {planLabel}</span></header>
-        <div className="plan-history-head"><span>期号 / 周期</span><span>推荐内容</span><span>状态</span></div>
+        <div className="plan-history-head"><span>期号 / 周期</span><span>推荐内容</span><span>结果</span></div>
         {history.map(row => <div className="plan-history-row" key={row.id}>
           <span><b>{shortIssue(row.issue)}</b><small>{racingPlanProgress(row)}</small><small>{updateTime(row.updated_at)}</small></span>
           <RacingPlanPick row={row} compact />
-          <em>{racingPlanCycleStatus(row)}</em>
+          <em className={`plan-outcome ${row.result}`}>{racingPlanResultLabel(row)}</em>
         </div>)}
         {!history.length && <p className="plan-history-loading">当前所选专家暂无此计划的发布记录</p>}
       </section>

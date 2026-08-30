@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { DrawResult } from '../api/lottery'
-import { drawCardIssueLabel, paintCurrentDrawCard, paintRecentDrawCard } from './drawResultCardCanvas'
+import { CURRENT_DRAW_CARD_SIZE, drawCardIssueLabel, paintCurrentDrawCard, paintRecentDrawCard, recentDrawCardSize, releaseDrawCardCanvas } from './drawResultCardCanvas'
 
 function recordingCanvas() {
   const gradient = { addColorStop: vi.fn() }
@@ -86,5 +86,21 @@ describe('shared draw-result racing artwork', () => {
   it('keeps existing display issue normalization without modifying the source issue', () => {
     expect(drawCardIssueLabel('20260830-12345')).toBe('12345')
     expect(drawCardIssueLabel('54776094')).toBe('54776094')
+  })
+
+  it('reserves the same display proportions as the painted bitmap before and after release', () => {
+    const { canvas } = recordingCanvas()
+    paintCurrentDrawCard(canvas, { title: '极速赛车' }, draw, artwork, 2)
+    expect(canvas.width / canvas.height).toBe(CURRENT_DRAW_CARD_SIZE.width / CURRENT_DRAW_CARD_SIZE.height)
+    releaseDrawCardCanvas(canvas)
+    expect([canvas.width, canvas.height]).toEqual([0, 0])
+    for (const count of [0, 1, 8, 15, 20]) {
+      const rows = Array.from({ length: count }, () => draw)
+      const size = recentDrawCardSize(count)
+      paintRecentDrawCard(canvas, { title: '极速赛车' }, rows, artwork, 2)
+      expect(canvas.width / canvas.height).toBe(size.width / size.height)
+      releaseDrawCardCanvas(canvas)
+      expect([canvas.width, canvas.height]).toEqual([0, 0])
+    }
   })
 })

@@ -25,6 +25,14 @@ describe('management API cookie credentials', () => {
 
   afterEach(() => vi.unstubAllGlobals())
 
+  it('sends only account and password, never a client-chosen login owner or role', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, data: {} }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { adminApi } = await import('./api')
+    await adminApi.login('agent-account', 'test-password')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ username: 'agent-account', password: 'test-password' })
+  })
+
   it('uses cookie credentials and never copies a legacy token to Authorization', async () => {
     storage.setItem('yaotu-admin-token', 'legacy-secret')
     const fetchMock = vi.fn().mockResolvedValue({

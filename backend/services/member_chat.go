@@ -83,7 +83,7 @@ func NewMemberChatService(db *gorm.DB) *MemberChatService {
 	return &MemberChatService{db: db, settings: NewSettingsAdminService(db)}
 }
 
-func (s *MemberChatService) List(userID uint64, roomType, gameID string, limit int, beforeID, afterID uint64) (*ChatMessageList, error) {
+func (s *MemberChatService) List(userID uint64, roomType, gameID string, limit int, beforeID, afterID uint64, since ...time.Time) (*ChatMessageList, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
@@ -105,6 +105,10 @@ func (s *MemberChatService) List(userID uint64, roomType, gameID string, limit i
 		}
 	}
 	query := scopedChatMessageQuery(s.db, account.WorkspaceID, roomType, scope, roomScope, gameID)
+	fromVisit := len(since) > 0 && !since[0].IsZero()
+	if fromVisit {
+		query = query.Where("created_at >= ?", since[0])
+	}
 	// Game rooms should contain genuine member conversation and bet activity.
 	// Older releases also wrote synthetic filler text through activity accounts;
 	// hide those rows without deleting real room history or lobby messages.
@@ -118,8 +122,10 @@ func (s *MemberChatService) List(userID uint64, roomType, gameID string, limit i
 	}
 	var rows []chat.Message
 	order := "created_at desc, id desc"
-	if afterID > 0 {
-		order = "created_at asc, id asc"
+	if afterID > 0 || (fromVisit && beforeID == 0) {
+		// Incremental cursors are IDs. Ordering by the same key avoids skipping
+		// messages whose timestamps tie or arrive slightly out of order.
+		order = "id asc"
 	}
 	if err := query.Order(order).Limit(limit + 1).Find(&rows).Error; err != nil {
 		return nil, apperrors.NewSystemError("CHAT_READ_FAILED", "读取聊天消息失败", err)
@@ -145,7 +151,7 @@ func (s *MemberChatService) List(userID uint64, roomType, gameID string, limit i
 	if err != nil {
 		return nil, apperrors.NewSystemError("CHAT_READ_FAILED", "读取红包资金状态失败", err)
 	}
-	if afterID > 0 {
+	if afterID > 0 || (fromVisit && beforeID == 0) {
 		for _, row := range rows {
 			items = append(items, chatMessageView(row, userID, identities[row.UserID], claimedPackets[row.ID], packetStates[row.ID]))
 		}
@@ -159,7 +165,7 @@ func (s *MemberChatService) List(userID uint64, roomType, gameID string, limit i
 	if len(items) > 0 {
 		nextBeforeID = items[0].ID
 	}
-	return &ChatMessageList{Items: items, HasMore: hasMore && afterID == 0, NextBeforeID: nextBeforeID}, nil
+	return &ChatMessageList{Items: items, HasMore: hasMore && (afterID == 0 || fromVisit), NextBeforeID: nextBeforeID}, nil
 }
 
 // LatestClaimableRedPacket reads the newest still-open envelope from the

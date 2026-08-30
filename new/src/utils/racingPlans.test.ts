@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { racingPlanDetail, racingPlanRow } from '../test/racingPlanFixtures'
-import { DEFAULT_RACING_PLAN, racingPlanAllowed, racingPlanCycleStatus, racingPlanDirection, racingPlanHistory, racingPlanIsCurrent, racingPlanMasters, racingPlanPositionLabel, racingPlanProgress } from './racingPlans'
+import { DEFAULT_RACING_PLAN, racingPlanAllowed, racingPlanResultLabel, racingPlanDirection, racingPlanHistory, racingPlanIsCurrent, racingPlanMasters, racingPlanPositionLabel, racingPlanProgress } from './racingPlans'
 
 describe('racing plan stream presentation', () => {
   it('defaults to champion / four-period-five-codes and labels all ten positions', () => {
@@ -35,8 +35,9 @@ describe('racing plan stream presentation', () => {
     expect(racingPlanProgress(racingPlanRow())).toBe('第 2 / 4 期')
     expect(racingPlanProgress(racingPlanRow({ cycle_period: 0 }))).toBe('周期进度待更新')
     expect(racingPlanProgress(racingPlanRow({ cycle_period: 5 }))).toBe('周期进度待更新')
-    expect(racingPlanCycleStatus(racingPlanRow({ cycle_status: 'completed' }))).toBe('本轮已全部发布')
-    expect(racingPlanCycleStatus(racingPlanRow({ cycle_status: 'active' }))).toBe('本轮发布中')
+    expect(racingPlanResultLabel(racingPlanRow({ cycle_status: 'completed' }))).toBe('待开奖')
+    expect(racingPlanResultLabel(racingPlanRow({ cycle_status: 'active', result: 'hit' }))).toBe('中')
+    expect(racingPlanResultLabel(racingPlanRow({ cycle_status: 'completed', result: 'miss' }))).toBe('不中')
   })
   it.each([['size', '小'], ['parity', '双'], ['dragon_tiger', '虎']] as const)('uses only the %s stream direction', (kind, expected) => {
     expect(racingPlanDirection(racingPlanRow({ kind, size: '小', parity: '双', dragon_tiger: '虎' }))).toBe(expected)

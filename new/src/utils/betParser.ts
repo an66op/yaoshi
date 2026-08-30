@@ -1,3 +1,5 @@
+import { formatBetAmount } from './betAmount'
+
 export type BetPayload = {
   position: number
   selection: string
@@ -8,7 +10,8 @@ export type BetPayload = {
 
 export type ParsedBet = { content: string; lines: string[]; total: number; payloads: BetPayload[] }
 
-const positionNames = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
+const positionNames = ['冠军', '亚军', '第三名', '第四名', '第五名', '第六名', '第七名', '第八名', '第九名', '第十名']
+const rankLabel = (position: number) => positionNames[position - 1] ?? `第${position}名`
 const rankMap: Record<string, number> = {
   冠军: 1, 亚军: 2, 第三名: 3, 第四名: 4, 第五名: 5,
   第六名: 6, 第七名: 7, 第八名: 8, 第九名: 9, 第十名: 10,
@@ -38,9 +41,9 @@ function positionedSelections(positions: number[], selections: string, amount: n
         ? 'two_sided'
         : 'dragon_tiger'
     const play_name = play_code === 'ball_1_5'
-      ? `第${position}名号码`
+      ? `${rankLabel(position)}号码`
       : play_code === 'two_sided'
-        ? `第${position}名两面`
+        ? `${rankLabel(position)}两面`
         : '龙虎'
     // 快捷输入沿用 0 表示号码 10；发给接口时统一为真实开奖号码 10。
     const canonicalSelection = play_code === 'ball_1_5' && selection === '0' ? '10' : selection
@@ -61,7 +64,7 @@ function segmentPayload(play: string, amount: number): BetPayload[] {
   for (const [rank, pos] of Object.entries(rankMap)) {
     if (play.startsWith(rank)) {
       const selection = play.slice(rank.length).replace(/^\//, '')
-      if (selection) return [{ position: pos, selection, amount, play_code: /^\d+$/.test(selection) ? 'ball_1_5' : ['大', '小', '单', '双'].includes(selection) ? 'two_sided' : 'dragon_tiger', play_name: play }]
+      if (/^[0-9大小单双龙虎]+$/.test(selection)) return positionedSelections([pos], selection, amount)
     }
   }
   const ranked = play.match(/^(\d+)([大小单双龙虎])$/)
@@ -86,9 +89,9 @@ function segmentPayload(play: string, amount: number): BetPayload[] {
 }
 
 function describePayload(payload: BetPayload): string {
-  const position = positionNames[payload.position - 1] ?? String(payload.position)
+  const position = payload.play_code === 'sum' ? '冠亚和' : rankLabel(payload.position)
   const selection = payload.play_code === 'ball_1_5' && payload.selection === '0' ? '10' : payload.selection
-  return `第${position}名[${selection}/${payload.amount}]`
+  return `${position}[${selection}/${formatBetAmount(payload.amount)}]`
 }
 
 function inferPlayCode(payload: BetPayload): string {
@@ -103,7 +106,7 @@ function inferPlayCode(payload: BetPayload): string {
 export function parseBetInput(content: string): ParsedBet {
   const lines: string[] = []
   const payloads: BetPayload[] = []
-  let total = 0
+  let totalCents = 0
   const text = content.replace(/^买/, '').trim()
 
   for (const segment of text.split('#').map((item) => item.trim()).filter(Boolean)) {
@@ -111,22 +114,23 @@ export function parseBetInput(content: string): ParsedBet {
     if (parts.length < 2) continue
     const amountText = parts.at(-1) ?? ''
     if (!/^\d+(?:\.\d+)?$/.test(amountText)) continue
-    const amount = Number(amountText)
-    if (amount <= 0) continue
+    const amountCents = Math.round(Number(amountText) * 100)
+    if (!Number.isSafeInteger(amountCents) || amountCents <= 0) continue
+    const amount = amountCents / 100
     const play = parts.slice(0, -1).join('/')
     const segmentPayloads = segmentPayload(play, amount)
     for (const payload of segmentPayloads) {
       const play_code = inferPlayCode(payload)
       payloads.push({ ...payload, play_code })
       lines.push(describePayload(payload))
-      total += payload.amount
+      totalCents += amountCents
     }
   }
 
   return {
     content,
     lines: lines.length ? lines : [`号码[${content}]`],
-    total,
+    total: totalCents / 100,
     payloads,
   }
 }

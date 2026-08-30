@@ -12,6 +12,19 @@ export type LotteryTimingInput = {
   enabled?: boolean
 }
 
+/** An independent, server-issued betting window while the displayed issue is
+ * still drawing. The browser must never manufacture this issue or its times. */
+export type LotteryBettingWindow = {
+  issue: string
+  issue_status: string
+  accept_at: string
+  seal_at: string
+  next_draw_at: string
+  draw_interval: number
+  seal_seconds: number
+  source_healthy?: boolean
+}
+
 export type LotteryTiming = {
   phase: LotteryPhase
   phaseLabel: string
@@ -94,6 +107,26 @@ export function resolveLotteryTiming(input: LotteryTimingInput, nowMs: number): 
     return result('pending', '距开始受理', '即将开始受理', acceptAtMs !== null && nowMs < acceptAtMs ? secondsUntil(acceptAtMs) : null)
   }
   return result('accepting', '受理倒计时', '正在受理', secondsUntil(sealAtMs))
+}
+
+export function resolveLotteryBetting(input: LotteryTimingInput & {
+  current_issue?: string
+  betting_window?: LotteryBettingWindow | null
+}, nowMs: number): { issue: string; timing: LotteryTiming } | undefined {
+  const window = input.betting_window
+  if (!window || typeof window.issue !== 'string' || !window.issue.trim()
+    || window.issue !== window.issue.trim() || window.issue.length > 80
+    || !input.current_issue || window.issue === input.current_issue
+    || input.source_healthy !== true || window.source_healthy === false || input.enabled === false) return
+  const displayed = resolveLotteryTiming(input, nowMs)
+  // A next-window snapshot cannot override a source error, reopen the sealed
+  // current issue, or be reused before that issue's fixed draw boundary.
+  if (displayed.phase !== 'awaiting_draw' || displayed.drawAtMs === null
+    || !Number.isFinite(nowMs) || nowMs < displayed.drawAtMs) return
+  const timing = resolveLotteryTiming({ ...window, source_healthy: input.source_healthy, enabled: input.enabled }, nowMs)
+  if (timing.drawAtMs === null || timing.acceptAtMs === null
+    || timing.drawAtMs <= displayed.drawAtMs || timing.acceptAtMs < displayed.drawAtMs) return
+  return { issue: window.issue, timing }
 }
 
 export type ServerClockSample = {

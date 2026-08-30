@@ -14,6 +14,8 @@ export type Game = {
   latestIssue: string
   due: string
   timing: LotteryTiming
+  /** Only supplied for a separate server-confirmed next-issue betting window. */
+  betting?: { issue: string; timing: LotteryTiming }
   color: string
   logo?: string
   balls: number[]

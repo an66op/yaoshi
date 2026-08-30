@@ -100,6 +100,21 @@ describe('draw refresh ordering', () => {
     expect(runtime.draws).toHaveBeenCalledTimes(2)
   })
 
+  it('refreshes distinct successive draw pushes without any bet/chat activity', async () => {
+    const next = { ...draw, id: 12, issue: '34136855', draw_at: '2026-08-30T06:47:15Z' }
+    const after = { ...draw, id: 13, issue: '34136856', draw_at: '2026-08-30T06:48:30Z' }
+    runtime.draws.mockResolvedValueOnce([draw]).mockResolvedValueOnce([next, draw]).mockResolvedValueOnce([after, next, draw])
+    render()
+    await flush()
+    notify()
+    await flush()
+    expect(render().draws).toEqual([next, draw])
+    notify()
+    await flush()
+    expect(render().draws).toEqual([after, next, draw])
+    expect(runtime.draws).toHaveBeenCalledTimes(3)
+  })
+
   it('still runs the queued refresh after a temporary request error', async () => {
     const first = deferred<DrawResult[]>()
     runtime.draws.mockReturnValueOnce(first.promise).mockResolvedValueOnce([draw])

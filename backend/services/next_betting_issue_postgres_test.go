@@ -190,7 +190,9 @@ func TestLotteryTimingPostgresNextBettingWindow(t *testing.T) {
 			t.Fatalf("retry changed accepted issue: %v", err)
 		}
 		cancelled, err := service.CancelCurrentIssue(member.UserID, "speed-racing", "test")
-		if err != nil || cancelled.Issue != "94012" || cancelled.Count != 2 || cancelled.Refund != 6 {
+		// Two independent direct placements and one idempotent assistant
+		// request are three contracts, each for 2; retries add no contracts.
+		if err != nil || cancelled.Issue != "94012" || cancelled.Count != 3 || cancelled.Refund != 6 || cancelled.Balance != centsToAmount(member.BalanceCents) {
 			t.Fatalf("next period cancellation mismatch: %+v %v", cancelled, err)
 		}
 		var oldBets int64

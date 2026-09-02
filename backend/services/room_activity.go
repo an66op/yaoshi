@@ -95,17 +95,8 @@ var roomActivityAliases = []string{
 	"月光捕手", "暖风经过", "青柠汽水", "漫游小队", "蓝鲸跃迁", "晴天预报", "星轨玩家", "橙色闪电",
 }
 
-func StartRoomActivity(ctxDone <-chan struct{}, db *gorm.DB) {
-	serverMode := strings.TrimSpace(os.Getenv("BACKEND_SERVER_MODE"))
-	if serverMode == "" {
-		serverMode = "debug"
-	}
-	StartRoomActivityForMode(ctxDone, db, serverMode)
-}
-
-// StartRoomActivityForMode lets the application pass the already validated
-// server mode instead of relying on ambient process state. StartRoomActivity
-// remains a debug-compatible wrapper for local tools and older tests.
+// StartRoomActivityForMode receives the already validated server mode from the
+// application instead of inferring it from a second ambient configuration path.
 func StartRoomActivityForMode(ctxDone <-chan struct{}, db *gorm.DB, serverMode string) {
 	policy := resolveRoomActivityProcessPolicy(
 		serverMode,

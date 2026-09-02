@@ -6,6 +6,7 @@ import (
 	"backend/data/models/lottery"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -236,7 +237,7 @@ func (s *BetAdminService) RecoverSettlementBacklog(ctx context.Context, limit in
 				continue
 			}
 			result.SettledIssues++
-			result.SettledBets += settled.Won + settled.Lost
+			result.SettledBets += settled.Won + settled.Lost + settled.Push
 		case recoveryMarkAbnormal:
 			markedIssue, markedBets, markErr := s.markUnsafeSettlement(ctx, candidate, reason)
 			if markErr != nil {
@@ -275,7 +276,8 @@ func (r *SettlementRecoveryResult) addFailure(gameID, issue string, err error) {
 
 func (s *BetAdminService) pendingSettlementCandidates(ctx context.Context, limit int) ([]settlementCandidate, error) {
 	rows := make([]settlementCandidate, 0, limit)
-	err := s.db.WithContext(ctx).Raw(`
+	verifiedDrawSQL, verifiedDrawArgs := orderedBingoRecoveryRevisionSQL("bets.game_id", "draws")
+	query := fmt.Sprintf(`
 		SELECT bets.game_id,
 		       bets.issue,
 		       COUNT(*) AS pending,
@@ -292,13 +294,43 @@ func (s *BetAdminService) pendingSettlementCandidates(ctx context.Context, limit
 		LEFT JOIN lottery_issues AS issues ON issues.game_id = bets.game_id AND issues.issue = bets.issue
 		LEFT JOIN lottery_draws AS draws ON draws.game_id = bets.game_id AND draws.issue = bets.issue
 		WHERE bets.status = 'pending'
-		  AND (bets.reconciliation_status <> 'abnormal' OR draws.id IS NOT NULL)
+		  AND (bets.reconciliation_status <> 'abnormal'
+		       OR (draws.id IS NOT NULL AND %s))
 		GROUP BY bets.game_id, bets.issue, games.id, games.enabled, games.source_kind,
 		         issues.id, issues.status, issues.seal_at, draws.id
 		ORDER BY MIN(bets.created_at) ASC, bets.game_id ASC, bets.issue ASC
 		LIMIT ?
-	`, limit).Scan(&rows).Error
+	`, verifiedDrawSQL)
+	args := append(verifiedDrawArgs, limit)
+	err := s.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error
 	return rows, err
+}
+
+// orderedBingoRecoveryRevisionSQL mirrors the service-level settlement gate
+// inside candidate selection. Once an unverified ordered draw has been marked
+// abnormal it must stay in the manual-reconciliation queue without occupying
+// every bounded recovery pass. A later verified import can update/replace the
+// safe row and make it eligible again; unrelated games retain the legacy retry
+// policy.
+func orderedBingoRecoveryRevisionSQL(gameExpression, drawAlias string) (string, []any) {
+	orderedIDs := make([]string, 0, len(api168BingoBindings))
+	conversionCases := make([]string, 0, len(api168BingoBindings))
+	conversionArgs := make([]any, 0, len(api168BingoBindings)*2)
+	for _, binding := range api168BingoBindings {
+		if !binding.RequiresOrderedSource {
+			continue
+		}
+		orderedIDs = append(orderedIDs, binding.GameID)
+		conversionCases = append(conversionCases, fmt.Sprintf("(%s = ? AND %s.conversion_revision = ?)", gameExpression, drawAlias))
+		conversionArgs = append(conversionArgs, binding.GameID, binding.ConversionVersion)
+	}
+	if len(orderedIDs) == 0 {
+		return "TRUE", nil
+	}
+	query := fmt.Sprintf("(%s NOT IN ? OR (%s.source_revision = ? AND (%s)))",
+		gameExpression, drawAlias, strings.Join(conversionCases, " OR "))
+	args := []any{orderedIDs, bingoOrderedSourceRevision}
+	return query, append(args, conversionArgs...)
 }
 
 func recoveryActionForCandidate(candidate settlementCandidate, now time.Time) (recoveryAction, string) {
@@ -399,7 +431,8 @@ type staleIssueCandidate struct {
 func (s *BetAdminService) recoverStaleIssueRows(ctx context.Context, limit int, operator string) (int, []SettlementRecoveryFailure, error) {
 	rows := make([]staleIssueCandidate, 0, limit)
 	now := time.Now().UTC()
-	if err := s.db.WithContext(ctx).Raw(`
+	verifiedDrawSQL, verifiedDrawArgs := orderedBingoRecoveryRevisionSQL("issues.game_id", "draws")
+	query := fmt.Sprintf(`
 		SELECT issues.game_id,
 		       issues.issue,
 		       issues.status,
@@ -413,12 +446,18 @@ func (s *BetAdminService) recoverStaleIssueRows(ctx context.Context, limit int, 
 		WHERE (issues.status = ? AND COALESCE(issues.draw_at, issues.seal_at) < ?)
 		   OR (issues.status = ? AND issues.seal_at < ?)
 		   OR (issues.status IN ? AND issues.seal_at < ?)
-		   OR (issues.status = ? AND draws.id IS NOT NULL)
+		   OR (issues.status = ? AND draws.id IS NOT NULL AND %s)
 		GROUP BY issues.id, draws.id
 		ORDER BY issues.seal_at ASC
 		LIMIT ?
-	`, lottery.IssueStatusSettling, now.Add(-settlementStaleAfter), lottery.IssueStatusAwaiting, now.Add(-awaitingDrawStaleAfter),
-		[]string{lottery.IssueStatusPending, lottery.IssueStatusAccepting, lottery.IssueStatusSealed}, now.Add(-awaitingDrawStaleAfter), lottery.IssueStatusError, limit).Scan(&rows).Error; err != nil {
+	`, verifiedDrawSQL)
+	args := []any{
+		lottery.IssueStatusSettling, now.Add(-settlementStaleAfter), lottery.IssueStatusAwaiting, now.Add(-awaitingDrawStaleAfter),
+		[]string{lottery.IssueStatusPending, lottery.IssueStatusAccepting, lottery.IssueStatusSealed}, now.Add(-awaitingDrawStaleAfter), lottery.IssueStatusError,
+	}
+	args = append(args, verifiedDrawArgs...)
+	args = append(args, limit)
+	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
 		return 0, nil, err
 	}
 	marked := 0

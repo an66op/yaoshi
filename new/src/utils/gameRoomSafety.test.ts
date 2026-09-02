@@ -4,6 +4,7 @@ import {
   DEFAULT_ROOM_FEATURES,
   canSubmitPlayWithOddsResponse,
   oddsForPlayCode,
+  oddsForPlaySelection,
   oddsForSelection,
   oddsLabel,
   playOddsFromResponse,
@@ -70,9 +71,42 @@ describe('authoritative game odds', () => {
     expect(oddsForSelection('冠军大', odds)).toBe(1.993)
     expect(oddsForSelection('冠军龙', odds)).toBe(1.88)
     expect(oddsForSelection('冠亚和小', odds)).toBe(1.97)
+    expect(oddsForSelection('和/大/5', odds)).toBe(1.97)
     expect(oddsForSelection('1/12345', odds)).toBe(9.9)
     expect(oddsLabel(oddsForPlayCode('two_sided', odds))).toBe('1.993')
     expect(oddsLabel(oddsForPlayCode('ball_1_5', odds))).toBe('9.90')
+  })
+
+  it('keeps the independent dragon/tiger tie price returned by the backend', () => {
+    const tieResponse = response([
+      { play_code: 'dragon_tiger', play_name: '龙虎', odds: 1.88, min_bet: 1, max_bet: 1000, max_user_period: 5000 },
+      { play_code: 'dragon_tiger_tie', play_name: '龙虎和', odds: 8.75, min_bet: 1, max_bet: 1000, max_user_period: 5000 },
+    ])
+    const odds = playOddsFromResponse(tieResponse)
+    expect(odds).toMatchObject({ dragon_tiger: 1.88, dragon_tiger_tie: 8.75 })
+    expect(oddsForSelection('1/和/5', odds)).toBe(8.75)
+    expect(canSubmitPlayWithOddsResponse('dragon_tiger_tie', tieResponse)).toBe(true)
+    expect(canSubmitPlayWithOddsResponse('dragon_tiger_tie', response([], true))).toBe(false)
+  })
+
+  it('prices Bingo Racing A crown sums by the exact selected outcome', () => {
+    const racingA = {
+      ...response([
+        { play_code: 'sum', play_name: '旧通用冠亚和', odds: 99, min_bet: 1, max_bet: 1000, max_user_period: 5000 },
+        { play_code: 'sum_big', play_name: '冠亚和大', odds: 2.18, min_bet: 1, max_bet: 1000, max_user_period: 5000 },
+        { play_code: 'sum_11', play_name: '冠亚和11', odds: 8.5, min_bet: 1, max_bet: 1000, max_user_period: 5000 },
+      ]),
+      game_id: 'bingo-racing-a',
+      game_name: '宾果赛车(A)',
+    }
+    const odds = playOddsFromResponse(racingA)
+    expect(oddsForPlaySelection('bingo-racing-a', 'sum', '大', odds)).toBe(2.18)
+    expect(oddsForPlaySelection('bingo-racing-a', 'sum', '11', odds)).toBe(8.5)
+    expect(oddsForPlaySelection('bingo-racing-a', 'sum', '小', odds)).toBeNull()
+    expect(canSubmitPlayWithOddsResponse('sum', racingA, '大')).toBe(true)
+    expect(canSubmitPlayWithOddsResponse('sum', racingA, '11')).toBe(true)
+    expect(canSubmitPlayWithOddsResponse('sum', racingA, '小')).toBe(false)
+    expect(canSubmitPlayWithOddsResponse('sum', racingA)).toBe(false)
   })
 
   it('never invents a fallback when odds are hidden, missing, or invalid', () => {
@@ -89,13 +123,24 @@ describe('authoritative game odds', () => {
     expect(oddsLabel(null)).toBe('待配置')
   })
 
-  it('allows supported plays when the server explicitly hides odds, but not when the response is missing', () => {
-    const hiddenResponse = response([], false)
+  it('uses the hidden response item list as the market availability contract', () => {
+    const hiddenResponse = response([
+      { play_code: 'two_sided', play_name: '两面', odds: 0, min_bet: 1, max_bet: 1000, max_user_period: 5000 },
+      { play_code: 'ball_1_5', play_name: '号码', odds: 0, min_bet: 1, max_bet: 1000, max_user_period: 5000 },
+    ], false)
     expect(canSubmitPlayWithOddsResponse('two_sided', hiddenResponse)).toBe(true)
     expect(canSubmitPlayWithOddsResponse('ball_1_5', hiddenResponse)).toBe(true)
     expect(canSubmitPlayWithOddsResponse('unknown', hiddenResponse)).toBe(false)
     expect(canSubmitPlayWithOddsResponse('two_sided', null)).toBe(false)
+    expect(canSubmitPlayWithOddsResponse('two_sided', response([], false))).toBe(false)
     expect(canSubmitPlayWithOddsResponse('two_sided', response([], true))).toBe(false)
     expect(oddsLabel(null, 2, true)).toBe('已隐藏')
+  })
+
+  it('never treats hidden odds as permission to bypass an explicit rules denial', () => {
+    expect(canSubmitPlayWithOddsResponse('ball_1_5', { ...response([], false), rules_ready: false })).toBe(false)
+    const digit = { ...response([{ play_code: 'leopard', play_name: '豹子', odds: 50, min_bet: 1, max_bet: 1000, max_user_period: 5000 }]), game_id: 'speed-ssc', rules_ready: true }
+    expect(playOddsFromResponse(digit).leopard).toBe(50)
+    expect(canSubmitPlayWithOddsResponse('leopard', digit)).toBe(true)
   })
 })

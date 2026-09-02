@@ -749,7 +749,7 @@ function SpecialPage() {
             <TextField select label="升级为代理的会员" value={assignUserID || ''} onChange={event => setAssignUserID(Number(event.target.value))}>
               {candidates.map(item => <MenuItem key={item.id} value={item.id}>{item.nickname || item.username} · @{item.username} · ID {item.public_id}</MenuItem>)}
             </TextField>
-            {!candidates.length && <Alert severity="warning">暂无可升级的正常会员，请先在用户管理中创建会员。</Alert>}
+            {!candidates.length && <Alert severity="warning">暂无可升级的正常会员，请先在会员管理中创建会员。</Alert>}
           </Stack>
         </DialogContent>
         <DialogActions><Button disabled={assigning} onClick={() => setAssignOpen(false)}>取消</Button><Button variant="contained" disabled={assigning || !assignResourceID || !assignUserID} onClick={() => void assignRoom()}>{assigning ? '发放中…' : '确认发放'}</Button></DialogActions>

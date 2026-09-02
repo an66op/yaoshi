@@ -120,10 +120,12 @@ func (s *AgentAdminService) list(query string, page, pageSize int, tenantID *uin
 	items := make([]AgentView, 0, len(rows))
 	for _, row := range rows {
 		var members int64
-		_ = s.db.Model(&user.User{}).Where("parent_agent_id = ?", row.UserID).Count(&members).Error
 		roomCode, roomName, roomLogo, workspaceID := row.AgentRoomCode, agentRoomDisplayName(row), row.AgentRoomLogo, row.WorkspaceID
 		if workspace, err := WorkspaceForAccount(s.db, row); err == nil {
 			roomCode, roomName, roomLogo, workspaceID = workspace.RoomCode, workspace.Name, workspace.Logo, workspace.ID
+		}
+		if err := WorkspaceHumanMemberQuery(s.db, workspaceID).Count(&members).Error; err != nil {
+			return nil, apperrors.NewSystemError("AGENT_READ_FAILED", "读取房间会员数量失败", err)
 		}
 		view := AgentView{
 			ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone,
@@ -148,7 +150,7 @@ func (s *AgentAdminService) list(query string, page, pageSize int, tenantID *uin
 	}
 	_ = summaryQuery.Where("status = ?", 1).Count(&summary.Active).Error
 	summary.Disabled = summary.Total - summary.Active
-	memberQuery := s.db.Model(&user.User{}).Where("parent_agent_id IS NOT NULL")
+	memberQuery := HumanMemberQuery(s.db).Where("parent_agent_id IS NOT NULL")
 	if tenantID != nil {
 		memberQuery = memberQuery.Where("parent_agent_id IN (?)", s.db.Model(&user.User{}).Select("user_id").Where("role = ? AND parent_tenant_id = ?", "agent", *tenantID))
 	}
@@ -369,12 +371,12 @@ func (s *AgentAdminService) view(id uint64) (*AgentView, error) {
 		return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "代理不存在")
 	}
 	var members int64
-	if err := s.db.Model(&user.User{}).Where("parent_agent_id = ?", id).Count(&members).Error; err != nil {
-		return nil, err
-	}
 	roomCode, roomName, roomLogo, workspaceID := row.AgentRoomCode, agentRoomDisplayName(row), row.AgentRoomLogo, row.WorkspaceID
 	if workspace, err := WorkspaceForAccount(s.db, row); err == nil {
 		roomCode, roomName, roomLogo, workspaceID = workspace.RoomCode, workspace.Name, workspace.Logo, workspace.ID
+	}
+	if err := WorkspaceHumanMemberQuery(s.db, workspaceID).Count(&members).Error; err != nil {
+		return nil, err
 	}
 	view := AgentView{ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone, RoomCode: roomCode, RoomName: roomName, RoomLogo: roomLogo, WorkspaceID: workspaceID, Balance: centsToAmount(row.BalanceCents), Status: row.Status, MemberCount: members, RebateRate: row.RoomRebateRate, ProfitShareRate: row.RoomProfitShareRate, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount, TenantID: row.ParentTenantID}
 	if row.ParentTenantID != nil {
@@ -433,7 +435,7 @@ func validateAgentRoomName(value string) error {
 }
 
 var builtInRoomLogos = map[string]struct{}{
-	"/images/wangzhe-header-logo.png":       {},
+	defaultRoomLogo:                         {},
 	"/images/room-logos/crown-crystal.webp": {},
 	"/images/room-logos/crown-shield.webp":  {},
 	"/images/room-logos/crown-laurel.webp":  {},

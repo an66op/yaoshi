@@ -1,4 +1,4 @@
-.PHONY: dev health smoke test race verify release production-check production-config-check backup upload-backup backup-integrity monitor restore-drill pitr-restore-drill shellcheck readiness-test rclone-integration-test dev-reset-plan dev-full-reset-plan dev-reset-sentinel-plan production-test-install production-system-test integration-test catalog-integration-test timing-integration-test e2e-test load-test
+.PHONY: dev health smoke test race verify release release-contract-check production-check production-config-check backup upload-backup backup-integrity monitor restore-drill pitr-restore-drill shellcheck readiness-test rclone-integration-test dev-reset-plan dev-full-reset-plan dev-reset-sentinel-plan production-test-install production-system-test integration-test catalog-integration-test timing-integration-test e2e-test load-test
 
 RELEASE_GOOS ?= linux
 RELEASE_GOARCH ?= amd64
@@ -51,8 +51,19 @@ release: verify readiness-test
 	test -f release/scripts/production-restore-drill.sh -a -f release/scripts/production-recovery-evidence-check.sh \
 		-a -f release/deploy/env/restore-drill.env.example -a -f release/deploy/env/recovery-evidence.env.example \
 		-a -f release/deploy/systemd/wangzhe-restore-drill.service
+	$(MAKE) release-contract-check
 	bash scripts/release-integrity.sh generate release
 	@{ command -v sha256sum >/dev/null 2>&1 && sha256sum release/SHA256SUMS || shasum -a 256 release/SHA256SUMS; } | awk '{print "可信清单摘要（部署时使用 EXPECTED_MANIFEST_SHA256）：" $$1}'
+
+# Keep the generated member bundle and backend binary on the same betting
+# contract. This fails the build if an old member release or pre-mark6 backend
+# is accidentally packaged after the source has already enabled the board.
+release-contract-check:
+	@test -x release/bin/wangzhe-backend || { echo "发布包缺少后端二进制" >&2; exit 1; }
+	@grep -aFq 'mark6-v1' release/bin/wangzhe-backend || { echo "后端发布包缺少历史 mark6-v1" >&2; exit 1; }
+	@grep -aFq 'mark6-v2' release/bin/wangzhe-backend || { echo "后端发布包缺少当前 mark6-v2" >&2; exit 1; }
+	@grep -aFRq 'mark-six-bet-board' release/member/assets || { echo "会员端发布包缺少宾果六合彩网投面板" >&2; exit 1; }
+	@grep -aFRq 'web-bets' release/member/assets || { echo "会员端发布包缺少批量网投接口" >&2; exit 1; }
 
 production-check:
 	bash scripts/production-readiness.sh

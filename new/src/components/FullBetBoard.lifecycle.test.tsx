@@ -5,11 +5,12 @@ import { HookHarness } from '../test/hookHarness'
 import { resolveLotteryTiming } from '../utils/lotteryTiming'
 import { parseBetInput } from '../utils/betParser'
 import { FullBetBoard } from './FullBetBoard'
+import { controlSurfaceProps } from '../utils/controlSurface'
 
 const runtime = vi.hoisted(() => ({ hooks: null as HookHarness | null }))
 vi.mock('react', async importOriginal => ({ ...await importOriginal<typeof import('react')>(), useState: <T,>(initial: T | (() => T)) => runtime.hooks!.useState(initial) }))
 type Props = ComponentProps<typeof FullBetBoard>
-type NodeProps = { children?: ReactNode; className?: string; 'aria-label'?: string; 'aria-pressed'?: boolean | 'mixed'; 'data-choice'?: string; disabled?: boolean; onClick?: () => void; onChange?: (event: { target: { value: string } }) => void }
+type NodeProps = { children?: ReactNode; className?: string; hidden?: boolean; 'aria-hidden'?: boolean; 'aria-label'?: string; 'aria-pressed'?: boolean | 'mixed'; 'aria-expanded'?: boolean; 'aria-controls'?: string; 'data-choice'?: string; disabled?: boolean; onClick?: () => void; onChange?: (event: { target: { value: string } }) => void }
 const timing = resolveLotteryTiming({ issue_status: 'accepting', source_healthy: true, next_draw_at: '2026-08-30T06:46:00Z', seal_seconds: 30 }, Date.parse('2026-08-30T06:45:00Z'))
 const game: Game = { id: 'speed-racing', title: '极速赛车', tag: '', category: 'racing', lobbyCategory: 'lottery', online: '', period: '34137265', latestIssue: '34137264', due: timing.due, timing, balls: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], color: '', issueStatus: 'accepting', sourceKind: '', sourceName: '', sourceHealthy: true, syncStatus: '', sourceError: '' }
 function find(node: ReactNode, predicate: (node: ReactElement<NodeProps>) => boolean): ReactElement<NodeProps> | undefined {
@@ -35,6 +36,46 @@ describe('bet board click feedback and generated commands', () => {
   beforeEach(() => {
     runtime.hooks = new HookHarness()
     props = { game, mode: 'quick', odds: { ball_1_5: 9.9, two_sided: 1.993, dragon_tiger: 1.993, sum: 1.993 }, oddsHidden: false, oddsResponseReady: true, onModeChange: value => { props.mode = value }, onConfirm: vi.fn(), onClose: vi.fn() }
+  })
+
+  it('protects the detailed panel but keeps native amount editing and selection intact', () => {
+    const panel = label('详细投注面板')
+    expect(panel.props).toMatchObject(controlSurfaceProps)
+    const onContextMenu = controlSurfaceProps.onContextMenu
+    const control = { target: { closest: () => null }, preventDefault: vi.fn() }
+    onContextMenu(control as unknown as Parameters<typeof onContextMenu>[0])
+    expect(control.preventDefault).toHaveBeenCalledOnce()
+    const input = { target: { closest: () => ({ tagName: 'INPUT' }) }, preventDefault: vi.fn() }
+    onContextMenu(input as unknown as Parameters<typeof onContextMenu>[0])
+    expect(input.preventDefault).not.toHaveBeenCalled()
+    label('自定义单注金额').props.onChange!({ target: { value: '50' } })
+    clickChoice('2')
+    confirm().props.onClick!()
+    expect(props.onConfirm).toHaveBeenCalledWith('1/2/50')
+    expect(props.onClose).not.toHaveBeenCalled()
+  })
+
+  it('uses the upper-right arrow to collapse the entire embedded board back to chat', () => {
+    props.embedded = true
+    const collapse = label('收起详细投注，返回聊天')
+    expect(collapse.type).toBe('button')
+    expect(collapse.props.className).toBe('detail-panel-collapse')
+    expect(label('批量选择名次（可多选）')).toBeDefined()
+    collapse.props.onClick!()
+    expect(props.onClose).toHaveBeenCalledOnce()
+    expect(find(render(), node => node.props['aria-label']?.includes('名次选择') === true && node.type === 'button')).toBeUndefined()
+  })
+
+  it('keeps the current detailed selections while the room temporarily shows chat', () => {
+    clickChoice('2')
+    expect(text(render())).toContain('已选 1 组 · 1 注')
+    props.active = false
+    const hidden = render() as ReactElement<NodeProps>
+    expect(hidden.props.hidden).toBe(true)
+    expect(hidden.props['aria-hidden']).toBe(true)
+    props.active = true
+    expect(choice('2').props['aria-pressed']).toBe(true)
+    expect(text(render())).toContain('已选 1 组 · 1 注')
   })
 
   it('highlights selected numbers, supports different ranks, and submits exactly those choices', () => {
@@ -240,5 +281,52 @@ describe('bet board click feedback and generated commands', () => {
     tab('两面盘')
     expect(label('编辑第六名').props['aria-pressed']).toBe(true)
     expect(choice('大').props['aria-pressed']).toBe(true)
+  })
+
+  it('uses selection-level crown-sum prices for Bingo Racing A', () => {
+    props.game = { ...game, id: 'bingo-racing-a', title: '宾果赛车(A)', rulesReady: true, ruleVersion: 'racing-v2' }
+    props.odds = { sum_big: 2.18, sum_11: 8.5 }
+    tab('冠亚和')
+    expect(choice('大').props.disabled).toBe(false)
+    expect(text(choice('大'))).toBe('大2.18')
+    expect(choice('小').props.disabled).toBe(true)
+    expect(choice('11').props.disabled).toBe(false)
+    expect(text(choice('11'))).toBe('118.50')
+    clickChoice('大')
+    clickChoice('11')
+    expect(text(label('已选投注'))).toBe('冠亚和 大、11')
+    expect(confirm().props.disabled).toBe(false)
+    confirm().props.onClick!()
+    expect(props.onConfirm).toHaveBeenCalledWith('冠亚/大/20#冠亚/11/20')
+  })
+
+  it('keeps an unconfigured A crown-sum option disabled when the room hides numeric odds', () => {
+    props.game = { ...game, id: 'bingo-racing-a', title: '宾果赛车(A)', rulesReady: true, ruleVersion: 'racing-v2' }
+    props.odds = {}
+    props.oddsHidden = true
+    props.oddsInfo = {
+      game_id: 'bingo-racing-a', game_name: '宾果赛车(A)', show_odds: false,
+      items: [{ play_code: 'sum_big', play_name: '冠亚和大', odds: 0, min_bet: 1, max_bet: 1000, max_user_period: 5000 }],
+    }
+    tab('冠亚和')
+    expect(choice('大').props.disabled).toBe(false)
+    expect(choice('小').props.disabled).toBe(true)
+    expect(choice('11').props.disabled).toBe(true)
+    clickChoice('大')
+    expect(confirm().props.disabled).toBe(false)
+  })
+
+  it('blocks an oversized command without splitting or placing any partial ticket', () => {
+    for (const rank of ['亚军', '第三名', '第四名', '第五名', '第六名', '第七名', '第八名', '第九名', '第十名']) label(`编辑${rank}`).props.onClick!()
+    clickChoice('1')
+    tab('冠亚和')
+    for (const value of ['大', '小', '单', '双', ...Array.from({ length: 17 }, (_, index) => String(index + 3))]) clickChoice(value)
+    label('自定义单注金额').props.onChange!({ target: { value: '123456789.12' } })
+    expect(confirm().props.disabled).toBe(true)
+    expect(text(render())).toContain('超过 400 字')
+    confirm().props.onClick!()
+    expect(props.onConfirm).not.toHaveBeenCalled()
+    label('自定义单注金额').props.onChange!({ target: { value: '20' } })
+    expect(confirm().props.disabled).toBe(false)
   })
 })

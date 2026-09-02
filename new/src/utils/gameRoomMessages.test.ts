@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../api/chat'
 import type { DrawResult } from '../api/lottery'
 import { buildGameTimelineEntries, compactAcceptedReceiptContent, drawHistoryAtIssue, formatGameMessageTime, isRepeatableBetInput, isRoomCommandContent, keyboardShortcutInput, latestBetInput, ticketsForGame } from './gameRoomMessages'
+import { GAME_TIMELINE_LIMIT } from './gameTimelineBudget'
 
 const acceptedContent = '@王者玩家\n【极速飞艇 - 54776105】下单成功\n冠军[4/352.00] · 赔率 9.900\n\n使用：352.00\n剩余：10035483.00'
 
 describe('game-room command routing', () => {
-  it.each(['3', '6', '4444', '单', '冠军', '冠军4', '买123', '3,4,5', '4/88', '4444/88', '查', '取消', '重复', '大梭哈', '申请上分 200.50', '下分/10'])(
+  it.each(['3', '6', '4444', '单', '冠军', '冠军4', '买123', '3,4,5', '4/88', '4444/88', '1大5', '和大5', '豹子5', '前三豹子5', '查', '取消', '重复', '大梭哈', '申请上分 200.50', '下分/10'])(
     'sends %s to the authoritative command parser', content => {
       expect(isRoomCommandContent(content)).toBe(true)
     },
@@ -144,6 +145,38 @@ describe('durable game timeline', () => {
     const entries = buildGameTimelineEntries({ gameId: 'speed-fly', messages: [publicSettlement], feed: [], tickets: [] })
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({ kind: 'chat', value: publicSettlement })
+  })
+
+  it('uses one combined budget for chat, feed, detailed tickets and announcements', () => {
+    const at = (index: number) => new Date(Date.parse(draw(10).draw_at) + index * 1000).toISOString()
+    const count = GAME_TIMELINE_LIMIT
+    const messages = Array.from({ length: count }, (_, index) => ({ ...message(index + 1, 'chat', false), created_at: at(index * 3 + 1) }))
+    const feed = Array.from({ length: count }, (_, index) => ({ nickname: `会员${index}`, detail: '冠军 1', amount: 20, created_at: at(index * 3 + 2) }))
+    const tickets = Array.from({ length: count }, (_, index) => ({ gameId: 'speed-fly', content: `1/${index + 1}`, issue: '11', acceptedAt: at(index * 3 + 3), lines: [], total: 20, balance: 100 }))
+    const latest = draw(11)
+    const entries = buildGameTimelineEntries({ gameId: 'speed-fly', startAt: Date.parse(draw(10).draw_at), anchorIssue: '10', draws: [draw(10), latest], messages, feed, tickets })
+    expect(entries).toHaveLength(GAME_TIMELINE_LIMIT)
+    expect(entries[0]).toMatchObject({ kind: 'draw', value: latest })
+    expect(entries.at(-1)).toMatchObject({ kind: 'ticket', value: tickets.at(-1) })
+    expect(new Set(entries.map(entry => entry.kind))).toEqual(new Set(['chat', 'feed', 'ticket', 'draw']))
+    expect(messages).toHaveLength(count)
+    expect(tickets).toHaveLength(count)
+  })
+
+  it('retains the newest same-timestamp message IDs rather than sorting their digits as text', () => {
+    const messages = Array.from({ length: GAME_TIMELINE_LIMIT + 50 }, (_, index) => ({ ...message(index + 1, 'chat', false), created_at: draw(10).draw_at }))
+    const entries = buildGameTimelineEntries({ gameId: 'speed-fly', messages, feed: [], tickets: [] })
+    expect(entries).toHaveLength(GAME_TIMELINE_LIMIT)
+    expect(entries[0].key).toBe('chat:51')
+    expect(entries.at(-1)?.key).toBe(`chat:${GAME_TIMELINE_LIMIT + 50}`)
+  })
+
+  it('does not add a draw slot outside the budget when the latest result is already in the recent window', () => {
+    const messages = Array.from({ length: GAME_TIMELINE_LIMIT + 1 }, (_, index) => ({ ...message(index + 1, 'chat', false), created_at: draw(10).draw_at }))
+    const entries = buildGameTimelineEntries({ gameId: 'speed-fly', draws: [draw(11)], messages, feed: [], tickets: [] })
+    expect(entries).toHaveLength(GAME_TIMELINE_LIMIT)
+    expect(entries.at(-1)).toMatchObject({ kind: 'draw', value: draw(11) })
+    expect(entries.filter(entry => entry.kind === 'draw')).toHaveLength(1)
   })
 
   it('restores the latest bet input but never repeats applications, cancellation, queries or chat', () => {

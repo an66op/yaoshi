@@ -763,6 +763,7 @@
 .wallet-bet-status.pending { background: #fff3d9; color: #bd7d19; }
 .wallet-status-success,
 .wallet-bet-status.won { background: #e4f8ef; color: #198761; }
+.wallet-bet-status.push { background: #e8f5f7; color: #287f8d; }
 .wallet-status-danger,
 .wallet-bet-status.lost,
 .wallet-bet-status.cancelled { background: #fff0f2; color: #d75d70; }

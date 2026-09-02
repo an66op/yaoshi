@@ -29,7 +29,7 @@ make dev
 
 以上是全新 `debug` 数据库的体验账号。管理中心仅需账号、密码，管理员、租户、代理的身份和归属均由后端自动识别，不再填写所属平台或租户。登录账号全局唯一（不区分大小写）；内部权限和业务记录仍使用用户 ID、工作区及上下级关系隔离。
 
-初始化只创建缺失的体验账号，不重置已有密码、不启用已停用账号，也不会把已占用的 `88001` 房间交给另一个账号。旧库账号可能与默认预填不同；需要保留旧库并跳过体验种子时，可显式使用 `BACKEND_SERVER_MODE=test make dev`，但必须自行准备可登录的账号。`test` 不会创建缺失的体验管理员、租户或代理。不要为修复登录问题清空数据库、重建房间或关闭这些保护。
+初始化只创建缺失的体验账号，不重置已有密码、不启用已停用账号，也不会把已占用的 `88001` 房间交给另一个账号。需要跳过体验种子时，可显式使用 `BACKEND_SERVER_MODE=test make dev`，但必须自行准备可登录的账号。`test` 不会创建缺失的体验管理员、租户或代理。不要为修复登录问题清空数据库、重建房间或关闭这些保护。
 
 ### 使用已有本地账号预填
 
@@ -123,7 +123,7 @@ make verify
 
 `make health` 检查 PostgreSQL、三个固定端口和 22 个启用彩种；`make smoke` 验证会员房间、管理员对账以及代理权限边界；`make verify` 执行全部 Go 测试和两个前端的 lint/build。
 
-分类初始化、旧库升级、重启保留配置和新房间默认关闭另有真实 PostgreSQL 集成测试：
+分类初始化、增量迁移、重启保留配置和新房间默认关闭另有真实 PostgreSQL 集成测试：
 
 ```bash
 BACKEND_CATALOG_TEST_DSN='postgres://test_user:TEST_PASSWORD@127.0.0.1:55439/wangzhe_catalog_test?sslmode=disable' make catalog-integration-test

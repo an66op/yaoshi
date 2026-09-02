@@ -2,7 +2,10 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import type { Game } from '../types'
 import { ballTone } from '../data/games'
 import { Icon } from '../components/Icon'
+import { MarkSixDrawBall } from '../components/MarkSixBall'
 import { useGameDraws } from '../hooks/useGameDraws'
+import { lotteryResultSummary, lotteryRuleProfile, markSixBallClass, markSixWaveLabel } from '../utils/lotteryRules'
+import './draw-results-rules.css'
 
 type ResultMode = 'numbers' | 'size' | 'parity' | 'trend'
 
@@ -12,19 +15,6 @@ const resultModes: Array<{ id: ResultMode; label: string }> = [
   { id: 'parity', label: '单双' },
   { id: 'trend', label: '冠亚/龙虎' },
 ]
-
-function shortIssue(issue: string) {
-  return issue.match(/^(\d{8})-/)?.[1] ?? issue
-}
-
-function crownMeta(balls: number[]) {
-  if (balls.length < 2) return { crownResult: '—', dragonTiger: '—' }
-  const sum = balls[0] + balls[1]
-  return {
-    crownResult: `${sum}${sum >= 12 ? '大' : '小'}${sum % 2 ? '单' : '双'}`,
-    dragonTiger: balls.slice(0, 5).map((ball, index) => (balls[9 - index] !== undefined && ball > balls[9 - index] ? '龙' : '虎')).join(''),
-  }
-}
 
 function drawTime(value: string) {
   const date = new Date(value)
@@ -37,42 +27,54 @@ function drawTime(value: string) {
   }).format(date)
 }
 
-function isLargeNumber(number: number, balls: number[]) {
-  const usesTenRanks = !balls.includes(0) && Math.max(...balls, 0) >= 10
-  return number >= (usesTenRanks ? 6 : 5)
-}
+function ResultCells({ mode, numbers, gameId, ruleVersion = '', drawAt }: { mode: ResultMode; numbers: number[]; gameId: string; ruleVersion?: string; drawAt: string }) {
+  const profile = lotteryRuleProfile(gameId)
+  const summary = lotteryResultSummary(gameId, numbers, ruleVersion)
+  // Long official results wrap into complete rows instead of squeezing twenty
+  // balls into the width reserved for ten or losing numbers off screen.
+  const cellColumns = { '--result-count': Math.min(numbers.length, 10) } as CSSProperties
+  if (!numbers.length) return <div className="draw-result-cells result-unavailable">暂无号码</div>
 
-function ResultCells({ mode, numbers, gameBalls }: { mode: ResultMode; numbers: number[]; gameBalls: number[] }) {
-  const cellColumns = { '--result-count': numbers.length } as CSSProperties
-
-  if (mode === 'numbers') {
-    return <div className="draw-result-cells number-cells" style={cellColumns}>{numbers.map((number, index) => <b className={ballTone(number)} key={index}>{number}</b>)}</div>
+  if (mode === 'numbers' || !summary) {
+    const isMarkSix = profile.family === 'mark-six'
+    return <div className={`draw-result-cells number-cells${isMarkSix ? ' mark-six-result-balls' : ''}`} style={cellColumns}>{numbers.map((number, index) => isMarkSix
+      ? <MarkSixDrawBall drawAt={drawAt} index={index} key={index} length={numbers.length} number={number} />
+      : <b className={ballTone(number)} key={index}>{number}</b>)}</div>
   }
 
   if (mode === 'size') {
     return <div className="draw-result-cells result-word-cells" style={cellColumns}>{numbers.map((number, index) => {
-      const large = isLargeNumber(number, gameBalls)
+      if (profile.family === 'mark-six' && number === 49) return <b className="result-neutral" key={index}>和</b>
+      const large = number >= profile.numberThreshold
       return <b className={large ? 'result-blue' : 'result-orange'} key={index}>{large ? '大' : '小'}</b>
     })}</div>
   }
 
   if (mode === 'parity') {
     return <div className="draw-result-cells result-word-cells" style={cellColumns}>{numbers.map((number, index) => {
+      if (profile.family === 'mark-six' && number === 49) return <b className="result-neutral" key={index}>和</b>
       const odd = number % 2 === 1
       return <b className={odd ? 'result-blue' : 'result-orange'} key={index}>{odd ? '单' : '双'}</b>
     })}</div>
   }
 
-  const meta = crownMeta(numbers)
-  const sum = numbers[0] + numbers[1]
-  const dragons = numbers.slice(0, 5).map((number, index) => number > numbers[numbers.length - 1 - index])
+  if (profile.family === 'mark-six') {
+    return <div className="draw-result-cells trend-cells mark-six-special-summary">
+      <strong>{summary.total}</strong>
+      <b className={summary.size === '和' ? 'result-neutral' : summary.size === '大' ? 'result-blue' : 'result-orange'}>{summary.size}</b>
+      <b className={summary.parity === '和' ? 'result-neutral' : summary.parity === '单' ? 'result-blue' : 'result-orange'}>{summary.parity}</b>
+      <b className={markSixBallClass(summary.total)}>{markSixWaveLabel(summary.total)}</b>
+      <em className="sr-only">{summary.label}：{summary.text}</em>
+    </div>
+  }
+
   return <div className="draw-result-cells trend-cells">
-    <strong>{sum}</strong>
-    <b className={sum >= 12 ? 'result-blue' : 'result-orange'}>{sum >= 12 ? '大' : '小'}</b>
-    <b className={sum % 2 ? 'result-blue' : 'result-orange'}>{sum % 2 ? '单' : '双'}</b>
+    <strong>{summary.total}</strong>
+    <b className={summary.size === '大' ? 'result-blue' : 'result-orange'}>{summary.size}</b>
+    <b className={summary.parity === '单' ? 'result-blue' : 'result-orange'}>{summary.parity}</b>
     <i aria-hidden="true" />
-    {dragons.map((dragon, index) => <b className={dragon ? 'result-blue' : 'result-orange'} key={index}>{dragon ? '龙' : '虎'}</b>)}
-    <em className="sr-only">{meta.crownResult}，{meta.dragonTiger}</em>
+    {summary.dragons.map((dragon, index) => <b className={dragon === '龙' ? 'result-blue' : dragon === '虎' ? 'result-orange' : 'result-neutral'} key={index}>{dragon}</b>)}
+    <em className="sr-only">{summary.label}：{summary.text}，{summary.dragonLabel}：{summary.dragonText}</em>
   </div>
 }
 
@@ -82,10 +84,16 @@ export function DrawResults({ games, initialGameId, onBack, onSelectGame }: { ga
   const [gamePickerOpen, setGamePickerOpen] = useState(false)
   const [resultMode, setResultMode] = useState<ResultMode>('numbers')
   const selectedGame = games.find((item) => item.id === selectedGameId) ?? games[0]
+  const profile = lotteryRuleProfile(selectedGame?.id ?? '')
   const { draws, loading } = useGameDraws(selectedGame?.id ?? '', 100)
-  const drawDate = (value: string) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(value))
-  const visibleDraws = selectedDate ? draws.filter((draw) => drawDate(draw.draw_at) === selectedDate) : draws
-  const availableModes = selectedGame?.balls.length >= 10 ? resultModes : resultModes.filter((item) => item.id !== 'trend')
+  const drawDate = (value: string) => {
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(date)
+  }
+  const visibleDraws = draws.filter(draw => draw.game_id === selectedGame?.id && (!selectedDate || drawDate(draw.draw_at) === selectedDate))
+  const availableModes = profile.family === 'unknown' ? resultModes.filter(item => item.id === 'numbers')
+    : resultModes.map(item => item.id === 'trend' ? { ...item, label: profile.family === 'mark-six' ? '特码属性' : `${profile.sumLabel}/龙虎` } : item)
+  const activeMode = availableModes.some(item => item.id === resultMode) ? resultMode : 'numbers'
 
   useEffect(() => {
     if (initialGameId) {
@@ -118,16 +126,15 @@ export function DrawResults({ games, initialGameId, onBack, onSelectGame }: { ga
     </section>
     <nav className="draw-result-modes" aria-label="开奖显示方式">
       <span>期数 / 时间</span>
-      <div>{availableModes.map((item) => <button className={resultMode === item.id ? 'active' : ''} aria-pressed={resultMode === item.id} key={item.id} onClick={() => setResultMode(item.id)}>{item.label}</button>)}</div>
+      <div>{availableModes.map((item) => <button className={activeMode === item.id ? 'active' : ''} aria-pressed={activeMode === item.id} key={item.id} onClick={() => setResultMode(item.id)}>{item.label}</button>)}</div>
       <small>{selectedDate || `最近 ${visibleDraws.length} 期`}</small>
     </nav>
-    <section className={`draw-results-table result-mode-${resultMode}${selectedGame.balls.length > 5 ? ' racing-results-table' : ''}`}>
+    <section className={`draw-results-table result-mode-${activeMode}${profile.family === 'racing' ? ' racing-results-table' : ''}`}>
       {loading && <p className="draw-results-empty">正在加载开奖结果…</p>}
       {!loading && visibleDraws.map((draw) => {
-        const balls = draw.numbers.length ? draw.numbers : selectedGame.balls
         return <article key={draw.issue}>
-          <span><b>{shortIssue(draw.issue)}</b><time>{drawTime(draw.draw_at)}</time></span>
-          <ResultCells mode={resultMode} numbers={balls} gameBalls={selectedGame.balls} />
+          <span><b>{draw.issue}</b><time dateTime={draw.draw_at}>{drawTime(draw.draw_at)}</time></span>
+          <ResultCells mode={activeMode} numbers={draw.numbers} gameId={selectedGame.id} ruleVersion={selectedGame.ruleVersion} drawAt={draw.draw_at} />
         </article>
       })}
       {!loading && !visibleDraws.length && <p className="draw-results-empty">该日期暂无开奖结果</p>}

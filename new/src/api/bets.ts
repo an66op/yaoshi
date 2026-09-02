@@ -16,6 +16,7 @@ export type MemberBet = {
   odds: number
   status: string
   payout: number
+  remark?: string
   created_at: string
 	request_id?: string
 	deducted?: number
@@ -51,9 +52,33 @@ export type AssistantBetResult = {
   total: number
   balance: number
   accepted_at: string
+  /** Stored contract version when the server exposes it for historical receipts. */
+  rule_version?: string
+}
+
+/**
+ * Detailed web boards submit normalized rows instead of routing financial
+ * requests through the compact chat parser. The server validates and commits
+ * the complete batch atomically under one request id.
+ */
+export type WebBetBatchItem = {
+  play_code: string
+  play_name: string
+  position: number
+  selection: string
+  amount: number
+}
+
+export type WebBetBatchPayload = {
+  issue: string
+  items: WebBetBatchItem[]
+  request_id?: string
 }
 
 export type AssistantDrawStatus = {
+  rules_ready?: boolean
+  rule_version?: string
+  rules_message?: string
   game_id: string
   game_name: string
   issue: string
@@ -117,6 +142,11 @@ export const betsApi = {
   assistantHistory: (gameId: string, limit = 20) => request<AssistantBetResult[]>(`/member/games/${encodeURIComponent(gameId)}/assistant/history?limit=${limit}`),
   assistantPlace: (gameId: string, payload: { issue?: string; content: string; request_id?: string }) =>
     request<AssistantBetResult>(`/member/games/${encodeURIComponent(gameId)}/assistant/bets`, { method: 'POST', body: JSON.stringify(payload) }),
+  webPlaceBatch: (gameId: string, payload: WebBetBatchPayload) =>
+    request<AssistantBetResult>(`/member/games/${encodeURIComponent(gameId)}/web-bets`, {
+      method: 'POST',
+      body: JSON.stringify({ ...payload, request_id: payload.request_id ?? createRequestId() }),
+    }),
   cancelCurrent: (gameId: string, issue?: string) => request<CancelIssueResult>('/member/bets/cancel-current', {
     method: 'POST',
     body: JSON.stringify({ game_id: gameId, issue }),

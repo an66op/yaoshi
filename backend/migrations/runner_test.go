@@ -92,13 +92,13 @@ func TestBaselineInventoryCoversTablesAndColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read core baseline: %v", err)
 	}
-	tables, err := baselineTables(string(contents))
-	if err != nil {
-		t.Fatalf("baselineTables() error = %v", err)
-	}
 	columns, err := baselineColumns(string(contents))
 	if err != nil {
 		t.Fatalf("baselineColumns() error = %v", err)
+	}
+	tables := make(map[string]struct{})
+	for _, column := range columns {
+		tables[column.Table] = struct{}{}
 	}
 	if len(tables) < 35 {
 		t.Fatalf("baseline contains only %d tables", len(tables))

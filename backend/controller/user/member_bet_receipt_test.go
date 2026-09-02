@@ -60,6 +60,14 @@ func TestOrdinaryRoomTextDoesNotBypassChatBoundary(t *testing.T) {
 	}
 }
 
+func TestCompactTextualBetsReachAssistantParser(t *testing.T) {
+	for _, content := range []string{"1大5", "和大5", "豹子5", "前三豹子5"} {
+		if !isRoomBetContent(content) || !isRoomCommandRequest("group", "speed-racing", content) {
+			t.Fatalf("compact bet %q was treated as ordinary chat", content)
+		}
+	}
+}
+
 func TestRepeatedDigitsStillUseServerParsedAmount(t *testing.T) {
 	lines, err := services.ParseAssistantBet("4444/88")
 	if err != nil || len(lines) != 1 || lines[0].Amount != 352 || lines[0].Selection != "4" {

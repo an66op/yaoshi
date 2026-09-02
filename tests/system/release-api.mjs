@@ -1,4 +1,6 @@
 import process from 'node:process'
+import { createLoginCaptchaFixture } from './login-captcha-fixture.mjs'
+import { writeMemberSessionFile } from './member-session-file.mjs'
 
 const baseURL = process.env.SYSTEM_TEST_BACKEND_ORIGIN || 'http://127.0.0.1:18080'
 const adminUsername = process.env.E2E_ADMIN_USERNAME || 'e2e_platform'
@@ -42,6 +44,36 @@ async function json(path, options = {}, expected = [200]) {
 }
 
 const jsonHeaders = { 'content-type': 'application/json' }
+
+async function assertCaptchaContract(path, clientIP) {
+  const result = await json(`${path}/captcha`, { headers: { 'x-forwarded-for': clientIP } })
+  const challenge = result.body.data
+  assert(/^[a-f0-9]{32}$/.test(challenge?.id || ''), `${path} captcha did not return a random 32-hex id`)
+  assert(typeof challenge?.image === 'string' && /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(challenge.image), `${path} captcha did not return a PNG data URL`)
+  const png = Buffer.from(challenge.image.slice('data:image/png;base64,'.length), 'base64')
+  assert(png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), `${path} captcha image did not contain the PNG signature`)
+  assert(challenge.expires_in === 120, `${path} captcha did not expire in 120 seconds`)
+  assert(result.response.headers.get('cache-control') === 'no-store', `${path} captcha may be cached`)
+  assert(Object.keys(challenge).every(key => ['id', 'image', 'expires_in'].includes(key)), `${path} captcha exposed unexpected response fields`)
+}
+
+async function assertCaptchaRejected(path, credentials, clientIP, proof) {
+  const rejected = await json(path, {
+    method: 'POST', headers: { ...jsonHeaders, 'x-forwarded-for': clientIP },
+    body: JSON.stringify({ ...credentials, ...proof }),
+  }, [400])
+  assert(!rejected.response.headers.get('set-cookie'), `${path} issued a cookie for an invalid or consumed captcha`)
+}
+
+async function assertCaptchaRequired(path, credentials, purpose, clientIP) {
+  await assertCaptchaContract(path, clientIP)
+  await assertCaptchaRejected(path, credentials, clientIP, {})
+  const proof = await createLoginCaptchaFixture(purpose, clientIP)
+  const wrongCode = String((Number(proof.captcha_code) + 1) % 1_000_000).padStart(6, '0')
+  await assertCaptchaRejected(path, credentials, clientIP, { ...proof, captcha_code: wrongCode })
+  // An incorrect answer must consume the challenge as well.
+  await assertCaptchaRejected(path, credentials, clientIP, proof)
+}
 
 const health = await json('/health')
 assert(health.body.status === 'ok', '/health did not report ok')
@@ -105,11 +137,15 @@ const independentIP = await raw('/api/member/register', {
 })
 assert(independentIP.status === 400, `independent X-Forwarded-For inherited another client's limit (${independentIP.status})`)
 
+const adminCredentials = { username: adminUsername, password: adminPassword, workspace: '平台' }
+await assertCaptchaRequired('/api/login', adminCredentials, 'management', '198.51.100.30')
+const adminCaptcha = await createLoginCaptchaFixture('management', '198.51.100.30')
 const login = await json('/api/login', {
   method: 'POST', headers: { ...jsonHeaders, 'x-forwarded-for': '198.51.100.30' },
-  body: JSON.stringify({ username: adminUsername, password: adminPassword, workspace: '平台' }),
+  body: JSON.stringify({ ...adminCredentials, ...adminCaptcha }),
 })
 assert(login.body.data?.user?.role === 'admin', 'bootstrap administrator could not log in')
+await assertCaptchaRejected('/api/login', adminCredentials, '198.51.100.30', adminCaptcha)
 assert(!('token' in (login.body.data || {})), 'login response exposed a bearer token')
 const setCookie = login.response.headers.get('set-cookie') || ''
 assert(/wangzhe_management_session=/.test(setCookie), 'management session cookie was not set')
@@ -281,15 +317,18 @@ await createMember(memberUsername, memberPassword, 'E2E 会员')
 await createMember(boundaryUsername, boundaryPassword, '边界会员')
 
 async function memberLogin(username, password, clientIP) {
+  const proof = await createLoginCaptchaFixture('member', clientIP)
   const result = await json('/api/member/login', {
-    method: 'POST', headers: { ...jsonHeaders, 'x-forwarded-for': clientIP }, body: JSON.stringify({ username, password, workspace: '' }),
+    method: 'POST', headers: { ...jsonHeaders, 'x-forwarded-for': clientIP }, body: JSON.stringify({ username, password, workspace: '', ...proof }),
   })
   const cookieHeader = result.response.headers.get('set-cookie') || ''
   assert(/wangzhe_member_session=/.test(cookieHeader), `member session cookie missing for ${username}`)
   assert(/HttpOnly/i.test(cookieHeader) && /Secure/i.test(cookieHeader), 'member release cookie flags are incomplete')
+  await assertCaptchaRejected('/api/member/login', { username, password, workspace: '' }, clientIP, proof)
   return cookieHeader.split(';', 1)[0]
 }
 
+await assertCaptchaRequired('/api/member/login', { username: memberUsername, password: memberPassword, workspace: '' }, 'member', '198.51.100.31')
 let memberCookie = await memberLogin(memberUsername, memberPassword, '198.51.100.31')
 await memberLogin(boundaryUsername, boundaryPassword, '198.51.100.32')
 const joined = await json('/api/member/room/join', {
@@ -311,4 +350,5 @@ assert(memberGames[0].enabled === true && memberGames[0].lobby_category === plat
   'member catalogue lost the effective status or platform category')
 await assertRoomGames(secondAgentID)
 
+await writeMemberSessionFile(process.env.SYSTEM_TEST_MEMBER_COOKIE_FILE, parsedBaseURL.origin, memberCookie)
 process.stdout.write('Fresh release API checks and disposable E2E fixtures are ready.\n')

@@ -1,6 +1,9 @@
 import { publicRequest, request } from './client'
 import { createRequestId } from '../utils/requestId'
 
+export type LoginCaptcha = { id: string; image: string; expires_in: number }
+export type LoginCaptchaInput = { captcha_id: string; captcha_code: string }
+
 export type LoginResult = {
   user: {
     id: number
@@ -156,8 +159,13 @@ export type EntertainmentLaunch = {
 }
 
 export const memberApi = {
-  login: (username: string, password: string, workspace = '') =>
-    request<LoginResult>('/member/login', { method: 'POST', body: JSON.stringify({ username, password, workspace }) }),
+  loginCaptcha: (signal?: AbortSignal) =>
+    publicRequest<LoginCaptcha>('/member/login/captcha', { cache: 'no-store', signal }),
+  login: (username: string, password: string, captcha: LoginCaptchaInput) =>
+    request<LoginResult>('/member/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password, captcha_id: captcha.captcha_id, captcha_code: captcha.captcha_code }),
+    }),
   register: (payload: { username: string; password: string; invite_code?: string; room_code?: string }) =>
     request<LoginResult>('/member/register', { method: 'POST', body: JSON.stringify(payload) }),
 	logout: () => request<null>('/member/logout', { method: 'POST' }),

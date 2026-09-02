@@ -9,8 +9,10 @@ import { AnnouncementDialog } from '../components/Dialogs'
 import type { Game, Theme } from '../types'
 import { portalApi } from '../api/portal'
 import type { AnnouncementItem } from '../api/portal'
-import { buildRoomEntries } from '../utils/roomHistory'
+import { buildRoomEntries, DEFAULT_ROOM_LOGO } from '../utils/roomHistory'
 import type { RoomHistoryItem } from '../utils/roomHistory'
+import { controlSurfaceProps } from '../utils/controlSurface'
+import { lotteryRuleProfile, markSixDrawBallClass } from '../utils/lotteryRules'
 
 type Filter = string
 
@@ -23,7 +25,9 @@ type Props = {
   theme: Theme
   gamesLive?: boolean
   gamesError?: string
-  onOpenGame: (id: string) => void
+  initialFilter?: string
+  onFilterChange?: (filter: string) => void
+  onOpenGame: (id: string, sourceFilter: string) => void
   onToggleTheme: () => void
   onSwitchRoom: (roomCode: string) => Promise<void>
 }
@@ -45,13 +49,13 @@ const upcomingEntertainment: Record<'捕鱼' | '体育' | '真人' | '电子' | 
   电竞: ['王者荣耀', '炉石传说', '英雄联盟'],
 }
 
-export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gamesLive, gamesError, onOpenGame, onToggleTheme, onSwitchRoom }: Props) {
+export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gamesLive, gamesError, initialFilter = '', onFilterChange, onOpenGame, onToggleTheme, onSwitchRoom }: Props) {
   const categoryRailRef = useRef<HTMLDivElement>(null)
   const roomSwitcherDialogRef = useRef<HTMLElement>(null)
   const roomSwitcherTriggerRef = useRef<HTMLButtonElement>(null)
   const roomCodeInputRef = useRef<HTMLInputElement>(null)
   const [announcementOpen, setAnnouncementOpen] = useState(false)
-  const [filter, setFilter] = useState<Filter>('彩票')
+  const [filter, setFilter] = useState<Filter>(() => initialFilter.trim() || '彩票')
   const [roomSwitcherOpen, setRoomSwitcherOpen] = useState(false)
   const [switchingRoom, setSwitchingRoom] = useState('')
   const [roomSwitchError, setRoomSwitchError] = useState('')
@@ -66,6 +70,12 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
   const visibleGames = showingEntertainment ? [] : games.filter((game) => game.lobbyCategory === filter)
   const visibleEntertainment = showingEntertainment ? upcomingEntertainment[filter as keyof typeof upcomingEntertainment] : []
   const roomEntries = buildRoomEntries({ code: room, name: roomName || room, logo: roomLogo }, roomHistory)
+
+  const chooseFilter = (next: Filter) => {
+    setFilter(next)
+    setEntertainmentMessage('')
+    onFilterChange?.(next)
+  }
 
   const chooseRoom = async (roomCode: string) => {
     if (roomCode === room) {
@@ -97,8 +107,13 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
 
   useEffect(() => {
     if (lotteryFilters.length === 0 || showingEntertainment || lotteryFilters.some(item => item.id === filter)) return
-    setFilter(lotteryFilters[0].id)
-  }, [filter, lotteryFilters, showingEntertainment])
+    chooseFilter(lotteryFilters[0].id)
+  }, [filter, lotteryFilters, showingEntertainment]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const next = initialFilter.trim() || '彩票'
+    setFilter(current => current === next ? current : next)
+  }, [initialFilter])
 
   useEffect(() => {
     let activeRequest = true
@@ -174,8 +189,8 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
       {announcements.length > 0 && <button className="announcement lobby-announcement" onClick={() => { setDialogAnnouncements(announcements); setAnnouncementOpen(true) }}><span className="announcement-badge">公告</span><p><b>{announcements[0]?.title || '大厅公告'}</b><small>{roomNotice}</small></p>{announcements.length > 1 && <em className="announcement-count">{announcements.length}</em>}<Icon name="arrow" /></button>}
     </header>
     <section className="lobby-body">
-      <div className="lobby-category-shell"><div className="lobby-toolbar" aria-label="大厅分类" ref={categoryRailRef}>{filters.map((item) => <button aria-pressed={filter === item.id} className={filter === item.id ? 'toolbar-active' : ''} key={item.id} onClick={() => { setFilter(item.id); setEntertainmentMessage('') }}>{item.label}</button>)}</div><button className="lobby-category-next" aria-label="向右查看更多分类" onClick={() => categoryRailRef.current?.scrollBy({ left: 150, behavior: 'smooth' })}><Icon name="arrow" /></button></div>
-      {!showingEntertainment && <div className="game-list">{visibleGames.map((game) => <button className="game-card" key={game.id} onClick={() => onOpenGame(game.id)}><div className="game-top" style={{ '--game': game.color } as CSSProperties}><div className="game-lead"><span className={`game-logo${game.logo ? ' has-image' : ''}`}>{game.logo ? <img alt={`${game.title} Logo`} src={game.logo} /> : game.tag.split(' ')[0].slice(0, 2)}</span><div><strong>{game.title}</strong><small>{game.online === '—' ? '实时开奖' : `在线 ${game.online} 人 · 实时开奖`}</small></div></div><div className="game-clock"><small>第 {game.period} 期</small><LotteryCountdown timing={game.timing} /></div></div><footer><span>上期 {game.latestIssue.slice(-8)}</span><div>{game.balls.map((number, index) => <b className={ballTone(number)} key={index}>{number}</b>)}</div><Icon name="arrow" /></footer></button>)}</div>}
+      <div className="lobby-category-shell" {...controlSurfaceProps}><div className="lobby-toolbar" aria-label="大厅分类" ref={categoryRailRef}>{filters.map((item) => <button aria-pressed={filter === item.id} className={filter === item.id ? 'toolbar-active' : ''} key={item.id} onClick={() => chooseFilter(item.id)}>{item.label}</button>)}</div><button className="lobby-category-next" aria-label="向右查看更多分类" onClick={() => categoryRailRef.current?.scrollBy({ left: 150, behavior: 'smooth' })}><Icon name="arrow" /></button></div>
+      {!showingEntertainment && <div className="game-list">{visibleGames.map((game) => <button className="game-card" key={game.id} onClick={() => onOpenGame(game.id, filter)}><div className="game-top" style={{ '--game': game.color } as CSSProperties}><div className="game-lead"><span className={`game-logo${game.logo ? ' has-image' : ''}`}>{game.logo ? <img alt={`${game.title} Logo`} src={game.logo} /> : game.tag.split(' ')[0].slice(0, 2)}</span><div><strong>{game.title}</strong><small>{game.online === '—' ? '实时开奖' : `在线 ${game.online} 人 · 实时开奖`}</small></div></div><div className="game-clock"><small>第 {game.period} 期</small><LotteryCountdown timing={game.timing} /></div></div><footer><span>上期 {game.latestIssue.slice(-8)}</span><div>{game.balls.map((number, index) => <b className={lotteryRuleProfile(game.id).family === 'mark-six' ? markSixDrawBallClass(number, index, game.balls.length) : ballTone(number)} key={index}>{number}</b>)}</div><Icon name="arrow" /></footer></button>)}</div>}
       {showingEntertainment && <div className="entertainment-list">{visibleEntertainment.map((name, index) => <button key={name} onClick={() => setEntertainmentMessage(`${name}暂未开放`)}><span style={{ '--entertainment-hue': `${(index * 47 + filter.length * 19) % 360}deg` } as CSSProperties}>{name.slice(0, 2)}</span><div><b>{name}</b><small>功能准备中</small></div><em className="maintenance">未开放</em><Icon name="arrow" /></button>)}</div>}
       {entertainmentMessage && <p className="entertainment-message">{entertainmentMessage}</p>}
       {!showingEntertainment && !gamesLive && <p className="lobby-tip">{gamesError ? '连接失败，正在自动重试' : '正在加载彩种…'}</p>}
@@ -216,11 +231,11 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
           </form>
           {roomSwitchError && <small className="room-switcher-error" id="room-code-error" role="alert">{roomSwitchError}</small>}
           <div className="room-switcher-recent-title"><span><b>我的房间</b><small>当前房间置顶 · 最近进入排序</small></span><em>{roomEntries.length} 个房间</em></div>
-          <div className="room-switcher-list">{roomEntries.map((item, index) => {
+          <div className="room-switcher-list" role="group" aria-label="我的房间" {...controlSurfaceProps}>{roomEntries.map((item, index) => {
             const disabled = item.status === 'disabled'
             const statusLabel = item.status === 'current' ? '当前' : item.status === 'pending' ? '待审核' : item.status === 'disabled' ? '已停用' : index === 1 ? '最近' : ''
-            return <button aria-current={item.status === 'current' ? 'true' : undefined} className={`room-switcher-list-${item.status}`} disabled={Boolean(switchingRoom) || disabled} key={item.code} onClick={() => void chooseRoom(item.code)}>
-              <span className={`room-switcher-list-icon${item.logo ? ' has-image' : ''}`}>{item.logo ? <img alt="" src={item.logo} /> : <Icon name="room" />}</span>
+            return <button type="button" aria-label={`${item.name}，房间 ${item.code}${statusLabel ? `，${statusLabel}` : ''}`} aria-current={item.status === 'current' ? 'true' : undefined} className={`room-switcher-list-${item.status}`} disabled={Boolean(switchingRoom) || disabled} key={item.code} onClick={() => void chooseRoom(item.code)} title={`${item.name} · ${item.code}`}>
+              <span className="room-switcher-list-icon has-image"><img alt="" src={item.logo} draggable={false} onError={event => { if (event.currentTarget.getAttribute('src') !== DEFAULT_ROOM_LOGO) event.currentTarget.src = DEFAULT_ROOM_LOGO }} /></span>
               <span><b>{item.name}</b><small>ROOM · {item.code}</small></span>
               {switchingRoom === item.code ? <em>切换中…</em> : statusLabel ? <em className={`room-switcher-status-${item.status}`}>{statusLabel}</em> : <Icon name="arrow" />}
             </button>

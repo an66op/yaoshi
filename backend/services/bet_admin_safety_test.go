@@ -65,8 +65,8 @@ func TestSafeAddInt64RejectsLedgerOverflow(t *testing.T) {
 }
 
 func TestValidateFiveBallAndThreeBallCatalogPlays(t *testing.T) {
-	fiveBall := &lottery.Game{Name: "宾果时时彩(一)", Category: "时时彩"}
-	threeBall := &lottery.Game{Name: "福彩3D", Category: "全国彩"}
+	fiveBall := &lottery.Game{ID: "bingo-ssc-1", Name: "宾果时时彩(一)", Category: "时时彩"}
+	threeBall := &lottery.Game{ID: "official-fc3d", Name: "福彩3D", Category: "全国彩"}
 
 	valid := []struct {
 		game      *lottery.Game
@@ -76,10 +76,11 @@ func TestValidateFiveBallAndThreeBallCatalogPlays(t *testing.T) {
 	}{
 		{fiveBall, "ball_1_5", 5, "0"},
 		{fiveBall, "two_sided", 3, "双"},
-		{fiveBall, "dragon_tiger", 2, "虎"},
-		{fiveBall, "sum", 6, "9"},
+		{fiveBall, "dragon_tiger", 1, "虎"},
+		{fiveBall, "dragon_tiger_tie", 1, "和"},
 		{fiveBall, "leopard", 1, "豹子"},
-		{fiveBall, "straight", 1, "yes"},
+		{fiveBall, "straight", 2, "yes"},
+		{fiveBall, "pair", 3, "对子"},
 		{threeBall, "ball_1_5", 3, "9"},
 		{threeBall, "dragon_tiger", 1, "龙"},
 		{threeBall, "pair", 1, "对子"},
@@ -94,8 +95,8 @@ func TestValidateFiveBallAndThreeBallCatalogPlays(t *testing.T) {
 }
 
 func TestValidateBetChoiceRejectsCatalogAndShapeConfusion(t *testing.T) {
-	fiveBall := &lottery.Game{Name: "宾果时时彩(一)", Category: "时时彩"}
-	racing := &lottery.Game{Name: "极速赛车", Category: "赛车"}
+	fiveBall := &lottery.Game{ID: "bingo-ssc-1", Name: "宾果时时彩(一)", Category: "时时彩"}
+	racing := &lottery.Game{ID: "speed-racing", Name: "极速赛车", Category: "赛车"}
 	invalid := []struct {
 		game      *lottery.Game
 		playCode  string
@@ -109,9 +110,13 @@ func TestValidateBetChoiceRejectsCatalogAndShapeConfusion(t *testing.T) {
 		{fiveBall, "ball_1_5", 1, "1e0"},
 		{fiveBall, "two_sided", 1, "龙"},
 		{fiveBall, "dragon_tiger", 3, "龙"},
+		{fiveBall, "dragon_tiger", 2, "虎"},
+		{fiveBall, "dragon_tiger_tie", 1, "龙"},
+		{fiveBall, "dragon_tiger_tie", 2, "和"},
+		{fiveBall, "sum", 6, "大"},
 		{fiveBall, "sum", 6, "10"},
-		{&lottery.Game{Name: "福彩3D", Category: "全国彩"}, "ball_1_5", 4, "1"},
-		{&lottery.Game{Name: "福彩3D", Category: "全国彩"}, "dragon_tiger", 2, "龙"},
+		{&lottery.Game{ID: "official-fc3d", Name: "福彩3D", Category: "全国彩"}, "ball_1_5", 4, "1"},
+		{&lottery.Game{ID: "official-fc3d", Name: "福彩3D", Category: "全国彩"}, "dragon_tiger", 2, "龙"},
 		{racing, "leopard", 1, "豹子"},
 	}
 	for _, item := range invalid {
@@ -122,8 +127,8 @@ func TestValidateBetChoiceRejectsCatalogAndShapeConfusion(t *testing.T) {
 }
 
 func TestNormalizeBetSelectionPreventsEquivalentKeyVariants(t *testing.T) {
-	fiveBall := &lottery.Game{Name: "宾果时时彩(一)", Category: "时时彩"}
-	racing := &lottery.Game{Name: "极速赛车", Category: "赛车"}
+	fiveBall := &lottery.Game{ID: "bingo-ssc-1", Name: "宾果时时彩(一)", Category: "时时彩"}
+	racing := &lottery.Game{ID: "speed-racing", Name: "极速赛车", Category: "赛车"}
 	tests := []struct {
 		game      *lottery.Game
 		playCode  string

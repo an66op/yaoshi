@@ -25,12 +25,24 @@ describe('management API cookie credentials', () => {
 
   afterEach(() => vi.unstubAllGlobals())
 
-  it('sends only account and password, never a client-chosen login owner or role', async () => {
+  it('sends credentials and captcha, never a client-chosen login owner or role', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, data: {} }) })
     vi.stubGlobal('fetch', fetchMock)
     const { adminApi } = await import('./api')
-    await adminApi.login('agent-account', 'test-password')
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ username: 'agent-account', password: 'test-password' })
+    const captcha = { captcha_id: 'management-challenge', captcha_code: '123456', role: 'admin', workspace: 'untrusted' }
+    await adminApi.login('agent-account', 'test-password', captcha)
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ username: 'agent-account', password: 'test-password', captcha_id: captcha.captcha_id, captcha_code: captcha.captcha_code })
+  })
+
+  it('fetches a fresh management challenge with cookie credentials and cancellation', async () => {
+    const challenge = { id: 'management-challenge', image: 'data:image/png;base64,AAAA', expires_in: 120 }
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, data: challenge }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { adminApi } = await import('./api')
+    const controller = new AbortController()
+    await expect(adminApi.loginCaptcha(controller.signal)).resolves.toEqual(challenge)
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/api\/login\/captcha$/)
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ cache: 'no-store', signal: controller.signal, credentials: 'include' })
   })
 
   it('uses cookie credentials and never copies a legacy token to Authorization', async () => {
@@ -108,6 +120,17 @@ describe('management API cookie credentials', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('/api/admin/robot-workspaces/37/games')
   })
 
+  it('serializes game-room retention and recycle-bin expiry without executing a cleanup', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, data: {} }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { adminApi } = await import('./api')
+    const payload = { workspace_id: 37, enabled: true, retention_days: 7, purge_after_days: 14 }
+    await adminApi.updateRetentionPolicy('game_chat_messages', payload)
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/api\/admin\/data-lifecycle\/policies\/game_chat_messages$/)
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'PUT', body: JSON.stringify(payload) })
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
   it('scopes plan automation reads and saves without exposing administrator generation', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -128,5 +151,46 @@ describe('management API cookie credentials', () => {
     expect(adminApi).not.toHaveProperty('previewPlanAutomation')
     expect(tenantApi).not.toHaveProperty('updatePlanAutomation')
     expect(agentApi).not.toHaveProperty('updatePlanAutomation')
+  })
+
+  describe.each(['tenant', 'agent'] as const)('%s room membership lookup', role => {
+    it('sends an exact user_id with a one-row limit and preserves historical nulls', async () => {
+      const historical = {
+        id: 41, public_id: 100041, username: 'history-member', nickname: '历史会员', role: 'member',
+        in_current_room: false, can_manage: false, balance: null, status: null, online: null,
+      }
+      const data = { items: [historical], total: 1, page: 1, page_size: 1 }
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, data }) })
+      vi.stubGlobal('fetch', fetchMock)
+      const { tenantApi, agentApi } = await import('./api')
+      const api = role === 'tenant' ? tenantApi : agentApi
+      await expect(api.users({ userId: 41, page: 1, pageSize: 1 })).resolves.toEqual(data)
+      const url = new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost')
+      expect(url.pathname).toBe(`/api/${role}/users`)
+      expect(url.searchParams.get('user_id')).toBe('41')
+      expect(url.searchParams.get('page_size')).toBe('1')
+      expect(url.searchParams.get('query')).toBe('')
+      expect(fetchMock.mock.calls[0][1].credentials).toBe('include')
+    })
+
+    it('does not silently turn an invalid explicit ID into an unfiltered lookup', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 400, text: async () => JSON.stringify({ code: 400, message: '会员编号无效' }) })
+      vi.stubGlobal('fetch', fetchMock)
+      const { tenantApi, agentApi } = await import('./api')
+      await expect((role === 'tenant' ? tenantApi : agentApi).users({ userId: 0 })).rejects.toThrow()
+      const url = new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost')
+      expect(url.searchParams.get('user_id')).toBe('0')
+    })
+
+    it('keeps normal room list filters without sending user_id', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, data: { items: [], total: 0, page: 2, page_size: 20 } }) })
+      vi.stubGlobal('fetch', fetchMock)
+      const { tenantApi, agentApi } = await import('./api')
+      await (role === 'tenant' ? tenantApi : agentApi).users({ query: '公开昵称', page: 2, pageSize: 20 })
+      const url = new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost')
+      expect(url.searchParams.has('user_id')).toBe(false)
+      expect(url.searchParams.get('query')).toBe('公开昵称')
+      expect(url.searchParams.get('page')).toBe('2')
+    })
   })
 })

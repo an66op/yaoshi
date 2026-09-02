@@ -1,14 +1,115 @@
 package services
 
 import (
+	"backend/data/models/bet"
 	"backend/data/models/chat"
 	"backend/data/models/lottery"
 	membernotify "backend/data/models/notify"
+	"backend/data/models/user"
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestBingoMarkSixPushPostgresRefundsOnceAndIsNotTurnover(t *testing.T) {
+	db := timingPostgresDatabase(t)
+	game, member := markSixPostgresFixture(t, db, "986201")
+	service := NewBetAssistantService(db)
+	service.bets.suppressNotifications = true
+
+	before := timingPostgresMoney(t, db, member.UserID)
+	receipt, err := service.PlaceWeb(member.UserID, game.ID, game.NextIssue, []WebBetItem{{
+		PlayCode: "marksix_special_big_small", Position: 7, Selection: "大", Amount: 10,
+	}}, member.Username, "marksix-push-refund-001")
+	if err != nil || receipt.BetCount != 1 || receipt.Total != 10 {
+		t.Fatalf("place push fixture: receipt=%+v err=%v", receipt, err)
+	}
+	afterBet := timingPostgresMoney(t, db, member.UserID)
+	if afterBet.BalanceCents != before.BalanceCents-1000 || afterBet.Pending != before.Pending+1 || afterBet.LedgerRows != before.LedgerRows+1 {
+		t.Fatalf("fixture debit mismatch: before=%+v after=%+v", before, afterBet)
+	}
+
+	var ticket bet.Bet
+	if err := db.Where("user_id = ? AND game_id = ? AND issue = ?", member.UserID, game.ID, game.NextIssue).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	drawAt := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	draw := lottery.Draw{
+		GameID: game.ID, Issue: game.NextIssue, Numbers: "1,2,3,4,5,6,49", DrawAt: drawAt,
+		SourceRevision: bingoOrderedSourceRevision, ConversionRevision: bingoMarkSixConversionVersion,
+	}
+	if err := db.Create(&draw).Error; err != nil {
+		t.Fatal(err)
+	}
+	settler := NewBetAdminService(db)
+	result, err := settler.SettleIssue(game.ID, game.NextIssue, "和局返本回归")
+	if err != nil || result.PendingBefore != 1 || result.Won != 0 || result.Lost != 0 || result.Push != 1 || result.StakeAmount != 10 || result.PayoutAmount != 10 {
+		t.Fatalf("push settlement mismatch: result=%+v err=%v", result, err)
+	}
+	if err := db.First(&ticket, ticket.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ticket.Status != "cancelled" || ticket.PayoutCents != 1000 || ticket.RebateCents != 0 || ticket.AgentShareCents != 0 ||
+		ticket.ReconciliationStatus != "normal" || ticket.ReconciliationNote != "settlement_push" || !strings.Contains(ticket.Remark, "和局返还本金") {
+		t.Fatalf("push financial row is not auditable: %+v", ticket)
+	}
+	afterSettlement := timingPostgresMoney(t, db, member.UserID)
+	if afterSettlement.BalanceCents != before.BalanceCents || afterSettlement.Pending != before.Pending ||
+		afterSettlement.Cancelled != before.Cancelled+1 || afterSettlement.LedgerRows != before.LedgerRows+2 {
+		t.Fatalf("push did not restore exactly one stake: before=%+v after=%+v", before, afterSettlement)
+	}
+	var refundLedgers []user.BalanceTransaction
+	if err := db.Where("user_id = ? AND reference = ?", member.UserID, "settlement_bet:"+fmt.Sprint(ticket.ID)).Find(&refundLedgers).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(refundLedgers) != 1 || refundLedgers[0].AmountCents != ticket.AmountCents || refundLedgers[0].BeforeCents != afterBet.BalanceCents || refundLedgers[0].AfterCents != before.BalanceCents {
+		t.Fatalf("push refund ledger mismatch: %+v", refundLedgers)
+	}
+
+	status, err := settler.SettlementStatus(game.ID, game.NextIssue)
+	if err != nil || !status.HasDraw || !status.Settled || status.Pending != 0 || status.Won != 0 || status.Lost != 0 || status.Push != 1 || status.StakeAmount != 10 || status.PayoutAmount != 10 {
+		t.Fatalf("push status aggregation mismatch: status=%+v err=%v", status, err)
+	}
+	var notice membernotify.MemberNotification
+	if err := db.Where("user_id = ? AND game_id = ? AND issue = ?", member.UserID, game.ID, game.NextIssue).First(&notice).Error; err != nil {
+		t.Fatal(err)
+	}
+	if notice.WonCount != 0 || notice.PayoutCents != 1000 || !strings.Contains(notice.Content, "和局返本 1 注") ||
+		strings.Contains(notice.Content, "中奖金额") || !strings.Contains(notice.BetDetailsJSON, `"result":"push"`) {
+		t.Fatalf("push notification was presented as a win: %+v", notice)
+	}
+	money, err := settler.GameMoneyMap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item := money[game.ID]; item.Turnover != 0 || item.GrossProfit != 0 || item.Profit != 0 {
+		t.Fatalf("push leaked into dashboard effective turnover: %+v", item)
+	}
+	report, err := NewReportCenterService(db).Report("summary", ReportCenterFilter{WorkspaceID: member.WorkspaceID, GameID: game.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, metric := range report.Metrics {
+		if (metric.Key == "turnover" || metric.Key == "payout" || metric.Key == "member_net" || metric.Key == "gross") && metric.Value != 0 {
+			t.Fatalf("push leaked into %s report metric: %+v", metric.Key, report.Metrics)
+		}
+	}
+
+	retry, err := settler.SettleIssue(game.ID, game.NextIssue, "和局返本重试")
+	if err != nil || retry.PendingBefore != 0 || retry.Push != 0 {
+		t.Fatalf("push retry was not a no-op: result=%+v err=%v", retry, err)
+	}
+	if afterRetry := timingPostgresMoney(t, db, member.UserID); afterRetry != afterSettlement {
+		t.Fatalf("push retry credited twice: before=%+v after=%+v", afterSettlement, afterRetry)
+	}
+	var refundCount int64
+	if err := db.Model(&user.BalanceTransaction{}).Where("user_id = ? AND reference = ?", member.UserID, "settlement_bet:"+fmt.Sprint(ticket.ID)).Count(&refundCount).Error; err != nil || refundCount != 1 {
+		t.Fatalf("push retry duplicated refund ledger: count=%d err=%v", refundCount, err)
+	}
+}
 
 // The shared fixture accepts only an empty, explicitly named loopback test
 // database, with all schema/data changes rolled back after the test. No

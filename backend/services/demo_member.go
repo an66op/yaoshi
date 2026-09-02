@@ -13,6 +13,7 @@ const (
 	demoPassword       = "Wz888888"
 	demoNickname       = "王者玩家"
 	demoRoomCode       = "88001"
+	demoRoomName       = "王者聊天室"
 	demoAgentUsername  = "suyang"
 	demoAgentPassword  = "Room8801"
 	demoTenantUsername = "wangzhetenant"
@@ -65,7 +66,7 @@ func SeedExperienceMember(db *gorm.DB) error {
 			}
 			agent = user.User{
 				Username: demoAgentUsername, Password: agentHash, Nickname: "苏洋",
-				Role: "agent", Status: 1, AgentRoomCode: demoRoomCode, AgentRoomName: "王者体验房",
+				Role: "agent", Status: 1, AgentRoomCode: demoRoomCode, AgentRoomName: demoRoomName,
 				LoginScope: "tenant:" + demoTenantUsername, ParentTenantID: &tenantID,
 			}
 			if err := tx.Create(&agent).Error; err != nil {

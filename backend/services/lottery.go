@@ -48,6 +48,9 @@ type GameSummary struct {
 	SealAt         *time.Time     `json:"seal_at,omitempty"`
 	SourceHealthy  bool           `json:"source_healthy"`
 	BettingWindow  *BettingWindow `json:"betting_window,omitempty"`
+	RulesReady     bool           `json:"rules_ready"`
+	RuleVersion    string         `json:"rule_version"`
+	RulesMessage   string         `json:"rules_message"`
 }
 
 type LobbyCategorySummary struct {
@@ -91,7 +94,7 @@ func (s *LotteryService) listGamesForWorkspace(workspaceID uint64) ([]GameSummar
 	result := make([]GameSummary, 0, len(games))
 	for _, game := range games {
 		var draw lottery.Draw
-		err := s.db.Where("game_id = ?", game.ID).Order("draw_at desc").First(&draw).Error
+		err := trustedDrawsForGame(s.db, game.ID).Order("draw_at desc").First(&draw).Error
 		if err != nil && err != gorm.ErrRecordNotFound {
 			return nil, err
 		}
@@ -129,6 +132,7 @@ func (s *LotteryService) listGamesForWorkspace(workspaceID uint64) ([]GameSummar
 				return "interval"
 			}(),
 		}
+		applyGameRulesSummary(&summary, &game)
 		var window *lottery.IssueWindow
 		if lifecycle != nil && lifecycle.Issue != "" && lifecycle.ScheduledDrawAt != nil && !lifecycle.ScheduledDrawAt.IsZero() {
 			window, err = ensureIssueWindow(s.db, actualWorkspaceID, &game, lifecycle.Issue, *lifecycle.ScheduledDrawAt, rawSettings)
@@ -169,6 +173,16 @@ func (s *LotteryService) listGamesForWorkspace(workspaceID uint64) ([]GameSummar
 		return result[i].Name < result[j].Name
 	})
 	return result, nil
+}
+
+func applyGameRulesSummary(summary *GameSummary, game *lottery.Game) {
+	profile, ok := rulesForGame(game)
+	summary.RulesReady = ok
+	summary.RuleVersion = profile.Version
+	summary.RulesMessage = ""
+	if !ok {
+		summary.RulesMessage = gameRulesUnavailableMessage
+	}
 }
 
 // Keep the issue number, countdown boundaries and status in the same snapshot.
@@ -443,7 +457,7 @@ func (s *LotteryService) ListDraws(gameID string, limit int) ([]DrawResult, erro
 		limit = 20
 	}
 	var draws []lottery.Draw
-	if err := s.db.Where("game_id = ?", gameID).Order("draw_at desc").Limit(limit).Find(&draws).Error; err != nil {
+	if err := trustedDrawsForGame(s.db, gameID).Order("draw_at desc").Limit(limit).Find(&draws).Error; err != nil {
 		return nil, err
 	}
 	result := make([]DrawResult, 0, len(draws))
@@ -496,7 +510,7 @@ var defaultGames = []seedGame{
 	{"bingo-ssc-4", "BINGO_SSC_4", "宾果时时彩(四)", "时时彩", "时时彩", "orange", 300, 4},
 	{"bingo-racing-a", "BINGO_RACING_A", "宾果赛车(A)", "赛车", "赛车", "red", 300, 5},
 	{"bingo-racing-b", "BINGO_RACING_B", "宾果赛车(B)", "赛车", "赛车", "red", 300, 6},
-	{"bingo-mark-six", "BINGO_MARK_SIX", "宾果六合彩", "六合彩", "六合彩", "blue", 600, 7},
+	{"bingo-mark-six", "BINGO_MARK_SIX", "宾果六合彩", "六合彩", "六合彩", "blue", 300, 7},
 	// 六合彩系列
 	{"hong-kong-mark-six", "HK_MARK_SIX", "香港六合彩", "六合彩", "六合彩", "white", 600, 8},
 	{"happy8-mark-six", "HAPPY8_MARK_SIX", "快乐8六合彩", "六合彩", "六合彩", "green", 600, 9},
@@ -549,13 +563,6 @@ var defaultLobbyCategories = []lobbyCategorySeed{
 
 const deterministicFixtureDrawCount = 12
 
-// SeedLotteryData is the safe catalog-only compatibility entry point. New
-// callers should use SeedLotteryCatalog and opt into fixture history only from
-// an explicitly debug-scoped bootstrap.
-func SeedLotteryData(db *gorm.DB) error {
-	return SeedLotteryCatalog(db, LotterySeedOptions{})
-}
-
 // SeedLotteryCatalog makes an empty database operational without overwriting
 // live configuration or published results.
 func SeedLotteryCatalog(db *gorm.DB, options LotterySeedOptions) error {
@@ -577,20 +584,7 @@ func SeedLotteryCatalog(db *gorm.DB, options LotterySeedOptions) error {
 		}
 
 		for index, item := range defaultGames {
-			next := now.Add(time.Duration(item.Interval) * time.Second)
-			sortOrder := item.SortOrder
-			if sortOrder <= 0 {
-				sortOrder = index + 1
-			}
-			lobbyCategory, lobbySortOrder := defaultLobbyPlacement(item.ID)
-			sourceKind, sourceName, sourceURL, syncStatus := defaultLotterySource(item.ID)
-			game := lottery.Game{
-				ID: item.ID, Code: item.Code, Name: item.Name, Category: item.Category, Badge: item.Badge, BadgeColor: item.Color,
-				Enabled: true, SortOrder: sortOrder, DrawInterval: item.Interval, NextDrawAt: next,
-				LobbyCategory: lobbyCategory, LobbySortOrder: lobbySortOrder,
-				SourceKind: sourceKind, SourceName: sourceName, SourceURL: sourceURL, SyncStatus: syncStatus,
-				CreatedAt: now,
-			}
+			game := defaultGameCatalogRow(item, index, now)
 			if err := tx.Where("id = ?", game.ID).FirstOrCreate(&game).Error; err != nil {
 				return err
 			}
@@ -618,6 +612,13 @@ func SeedLotteryCatalog(db *gorm.DB, options LotterySeedOptions) error {
 			}).Create(officialGameSeedValues(game)).Error; err != nil {
 				return err
 			}
+		}
+		// Upgrade only the Bingo products whose settlement depends on actual
+		// draw order. Existing ordinary source/operator configuration remains
+		// untouched; a legacy single-source "ok" row must become stale before
+		// this process can expose the newly enabled financial rules.
+		if err := EnsureBingoOrderedSourceRevision(tx); err != nil {
+			return err
 		}
 		return nil
 	})
@@ -674,10 +675,32 @@ func defaultLotterySource(gameID string) (kind, name, sourceURL, status string) 
 	}
 	for _, item := range api168BingoBindings {
 		if item.GameID == gameID {
-			return "external", "168开奖网", "https://kj138138.com/view/api/index.html", "idle"
+			name, sourceURL, syncStatus, _ := bingoBindingSourceDefaults(item)
+			return "external", name, sourceURL, syncStatus
 		}
 	}
 	return "platform", "王者开奖", "", "ok"
+}
+
+func defaultGameCatalogRow(item seedGame, index int, now time.Time) lottery.Game {
+	sortOrder := item.SortOrder
+	if sortOrder <= 0 {
+		sortOrder = index + 1
+	}
+	lobbyCategory, lobbySortOrder := defaultLobbyPlacement(item.ID)
+	sourceKind, sourceName, sourceURL, syncStatus := defaultLotterySource(item.ID)
+	game := lottery.Game{
+		ID: item.ID, Code: item.Code, Name: item.Name, Category: item.Category, Badge: item.Badge, BadgeColor: item.Color,
+		Enabled: true, SortOrder: sortOrder, DrawInterval: item.Interval,
+		NextDrawAt:    now.UTC().Add(time.Duration(item.Interval) * time.Second),
+		LobbyCategory: lobbyCategory, LobbySortOrder: lobbySortOrder,
+		SourceKind: sourceKind, SourceName: sourceName, SourceURL: sourceURL, SyncStatus: syncStatus,
+		CreatedAt: now.UTC(),
+	}
+	if binding, ok := api168BingoBindingForGame(item.ID); ok && binding.RequiresOrderedSource {
+		game.LastSyncError = bingoOrderPendingMessage
+	}
+	return game
 }
 
 func seedDeterministicHistory(tx *gorm.DB, game lottery.Game, item seedGame, seed int, fallback time.Time) error {
@@ -778,42 +801,19 @@ func SyncTargetGames(db *gorm.DB) (*SyncTargetResult, error) {
 		targetSet[id] = struct{}{}
 	}
 	now := time.Now().UTC().Truncate(time.Minute)
-	oddsSvc := NewOddsAdminService(db)
 	result := &SyncTargetResult{Total: len(TargetGameIDs)}
 	for index, item := range defaultGames {
 		if item.SortOrder > 11 {
 			continue
 		}
 		delete(targetSet, item.ID)
-		next := now.Add(time.Duration(item.Interval) * time.Second)
-		sortOrder := item.SortOrder
-		if sortOrder <= 0 {
-			sortOrder = index + 1
-		}
-		lobbyCategory, lobbySortOrder := defaultLobbyPlacement(item.ID)
-		game := lottery.Game{
-			ID: item.ID, Code: item.Code, Name: item.Name, Category: item.Category, Badge: item.Badge, BadgeColor: item.Color,
-			Enabled: true, SortOrder: sortOrder, DrawInterval: item.Interval, NextDrawAt: next,
-			LobbyCategory: lobbyCategory, LobbySortOrder: lobbySortOrder,
-			SourceKind: "platform", SourceName: "王者开奖", SyncStatus: "ok",
-		}
+		game := defaultGameCatalogRow(item, index, now)
 		created := db.Where("id = ?", game.ID).FirstOrCreate(&game)
 		if created.Error != nil {
 			return nil, created.Error
 		}
 		if created.RowsAffected > 0 {
 			result.Created = append(result.Created, item.ID)
-			for offset := 0; offset < 12; offset++ {
-				drawAt := now.Add(-time.Duration(offset+1) * time.Duration(item.Interval) * time.Second)
-				issue := fmt.Sprintf("%s-%s-%03d", drawAt.Format("20060102"), strings.ToUpper(strings.ReplaceAll(item.Code, "_", "")), 999-offset)
-				numbers := deterministicNumbers(index, offset)
-				if err := db.Create(&lottery.Draw{GameID: item.ID, Issue: issue, Numbers: numbers, DrawAt: drawAt}).Error; err != nil {
-					return nil, err
-				}
-			}
-		}
-		if err := oddsSvc.EnsureGameDefaults(item.ID); err != nil {
-			return nil, err
 		}
 	}
 	for id := range targetSet {

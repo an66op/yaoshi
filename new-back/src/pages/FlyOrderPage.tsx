@@ -9,14 +9,23 @@ import ManageAccountsRounded from '@mui/icons-material/ManageAccountsRounded'
 import RestartAltRounded from '@mui/icons-material/RestartAltRounded'
 import SaveRounded from '@mui/icons-material/SaveRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   adminApi, agentApi, tenantApi, type AdminUser, type UpdateUserTradingPayload,
-  type UserListResponse, type UserTradingConfig,
+  type UserListResponse, type UserTradingConfig, type WorkspaceMember, type WorkspaceMemberList,
 } from '../api'
 import { useFeedback } from '../components/feedback'
 
 type FlyOrderRole = 'admin' | 'tenant' | 'agent'
+type FlyMember = AdminUser | WorkspaceMember
+const isWorkspaceMember = (member: FlyMember): member is WorkspaceMember => 'in_current_room' in member
+const canConfigure = (role: FlyOrderRole, member?: FlyMember | null) => Boolean(member && (role === 'admin' || (isWorkspaceMember(member) && member.in_current_room === true && member.can_manage === true)))
+const visibleMember = (role: FlyOrderRole, member: FlyMember): FlyMember => canConfigure(role, member) ? member : {
+  id: member.id, public_id: member.public_id, username: member.username, nickname: member.nickname,
+  avatar: member.avatar, public_title: member.public_title, badge: member.badge, role: 'member',
+  in_current_room: isWorkspaceMember(member) && member.in_current_room === true,
+  can_manage: false, balance: null, online: null, status: null,
+}
 
 const modeLabel: Record<string, string> = {
   inherit: '跟随房间',
@@ -24,7 +33,7 @@ const modeLabel: Record<string, string> = {
   off: '已停用',
 }
 
-function listMembers(role: FlyOrderRole, query: string, status: string, page: number, pageSize: number): Promise<UserListResponse> {
+function listMembers(role: FlyOrderRole, query: string, status: string, page: number, pageSize: number): Promise<UserListResponse | WorkspaceMemberList> {
   if (role === 'admin') return adminApi.users({ query, status, role: 'member', kind: 'member', page, pageSize })
   if (role === 'tenant') return tenantApi.users({ query, status, page, pageSize })
   return agentApi.users({ query, status, page, pageSize })
@@ -48,7 +57,7 @@ function updateExternal(config: UserTradingConfig | null, patch: Partial<UserTra
 
 export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
   const { showMessage } = useFeedback()
-  const [members, setMembers] = useState<AdminUser[]>([])
+  const [members, setMembers] = useState<FlyMember[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(20)
@@ -57,20 +66,73 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
   const [status, setStatus] = useState('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [selected, setSelected] = useState<AdminUser | null>(null)
+  const [selected, setSelected] = useState<FlyMember | null>(null)
   const [config, setConfig] = useState<UserTradingConfig | null>(null)
   const [configLoading, setConfigLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
   const configRequestRef = useRef(0)
   const selectedMemberIDRef = useRef<number | null>(null)
+  const savingRef = useRef(false)
+  const knownMembers = useRef(new Map<number, FlyMember>())
+  const memberVersions = useRef(new Map<number, number>())
+  const membershipSequence = useRef(0)
+  const alive = useRef(true)
+  const activeRole = useRef(role)
+
+  const invalidateDialog = useCallback(() => {
+    configRequestRef.current += 1
+    selectedMemberIDRef.current = null
+    setSelected(null); setConfig(null); setConfigLoading(false); setDirty(false)
+  }, [])
+  const acceptMember = useCallback((member: FlyMember, version: number) => {
+    if ((memberVersions.current.get(member.id) ?? 0) > version) return knownMembers.current.get(member.id) ?? visibleMember(role, member)
+    const next = visibleMember(role, member)
+    memberVersions.current.set(member.id, version)
+    knownMembers.current.set(member.id, next)
+    if (!canConfigure(role, next) && selectedMemberIDRef.current === next.id) invalidateDialog()
+    return next
+  }, [invalidateDialog, role])
+  useEffect(() => {
+    alive.current = true
+    activeRole.current = role
+    const cache = knownMembers.current
+    const versions = memberVersions.current
+    return () => {
+      alive.current = false
+      configRequestRef.current += 1
+      selectedMemberIDRef.current = null
+      cache.clear(); versions.clear()
+    }
+  }, [role])
+
+  const revalidateMember = async (member: FlyMember) => {
+    if (!canConfigure(role, knownMembers.current.get(member.id) ?? member)) return null
+    if (role === 'admin') return member
+    const version = ++membershipSequence.current
+    const result = await (role === 'tenant' ? tenantApi : agentApi).users({ userId: member.id, page: 1, pageSize: 1 })
+    if (!alive.current || activeRole.current !== role) return null
+    const found = result.items.find(item => item.id === member.id)
+    const next = acceptMember(found ?? {
+      id: member.id, public_id: member.public_id, username: member.username, nickname: member.nickname,
+      avatar: member.avatar, public_title: member.public_title, badge: member.badge, role: 'member',
+      in_current_room: false, can_manage: false, balance: null, status: null, online: null,
+    }, version)
+    setMembers(current => current.map(item => item.id === member.id ? next : item))
+    if (!canConfigure(role, next)) {
+      showMessage('该会员已不在本房间或无管理权限，请刷新会员列表', 'warning')
+      return null
+    }
+    return next
+  }
 
   useEffect(() => {
     let cancelled = false
+    const version = ++membershipSequence.current
     void listMembers(role, appliedQuery, status, page + 1, pageSize)
       .then(result => {
         if (cancelled) return
-        setMembers(result.items ?? [])
+        setMembers((result.items ?? []).map(member => acceptMember(member, version)))
         setTotal(result.total ?? 0)
 				setError('')
       })
@@ -79,14 +141,15 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
       })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [appliedQuery, page, pageSize, role, status])
+  }, [acceptMember, appliedQuery, page, pageSize, role, status])
 
   const summary = useMemo(() => ({
-    custom: members.filter(item => item.fly_mode === 'custom').length,
-    disabled: members.filter(item => item.fly_mode === 'off').length,
-  }), [members])
+    custom: members.filter(item => canConfigure(role, item) && item.fly_mode === 'custom').length,
+    disabled: members.filter(item => canConfigure(role, item) && item.fly_mode === 'off').length,
+  }), [members, role])
 
-  const openMember = async (member: AdminUser) => {
+  const openMember = async (member: FlyMember) => {
+    if (!canConfigure(role, member) || !canConfigure(role, knownMembers.current.get(member.id) ?? member) || savingRef.current) return
     const requestID = ++configRequestRef.current
     selectedMemberIDRef.current = member.id
     setSelected(member)
@@ -94,8 +157,13 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
     setDirty(false)
     setConfigLoading(true)
     try {
+      const current = await revalidateMember(member)
+      if (!current || requestID !== configRequestRef.current || selectedMemberIDRef.current !== member.id) return
       const next = await getTrading(role, member.id)
-      if (requestID !== configRequestRef.current || selectedMemberIDRef.current !== member.id) return
+      if (requestID !== configRequestRef.current || selectedMemberIDRef.current !== member.id || !alive.current) return
+      const latest = await revalidateMember(current)
+      if (!latest || requestID !== configRequestRef.current || selectedMemberIDRef.current !== member.id) return
+      setSelected(latest)
       setConfig(next)
     } catch (reason) {
       if (requestID !== configRequestRef.current || selectedMemberIDRef.current !== member.id) return
@@ -109,17 +177,12 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
   }
 
   const closeDialog = () => {
-    if (saving) return
-    configRequestRef.current += 1
-    selectedMemberIDRef.current = null
-    setSelected(null)
-    setConfig(null)
-    setConfigLoading(false)
-    setDirty(false)
+    if (savingRef.current) return
+    invalidateDialog()
   }
 
   const save = async () => {
-    if (!selected || !config) return
+    if (!selected || !config || !canConfigure(role, selected) || savingRef.current) return
     const memberID = selected.id
     const configSnapshot = config
     if (selectedMemberIDRef.current !== memberID) return
@@ -132,8 +195,11 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
       showMessage('每日上限不能小于单笔上限', 'warning')
       return
     }
+    savingRef.current = true
     setSaving(true)
     try {
+      const current = await revalidateMember(selected)
+      if (!current || selectedMemberIDRef.current !== memberID) return
       const next = await updateTrading(role, memberID, {
         fly_mode: configSnapshot.fly.mode,
         fly_rate: configSnapshot.fly.rate,
@@ -152,7 +218,9 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
         game_id: '',
         odds: [],
       })
-      if (selectedMemberIDRef.current !== memberID) return
+      if (selectedMemberIDRef.current !== memberID || !alive.current) return
+      const latest = await revalidateMember(current)
+      if (!latest || selectedMemberIDRef.current !== memberID) return
       setConfig(next)
       setMembers(current => current.map(item => item.id === memberID
         ? { ...item, fly_mode: next.fly.mode, fly_rate: next.fly.rate }
@@ -162,7 +230,8 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
     } catch (reason) {
       if (selectedMemberIDRef.current === memberID) showMessage(reason instanceof Error ? reason.message : '保存会员飞单配置失败', 'error')
     } finally {
-      if (selectedMemberIDRef.current === memberID) setSaving(false)
+      savingRef.current = false
+      if (alive.current) setSaving(false)
     }
   }
 
@@ -185,7 +254,7 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
 
     <Stack direction={{ xs: 'column', sm: 'row' }} gap={1.2}>
       {[
-        ['权限内会员', total, '当前账号只能查看所属权限范围'],
+        [role === 'admin' ? '权限内会员' : '曾加入房间会员', total, role === 'admin' ? '当前账号只能查看所属权限范围' : '已切换会员仅保留公开身份，不再提供配置'],
         ['本页单独比例', summary.custom, '已覆盖房间默认比例'],
         ['本页已停用', summary.disabled, '不会计算站内飞单金额'],
       ].map(([label, value, note]) => <Paper key={String(label)} variant="outlined" sx={{ flex: 1, p: 1.6, borderRadius: 1.5 }}>
@@ -213,7 +282,7 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
         <Table size="small" sx={{ minWidth: 760 }}>
           <TableHead><TableRow>
             <TableCell>会员</TableCell>
-            <TableCell>所属房间</TableCell>
+            <TableCell>{role === 'admin' ? '所属房间' : '房间状态'}</TableCell>
             <TableCell>站内飞单</TableCell>
             <TableCell>外部连接</TableCell>
             <TableCell align="right">操作</TableCell>
@@ -226,10 +295,10 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
                     <Avatar src={member.avatar} sx={{ width: 34, height: 34, fontSize: 12 }}>{(member.nickname || member.username).slice(0, 1)}</Avatar>
                     <Box minWidth={0}><Typography fontSize={12} fontWeight={850} noWrap>{member.nickname || member.username}</Typography><Typography color="text.secondary" fontSize={9.5} noWrap>{member.username} · #{member.public_id}</Typography></Box>
                   </Stack></TableCell>
-                  <TableCell><Typography fontSize={11}>{member.room_code || '平台直属'}</Typography></TableCell>
-                  <TableCell><Chip size="small" color={member.fly_mode === 'off' ? 'default' : member.fly_mode === 'custom' ? 'primary' : 'info'} variant="outlined" label={`${modeLabel[member.fly_mode ?? 'inherit'] ?? member.fly_mode}${member.fly_mode === 'custom' ? ` ${member.fly_rate ?? 0}%` : ''}`} /></TableCell>
-                  <TableCell><Chip size="small" icon={<LinkOffRounded />} color="warning" variant="outlined" label="未连接" /></TableCell>
-                  <TableCell align="right"><Button size="small" startIcon={<ManageAccountsRounded />} onClick={() => void openMember(member)}>独立配置</Button></TableCell>
+                  <TableCell><Typography fontSize={11}>{role === 'admin' ? ('room_code' in member ? member.room_code || '直属会员' : '—') : isWorkspaceMember(member) && member.in_current_room === true ? '在本房间' : '已切换'}</Typography></TableCell>
+                  <TableCell>{canConfigure(role, member) ? <Chip size="small" color={member.fly_mode === 'off' ? 'default' : member.fly_mode === 'custom' ? 'primary' : 'info'} variant="outlined" label={`${modeLabel[member.fly_mode ?? 'inherit'] ?? member.fly_mode}${member.fly_mode === 'custom' ? ` ${member.fly_rate ?? 0}%` : ''}`} /> : '—'}</TableCell>
+                  <TableCell>{canConfigure(role, member) ? <Chip size="small" icon={<LinkOffRounded />} color="warning" variant="outlined" label="未连接" /> : '—'}</TableCell>
+                  <TableCell align="right">{canConfigure(role, member) ? <Button size="small" startIcon={<ManageAccountsRounded />} onClick={() => void openMember(member)}>独立配置</Button> : '—'}</TableCell>
                 </TableRow>)}
           </TableBody>
         </Table>
@@ -245,7 +314,7 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
         </Stack>
       </DialogTitle>
       <DialogContent dividers>
-        {configLoading || !config ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={28} /></Box> : <Stack gap={2}>
+        {!canConfigure(role, selected) || configLoading || !config ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={28} /></Box> : <Stack gap={2}>
           <Paper variant="outlined" sx={{ p: 1.6, borderRadius: 1.5 }}>
             <Typography fontSize={13} fontWeight={900}>站内飞单规则</Typography>
             <Typography color="text.secondary" fontSize={10} mb={1.3}>该设置复用现有注单计算逻辑，保存后真实影响此会员的站内飞单金额。</Typography>
@@ -282,7 +351,7 @@ export function FlyOrderPage({ role }: { role: FlyOrderRole }) {
       </DialogContent>
       <DialogActions sx={{ p: 1.5 }}>
         <Button onClick={closeDialog}>关闭</Button>
-        <Button variant="contained" startIcon={<SaveRounded />} disabled={!config || !dirty || saving} onClick={() => void save()}>{saving ? '保存中…' : dirty ? '保存会员配置' : '已保存'}</Button>
+        <Button variant="contained" startIcon={<SaveRounded />} disabled={!canConfigure(role, selected) || !config || !dirty || saving} onClick={() => void save()}>{saving ? '保存中…' : dirty ? '保存会员配置' : '已保存'}</Button>
       </DialogActions>
     </Dialog>
   </Stack>

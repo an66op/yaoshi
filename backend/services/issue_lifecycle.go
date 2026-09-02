@@ -69,10 +69,12 @@ func (s *BetAdminService) EnsureCurrentIssue(game *lottery.Game) (*lottery.Issue
 	status := row.Status
 	lastError := row.LastError
 	var draw lottery.Draw
-	drawQuery := s.db.Where("game_id = ? AND issue = ?", game.ID, issueNo).Limit(1).Find(&draw)
+	drawQuery := trustedDrawsForGame(s.db, game.ID).Where("issue = ?", issueNo).Limit(1).Find(&draw)
 	if drawQuery.Error != nil {
 		return nil, apperrors.NewSystemError("DRAW_READ_FAILED", "读取开奖结果失败", drawQuery.Error)
 	}
+	_, _, orderedDrawContract := trustedDrawRevision(game.ID)
+	clearUntrustedLifecycleDraw := drawQuery.RowsAffected == 0 && orderedDrawContract && (row.DrawAt != nil || row.SettledAt != nil)
 	if drawQuery.RowsAffected > 0 {
 		var pending int64
 		if err := s.db.Model(&bet.Bet{}).Where("game_id = ? AND issue = ? AND status = ?", game.ID, issueNo, "pending").Count(&pending).Error; err != nil {
@@ -109,10 +111,20 @@ func (s *BetAdminService) EnsureCurrentIssue(game *lottery.Game) (*lottery.Issue
 		updates["scheduled_draw_at"] = drawAt
 		updates["seal_at"], updates["accept_at"] = window.SealAt, window.AcceptAt
 	}
-	if row.DrawAt != nil {
+	if clearUntrustedLifecycleDraw {
+		// An earlier single-source build may already have copied an unverified
+		// draw into the current issue row.  Filtering lottery_draws alone is not
+		// enough: sharedIssueOpen treats any DrawAt as terminal.  Clear only the
+		// current lifecycle pointers after the ordered contract has no trusted
+		// draw; the raw draw remains intact for administrative reconciliation.
+		row.DrawAt = nil
+		row.SettledAt = nil
+		updates["draw_at"] = nil
+		updates["settled_at"] = nil
+	} else if row.DrawAt != nil {
 		updates["draw_at"] = row.DrawAt
 	}
-	if row.SettledAt != nil {
+	if !clearUntrustedLifecycleDraw && row.SettledAt != nil {
 		updates["settled_at"] = row.SettledAt
 	}
 	if len(updates) > 0 {

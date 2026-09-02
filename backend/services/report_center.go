@@ -189,6 +189,7 @@ func (s *ReportCenterService) betBase(filter ReportCenterFilter, period reportPe
 
 type reportBetAggregate struct {
 	Turnover int64
+	Stake    int64
 	Payout   int64
 	Rebate   int64
 	Share    int64
@@ -202,17 +203,20 @@ func (s *ReportCenterService) betOverview(out *ReportCenterResult, filter Report
 		query = query.Where("game_id IN ?", pc28GameIDs)
 	}
 	var aggregate reportBetAggregate
-	if err := query.Session(&gorm.Session{}).Select(`COALESCE(SUM(CASE WHEN status <> 'cancelled' THEN amount_cents ELSE 0 END),0) turnover,
+	if err := query.Session(&gorm.Session{}).Select(`COALESCE(SUM(CASE
+		WHEN status IN ('won','lost') THEN COALESCE(valid_turnover_cents,amount_cents)
+		WHEN status IN ('pending','settling') THEN amount_cents ELSE 0 END),0) turnover,
+		COALESCE(SUM(CASE WHEN status NOT IN ('cancelled','push') THEN amount_cents ELSE 0 END),0) stake,
 		COALESCE(SUM(CASE WHEN status IN ('won','lost') THEN payout_cents ELSE 0 END),0) payout,
 		COALESCE(SUM(rebate_cents),0) rebate, COALESCE(SUM(agent_share_cents),0) share,
 		COUNT(*) tickets, COUNT(DISTINCT user_id) members`).Scan(&aggregate).Error; err != nil {
 		return err
 	}
-	gross := aggregate.Turnover - aggregate.Payout
+	gross := aggregate.Stake - aggregate.Payout
 	out.Metrics = []ReportMetric{
 		{Key: "turnover", Label: "有效流水", Value: centsToAmount(aggregate.Turnover)},
 		{Key: "payout", Label: "派彩", Value: centsToAmount(aggregate.Payout)},
-		{Key: "member_net", Label: "会员输赢", Value: centsToAmount(aggregate.Payout - aggregate.Turnover)},
+		{Key: "member_net", Label: "会员输赢", Value: centsToAmount(aggregate.Payout - aggregate.Stake)},
 		{Key: "gross", Label: "毛利", Value: centsToAmount(gross)},
 		{Key: "rebate", Label: "回水", Value: centsToAmount(aggregate.Rebate)},
 		{Key: "net", Label: "净利润", Value: centsToAmount(gross - aggregate.Rebate - aggregate.Share)},
@@ -244,7 +248,7 @@ func (s *ReportCenterService) betOverview(out *ReportCenterResult, filter Report
 		}
 		out.Metrics = []ReportMetric{
 			{Key: "turnover", Label: "有效流水", Value: centsToAmount(aggregate.Turnover)}, {Key: "payout", Label: "派彩", Value: centsToAmount(aggregate.Payout)},
-			{Key: "member_net", Label: "会员输赢", Value: centsToAmount(aggregate.Payout - aggregate.Turnover)}, {Key: "gross", Label: "毛利", Value: centsToAmount(gross)},
+			{Key: "member_net", Label: "会员输赢", Value: centsToAmount(aggregate.Payout - aggregate.Stake)}, {Key: "gross", Label: "毛利", Value: centsToAmount(gross)},
 			{Key: "rebate", Label: "回水", Value: centsToAmount(aggregate.Rebate)}, {Key: "redpacket", Label: "红包", Value: centsToAmount(redPacketCost)},
 			{Key: "activity", Label: "活动成本", Value: centsToAmount(costs.Activity)}, {Key: "commission", Label: "会员返佣", Value: centsToAmount(costs.Commission)},
 			{Key: "share", Label: "渠道分账", Value: centsToAmount(aggregate.Share)}, {Key: "net", Label: "净利润", Value: centsToAmount(net)},
@@ -342,7 +346,7 @@ func (s *ReportCenterService) dailyMemberReport(out *ReportCenterResult, filter 
 	}
 	var bets []betRow
 	if err := s.betBase(filter, period).
-		Select("user_id, username, COALESCE(SUM(CASE WHEN status <> 'cancelled' THEN amount_cents ELSE 0 END),0) stake, COALESCE(SUM(CASE WHEN status IN ('won','lost') THEN payout_cents ELSE 0 END),0) payout, COALESCE(SUM(rebate_cents),0) rebate, COUNT(*) tickets").
+		Select("user_id, username, COALESCE(SUM(CASE WHEN status NOT IN ('cancelled','push') THEN amount_cents ELSE 0 END),0) stake, COALESCE(SUM(CASE WHEN status IN ('won','lost') THEN payout_cents ELSE 0 END),0) payout, COALESCE(SUM(rebate_cents),0) rebate, COUNT(*) tickets").
 		Group("user_id, username").Scan(&bets).Error; err != nil {
 		return err
 	}
@@ -482,13 +486,17 @@ func (s *ReportCenterService) categoryReport(out *ReportCenterResult, filter Rep
 		base = base.Where("g.lobby_category = ?", filter.Category)
 	}
 	type row struct {
-		Category string
-		Stake    int64
-		Payout   int64
-		Tickets  int64
+		Category    string
+		Stake       int64
+		ActualStake int64
+		Payout      int64
+		Tickets     int64
 	}
 	const categoryExpression = "COALESCE(NULLIF(g.lobby_category,''),'未分类')"
-	grouped := base.Session(&gorm.Session{}).Select(categoryExpression + " category, COALESCE(SUM(b.amount_cents),0) stake, COALESCE(SUM(b.payout_cents),0) payout, COUNT(*) tickets").Group(categoryExpression)
+	grouped := base.Session(&gorm.Session{}).Select(categoryExpression + ` category,
+		COALESCE(SUM(CASE WHEN b.status IN ('won','lost') THEN COALESCE(b.valid_turnover_cents,b.amount_cents) WHEN b.status IN ('pending','settling') THEN b.amount_cents ELSE 0 END),0) stake,
+		COALESCE(SUM(CASE WHEN b.status NOT IN ('cancelled','push') THEN b.amount_cents ELSE 0 END),0) actual_stake,
+		COALESCE(SUM(CASE WHEN b.status IN ('won','lost') THEN b.payout_cents ELSE 0 END),0) payout, COUNT(*) tickets`).Group(categoryExpression)
 	if err := s.db.Table("(?) AS grouped", grouped).Count(&out.Total).Error; err != nil {
 		return err
 	}
@@ -498,7 +506,7 @@ func (s *ReportCenterService) categoryReport(out *ReportCenterResult, filter Rep
 	}
 	out.Columns = []ReportColumn{{Key: "category", Label: "分类"}, {Key: "stake", Label: "流水"}, {Key: "payout", Label: "派彩"}, {Key: "gross", Label: "毛利"}, {Key: "tickets", Label: "注数"}}
 	for _, row := range rows {
-		out.Items = append(out.Items, map[string]any{"category": row.Category, "stake": centsToAmount(row.Stake), "payout": centsToAmount(row.Payout), "gross": centsToAmount(row.Stake - row.Payout), "tickets": row.Tickets})
+		out.Items = append(out.Items, map[string]any{"category": row.Category, "stake": centsToAmount(row.Stake), "payout": centsToAmount(row.Payout), "gross": centsToAmount(row.ActualStake - row.Payout), "tickets": row.Tickets})
 	}
 	return nil
 }

@@ -103,7 +103,7 @@ func (s *MemberService) RoomHistory(userID uint64, limit int) ([]MemberRoomHisto
 		}
 		indexByWorkspace[row.WorkspaceID] = len(candidates)
 		candidates = append(candidates, candidate{workspaceID: row.WorkspaceID, item: MemberRoomHistoryItem{
-			RoomCode: row.RoomCode, RoomName: name, RoomLogo: row.RoomLogo,
+			RoomCode: row.RoomCode, RoomName: name, RoomLogo: roomLogoForDisplay(row.RoomLogo),
 			Status: status, Current: status == "current", LastEnteredAt: row.LastEnteredAt,
 		}})
 	}
@@ -146,7 +146,7 @@ func (s *MemberService) RoomHistory(userID uint64, limit int) ([]MemberRoomHisto
 		}
 		indexByWorkspace[row.WorkspaceID] = len(candidates)
 		candidates = append(candidates, candidate{workspaceID: row.WorkspaceID, item: MemberRoomHistoryItem{
-			RoomCode: row.RoomCode, RoomName: name, RoomLogo: row.RoomLogo,
+			RoomCode: row.RoomCode, RoomName: name, RoomLogo: roomLogoForDisplay(row.RoomLogo),
 			Status: status, Current: status == "current", LastEnteredAt: row.LastEnteredAt,
 		}})
 	}
@@ -164,7 +164,7 @@ func (s *MemberService) RoomHistory(userID uint64, limit int) ([]MemberRoomHisto
 					name = room.RoomCode
 				}
 				candidates = append(candidates, candidate{workspaceID: room.ID, item: MemberRoomHistoryItem{
-					RoomCode: room.RoomCode, RoomName: name, RoomLogo: room.Logo,
+					RoomCode: room.RoomCode, RoomName: name, RoomLogo: roomLogoForDisplay(room.Logo),
 					Status: "current", Current: true, LastEnteredAt: room.UpdatedAt,
 				}})
 			}
@@ -214,7 +214,7 @@ func (s *MemberService) Profile(userID uint64) (*vo.MemberProfileResponse, error
 		if err := s.db.Select("room_code", "name", "logo", "type").First(&workspace, account.WorkspaceID).Error; err == nil && workspace.Type != workspacemodel.TypePlatform {
 			out.RoomCode = workspace.RoomCode
 			out.RoomName = workspace.Name
-			out.RoomLogo = workspace.Logo
+			out.RoomLogo = roomLogoForDisplay(workspace.Logo)
 		}
 	}
 	return out, nil

@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "test": "node --test login-captcha-fixture.test.mjs member-session-file.test.mjs"
+  },
   "devDependencies": {
     "ws": "8.21.3"
   }

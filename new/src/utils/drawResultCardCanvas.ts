@@ -1,5 +1,6 @@
 import type { DrawResult } from '../api/lottery'
 import type { Game } from '../types'
+import { lotteryResultSummary, lotteryRuleProfile } from './lotteryRules'
 
 // Result-card artwork is shared by every lottery; game identity only supplies
 // the title. It must not be used as a game Logo or gated on a specific game ID.
@@ -11,9 +12,27 @@ const RECENT_DRAW_HEADER_HEIGHT = 84
 const RECENT_DRAW_ROW_HEIGHT = 35
 const RECENT_DRAW_TABLE_TOP = RECENT_DRAW_HEADER_HEIGHT + 22
 
-export function recentDrawCardSize(drawCount: number) {
-  const rows = Math.min(RECENT_DRAW_ROW_LIMIT, Math.max(0, drawCount))
-  return { width: 720, height: RECENT_DRAW_TABLE_TOP + rows * RECENT_DRAW_ROW_HEIGHT + 14 }
+function currentIssueLines(issue: string) {
+  return (`第 ${drawCardIssueLabel(issue)} 期 · 开奖结果`).match(/.{1,55}/gu) ?? ['—']
+}
+
+export function currentDrawCardSize(numberCount: number, issue = '') {
+  return { width: CURRENT_DRAW_CARD_SIZE.width, height: CURRENT_DRAW_CARD_SIZE.height + Math.max(0, Math.ceil(numberCount / 10) - 1) * 58 + (currentIssueLines(issue).length - 1) * 20 }
+}
+
+function issueLines(issue: string) {
+  return drawCardIssueLabel(issue).match(/.{1,19}/gu) ?? ['—']
+}
+
+function recentRowHeight(draw: DrawResult) {
+  return Math.max(RECENT_DRAW_ROW_HEIGHT, Math.ceil(draw.numbers.length / 10) * 30 + 5, issueLines(draw.issue).length * 16 + 15)
+}
+
+export function recentDrawCardSize(draws: number | DrawResult[]) {
+  const contentHeight = typeof draws === 'number'
+    ? Math.min(RECENT_DRAW_ROW_LIMIT, Math.max(0, draws)) * RECENT_DRAW_ROW_HEIGHT
+    : draws.slice(0, RECENT_DRAW_ROW_LIMIT).reduce((height, draw) => height + recentRowHeight(draw), 0)
+  return { width: 720, height: RECENT_DRAW_TABLE_TOP + contentHeight + 14 }
 }
 
 export function releaseDrawCardCanvas(canvas: HTMLCanvasElement) {
@@ -35,17 +54,8 @@ function drawBall(ctx: CanvasRenderingContext2D, value: number, x: number, y: nu
   ctx.fillText(String(value), x + size / 2, y + size / 2 + 1)
 }
 
-function racingMeta(numbers: number[]) {
-  if (numbers.length < 2) return { sum: '—', dragon: '—' }
-  const sum = numbers[0] + numbers[1]
-  return {
-    sum: `${sum} ${sum >= 12 ? '大' : '小'} ${sum % 2 ? '单' : '双'}`,
-    dragon: numbers.slice(0, Math.min(5, Math.floor(numbers.length / 2))).map((value, index) => value > numbers[numbers.length - 1 - index] ? '龙' : '虎').join(' '),
-  }
-}
-
 export function drawCardIssueLabel(issue: string) {
-  return issue.match(/^\d{8}-(.+)$/)?.[1] ?? issue
+  return issue
 }
 
 function prepareCanvas(canvas: HTMLCanvasElement, width: number, height: number, pixelRatio: number) {
@@ -77,8 +87,10 @@ function drawPodiumMarker(ctx: CanvasRenderingContext2D, value: number, x: numbe
   ctx.restore()
 }
 
-export function paintCurrentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game, 'title'>, draw: DrawResult, racingCars: CanvasImageSource | null, pixelRatio = 1) {
-  const { width, height } = CURRENT_DRAW_CARD_SIZE
+export function paintCurrentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game, 'title'> & Partial<Pick<Game, 'ruleVersion'>>, draw: DrawResult, racingCars: CanvasImageSource | null, pixelRatio = 1) {
+  const { width, height } = currentDrawCardSize(draw.numbers.length, draw.issue)
+  const extraHeight = height - CURRENT_DRAW_CARD_SIZE.height
+  const headerExtraHeight = (currentIssueLines(draw.issue).length - 1) * 20
   const ctx = prepareCanvas(canvas, width, height, pixelRatio)
   if (!ctx) return
   const background = ctx.createLinearGradient(0, 0, width, height)
@@ -103,16 +115,16 @@ export function paintCurrentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game,
   ctx.fillText(game.title, 28, 48)
   ctx.fillStyle = '#9deee8'
   ctx.font = '600 16px Arial, sans-serif'
-  ctx.fillText(`第 ${drawCardIssueLabel(draw.issue)} 期 · 开奖结果`, 29, 76)
+  currentIssueLines(draw.issue).forEach((line, index) => ctx.fillText(line, 29, 76 + index * 20, width - 58))
 
-  const balls = draw.numbers.slice(0, 10)
+  const balls = draw.numbers
   const ballSize = balls.length > 8 ? 49 : 58
   const gap = 9
-  const totalWidth = balls.length * ballSize + Math.max(0, balls.length - 1) * gap
-  let startX = Math.max(28, (width - totalWidth) / 2)
-  balls.forEach((ball) => {
-    drawBall(ctx, ball, startX, 104, ballSize)
-    startX += ballSize + gap
+  const columns = Math.min(10, balls.length)
+  const totalWidth = columns * ballSize + Math.max(0, columns - 1) * gap
+  const startX = Math.max(28, (width - totalWidth) / 2)
+  balls.forEach((ball, index) => {
+    drawBall(ctx, ball, startX + (index % 10) * (ballSize + gap), 104 + headerExtraHeight + Math.floor(index / 10) * 58, ballSize)
   })
 
   const podium = balls.slice(0, 3)
@@ -121,53 +133,55 @@ export function paintCurrentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game,
     ctx.globalAlpha = .94
     ctx.shadowColor = 'rgba(1,25,43,.42)'
     ctx.shadowBlur = 18
-    ctx.drawImage(racingCars, 160, 148, 400, 227)
+    ctx.drawImage(racingCars, 160, 148 + extraHeight, 400, 227)
     ctx.restore()
     const markers = [{ x: 360, y: 302, rank: '1st' }, { x: 225, y: 278, rank: '2nd' }, { x: 495, y: 280, rank: '3rd' }]
     podium.forEach((ball, index) => {
       const marker = markers[index]
-      if (marker) drawPodiumMarker(ctx, ball, marker.x, marker.y, marker.rank, index === 0)
+      if (marker) drawPodiumMarker(ctx, ball, marker.x, marker.y + extraHeight, lotteryRuleProfile(draw.game_id).family === 'racing' ? marker.rank : `第${index + 1}球`, index === 0)
     })
   } else {
     const podiumLayout = [{ x: 360, y: 244, rank: '1st', size: 82 }, { x: 190, y: 270, rank: '2nd', size: 67 }, { x: 530, y: 278, rank: '3rd', size: 62 }]
     podium.forEach((ball, index) => {
       const slot = podiumLayout[index]
       if (!slot) return
-      const glow = ctx.createRadialGradient(slot.x, slot.y, 8, slot.x, slot.y, slot.size)
+      const slotY = slot.y + extraHeight
+      const glow = ctx.createRadialGradient(slot.x, slotY, 8, slot.x, slotY, slot.size)
       glow.addColorStop(0, index === 0 ? 'rgba(255,220,87,.75)' : 'rgba(255,255,255,.42)')
       glow.addColorStop(1, 'rgba(255,255,255,0)')
       ctx.fillStyle = glow
-      ctx.beginPath(); ctx.arc(slot.x, slot.y, slot.size, 0, Math.PI * 2); ctx.fill()
+      ctx.beginPath(); ctx.arc(slot.x, slotY, slot.size, 0, Math.PI * 2); ctx.fill()
       ctx.fillStyle = '#fff'
       ctx.textAlign = 'center'
       ctx.font = `900 ${index === 0 ? 48 : 35}px Arial, sans-serif`
-      ctx.fillText(String(ball), slot.x, slot.y + 8)
+      ctx.fillText(String(ball), slot.x, slotY + 8)
       ctx.fillStyle = index === 0 ? '#ffe374' : '#d7f7fa'
       ctx.font = '800 17px Arial, sans-serif'
-      ctx.fillText(slot.rank, slot.x, slot.y - (index === 0 ? 56 : 45))
+      ctx.fillText(lotteryRuleProfile(draw.game_id).family === 'racing' ? slot.rank : `第${index + 1}球`, slot.x, slotY - (index === 0 ? 56 : 45))
     })
   }
 
-  const meta = racingMeta(balls)
+  const meta = lotteryResultSummary(draw.game_id, balls, game.ruleVersion)
   ctx.fillStyle = 'rgba(4,25,43,.72)'
-  ctx.beginPath(); ctx.roundRect(18, 382, width - 36, 50, 12); ctx.fill()
+  ctx.beginPath(); ctx.roundRect(18, 382 + extraHeight, width - 36, 50, 12); ctx.fill()
   ctx.fillStyle = '#8bdfe7'
   ctx.textAlign = 'left'; ctx.font = '600 14px Arial, sans-serif'
-  ctx.fillText('冠亚和', 40, 402)
+  ctx.fillText(meta?.label ?? '开奖号码', 40, 402 + extraHeight)
   ctx.fillStyle = '#fff'; ctx.font = '800 17px Arial, sans-serif'
-  ctx.fillText(meta.sum, 40, 423)
-  ctx.fillStyle = '#8bdfe7'; ctx.font = '600 14px Arial, sans-serif'
-  ctx.fillText('1–5 龙虎', 300, 402)
-  ctx.fillStyle = '#fff'; ctx.font = '800 17px Arial, sans-serif'
-  ctx.fillText(meta.dragon, 300, 423)
+  ctx.fillText(meta?.spacedText ?? `共 ${balls.length} 个`, 40, 423 + extraHeight)
+  if (meta) {
+    ctx.fillStyle = '#8bdfe7'; ctx.font = '600 14px Arial, sans-serif'
+    ctx.fillText(meta.dragonLabel, 275, 402 + extraHeight)
+    ctx.fillStyle = '#fff'; ctx.font = '800 17px Arial, sans-serif'
+    ctx.fillText(meta.dragons.join(' '), 275, 423 + extraHeight)
+  }
   ctx.fillStyle = '#b8d8df'; ctx.textAlign = 'right'; ctx.font = '600 13px Arial, sans-serif'
-  ctx.fillText(new Date(draw.draw_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }), 680, 417)
+  ctx.fillText(new Date(draw.draw_at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }), 680, 417 + extraHeight, 240)
 }
 
-export function paintRecentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game, 'title'>, draws: DrawResult[], racingCars: CanvasImageSource | null, pixelRatio = 1) {
+export function paintRecentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game, 'title'> & Partial<Pick<Game, 'ruleVersion'>>, draws: DrawResult[], racingCars: CanvasImageSource | null, pixelRatio = 1) {
   const rows = draws.slice(0, RECENT_DRAW_ROW_LIMIT)
-  const { width, height } = recentDrawCardSize(rows.length)
-  const rowHeight = RECENT_DRAW_ROW_HEIGHT
+  const { width, height } = recentDrawCardSize(rows)
   // Reserve the same artwork space before and after loading to avoid layout jumps.
   const headerHeight = RECENT_DRAW_HEADER_HEIGHT
   const tableTop = RECENT_DRAW_TABLE_TOP
@@ -188,20 +202,25 @@ export function paintRecentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game, 
     ctx.drawImage(racingCars, width - 157, 1, 145, 82)
     ctx.restore()
   }
-  const headers = [['期号', 18], ['号码', 170], ['冠亚和', 520], ['龙虎', 625]] as const
+  const profile = lotteryRuleProfile(rows[0]?.game_id ?? '')
+  const headers: Array<[string, number]> = [['期号', 18], ['号码', 170]]
+  if (profile.family !== 'unknown') headers.push([profile.sumLabel, 520], ['龙虎', 625])
   ctx.fillStyle = '#e5f1f4'; ctx.fillRect(0, headerHeight, width, 22)
   ctx.fillStyle = '#567582'; ctx.font = '700 12px Arial, sans-serif'
   headers.forEach(([label, x]) => ctx.fillText(label, x, headerHeight + 15))
 
+  let y = tableTop
   rows.forEach((draw, rowIndex) => {
-    const y = tableTop + rowIndex * rowHeight
+    const rowHeight = recentRowHeight(draw)
     ctx.fillStyle = rowIndex % 2 ? '#eef5f7' : '#fff'; ctx.fillRect(0, y, width, rowHeight)
     ctx.fillStyle = '#314f5d'; ctx.font = '600 12px Arial, sans-serif'; ctx.textAlign = 'left'
-    ctx.fillText(drawCardIssueLabel(draw.issue), 18, y + 22)
-    let x = 170
-    draw.numbers.slice(0, 10).forEach((number) => { drawBall(ctx, number, x, y + 5, 25); x += 30 })
-    const meta = racingMeta(draw.numbers)
-    ctx.fillStyle = '#405d69'; ctx.font = '700 12px Arial, sans-serif'; ctx.fillText(meta.sum, 520, y + 22)
-    ctx.fillStyle = '#276c85'; ctx.fillText(meta.dragon, 625, y + 22)
+    issueLines(draw.issue).forEach((line, index) => ctx.fillText(line, 18, y + 22 + index * 16, 140))
+    draw.numbers.forEach((number, index) => drawBall(ctx, number, 170 + (index % 10) * 30, y + 5 + Math.floor(index / 10) * 30, 25))
+    const meta = lotteryResultSummary(draw.game_id, draw.numbers, game.ruleVersion)
+    if (meta) {
+      ctx.fillStyle = '#405d69'; ctx.font = '700 12px Arial, sans-serif'; ctx.fillText(meta.spacedText, 520, y + 22)
+      ctx.fillStyle = '#276c85'; ctx.fillText(meta.dragons.join(' '), 625, y + 22, 80)
+    }
+    y += rowHeight
   })
 }

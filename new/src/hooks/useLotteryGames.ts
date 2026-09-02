@@ -6,6 +6,7 @@ import { readServerClock, resolveLotteryBetting, resolveLotteryTiming, sampleSer
 import { createRefreshLoop } from '../utils/refreshLoop'
 import { gameCatalogRefreshDelay } from '../utils/gameCatalogRefresh'
 import type { Game } from '../types'
+import { gameRulesReady, rulesBlockedTiming, UNCONFIGURED_RULES_MESSAGE } from '../utils/lotteryRules'
 
 export const gameLogoPaths: Partial<Record<string, string>> = {
   'speed-racing': '/images/game-logos/speed-racing.png',
@@ -54,7 +55,9 @@ const resolvedBadgeColor = (item: LotteryGame) => {
 }
 
 export const mapLotteryGame = (item: LotteryGame, nowMs: number): Game => {
-  const timing = resolveLotteryTiming(item, nowMs)
+  const rulesReady = gameRulesReady({ id: item.id, rulesReady: item.rules_ready, ruleVersion: item.rule_version })
+  const resolvedTiming = resolveLotteryTiming(item, nowMs)
+  const timing = rulesReady ? resolvedTiming : rulesBlockedTiming(resolvedTiming)
   return {
     id: item.id,
     title: item.name,
@@ -67,7 +70,7 @@ export const mapLotteryGame = (item: LotteryGame, nowMs: number): Game => {
     latestIssue: item.issue || '—',
     due: timing.due,
     timing,
-    betting: resolveLotteryBetting(item, nowMs),
+    betting: rulesReady ? resolveLotteryBetting(item, nowMs) : undefined,
     color: resolvedBadgeColor(item),
     logo: gameLogoPaths[item.id],
     // Missing draw data is an empty state. Zero-filled balls look like a real
@@ -79,6 +82,9 @@ export const mapLotteryGame = (item: LotteryGame, nowMs: number): Game => {
     sourceHealthy: item.source_healthy !== false,
     syncStatus: item.sync_status || 'idle',
     sourceError: item.last_sync_error || '',
+    rulesReady,
+    ruleVersion: item.rule_version || '',
+    rulesMessage: rulesReady ? '' : item.rules_message || UNCONFIGURED_RULES_MESSAGE,
     lastSyncAt: item.last_sync_at || undefined,
   }
 }

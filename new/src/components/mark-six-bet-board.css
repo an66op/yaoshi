@@ -1,0 +1,132 @@
+.mark-six-bet-board.full-bet-board .full-bet-workspace { grid-template-columns: 72px minmax(0, 1fr); }
+.mark-six-bet-board .full-bet-workspace > aside {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.mark-six-bet-board .full-bet-workspace > aside::-webkit-scrollbar { display: none; }
+.mark-six-bet-board.full-bet-board .full-bet-workspace > aside button {
+  min-height: 48px;
+  padding: 7px 2px;
+  font-size: 10px;
+  line-height: 1.25;
+}
+.mark-six-bet-board .full-bet-content { padding: 10px 8px 16px; }
+.mark-six-bet-board .full-bet-content > header { gap: 8px; align-items: flex-start; }
+.mark-six-bet-board .full-bet-content > header > span { flex: none; padding-top: 2px; }
+.mark-six-rule-notice,
+.mark-six-market-notice,
+.mark-six-accepted {
+  margin: 0 0 10px;
+  padding: 8px 9px;
+  border-radius: 7px;
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.mark-six-rule-notice,
+.mark-six-market-notice { background: #fff3df; color: #825119; }
+.mark-six-accepted { margin: 0; background: #e7f8f2; color: #177b72; }
+.mark-six-market-tabs {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  margin: 0 -2px 10px;
+  padding: 2px;
+  scrollbar-width: none;
+}
+.mark-six-market-tabs::-webkit-scrollbar { display: none; }
+.mark-six-market-tabs button {
+  display: grid;
+  flex: none;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid #dbe5e8;
+  border-radius: 7px;
+  background: #fff;
+  color: #647c86;
+  font-size: 9px;
+}
+.mark-six-market-tabs button small { color: #b17a35; font-size: 7px; }
+.mark-six-market-tabs button.active { border-color: #249ba5; background: #e5f6f6; color: #197e88; font-weight: 800; }
+.mark-six-position-selector { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; margin-bottom: 10px; }
+.mark-six-number-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+  margin-bottom: 9px;
+}
+.mark-six-number-filters button {
+  display: grid;
+  place-items: center;
+  min-height: 31px;
+  padding: 4px 2px;
+  border: 1px solid #dce5e8;
+  border-radius: 6px;
+  background: #fff;
+  color: #4e6873;
+  font-size: 9px;
+}
+.mark-six-number-filters button small { color: #a6783b; font-size: 7px; }
+.mark-six-number-grid { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 6px !important; }
+.mark-six-bet-board.full-bet-board .mark-six-number-grid button {
+  min-height: 58px;
+  padding: 5px 1px;
+}
+.mark-six-number-grid .mark-six-ball {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  margin: auto;
+  border-radius: 50% !important;
+  font-size: 13px;
+}
+.mark-six-value-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.mark-six-value-grid button { min-height: 44px; padding: 0 9px; border-radius: 7px; }
+.mark-six-value-grid button b { overflow-wrap: anywhere; }
+.mark-six-combo-bar {
+  position: sticky;
+  bottom: -16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 10px -8px -16px;
+  padding: 8px;
+  border-top: 1px solid #dce7e9;
+  background: #f8fbfbf2;
+  backdrop-filter: blur(5px);
+  color: #6b8088;
+  font-size: 9px;
+}
+.mark-six-combo-bar button {
+  min-height: 31px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: #238f9c;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+}
+.mark-six-bet-board .mark-six-amount-pills { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.mark-six-bet-board .full-bet-footer { gap: 6px; }
+.mark-six-bet-board .board-selected-preview { max-height: 32px; }
+.mark-six-bet-board .full-bet-selection-list { max-height: min(150px, 23vh); }
+
+.theme-night.game-room .mark-six-rule-notice,
+.theme-night.game-room .mark-six-market-notice { background: #51411f; color: #ffda91; }
+.theme-night.game-room .mark-six-accepted { background: #164b46; color: #9ce6d8; }
+.theme-night.game-room .mark-six-market-tabs button,
+.theme-night.game-room .mark-six-number-filters button { border-color: #477989; background: #143954; color: #bedce1; }
+.theme-night.game-room .mark-six-market-tabs button.active { border-color: #6bd3d8; background: #155364; color: #e1f5f6; }
+.theme-night.game-room .mark-six-combo-bar { border-color: #376779; background: #10324aec; color: #b1d2d8; }
+
+@media (max-width: 350px) {
+  .mark-six-bet-board.full-bet-board .full-bet-workspace { grid-template-columns: 62px minmax(0, 1fr); }
+  .mark-six-bet-board.full-bet-board .full-bet-workspace > aside button { font-size: 9px; }
+  .mark-six-number-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .mark-six-number-grid { gap: 4px !important; }
+}

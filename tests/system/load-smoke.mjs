@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks'
 import process from 'node:process'
 import WebSocket from 'ws'
+import { readMemberSessionFile } from './member-session-file.mjs'
 
 const baseURL = process.env.LOAD_TEST_BASE_URL || process.env.SYSTEM_TEST_BACKEND_ORIGIN || 'http://127.0.0.1:18080'
 const parsedBaseURL = new URL(baseURL)
@@ -13,8 +14,6 @@ if (loopback) {
   throw new Error('Refusing non-loopback traffic. Set LOAD_TEST_AUTHORIZED_ORIGIN to the exact origin and provide LOAD_TEST_CONFIRM.')
 }
 
-const memberUsername = process.env.E2E_MEMBER_USERNAME || 'e2e_member'
-const memberPassword = process.env.E2E_MEMBER_PASSWORD || 'MemberPass#2026_x9Q'
 const reads = positiveInteger('LOAD_READ_REQUESTS', 500, 1, 20_000)
 const writes = positiveInteger('LOAD_WRITE_REQUESTS', 20, 0, 500)
 const websocketConnections = positiveInteger('LOAD_WEBSOCKET_CONNECTIONS', 10, 1, 100)
@@ -25,7 +24,9 @@ const samples = []
 let errors = 0
 
 function fetchWithTimeout(url, options = {}) {
-  return fetch(url, { signal: AbortSignal.timeout(10_000), ...options })
+  // A pre-authenticated session is bound to this exact origin; never follow
+  // a redirect that could forward its explicit Cookie header elsewhere.
+  return fetch(url, { signal: AbortSignal.timeout(10_000), ...options, redirect: 'error' })
 }
 
 function positiveInteger(name, fallback, minimum, maximum) {
@@ -63,15 +64,16 @@ async function inPool(tasks) {
   }))
 }
 
-const login = await fetchWithTimeout(`${baseURL}/api/member/login`, {
-  method: 'POST', headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ username: memberUsername, password: memberPassword, workspace: '' }),
-})
-if (!login.ok) throw new Error(`load fixture login failed: HTTP ${login.status}`)
-const setCookie = login.headers.get('set-cookie') || ''
-const memberCookie = setCookie.split(';', 1)[0]
-if (!memberCookie.includes('=')) throw new Error('load fixture login did not return a session cookie')
+// Load smoke measures business traffic, not CAPTCHA solving. Fresh local runs
+// receive the final session from the authenticated API fixture; authorized
+// remote runs must be given an operator-authenticated, origin-bound 0600 file.
+const memberCookie = await readMemberSessionFile(
+  process.env.LOAD_TEST_MEMBER_COOKIE_FILE || process.env.SYSTEM_TEST_MEMBER_COOKIE_FILE,
+  parsedBaseURL.origin,
+)
 const memberHeaders = { cookie: memberCookie }
+const sessionCheck = await fetchWithTimeout(`${baseURL}/api/member/me`, { headers: memberHeaders })
+if (!sessionCheck.ok) throw new Error(`pre-authenticated load session is not usable: HTTP ${sessionCheck.status}`)
 
 const readPaths = ['/health', '/ready', '/api/member/me', '/api/member/chat/messages?room_type=group&game_id=lobby&limit=5']
 const tasks = []

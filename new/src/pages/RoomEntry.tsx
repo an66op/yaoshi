@@ -4,21 +4,27 @@ import { memberApi } from '../api/member'
 
 import { BRAND_NAME, DEMO_ROOM } from '../data/brand'
 import type { Theme } from '../types'
+import { buildRecentRoomEntries, DEFAULT_ROOM_LOGO } from '../utils/roomHistory'
+import type { RoomHistoryItem } from '../utils/roomHistory'
+import { controlSurfaceProps } from '../utils/controlSurface'
 
 type Props = {
   onBack: () => void
   onEnter: (room: string, roomName: string) => void
   theme?: Theme
   fromLobby?: boolean
+  roomHistory?: RoomHistoryItem[]
 }
 
 /** 房间入口：校验房间号并绑定 parent_agent_id */
-export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }: Props) {
+export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false, roomHistory = [] }: Props) {
   const [room, setRoom] = useState(DEMO_ROOM)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
   const submittingRef = useRef(false)
+  const recentRooms = buildRecentRoomEntries(roomHistory)
+  const mostRecentAvailableCode = recentRooms.find(item => item.status === 'available')?.code
   const roomDescription = [error && 'room-entry-error', notice && 'room-entry-notice', 'room-entry-hint'].filter(Boolean).join(' ')
 
   const updateRoom = (value: string) => {
@@ -27,9 +33,9 @@ export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }:
     setNotice('')
   }
 
-  const submit = async () => {
+  const submit = async (requestedRoom = room) => {
     if (submittingRef.current) return
-    const value = room.trim()
+    const value = requestedRoom.trim()
     if (!/^\d{5,12}$/.test(value)) return setError('请输入 5–12 位数字房间号')
     submittingRef.current = true
     setLoading(true)
@@ -93,6 +99,32 @@ export function RoomEntry({ onBack, onEnter, theme = 'day', fromLobby = false }:
           </button>
           <p className="room-entry-hint" id="room-entry-hint">仅支持 5–12 位数字，房间号由上级提供</p>
         </form>
+        {recentRooms.length > 0 && <section aria-labelledby="room-entry-history-title" className="room-entry-history">
+          <header>
+            <span><b id="room-entry-history-title">历史房间</b><small>点击即可进入 · 最近使用排序</small></span>
+            <em>{recentRooms.length} 个</em>
+          </header>
+          <div aria-label="历史房间" className="room-entry-history-list" role="group" {...controlSurfaceProps}>
+            {recentRooms.map((item) => {
+              const disabled = item.status === 'disabled'
+              const statusLabel = item.status === 'current' ? '当前' : item.status === 'pending' ? '待审核' : disabled ? '已停用' : item.code === mostRecentAvailableCode ? '最近' : ''
+              return <button
+                aria-current={item.status === 'current' ? 'true' : undefined}
+                aria-label={`${item.name}，房间 ${item.code}${statusLabel ? `，${statusLabel}` : ''}`}
+                className={`room-entry-history-card room-entry-history-${item.status}`}
+                disabled={loading || disabled}
+                key={item.code}
+                onClick={() => { updateRoom(item.code); void submit(item.code) }}
+                title={`${item.name} · ${item.code}`}
+                type="button"
+              >
+                <span className="room-entry-history-logo"><img alt="" draggable={false} onError={event => { if (event.currentTarget.getAttribute('src') !== DEFAULT_ROOM_LOGO) event.currentTarget.src = DEFAULT_ROOM_LOGO }} src={item.logo} /></span>
+                <span className="room-entry-history-copy"><b>{item.name}</b><small>ROOM · {item.code}</small></span>
+                {statusLabel && <em>{statusLabel}</em>}
+              </button>
+            })}
+          </div>
+        </section>}
       </section>
     </main>
   )

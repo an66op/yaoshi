@@ -11,8 +11,12 @@ export type RoomFeatureSettings = {
   showPrediction: boolean
 }
 
-export type PlayOdds = Partial<Record<'two_sided' | 'ball_1_5' | 'dragon_tiger' | 'sum', number>>
-type SupportedPlayCode = keyof PlayOdds
+export type BasePlayCode = 'two_sided' | 'ball_1_5' | 'dragon_tiger' | 'dragon_tiger_tie' | 'sum' | 'leopard' | 'straight' | 'pair' | 'half_straight' | 'mixed'
+type RacingASumSelectionKey = 'big' | 'small' | 'odd' | 'even' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | '11' | '12' | '13' | '14' | '15' | '16' | '17' | '18' | '19'
+export type RacingASumPricingCode = `sum_${RacingASumSelectionKey}`
+export type OddsPlayCode = BasePlayCode | RacingASumPricingCode
+export type PlayOdds = Partial<Record<OddsPlayCode, number>>
+type SupportedPlayCode = BasePlayCode
 
 /**
  * These are presentation preferences, not authorization boundaries. Legacy
@@ -49,7 +53,26 @@ function isValidOdds(value: unknown): value is number {
 }
 
 function isSupportedPlayCode(value: string): value is SupportedPlayCode {
-  return value === 'two_sided' || value === 'ball_1_5' || value === 'dragon_tiger' || value === 'sum'
+  return ['two_sided', 'ball_1_5', 'dragon_tiger', 'dragon_tiger_tie', 'sum', 'leopard', 'straight', 'pair', 'half_straight', 'mixed'].includes(value)
+}
+
+function isOddsPlayCode(value: string): value is OddsPlayCode {
+  return isSupportedPlayCode(value) || /^sum_(?:big|small|odd|even|[3-9]|1[0-9])$/.test(value)
+}
+
+export function racingASumPricingCode(selection: string): RacingASumPricingCode | null {
+  const normalized = selection.trim().toLowerCase()
+  const side = ({ '大': 'big', '小': 'small', '单': 'odd', '双': 'even', big: 'big', small: 'small', odd: 'odd', even: 'even' } as const)[normalized as '大' | '小' | '单' | '双' | 'big' | 'small' | 'odd' | 'even']
+  if (side) return `sum_${side}`
+  if (!/^\d+$/.test(normalized)) return null
+  const value = Number(normalized)
+  return value >= 3 && value <= 19 ? `sum_${value}` as RacingASumPricingCode : null
+}
+
+export function pricingPlayCode(gameId: string, playCode: string, selection = ''): OddsPlayCode | null {
+  if (!isSupportedPlayCode(playCode)) return null
+  if (gameId === 'bingo-racing-a' && playCode === 'sum') return racingASumPricingCode(selection)
+  return playCode
 }
 
 /** Only odds explicitly returned by the member odds endpoint are accepted. */
@@ -58,7 +81,7 @@ export function playOddsFromResponse(response: GameOdds | null | undefined): Pla
   const resolved: PlayOdds = {}
   for (const item of response.items) {
     if (!isValidOdds(item?.odds)) continue
-    if (item.play_code === 'two_sided' || item.play_code === 'ball_1_5' || item.play_code === 'dragon_tiger' || item.play_code === 'sum') {
+    if (isOddsPlayCode(item.play_code)) {
       resolved[item.play_code] = item.odds
     }
   }
@@ -68,22 +91,31 @@ export function playOddsFromResponse(response: GameOdds | null | undefined): Pla
 export function playCodeForSelection(play: string): keyof PlayOdds | null {
   const normalized = play.replace(/\s+/g, '')
   if (!normalized) return null
-  if (/冠亚(?:和)?/.test(normalized)) return 'sum'
+  if (/冠亚(?:和)?|^和(?:\/|[大小单双0-9])/.test(normalized)) return 'sum'
+  if (/龙虎和|(?:[1-5]\/|球)和(?:\/|$)/.test(normalized)) return 'dragon_tiger_tie'
   if (/[龙虎]/.test(normalized)) return 'dragon_tiger'
   if (/[大小单双]/.test(normalized)) return 'two_sided'
   if (/^(?:(?:10|[1-9])\/)?\d+$/.test(normalized)) return 'ball_1_5'
   return null
 }
 
-export function oddsForSelection(play: string, odds: PlayOdds): number | null {
+export function oddsForSelection(play: string, odds: PlayOdds, gameId = ''): number | null {
   const code = playCodeForSelection(play)
-  return code ? oddsForPlayCode(code, odds) : null
+  if (!code) return null
+  const normalized = play.replace(/\s+/g, '')
+  const sumSelection = code === 'sum' ? normalized.match(/(?:冠亚(?:和)?|^和)\/?(大|小|单|双|[3-9]|1[0-9])/)?.[1] ?? '' : ''
+  return oddsForPlaySelection(gameId, code, sumSelection, odds)
 }
 
 export function oddsForPlayCode(playCode: string, odds: PlayOdds): number | null {
-  if (!isSupportedPlayCode(playCode)) return null
+  if (!isOddsPlayCode(playCode)) return null
   const value = odds[playCode]
   return isValidOdds(value) ? value : null
+}
+
+export function oddsForPlaySelection(gameId: string, playCode: string, selection: string, odds: PlayOdds): number | null {
+  const pricingCode = pricingPlayCode(gameId, playCode, selection)
+  return pricingCode ? oddsForPlayCode(pricingCode, odds) : null
 }
 
 /**
@@ -92,10 +124,16 @@ export function oddsForPlayCode(playCode: string, odds: PlayOdds): number | null
  * browser deliberately receives no numeric value. A missing response remains
  * fail-closed.
  */
-export function canSubmitPlayWithOddsResponse(playCode: string, response: GameOdds | null | undefined): boolean {
-  if (!response || !isSupportedPlayCode(playCode)) return false
-  if (response.show_odds === false) return true
-  return oddsForPlayCode(playCode, playOddsFromResponse(response)) !== null
+export function canSubmitPlayWithOddsResponse(playCode: string, response: GameOdds | null | undefined, selection = ''): boolean {
+  if (!response || response.rules_ready === false) return false
+  const pricingCode = pricingPlayCode(response.game_id, playCode, selection)
+  if (!pricingCode) return false
+  // Hiding the numeric value is only a presentation policy. The endpoint still
+  // returns one zero-valued item for every configured market, so its item list
+  // remains the authoritative availability contract. Never let a hidden room
+  // resurrect a missing selection (notably one Bingo Racing A crown-sum price).
+  if (response.show_odds === false) return response.items.some(item => item.play_code === pricingCode)
+  return oddsForPlayCode(pricingCode, playOddsFromResponse(response)) !== null
 }
 
 export function oddsLabel(value: number | null | undefined, digits = 3, hidden = false) {

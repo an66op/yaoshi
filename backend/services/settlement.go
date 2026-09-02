@@ -9,9 +9,12 @@ import (
 	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
 	"backend/ws"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +32,7 @@ type SettlementResult struct {
 	PendingBefore int64     `json:"pending_before"`
 	Won           int64     `json:"won"`
 	Lost          int64     `json:"lost"`
+	Push          int64     `json:"push"`
 	Skipped       int64     `json:"skipped"`
 	StakeAmount   float64   `json:"stake_amount"`
 	PayoutAmount  float64   `json:"payout_amount"`
@@ -54,6 +58,7 @@ type SettlementStatus struct {
 	Pending      int64      `json:"pending"`
 	Won          int64      `json:"won"`
 	Lost         int64      `json:"lost"`
+	Push         int64      `json:"push"`
 	StakeAmount  float64    `json:"stake_amount"`
 	PayoutAmount float64    `json:"payout_amount"`
 	Settled      bool       `json:"settled"`
@@ -77,6 +82,12 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 			return nil, apperrors.NewBusinessError("DRAW_NOT_FOUND", "该期尚未开奖，无法结算")
 		}
 		return nil, apperrors.NewSystemError("DRAW_READ_FAILED", "读取开奖结果失败", err)
+	}
+	if revisionErr := orderedBingoSettlementRevisionError(game.ID, draw); revisionErr != nil {
+		if err := s.markUnverifiedOrderedBingoIssue(game, draw, revisionErr.Error()); err != nil {
+			return nil, apperrors.NewSystemError("ISSUE_SAVE_FAILED", "记录未验证开奖对账状态失败", err)
+		}
+		return nil, revisionErr
 	}
 	numbers := parseNumbers(draw.Numbers)
 	if len(numbers) == 0 {
@@ -140,28 +151,98 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 		for _, profile := range robotProfiles {
 			robotBets[robotBetIdentity{workspaceID: profile.WorkspaceID, userID: profile.UserID}] = struct{}{}
 		}
+		type pc28StakeKey struct {
+			workspaceID uint64
+			roomScope   string
+			userID      uint64
+		}
+		pc28UserIssueStake := make(map[pc28StakeKey]int64)
+		gameProfile, _ := rulesForGame(game)
+		if gameProfile.PC28 > 0 {
+			for _, item := range pending {
+				key := pc28StakeKey{workspaceID: item.WorkspaceID, roomScope: defaultString(strings.TrimSpace(item.RoomScope), "legacy"), userID: item.UserID}
+				total, ok := safeAddInt64(pc28UserIssueStake[key], item.AmountCents)
+				if !ok || total < item.AmountCents {
+					return apperrors.NewBusinessError("INVALID_REQUEST", "PC28会员本期总注超出系统范围")
+				}
+				pc28UserIssueStake[key] = total
+			}
+		}
 		for _, item := range pending {
-			won, reason := evaluateBet(numbers, item.PlayCode, item.Position, item.Selection)
+			outcome, reason := markSixOutcomeLost, ""
+			effectiveOdds := item.Odds
+			validTurnoverCents := item.AmountCents
+			settlementPolicy := "standard"
+			userIssueStakeCents := int64(0)
+			var evaluationErr error
+			if gameProfile.PC28 > 0 {
+				key := pc28StakeKey{workspaceID: item.WorkspaceID, roomScope: defaultString(strings.TrimSpace(item.RoomScope), "legacy"), userID: item.UserID}
+				decision, decisionErr := decidePC28Settlement(game.ID, item, numbers, pc28UserIssueStake[key])
+				if decisionErr != nil {
+					evaluationErr = decisionErr
+				} else {
+					outcome, reason, effectiveOdds = decision.Outcome, decision.Reason, decision.EffectiveOdds
+					validTurnoverCents, userIssueStakeCents, settlementPolicy = decision.ValidTurnoverCents, decision.UserIssueStakeCents, decision.Policy
+				}
+			} else {
+				outcome, reason, evaluationErr = evaluateBetOutcomeForRuleVersionAt(game, item.RuleVersion, numbers, item.PlayCode, item.Position, item.Selection, draw.DrawAt)
+				if outcome == markSixOutcomePush {
+					effectiveOdds, validTurnoverCents, settlementPolicy = 1, 0, "settlement_push"
+				}
+			}
+			if evaluationErr != nil {
+				// The transaction must roll back every ticket in this issue. An
+				// unknown rule or malformed draw is not a losing result.
+				return evaluationErr
+			}
 			payout := int64(0)
-			status := "lost"
-			if won {
-				status = "won"
-				payout = int64(math.Round(float64(item.AmountCents) * item.Odds))
+			status := string(outcome)
+			storedStatus := status
+			if outcome == markSixOutcomeWon {
+				payout = int64(math.Round(float64(item.AmountCents) * effectiveOdds))
+			} else if outcome == markSixOutcomePush {
+				payout = item.AmountCents
+				// The persisted status check predates explicit push outcomes. Keep
+				// the existing cancelled financial state while the immutable reason
+				// and notification detail retain the more precise "push" result.
+				storedStatus = "cancelled"
 			}
 			settledAt := time.Now().UTC()
+			item.ValidTurnoverCents = int64Pointer(validTurnoverCents)
+			item.SettlementOdds = &effectiveOdds
+			item.SettlementPolicy = settlementPolicy
+			if gameProfile.PC28 > 0 {
+				item.UserIssueStakeCentsSnapshot = int64Pointer(userIssueStakeCents)
+			}
 			_, isRobotBet := robotBets[robotBetIdentity{workspaceID: item.WorkspaceID, userID: item.UserID}]
-			rebateCents, agentShareCents := settledBetFinancialAmounts(item, payout, isRobotBet)
+			rebateCents, agentShareCents := int64(0), int64(0)
+			if outcome != markSixOutcomePush {
+				rebateCents, agentShareCents = settledBetFinancialAmounts(item, payout, isRobotBet)
+			}
 			updates := map[string]any{
-				"status":                status,
+				"status":                storedStatus,
 				"payout_cents":          payout,
 				"rebate_cents":          rebateCents,
 				"agent_share_cents":     agentShareCents,
+				"valid_turnover_cents":  validTurnoverCents,
+				"settlement_odds":       effectiveOdds,
+				"settlement_policy":     settlementPolicy,
 				"settled_at":            settledAt,
 				"remark":                trimRemark(item.Remark, reason),
 				"operator":              operator,
 				"updated_at":            settledAt,
 				"reconciliation_status": "normal",
 				"reconciliation_note":   "",
+			}
+			if gameProfile.PC28 > 0 {
+				updates["user_issue_stake_cents_snapshot"] = userIssueStakeCents
+			}
+			if outcome == markSixOutcomePush {
+				// PostgreSQL's historical bet-status constraint has no dedicated
+				// push value. Keep the financial state recoverable as cancelled and
+				// attach an immutable machine marker so status aggregation can tell
+				// a settled push apart from an operator cancellation.
+				updates["reconciliation_note"] = "settlement_push"
 			}
 			if isRobotBet {
 				updates["fly_cents"] = 0
@@ -191,27 +272,38 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 			}
 			summary.stakeCents += item.AmountCents
 			summary.details = append(summary.details, NotificationBetDetail{
-				PlayCode: item.PlayCode, PlayName: settlementPositionLabel(item.Position, item.PlayCode, item.PlayName), Position: item.Position, Selection: item.Selection,
-				Amount: centsToAmount(item.AmountCents), Odds: item.Odds, Result: status,
+				PlayCode: item.PlayCode, PlayName: settlementBetLabel(item), Position: item.Position, Selection: item.Selection,
+				Amount: centsToAmount(item.AmountCents), Odds: effectiveOdds, QuotedOdds: item.Odds,
+				EffectiveOdds: effectiveOdds, SettlementPolicy: settlementPolicy, Result: status,
 				Payout: centsToAmount(payout),
 			})
-			if won {
+			switch outcome {
+			case markSixOutcomeWon:
 				summary.wonCount++
 				summary.payoutCents += payout
-			} else {
+				summary.wonPayoutCents += payout
+			case markSixOutcomePush:
+				summary.pushCount++
+				summary.payoutCents += payout
+				summary.refundCents += payout
+			default:
 				summary.lostCount++
 			}
 			result.StakeAmount += centsToAmount(item.AmountCents)
-			if won {
+			switch outcome {
+			case markSixOutcomeWon:
 				result.Won++
 				result.PayoutAmount += centsToAmount(payout)
-				if payout > 0 {
-					if err := creditSettlement(tx, item.WorkspaceID, item.ID, item.UserID, payout, game.Name, issue, operator); err != nil {
-						return err
-					}
-				}
-			} else {
+			case markSixOutcomePush:
+				result.Push++
+				result.PayoutAmount += centsToAmount(payout)
+			default:
 				result.Lost++
+			}
+			if payout > 0 {
+				if err := creditSettlement(tx, item.WorkspaceID, item.ID, item.UserID, payout, game.Name, issue, operator); err != nil {
+					return err
+				}
 			}
 		}
 		var persistErr error
@@ -243,6 +335,50 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 	deliverRoomSettlementMessages(s.db, roomMessages)
 	ws.NotifyDraw(gameID, issue, numbers)
 	return result, nil
+}
+
+func orderedBingoSettlementRevisionError(gameID string, draw lottery.Draw) error {
+	if orderedBingoDrawRevisionCurrent(gameID, draw.SourceRevision, draw.ConversionRevision) {
+		return nil
+	}
+	return apperrors.NewBusinessError("DRAW_SOURCE_UNVERIFIED",
+		fmt.Sprintf("第 %s 期不是当前双源验证版本，已保留注单并转人工对账", draw.Issue))
+}
+
+func orderedBingoDrawRevisionCurrent(gameID, sourceRevision, conversionRevision string) bool {
+	binding, ok := api168BingoBindingForGame(gameID)
+	if !ok || !binding.RequiresOrderedSource {
+		return true
+	}
+	return sourceRevision == bingoOrderedSourceRevision && conversionRevision == binding.ConversionVersion
+}
+
+func (s *BetAdminService) markUnverifiedOrderedBingoIssue(game *lottery.Game, draw lottery.Draw, reason string) error {
+	if game == nil {
+		return fmt.Errorf("游戏配置不存在")
+	}
+	reason = reconciliationIssueError(reason)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		interval := time.Duration(maxInt(game.DrawInterval, 60)) * time.Second
+		row := lottery.Issue{
+			GameID: game.ID, Issue: draw.Issue, Status: lottery.IssueStatusError, SourceMode: sourceMode(game.SourceKind),
+			AcceptAt: draw.DrawAt.UTC().Add(-interval), SealAt: draw.DrawAt.UTC().Add(-3 * time.Second),
+			DrawAt: &draw.DrawAt, LastError: reason,
+		}
+		if err := tx.Where("game_id = ? AND issue = ?", game.ID, draw.Issue).FirstOrCreate(&row).Error; err != nil {
+			return err
+		}
+		if row.Status != lottery.IssueStatusSettled {
+			if err := tx.Model(&lottery.Issue{}).Where("id = ?", row.ID).Updates(map[string]any{
+				"status": lottery.IssueStatusError, "last_error": reason, "draw_at": draw.DrawAt.UTC(),
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(&bet.Bet{}).
+			Where("game_id = ? AND issue = ? AND status = ?", game.ID, draw.Issue, "pending").
+			Updates(map[string]any{"reconciliation_status": "abnormal", "reconciliation_note": reason}).Error
+	})
 }
 
 type roomSettlementPlayer struct {
@@ -330,7 +466,7 @@ func createRoomSettlementMessage(db *gorm.DB, drawID, workspaceID uint64, roomSc
 		Scope: roomScope, RoomScope: roomScope, GameID: gameID, Content: content,
 		MessageType: messageType, ReferenceID: drawID,
 	}
-	result := db.Where(
+	result := db.Unscoped().Where(
 		"workspace_id = ? AND room_type = ? AND room_scope = ? AND game_id = ? AND message_type = ? AND reference_id = ?",
 		workspaceID, "group", roomScope, gameID, messageType, drawID,
 	).FirstOrCreate(&row)
@@ -344,12 +480,124 @@ func formatRoomSettlement(gameName, issue string, players []roomSettlementPlayer
 		net := player.payoutCents - player.stakeCents
 		fmt.Fprintf(&body, "\n\n[%s]\n得分：%+.2f", player.nickname, centsToAmount(net))
 		for _, detail := range player.details {
-			label := settlementPositionLabel(detail.Position, detail.PlayCode, detail.PlayName)
+			// The financial pass already froze this label from the bet's rule
+			// version. Reclassifying it here would turn digit sums into racing
+			// 冠亚和 and overwrite numbered-ball/front-three labels.
+			label := strings.TrimSpace(detail.PlayName)
+			if label == "" {
+				label = settlementPositionLabel(detail.Position, detail.PlayCode, "")
+			}
 			lineNet := int64(math.Round((detail.Payout - detail.Amount) * 100))
 			fmt.Fprintf(&body, "\n%s [%s/%.2f=%+.2f]", label, detail.Selection, detail.Amount, centsToAmount(lineNet))
 		}
 	}
 	return body.String()
+}
+
+func settlementBetLabel(item bet.Bet) string {
+	profile, versioned := rulesForVersion(item.RuleVersion)
+	if !versioned {
+		// The rule-version migration deliberately leaves pre-migration rows
+		// empty. Only games upgraded from digits5-v2 to digits5-v3 need
+		// this display bridge: retain their stored legacy play/position meaning
+		// without writing a version or inferring any new v3 market.
+		if strings.TrimSpace(item.RuleVersion) == "" && isUpgradedDigits5Game(item.GameID) {
+			return legacyUnversionedDigits5BetLabel(item)
+		}
+		return settlementPositionLabel(item.Position, item.PlayCode, item.PlayName)
+	}
+	if profile.Racing {
+		return settlementPositionLabel(item.Position, item.PlayCode, item.PlayName)
+	}
+	if profile.MarkSix {
+		if spec, ok := markSixSpecByCode(item.RuleVersion, item.PlayCode); ok {
+			if spec.PositionMode == "regular" && item.Position >= 1 && item.Position <= 6 {
+				return fmt.Sprintf("%s 第%d位", spec.Play.Name, item.Position)
+			}
+			return spec.Play.Name
+		}
+		return defaultString(strings.TrimSpace(item.PlayName), "宾果六合彩")
+	}
+	if profile.PC28 > 0 {
+		if spec, ok := pc28SpecByCode(item.PlayCode); ok {
+			if item.Position >= 1 && item.Position <= 3 {
+				return fmt.Sprintf("%s 第%d球", spec.Name, item.Position)
+			}
+			return spec.Name
+		}
+		return defaultString(strings.TrimSpace(item.PlayName), "PC28")
+	}
+	code := strings.ToLower(strings.TrimSpace(item.PlayCode))
+	switch code {
+	case "sum":
+		if isSideSelection(item.Selection) {
+			return "总和"
+		}
+		return "总和尾"
+	case "leopard", "straight", "pair", "half_straight", "mixed":
+		return digitShapeScopeName(item.Position) + playNameOf(code)
+	case "dragon_tiger":
+		if profile.Version == "digits5-v3" {
+			return "第1球龙虎"
+		}
+		return fmt.Sprintf("第%d球", item.Position)
+	case "dragon_tiger_tie":
+		return "第1球龙虎和"
+	default:
+		return fmt.Sprintf("第%d球", item.Position)
+	}
+}
+
+func isUpgradedDigits5Game(gameID string) bool {
+	switch strings.TrimSpace(gameID) {
+	case "speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1":
+		return true
+	default:
+		return false
+	}
+}
+
+func legacyUnversionedDigits5BetLabel(item bet.Bet) string {
+	code := strings.ToLower(strings.TrimSpace(item.PlayCode))
+	switch code {
+	case "sum":
+		if isSideSelection(item.Selection) {
+			return "总和"
+		}
+		return "总和尾"
+	case "leopard", "straight", "pair", "half_straight", "mixed":
+		// The empty snapshot predates middle/back-three support. A historical
+		// shape is always the old front-three contract, even if malformed stored
+		// data carries another position.
+		return "前三" + playNameOf(code)
+	case "ball_1_5", "two_sided", "dragon_tiger":
+		if item.Position >= 1 && item.Position <= 5 {
+			return fmt.Sprintf("第%d球", item.Position)
+		}
+	}
+	// New/unknown codes on an empty snapshot must never be guessed as v3.
+	// Prefer the immutable stored label, then a neutral digit-ball fallback.
+	if stored := strings.TrimSpace(item.PlayName); stored != "" {
+		return stored
+	}
+	if item.Position > 0 {
+		return fmt.Sprintf("第%d球", item.Position)
+	}
+	return "历史玩法"
+}
+
+// BetDisplayLabel exposes the same immutable rule-version label used by
+// settlement notifications to read-only bet views such as the room “查”
+// command. Display code must not infer a racing rank from a v3 digit shape.
+func BetDisplayLabel(item BetView) string {
+	return settlementBetLabel(bet.Bet{
+		GameID:      item.GameID,
+		RuleVersion: item.RuleVersion,
+		PlayCode:    item.PlayCode,
+		PlayName:    item.PlayName,
+		Position:    item.Position,
+		Selection:   item.Selection,
+	})
 }
 
 func settlementPositionLabel(position int, playCode, playName string) string {
@@ -408,9 +656,14 @@ type settleUserSummary struct {
 	roomScope   string
 	wonCount    int
 	lostCount   int
+	pushCount   int
 	stakeCents  int64
 	payoutCents int64
-	details     []NotificationBetDetail
+	// payoutCents is the actual balance credit used by room net calculations;
+	// these two components keep member copy from calling a push refund a win.
+	wonPayoutCents int64
+	refundCents    int64
+	details        []NotificationBetDetail
 }
 
 type settlementRecipient struct {
@@ -420,14 +673,17 @@ type settlementRecipient struct {
 }
 
 type NotificationBetDetail struct {
-	PlayCode  string  `json:"play_code,omitempty"`
-	PlayName  string  `json:"play_name"`
-	Position  int     `json:"position,omitempty"`
-	Selection string  `json:"selection"`
-	Amount    float64 `json:"amount"`
-	Odds      float64 `json:"odds"`
-	Result    string  `json:"result"`
-	Payout    float64 `json:"payout"`
+	PlayCode         string  `json:"play_code,omitempty"`
+	PlayName         string  `json:"play_name"`
+	Position         int     `json:"position,omitempty"`
+	Selection        string  `json:"selection"`
+	Amount           float64 `json:"amount"`
+	Odds             float64 `json:"odds"`
+	QuotedOdds       float64 `json:"quoted_odds,omitempty"`
+	EffectiveOdds    float64 `json:"effective_odds,omitempty"`
+	SettlementPolicy string  `json:"settlement_policy,omitempty"`
+	Result           string  `json:"result"`
+	Payout           float64 `json:"payout"`
 }
 
 type settlementNotificationDelivery struct {
@@ -439,20 +695,23 @@ func persistSettlementResults(db *gorm.DB, gameID, gameName, issue string, numbe
 	numText := formatDrawNumbers(numbers)
 	deliveries := make([]settlementNotificationDelivery, 0, len(summaries))
 	for recipient, summary := range summaries {
-		if summary == nil || (summary.wonCount == 0 && summary.lostCount == 0) {
+		if summary == nil || (summary.wonCount == 0 && summary.lostCount == 0 && summary.pushCount == 0) {
 			continue
 		}
 		userID := recipient.UserID
 		roomScope := defaultString(strings.TrimSpace(summary.roomScope), recipient.RoomScope)
 		title := "开奖通知"
 		level := "info"
-		betCount := summary.wonCount + summary.lostCount
+		betCount := summary.wonCount + summary.lostCount + summary.pushCount
 		content := fmt.Sprintf("%s 第 %s 期开奖，开奖号码 %s。共投注 %d 注，投注金额 %.2f 元", gameName, issue, numText, betCount, centsToAmount(summary.stakeCents))
 		if summary.wonCount > 0 {
 			level = "success"
-			content += fmt.Sprintf("；中奖 %d 注，中奖金额 %.2f 元。", summary.wonCount, centsToAmount(summary.payoutCents))
+			content += fmt.Sprintf("；中奖 %d 注，中奖金额 %.2f 元。", summary.wonCount, centsToAmount(summary.wonPayoutCents))
 		} else {
 			content += "；本期未中奖。"
+		}
+		if summary.pushCount > 0 {
+			content += fmt.Sprintf("；和局返本 %d 注，返还 %.2f 元。", summary.pushCount, centsToAmount(summary.refundCents))
 		}
 		detailsJSON, _ := json.Marshal(summary.details)
 		eventKey := settlementEventKey(gameID, issue, userID, roomScope)
@@ -478,7 +737,8 @@ func persistSettlementResults(db *gorm.DB, gameID, gameName, issue string, numbe
 			"game_name": gameName, "issue": issue, "draw_numbers": numbers,
 			"draw_at": drawAt, "bet_count": betCount, "won_count": summary.wonCount,
 			"stake_amount": centsToAmount(summary.stakeCents), "payout_amount": centsToAmount(summary.payoutCents),
-			"bet_details": summary.details, "created_at": notice.CreatedAt,
+			"refund_amount": centsToAmount(summary.refundCents),
+			"bet_details":   summary.details, "created_at": notice.CreatedAt,
 		}})
 	}
 	return deliveries, nil
@@ -504,11 +764,33 @@ func formatDrawNumbers(numbers []int) string {
 
 // PublishDraw creates (or reuses) a draw for simulated games and settles bets.
 func (s *BetAdminService) PublishDraw(gameID, issue string, numbers []int, operator string) (*SettlementResult, error) {
+	return s.publishDrawWithEntropy(gameID, issue, numbers, operator, cryptorand.Reader)
+}
+
+// Keep entropy injection local to an invocation: regression tests can verify
+// that a failed generator makes no writes without replacing a global reader.
+func (s *BetAdminService) publishDrawWithEntropy(gameID, issue string, numbers []int, operator string, entropy io.Reader) (*SettlementResult, error) {
 	game, err := s.loadGame(gameID)
 	if err != nil {
 		return nil, err
 	}
+	if bingoGameRequiresOrderedSource(game.ID) {
+		return nil, apperrors.NewBusinessError("EXTERNAL_DRAW_MANUAL_FORBIDDEN", "依赖双源顺序校验的宾果彩种禁止手工或随机开奖，请使用来源同步或人工对账流程")
+	}
 	issue = strings.TrimSpace(issue)
+	if len(numbers) == 0 {
+		numbers, err = generateDrawNumbers(game, entropy)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if profile, supported := rulesForGame(game); supported {
+		if err := profile.validateDraw(numbers); err != nil {
+			return nil, apperrors.NewBusinessError("INVALID_DRAW", "开奖号码不符合彩种规则："+err.Error())
+		}
+	} else if len(numbers) < 3 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "开奖号码至少需要 3 个")
+	}
 	// Persist the accepting/sealed lifecycle before the immutable draw advances
 	// CurrentIssue to the following period.
 	_, _ = s.EnsureCurrentIssue(game)
@@ -517,12 +799,6 @@ func (s *BetAdminService) PublishDraw(gameID, issue string, numbers []int, opera
 		if err != nil {
 			return nil, err
 		}
-	}
-	if len(numbers) == 0 {
-		numbers = defaultDrawNumbers(game.Category, issue)
-	}
-	if len(numbers) < 3 {
-		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "开奖号码至少需要 3 个")
 	}
 	now := time.Now().UTC()
 	draw := lottery.Draw{GameID: game.ID, Issue: issue, Numbers: joinNumbers(numbers), DrawAt: now}
@@ -565,16 +841,17 @@ func (s *BetAdminService) SettlementStatus(gameID, issue string) (*SettlementSta
 		return nil, apperrors.NewSystemError("DRAW_READ_FAILED", "读取开奖结果失败", err)
 	}
 	type agg struct {
-		Status      string
-		Cnt         int64
-		StakeCents  int64
-		PayoutCents int64
+		Status             string
+		ReconciliationNote string
+		Cnt                int64
+		StakeCents         int64
+		PayoutCents        int64
 	}
 	var rows []agg
 	if err := s.db.Model(&bet.Bet{}).
-		Select("status, COUNT(*) as cnt, COALESCE(SUM(amount_cents),0) as stake_cents, COALESCE(SUM(payout_cents),0) as payout_cents").
+		Select("status, COALESCE(reconciliation_note,'') as reconciliation_note, COUNT(*) as cnt, COALESCE(SUM(amount_cents),0) as stake_cents, COALESCE(SUM(payout_cents),0) as payout_cents").
 		Where("game_id = ? AND issue = ?", game.ID, issue).
-		Group("status").Scan(&rows).Error; err != nil {
+		Group("status, reconciliation_note").Scan(&rows).Error; err != nil {
 		return nil, apperrors.NewSystemError("BET_READ_FAILED", "读取结算状态失败", err)
 	}
 	for _, row := range rows {
@@ -582,14 +859,22 @@ func (s *BetAdminService) SettlementStatus(gameID, issue string) (*SettlementSta
 		status.PayoutAmount += centsToAmount(row.PayoutCents)
 		switch row.Status {
 		case "pending":
-			status.Pending = row.Cnt
+			status.Pending += row.Cnt
 		case "won":
-			status.Won = row.Cnt
+			status.Won += row.Cnt
 		case "lost":
-			status.Lost = row.Cnt
+			status.Lost += row.Cnt
+		case "push":
+			// Kept for compatibility with archival stores that predate the
+			// PostgreSQL status constraint used by the current write path.
+			status.Push += row.Cnt
+		case "cancelled":
+			if row.ReconciliationNote == "settlement_push" {
+				status.Push += row.Cnt
+			}
 		}
 	}
-	status.Settled = status.HasDraw && status.Pending == 0 && (status.Won+status.Lost) > 0
+	status.Settled = status.HasDraw && status.Pending == 0 && (status.Won+status.Lost+status.Push) > 0
 	return status, nil
 }
 
@@ -630,6 +915,152 @@ func creditSettlement(tx *gorm.DB, workspaceID, betID, userID uint64, payoutCent
 	}).Error
 }
 
+// evaluateBetOutcomeForRuleVersionAt is the financial settlement entry point.
+// Mark Six zodiac rules receive the immutable official draw timestamp; using
+// the server clock would change a historical ticket around lunar new year.
+func evaluateBetOutcomeForRuleVersionAt(game *lottery.Game, version string, numbers []int, playCode string, position int, selection string, drawAt time.Time) (markSixBetOutcome, string, error) {
+	gameProfile, supported := rulesForGame(game)
+	if supported && gameProfile.MarkSix {
+		if version == "" {
+			return "", "", apperrors.NewBusinessError("RULES_NOT_READY", "旧宾果六合彩注单没有已确认规则版本，暂不能自动结算")
+		}
+		profile, found := rulesForVersion(version)
+		if !found || !profile.MarkSix || (version != markSixLegacyRuleVersion && version != markSixRuleVersion) {
+			return "", "", apperrors.NewBusinessError("RULES_NOT_READY", "注单规则版本未确认或与彩种不一致，暂不能结算")
+		}
+		if err := profile.validateDraw(numbers); err != nil {
+			return "", "", apperrors.NewBusinessError("INVALID_DRAW", "开奖号码不符合注单规则："+err.Error())
+		}
+		return evaluateMarkSixBetForVersion(version, numbers, strings.ToLower(strings.TrimSpace(playCode)), position, strings.TrimSpace(selection), drawAt)
+	}
+	won, reason, err := evaluateBetForRuleVersion(game, version, numbers, playCode, position, selection)
+	if err != nil {
+		return "", "", err
+	}
+	return markSixWonLost(won), reason, nil
+}
+
+// evaluateBetForRuleVersion remains the bool compatibility boundary used by
+// rule-unit tests and non-Mark-Six callers. Push is intentionally not flattened
+// in financial settlement, which uses evaluateBetOutcomeForRuleVersionAt.
+// A rule
+// snapshot must belong to the immutable game ID; neither a renamed category nor
+// the length of an arbitrary source result can change its lottery family.
+func evaluateBetForRuleVersion(game *lottery.Game, version string, numbers []int, playCode string, position int, selection string) (bool, string, error) {
+	gameProfile, supported := rulesForGame(game)
+	if !supported {
+		return false, "", apperrors.NewBusinessError("RULES_NOT_READY", "该彩种规则尚待核对，暂不能结算")
+	}
+	profile := gameProfile
+	if version != "" {
+		var found bool
+		profile, found = rulesForVersion(version)
+		if !found || !gameSupportsRuleVersion(game.ID, version) {
+			return false, "", apperrors.NewBusinessError("RULES_NOT_READY", "注单规则版本未确认或与彩种不一致，暂不能结算")
+		}
+	}
+	if err := profile.validateDraw(numbers); err != nil {
+		return false, "", apperrors.NewBusinessError("INVALID_DRAW", "开奖号码不符合注单规则："+err.Error())
+	}
+	if profile.MarkSix {
+		if version == "" {
+			return false, "", apperrors.NewBusinessError("RULES_NOT_READY", "旧宾果六合彩注单没有已确认规则版本，暂不能自动结算")
+		}
+		outcome, reason, err := evaluateMarkSixBetForVersion(version, numbers, strings.ToLower(strings.TrimSpace(playCode)), position, strings.TrimSpace(selection), time.Time{})
+		return outcome == markSixOutcomeWon, reason, err
+	}
+	if profile.PC28 > 0 {
+		if version == "" {
+			return false, "", apperrors.NewBusinessError("RULES_NOT_READY", "旧PC28注单没有已确认规则版本，暂不能自动结算")
+		}
+		outcome, reason, err := evaluatePC28Bet(profile, numbers, strings.ToLower(strings.TrimSpace(playCode)), position, strings.TrimSpace(selection), false)
+		return outcome == markSixOutcomeWon, reason, err
+	}
+	if version == "" {
+		// Empty snapshots predate versioned rules. Keep their original sum-tail,
+		// shape and other payout semantics after the known game's draw shape has
+		// been verified; never reinterpret a legacy 20-ball or unmodelled game as
+		// racing. Already-settled rows are not passed here or recalculated.
+		won, reason := evaluateBet(numbers, playCode, position, selection)
+		return won, reason, nil
+	}
+	playCode = strings.ToLower(strings.TrimSpace(playCode))
+	settlementProfile := profile
+	if profile.Version == "digits5-v3" && playCode == "sum" {
+		// Early digits5-v3 builds briefly accepted the local v2 total/total-tail
+		// extension. New v3 placement and catalog paths now reject it, but an
+		// already persisted ticket must not become un-settleable. Use the frozen
+		// v2 meaning only at this historical settlement boundary.
+		settlementProfile, _ = rulesForVersion("digits5-v2")
+	}
+	if err := settlementProfile.validateChoice(playCode, position, selection); err != nil {
+		return false, "", err
+	}
+	profile = settlementProfile
+	selection = normalizeSelection(selection)
+	switch playCode {
+	case "ball_1_5":
+		digit, _ := strconv.Atoi(selection) // validateChoice has checked the domain.
+		value := numbers[position-1]
+		return digit == value, fmt.Sprintf("第%d球开出 %d", position, value), nil
+	case "two_sided":
+		value := numbers[position-1]
+		label := fmt.Sprintf("第%d球", position)
+		if matchRuleSide(value, profile.PositionBigFrom, selection) {
+			return true, label + "命中" + selectionLabel(selection), nil
+		}
+		return false, label + "为" + describeSideAtThreshold(value, profile.PositionBigFrom), nil
+	case "dragon_tiger", "dragon_tiger_tie":
+		left, right := numbers[position-1], numbers[profile.BallCount-position]
+		outcome := "tie"
+		if left > right {
+			outcome = "dragon"
+		} else if left < right {
+			outcome = "tiger"
+		}
+		return selection == outcome, fmt.Sprintf("龙虎 %d:%d", left, right), nil
+	case "sum":
+		total := sumInts(numbers)
+		label := "总和"
+		if profile.Racing {
+			total, label = numbers[0]+numbers[1], "冠亚和"
+		}
+		if selected, err := strconv.Atoi(selection); err == nil {
+			if profile.Racing {
+				return total == selected, fmt.Sprintf("冠亚和 %d", total), nil
+			}
+			return total%10 == selected, fmt.Sprintf("总和尾 %d", total%10), nil
+		}
+		if matchRuleSide(total, profile.SumBigFrom, selection) {
+			return true, fmt.Sprintf("%s %d 命中%s", label, total, selectionLabel(selection)), nil
+		}
+		return false, label + "为" + describeSideAtThreshold(total, profile.SumBigFrom), nil
+	case "leopard", "straight", "pair", "half_straight", "mixed":
+		start := position - 1
+		pattern := frontPattern(numbers[start : start+3])
+		return pattern == playCode, digitShapeScopeName(position) + "形态为" + playNameOf(pattern), nil
+	default:
+		return false, "", apperrors.NewBusinessError("RULES_NOT_READY", "注单玩法尚未建模，暂不能结算")
+	}
+}
+
+func matchRuleSide(value, bigFrom int, selection string) bool {
+	switch normalizeSelection(selection) {
+	case "big":
+		return value >= bigFrom
+	case "small":
+		return value < bigFrom
+	case "odd":
+		return value%2 != 0
+	case "even":
+		return value%2 == 0
+	default:
+		return false
+	}
+}
+
+// evaluateBet retains the pre-versioning payout contract for valid legacy
+// tickets. New tickets must go through evaluateBetForRuleVersion instead.
 func evaluateBet(numbers []int, playCode string, position int, selection string) (bool, string) {
 	playCode = strings.ToLower(strings.TrimSpace(playCode))
 	selection = normalizeSelection(selection)
@@ -672,7 +1103,11 @@ func evaluateBet(numbers []int, playCode string, position int, selection string)
 		if matchPositionSide(value, balls, selection) {
 			return true, label + "命中" + selectionLabel(selection)
 		}
-		return false, label + "为" + describeSide(value)
+		threshold := 5
+		if len(balls) >= 10 {
+			threshold = 6
+		}
+		return false, label + "为" + describeSideAtThreshold(value, threshold)
 
 	case "dragon_tiger":
 		if len(balls) < 2 {
@@ -906,8 +1341,12 @@ func selectionLabel(selection string) string {
 }
 
 func describeSide(value int) string {
+	return describeSideAtThreshold(value, 5)
+}
+
+func describeSideAtThreshold(value, bigFrom int) string {
 	size := "小"
-	if value >= 5 {
+	if value >= bigFrom {
 		size = "大"
 	}
 	parity := "双"
@@ -958,33 +1397,59 @@ func trimRemark(existing, reason string) string {
 	return merged
 }
 
-func defaultDrawNumbers(category, issue string) []int {
-	seed := int(time.Now().UnixNano())
-	for _, ch := range issue {
-		seed += int(ch)
+// generateDrawNumbers samples only an explicitly modelled game. Entropy is
+// supplied per call so failure tests never replace the process-wide reader.
+func generateDrawNumbers(game *lottery.Game, entropy io.Reader) ([]int, error) {
+	profile, supported := rulesForGame(game)
+	if !supported {
+		return nil, apperrors.NewBusinessError("RULES_NOT_READY", "该彩种规则尚待核对，不能自动生成开奖号码")
 	}
-	count := 5
-	switch {
-	case strings.Contains(category, "3"):
-		count = 3
-	case strings.Contains(category, "赛车"), strings.Contains(category, "飞艇"), strings.Contains(category, "幸运10"):
-		count = 10
+	if profile.MarkSix {
+		return nil, apperrors.NewBusinessError("DRAW_NOT_FOUND", "宾果六合彩必须提供实际来源开奖号码，不能自动生成")
 	}
-	result := make([]int, count)
-	if count == 10 {
-		// 1-10 permutation style
-		pool := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-		for i := range result {
-			idx := (seed + i*7) % len(pool)
-			result[i] = pool[idx]
-			pool = append(pool[:idx], pool[idx+1:]...)
+	switch strings.ToLower(strings.TrimSpace(game.SourceKind)) {
+	case "", "platform", "simulated":
+		// The empty legacy mode has always represented a platform game.
+	default:
+		return nil, apperrors.NewBusinessError("DRAW_NOT_FOUND", "外部或官方彩种必须提供实际开奖号码，不能自动生成")
+	}
+	if entropy == nil {
+		return nil, apperrors.NewBusinessError("DRAW_RANDOM_FAILED", "开奖随机源不可用")
+	}
+	rangeSize := profile.MaxNumber - profile.MinNumber + 1
+	if profile.BallCount <= 0 || rangeSize <= 0 || profile.Unique && profile.BallCount > rangeSize {
+		return nil, apperrors.NewBusinessError("RULES_NOT_READY", "彩种开奖规则不完整")
+	}
+	result := make([]int, profile.BallCount)
+	if profile.Unique {
+		pool := make([]int, rangeSize)
+		for i := range pool {
+			pool[i] = profile.MinNumber + i
 		}
-		return result
+		// Partial Fisher-Yates with rejection-sampled uniform indices: no
+		// modulo bias or deterministic positional offsets.
+		for i := range result {
+			index, err := cryptorand.Int(entropy, big.NewInt(int64(len(pool)-i)))
+			if err != nil {
+				return nil, apperrors.NewSystemError("DRAW_RANDOM_FAILED", "开奖随机源读取失败", err)
+			}
+			j := i + int(index.Int64())
+			pool[i], pool[j] = pool[j], pool[i]
+			result[i] = pool[i]
+		}
+	} else {
+		for i := range result {
+			number, err := cryptorand.Int(entropy, big.NewInt(int64(rangeSize)))
+			if err != nil {
+				return nil, apperrors.NewSystemError("DRAW_RANDOM_FAILED", "开奖随机源读取失败", err)
+			}
+			result[i] = profile.MinNumber + int(number.Int64())
+		}
 	}
-	for i := range result {
-		result[i] = (seed + i*3 + i*i) % 10
+	if err := profile.validateDraw(result); err != nil {
+		return nil, apperrors.NewSystemError("DRAW_RANDOM_FAILED", "生成开奖号码校验失败", err)
 	}
-	return result
+	return result, nil
 }
 
 func maxInt(a, b int) int {
@@ -1008,7 +1473,13 @@ func settledBetFinancialAmounts(item bet.Bet, payoutCents int64, isRobot bool) (
 	if isRobot {
 		return 0, 0
 	}
-	rebateCents = int64(math.Round(float64(item.AmountCents) * clampPercent(item.RebateRateSnapshot) / 100))
+	validTurnoverCents := item.AmountCents
+	if item.ValidTurnoverCents != nil {
+		validTurnoverCents = *item.ValidTurnoverCents
+	}
+	rebateCents = int64(math.Round(float64(validTurnoverCents) * clampPercent(item.RebateRateSnapshot) / 100))
+	// Agent share remains based on actual positive GGR. PC28-v1 can make valid
+	// turnover zero without erasing the member's actual stake or platform P&L.
 	agentShareCents = agentProfitShareCents(item.AmountCents-payoutCents, item.AgentShareRateSnapshot)
 	return rebateCents, agentShareCents
 }

@@ -2,6 +2,7 @@ package services
 
 import (
 	"backend/cluster"
+	"backend/data/models/lifecycle"
 	workspacemodel "backend/data/models/workspace"
 	"context"
 	"fmt"
@@ -21,6 +22,7 @@ const (
 // never deletes data. Every automatic run still uses the same frozen preview,
 // request id, transaction and recovery receipt as a manual operation.
 func StartDataLifecycleLoop(ctx context.Context, db *gorm.DB) {
+	startGameChatLifecycleLoop(ctx, db)
 	go func() {
 		for {
 			now := time.Now()
@@ -69,7 +71,7 @@ func runScheduledLifecycle(db *gorm.DB, scheduledAt time.Time) {
 		}
 		classes := make([]string, 0, len(policies))
 		for _, policy := range policies {
-			if policy.Enabled {
+			if policy.Enabled && policy.DataClass != lifecycle.ClassGameChatMessages {
 				classes = append(classes, policy.DataClass)
 			}
 		}

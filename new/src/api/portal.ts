@@ -22,6 +22,7 @@ export type RoomSettings = {
   min_chat_score: number
   chat_nickname?: string
   chat_avatar?: string
+  lottery_source_url: string
   game: Record<string, unknown>
   quick_replies: string[] | Record<string, unknown>
 }
@@ -29,6 +30,9 @@ export type RoomSettings = {
 export type OddsItem = {
   play_code: string
   play_name: string
+  category?: string
+  description?: string
+  example?: string
   odds: number
   min_bet: number
   max_bet: number
@@ -36,6 +40,10 @@ export type OddsItem = {
 }
 
 export type GameOdds = {
+  rules_ready?: boolean
+  rule_version?: string
+  rules_message?: string
+  bet_modes?: { chat: boolean; web: boolean }
   game_id: string
   game_name: string
   show_odds: boolean

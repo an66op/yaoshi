@@ -2,6 +2,42 @@ package services
 
 import "testing"
 
+func TestRoomLogoForDisplayDefaultsOnlyEmptyRoomIdentities(t *testing.T) {
+	const classicLogo = "/images/wangzhe-header-logo.png"
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "new or legacy room without a logo", want: classicLogo},
+		{name: "blank legacy value", value: " \t\n", want: classicLogo},
+		{name: "explicit classic preset", value: classicLogo, want: classicLogo},
+		{name: "another chosen preset", value: "/images/room-logos/crown-shield.webp", want: "/images/room-logos/crown-shield.webp"},
+		{name: "uploaded PNG", value: "data:image/png;base64,AAAA", want: "data:image/png;base64,AAAA"},
+		{name: "uploaded JPEG", value: "data:image/jpeg;base64,AAAA", want: "data:image/jpeg;base64,AAAA"},
+		{name: "uploaded WebP", value: "data:image/webp;base64,AAAA", want: "data:image/webp;base64,AAAA"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := roomLogoForDisplay(test.value); got != test.want {
+				t.Fatalf("roomLogoForDisplay(%q) = %q, want %q", test.value, got, test.want)
+			}
+		})
+	}
+}
+
+func TestRoomLogoDefaultDoesNotChangeEmptyStoredValue(t *testing.T) {
+	for _, value := range []string{"", " \t\n"} {
+		stored, err := normalizeRoomLogo(value)
+		if err != nil || stored != "" {
+			t.Fatalf("clearing a custom logo must keep the stored default marker empty: %q, %v", stored, err)
+		}
+		if shown := roomLogoForDisplay(stored); shown != defaultRoomLogo {
+			t.Fatalf("empty stored logo displays %q, want %q", shown, defaultRoomLogo)
+		}
+	}
+}
+
 func TestNormalizeRoomLogoAllowsBuiltInAndUploadedImages(t *testing.T) {
 	values := []string{
 		"",

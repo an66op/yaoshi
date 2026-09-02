@@ -2,6 +2,7 @@ package user
 
 import (
 	"backend/accesscontrol"
+	"backend/captcha"
 	"backend/constants"
 	"backend/data/vo"
 	"backend/services"
@@ -48,9 +49,13 @@ func (h *authHandler) Register(c *gin.Context) {
 }
 
 func (h *authHandler) Login(c *gin.Context) {
+	noLoginCache(c)
 	var req vo.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		constants.SendError(c, http.StatusBadRequest, constants.ErrInvalidRequestFormat, err)
+		return
+	}
+	if !verifyLoginCaptcha(c, captcha.Management, req.CaptchaID, req.CaptchaCode) {
 		return
 	}
 	account, token, err := h.authService.Login(req.Username, req.Password, req.Workspace)

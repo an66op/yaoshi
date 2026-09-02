@@ -185,6 +185,33 @@
   font: 600 16px "DM Mono";
   letter-spacing: 0.05em;
 }
+.login-captcha-row input {
+  flex: 1;
+  min-width: 0;
+  padding-left: 13px;
+  letter-spacing: 0.03em;
+}
+.login-captcha-image {
+  display: grid;
+  flex: 0 0 118px;
+  place-items: center;
+  height: 42px;
+  margin: 3px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #d6e8eb;
+  border-radius: 8px;
+  background: #fff;
+  color: #4c7182;
+  cursor: pointer;
+}
+.login-captcha-image img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.login-captcha-image span { font-size: 11px; }
+.login-captcha-image.is-expired img { opacity: 0.45; }
+.login-captcha-image:focus-visible { outline: 2px solid #168f9b; outline-offset: 2px; }
+.login-captcha-image:disabled { cursor: wait; }
+.login-captcha-status { color: #688695; font-size: 10px; line-height: 1.5; }
+.login-captcha-status.is-error { color: #bd4e45; }
 .login-primary {
   position: relative;
   z-index: 1;
@@ -303,4 +330,6 @@
 .theme-night.login-page .login-field i { color: #79ddd9; }
 .theme-night.login-page .login-field input { color: #e7fbfc; }
 .theme-night.login-page .login-field input::placeholder { color: #769ea9; }
+.theme-night.login-page .login-captcha-status { color: #9dc8cf; }
+.theme-night.login-page .login-captcha-status.is-error { color: #ffa79d; }
 .theme-night.login-page .login-status { border-color: #47c9ca38; background: #0e374f; color: #a8d1d6; }

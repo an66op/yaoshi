@@ -30,6 +30,7 @@ import CheckCircleRounded from '@mui/icons-material/CheckCircleRounded'
 import ViewListRounded from '@mui/icons-material/ViewListRounded'
 import SmartToyRounded from '@mui/icons-material/SmartToyRounded'
 import StorageRounded from '@mui/icons-material/StorageRounded'
+import MenuBookRounded from '@mui/icons-material/MenuBookRounded'
 import CloseRounded from '@mui/icons-material/CloseRounded'
 import VolumeUpRounded from '@mui/icons-material/VolumeUpRounded'
 import VolumeOffRounded from '@mui/icons-material/VolumeOffRounded'
@@ -55,7 +56,7 @@ const drawerWidth = 208
 type ShellMenuItem = { path: string; label: string; icon: ReactNode }
 type ShellMenuGroup = { label: string; items: ShellMenuItem[] }
 const adminIcons: Record<string, ReactNode> = {
-  '/': <DashboardRounded />, '/tenants': <ApartmentRounded />, '/users': <PeopleAltRounded />, '/members': <PeopleAltRounded />, '/agents': <SupportAgentRounded />,
+  '/': <DashboardRounded />, '/tenants': <ApartmentRounded />, '/members': <PeopleAltRounded />, '/agents': <SupportAgentRounded />,
 	'/robots': <SmartToyRounded />,
 	'/fly-orders': <FlightTakeoffRounded />,
   '/applications': <FactCheckRounded />, '/room-reviews': <CheckCircleRounded />, '/chat': <SupportAgentRounded />, '/lottery-chat': <ForumRounded />, '/reports': <AssessmentRounded />, '/wallet': <AccountBalanceWalletRounded />,
@@ -64,6 +65,7 @@ const adminIcons: Record<string, ReactNode> = {
   '/special-numbers': <StarsRounded />, '/menu-management': <ViewListRounded />, '/system': <SettingsRounded />,
 	'/audit': <ReceiptLongRounded />,
   '/data-maintenance': <StorageRounded />,
+  '/game-guide': <MenuBookRounded />,
 }
 
 const createAdminGroups = (menu: AdminMenuItemConfig[]) => {

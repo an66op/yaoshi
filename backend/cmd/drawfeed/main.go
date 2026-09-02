@@ -43,7 +43,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := services.SeedLotteryData(db); err != nil {
+	if err := services.SeedLotteryCatalog(db, services.LotterySeedOptions{}); err != nil {
 		log.Fatalf("初始化开奖数据失败: %v", err)
 	}
 

@@ -345,10 +345,3 @@ func generatePlanDemoGame(tx *gorm.DB, workspaceID uint64, gameID, rawSettings s
 	}
 	return created, true, nil
 }
-
-func (s *PlanAutomationService) RunEnabled(ctx context.Context) error {
-	return nil
-}
-
-// Deprecated no-op for compatibility. No task, ticker or goroutine is started.
-func StartPlanAutomationLoop(ctx context.Context, db *gorm.DB) {}

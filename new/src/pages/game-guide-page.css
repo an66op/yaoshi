@@ -1,0 +1,17 @@
+.game-guide-page{display:grid;grid-template-rows:auto minmax(0,1fr);min-height:100%;background:linear-gradient(180deg,#edfafd 0,#f7fafb 230px,#f4f7f8 100%);color:#294654}
+.game-guide-page-header{position:sticky;z-index:2;top:0;display:grid;grid-template-columns:42px minmax(0,1fr) 42px;align-items:center;min-height:78px;padding:12px 15px;border-radius:0 0 24px 24px;background:radial-gradient(circle at 92% 0,#66dad7 0,transparent 38%),linear-gradient(125deg,#155d99,#159fab);box-shadow:0 8px 22px #0e819829;color:#fff}
+.game-guide-page-header>button{display:grid;place-items:center;width:38px;height:38px;padding:8px;border:1px solid #ffffff35;border-radius:12px;background:#ffffff18;color:#fff}
+.game-guide-page-header>button svg{width:100%;height:100%}
+.game-guide-page-header>div{display:grid;gap:2px;text-align:center}
+.game-guide-page-header b{font-size:17px;letter-spacing:.04em}
+.game-guide-page-header small{font-size:9px;font-weight:600;opacity:.75}
+.game-guide-page-content{min-height:0;padding:9px 3px 28px}
+.game-guide-page .game-guide-panel{max-width:720px;margin:0 auto}
+
+.theme-night .game-guide-page{background:linear-gradient(180deg,#061b32,#0b2c48);color:#e2f7f9}
+.theme-night .game-guide-page-header{background:radial-gradient(circle at 92% 0,#19767e 0,transparent 38%),linear-gradient(125deg,#0b3559,#0d6874);box-shadow:0 8px 22px #02121f80}
+
+@media (min-width:720px){
+  .game-guide-page-header{border-radius:0 0 28px 28px}
+  .game-guide-page-content{padding-top:15px}
+}

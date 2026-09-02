@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DrawResult } from '../api/lottery'
 import { HookHarness } from '../test/hookHarness'
 import { useGameTimelineWindow } from './useGameTimelineWindow'
+import { GAME_TIMELINE_LIMIT } from '../utils/gameTimelineBudget'
 
 const runtime = vi.hoisted(() => ({ hooks: null as HookHarness | null }))
 vi.mock('react', async original => ({ ...await original<typeof import('react')>(),
@@ -41,6 +42,20 @@ describe('one-draw entry boundary and append-only visit', () => {
     runtime.hooks!.unmount()
     runtime.hooks = new HookHarness()
     expect(render([draw(35), draw(34), draw(33)]).draws.map(row => row.issue)).toEqual(['35'])
+  })
+
+  it('bounds a long visit while preserving its original read boundary and newest confirmed draw', () => {
+    const initial = render([draw(34), draw(33)])
+    const lastIssue = 34 + GAME_TIMELINE_LIMIT + 50
+    for (let issue = 35; issue <= lastIssue; issue++) render([draw(issue), draw(issue - 1)])
+    const state = render([draw(lastIssue), draw(lastIssue - 1)])
+    expect(state).toMatchObject({ ready: true, anchorIssue: '34', startAt: initial.startAt })
+    expect(state.draws).toHaveLength(GAME_TIMELINE_LIMIT)
+    expect(state.draws[0].issue).toBe(String(lastIssue - GAME_TIMELINE_LIMIT + 1))
+    expect(state.draws.at(-1)?.issue).toBe(String(lastIssue))
+    // Old repeated recovery rows must not displace any newer cached result.
+    expect(render([draw(34), draw(33)]).draws).toEqual(state.draws)
+    expect(render([], true).draws).toEqual(state.draws)
   })
 
   it('never exposes a different game snapshot and resets when switching games', () => {

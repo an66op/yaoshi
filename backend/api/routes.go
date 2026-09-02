@@ -1,8 +1,10 @@
 package api
 
 import (
+	"backend/captcha"
 	"backend/constants"
 	"backend/controller/drawfeed"
+	usercontroller "backend/controller/user"
 	"backend/lotteryfeed"
 	"backend/middleware"
 	"backend/services"
@@ -57,11 +59,13 @@ func LoadRoutesForMode(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Schedu
 	}
 
 	publicAuthRoutes := []Route{
-		{Method: "POST", Pattern: "/login", Handler: h.AuthHandler.Login, Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit()}},
+		{Method: "GET", Pattern: "/login/captcha", Handler: usercontroller.LoginCaptcha(captcha.Management), Middlewares: []gin.HandlerFunc{middleware.RequireSharedLoginCaptcha(serverMode), middleware.LoginCaptchaRateLimit()}},
+		{Method: "POST", Pattern: "/login", Handler: h.AuthHandler.Login, Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit(), middleware.RequireSharedLoginCaptcha(serverMode)}},
 		{Method: "POST", Pattern: "/logout", Handler: h.AuthHandler.Logout},
 		{Method: "GET", Pattern: "/session", Handler: h.AuthHandler.Me, Middlewares: []gin.HandlerFunc{middleware.AuthMiddleware()}},
 		{Method: "POST", Pattern: "/session/refresh", Handler: h.AuthHandler.Refresh, Middlewares: []gin.HandlerFunc{middleware.AuthMiddleware()}},
-		{Method: "POST", Pattern: "/member/login", Handler: h.MemberHandler.Login, Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit()}},
+		{Method: "POST", Pattern: "/member/login", Handler: h.MemberHandler.Login, Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit(), middleware.RequireSharedLoginCaptcha(serverMode)}},
+		{Method: "GET", Pattern: "/member/login/captcha", Handler: usercontroller.LoginCaptcha(captcha.Member), Middlewares: []gin.HandlerFunc{middleware.RequireSharedLoginCaptcha(serverMode), middleware.LoginCaptchaRateLimit()}},
 		{Method: "POST", Pattern: "/member/register", Handler: h.MemberHandler.Register, Middlewares: []gin.HandlerFunc{middleware.AuthRateLimit()}},
 		{Method: "POST", Pattern: "/member/logout", Handler: h.MemberHandler.Logout},
 		{Method: "GET", Pattern: "/ws", Handler: ws.HandleConnect, Middlewares: []gin.HandlerFunc{middleware.WSConnectRateLimit()}},
@@ -131,6 +135,7 @@ func LoadRoutesForMode(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Schedu
 				{Method: "GET", Pattern: "/games/:id/assistant", Handler: h.MemberHandler.AssistantStatus},
 				{Method: "GET", Pattern: "/games/:id/assistant/history", Handler: h.MemberHandler.AssistantBetHistory},
 				{Method: "POST", Pattern: "/games/:id/assistant/bets", Handler: h.MemberHandler.AssistantBet, Middlewares: []gin.HandlerFunc{middleware.MemberBetRateLimit()}},
+				{Method: "POST", Pattern: "/games/:id/web-bets", Handler: h.MemberHandler.WebBets, Middlewares: []gin.HandlerFunc{middleware.MemberBetRateLimit()}},
 				{Method: "GET", Pattern: "/games/:id/odds", Handler: h.MemberHandler.GameOdds},
 				{Method: "GET", Pattern: "/games/:id/feed", Handler: h.MemberHandler.GameFeed},
 				{Method: "GET", Pattern: "/activities", Handler: h.MemberHandler.ListActivities},
@@ -352,7 +357,6 @@ func LoadRoutesForMode(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Schedu
 				{Method: "GET", Pattern: "/admin/games/:id/odds-limits", Handler: h.OddsHandler.Get},
 				{Method: "PUT", Pattern: "/admin/games/:id/odds-limits", Handler: h.OddsHandler.Update},
 				{Method: "POST", Pattern: "/admin/games/:id/odds-limits/reset", Handler: h.OddsHandler.Reset},
-				{Method: "POST", Pattern: "/admin/games/sync-odds-limits", Handler: h.OddsHandler.SyncAll},
 				{Method: "GET", Pattern: "/admin/wallet/channels", Handler: h.WalletHandler.List},
 				{Method: "POST", Pattern: "/admin/wallet/channels", Handler: h.WalletHandler.Create},
 				{Method: "PATCH", Pattern: "/admin/wallet/channels/:id", Handler: h.WalletHandler.Update},

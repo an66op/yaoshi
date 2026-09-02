@@ -16,6 +16,7 @@ describe('scratch draw dialog content', () => {
   it('identifies the real drawn issue, hides covered numbers from assistive technology and offers keyboard reveal', () => {
     const html = renderToStaticMarkup(<ScratchDrawDialog game={game} draw={draw} onClose={() => {}} />)
     expect(html).toContain('涂抹开奖')
+    expect(html).toContain('class="scratch-draw-board" data-control-surface=""')
     expect(html).toContain('第 54776211 期')
     expect(html).not.toContain('54776212')
     expect(html).toContain('class="scratch-draw-grid" style="--scratch-columns:10" aria-hidden="true"')
@@ -37,5 +38,14 @@ describe('scratch draw dialog content', () => {
     expect(html).not.toContain('<canvas')
     expect(html).not.toContain('54776212')
     expect(html).not.toContain('全部揭晓')
+  })
+
+  it('keeps Bingo Mark Six fixed wave colours and marks the seventh ball as special', () => {
+    const markSix = { ...game, id: 'bingo-mark-six', title: '宾果六合彩', balls: [5, 9, 40, 47, 29, 2, 49] }
+    const html = renderToStaticMarkup(<ScratchDrawDialog game={markSix} draw={{ ...draw, game_id: markSix.id, numbers: markSix.balls }} onClose={() => {}} />)
+    expect(html).toContain('mark-six-ball wave-green')
+    expect(html).toContain('mark-six-ball wave-blue')
+    expect(html).toContain('mark-six-ball wave-green mark-six-special-ball')
+    expect(html).toContain('<small>特</small>')
   })
 })

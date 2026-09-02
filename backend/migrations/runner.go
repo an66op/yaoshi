@@ -13,9 +13,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// SQL migrations are intentionally kept outside config/database.go. The
-// legacy AutoMigrate bootstrap remains available for old installations, while
-// every new cross-table/data migration has an immutable version and checksum.
+// SQL migrations are intentionally kept outside config/database.go. They are
+// the single schema source for both empty local databases and future releases;
+// every cross-table/data change has an immutable version and checksum.
 //
 //go:embed *.sql
 var migrationFiles embed.FS
@@ -155,16 +155,6 @@ func apply(db *gorm.DB, item migration) error {
 			}
 			return nil
 		}
-		if item.Version == coreSchemaBaselineVersion {
-			adopted, err := adoptExistingCoreSchema(tx, item)
-			if err != nil {
-				return err
-			}
-			if adopted {
-				return nil
-			}
-		}
-
 		if err := tx.Exec(item.SQL).Error; err != nil {
 			return err
 		}
@@ -175,70 +165,6 @@ func apply(db *gorm.DB, item migration) error {
 type baselineColumn struct {
 	Table  string
 	Column string
-}
-
-// adoptExistingCoreSchema is the one-time compatibility bridge for databases
-// that were already maintained by AutoMigrate before the immutable baseline
-// existed. It never mutates the application schema. A complete table/column
-// inventory must match the checked-in baseline before its checksum is adopted;
-// incomplete legacy databases fail closed and must use the explicit debug-only
-// db-bootstrap command.
-func adoptExistingCoreSchema(tx *gorm.DB, item migration) (bool, error) {
-	var legacyCoreExists bool
-	if err := tx.Raw(`SELECT to_regclass('public."user"') IS NOT NULL`).Scan(&legacyCoreExists).Error; err != nil {
-		return false, err
-	}
-	if !legacyCoreExists {
-		return false, nil
-	}
-
-	expected, err := baselineTables(item.SQL)
-	if err != nil {
-		return false, err
-	}
-	var actual []string
-	if err := tx.Raw(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`).Scan(&actual).Error; err != nil {
-		return false, err
-	}
-	available := make(map[string]struct{}, len(actual))
-	for _, table := range actual {
-		available[table] = struct{}{}
-	}
-	missing := make([]string, 0)
-	for _, table := range expected {
-		if _, ok := available[table]; !ok {
-			missing = append(missing, table)
-		}
-	}
-	if len(missing) != 0 {
-		const limit = 8
-		display := missing
-		if len(display) > limit {
-			display = display[:limit]
-		}
-		return false, fmt.Errorf(
-			"legacy schema cannot adopt %s; missing tables %s (total %d). Run the explicit debug-only cmd/db-bootstrap first",
-			item.Version,
-			strings.Join(display, ", "),
-			len(missing),
-		)
-	}
-	if err := tx.Exec(`INSERT INTO schema_migrations (version, checksum) VALUES (?, ?)`, item.Version, item.Checksum).Error; err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func baselineTables(sql string) ([]string, error) {
-	tables := baselineTablePattern.FindAllStringSubmatch(sql, -1)
-	if len(tables) == 0 {
-		return nil, fmt.Errorf("core schema baseline contains no public tables")
-	}
-	result := make([]string, 0, len(tables))
-	for _, table := range tables {
-		result = append(result, table[1])
-	}
-	return result, nil
 }
 
 func baselineColumns(sql string) ([]baselineColumn, error) {
@@ -291,7 +217,7 @@ func verifyCoreSchema(db *gorm.DB, sql string) error {
 		display = display[:limit]
 	}
 	return fmt.Errorf(
-		"database is missing baseline columns %s (total %d); run the explicit debug-only cmd/db-bootstrap for a pre-versioned development database",
+		"database is missing baseline columns %s (total %d); recreate the unpublished local database from the checked-in migration inventory",
 		strings.Join(display, ", "),
 		len(missing),
 	)

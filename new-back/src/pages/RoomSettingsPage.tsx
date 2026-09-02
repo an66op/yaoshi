@@ -10,11 +10,14 @@ import { getStoredUser } from '../auth'
 import { PageHeader } from '../components/PageHeader'
 import { RoomLogoPicker } from '../components/RoomLogoPicker'
 import { SealSecondsField } from '../components/SealSecondsField'
+import { GameSealSecondsOverrides } from '../components/GameSealSecondsOverrides'
+import { validGameTimingOverrides } from '../utils/gameTimingOverrides'
 import { GameOddsNavigation, OddsOverrideGrid } from '../components/OddsEditors'
 import { useFeedback } from '../components/feedback'
 import { PlanManagementPanel } from '../components/PlanManagementPanel'
 import { prepareRoomLogo } from '../utils/roomLogo'
 import { SEAL_SECONDS_ERROR, isValidSealSeconds } from '../utils/sealSeconds'
+import { DEFAULT_LOTTERY_SOURCE_URL, isValidLotterySourceURL } from '../utils/lotterySourceURL'
 
 type Section = 'room' | 'content' | 'limits' | 'wallet'
 type Announcement = SystemSettings['announcements'][number]
@@ -62,6 +65,7 @@ export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
 		try {
 			const settings = await api.settings()
 			setData(settings)
+			if (section === 'room') setGames(await api.games())
 			if (section === 'limits') {
 				const [roomGames, roomTrading] = await Promise.all([api.games(), api.trading()])
 				setGames(roomGames)
@@ -106,6 +110,14 @@ export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
     if (!data) return
     if (section === 'room' && !isValidSealSeconds(data.game.seal_seconds)) {
       setError(SEAL_SECONDS_ERROR)
+      return
+    }
+    if (section === 'room' && !validGameTimingOverrides(data.game.game_timing_overrides)) {
+      setError('彩种封盘秒数必须为 0～86400 的整数')
+      return
+    }
+    if (section === 'room' && !isValidLotterySourceURL(data.lottery_source_url)) {
+      setError('开奖源地址必须是完整、无账号密码的 HTTPS 地址')
       return
     }
     if (section === 'content' && data.announcements.some(item => !item.title.trim() || !item.content.trim())) {
@@ -198,10 +210,19 @@ export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
         <Typography variant="caption" color="text.secondary">开启后，会员提交申请并审核通过才能进入当前房间；新房间默认开启。</Typography>
         <Paper variant="outlined" sx={{ p: 1.4, borderRadius: 2.2 }}><RoomLogoPicker value={data.room_logo} fallback={data.room_name || '房'} heading={data.room_name || '当前房间'} description={`${data.chat_nickname || '开奖员'} · 将显示在彩票室和工作人员消息旁`} previewSize={58} onChange={room_logo => patch('room_logo', room_logo)} onUpload={chooseRoomLogo} /></Paper>
         <Stack direction={{ xs: 'column', md: 'row' }} gap={1.5}><TextField fullWidth label="房间名称" value={data.room_name} onChange={event => patch('room_name', event.target.value)} inputProps={{ maxLength: 30 }} /><TextField fullWidth label="客服 / 开奖员头衔" value={data.chat_nickname} onChange={event => patch('chat_nickname', event.target.value)} inputProps={{ maxLength: 80 }} helperText="用于后台发送消息时显示自己的身份" /></Stack>
+        <TextField fullWidth type="url" label="外部开奖信息 HTTPS 地址" placeholder={DEFAULT_LOTTERY_SOURCE_URL} value={data.lottery_source_url} onChange={event => patch('lottery_source_url', event.target.value)} inputProps={{ maxLength: 2048 }} helperText="仅控制会员右侧快捷跳转，不改变实际开奖抓取来源；留空恢复 163 默认地址。" />
         <Stack direction={{ xs: 'column', md: 'row' }} gap={1.5}><TextField fullWidth type="number" label="最低发言积分" value={data.min_chat_score} onChange={event => patch('min_chat_score', Number(event.target.value))} /><TextField fullWidth type="number" label="昵称显示长度" value={data.nickname_display_length} onChange={event => patch('nickname_display_length', Number(event.target.value))} /></Stack>
         <Divider />
         <Typography fontWeight={850}>投注受理</Typography>
         <Box sx={{ maxWidth: 560 }}><SealSecondsField scope="room" value={data.game.seal_seconds} disabled={saving} onChange={seal_seconds => setData(current => current ? { ...current, game: { ...current.game, seal_seconds } } : current)} /></Box>
+        <GameSealSecondsOverrides
+          scope="room"
+          games={games}
+          defaultSeconds={data.game.seal_seconds}
+          value={data.game.game_timing_overrides}
+          disabled={saving}
+          onChange={game_timing_overrides => setData(current => current ? { ...current, game: { ...current.game, game_timing_overrides } } : current)}
+        />
       </>}
 	      {section === 'content' && <>
 	        <Stack direction="row" alignItems="center" gap={1}><PushPinRounded color="primary" fontSize="small" /><Typography fontWeight={850}>消息入口置顶</Typography></Stack>
@@ -234,9 +255,10 @@ export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
 		        <Paper variant="outlined" sx={{ px: 1, py: .7, borderRadius: 1.1, bgcolor: 'action.hover' }}>
 					  <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ md: 'center' }} gap={{ xs: .5, md: 1 }}>
 					    <Box flex={1}><Typography fontSize={13} fontWeight={900}>房间规则</Typography><Typography fontSize={9.8} color="text.secondary">仅作用于当前房间，会员单独配置优先。</Typography></Box>
-					    <Stack direction="row" gap={{ xs: .5, sm: 1 }} flexWrap="wrap" sx={{ '& .MuiFormControlLabel-root': { m: 0 }, '& .MuiFormControlLabel-label': { fontSize: 11.5, fontWeight: 700 } }}><FormControlLabel control={<Switch size="small" checked={data.show_odds} onChange={event => patch('show_odds', event.target.checked)} />} label="显示赔率" /><FormControlLabel control={<Switch size="small" checked={data.prediction_enabled} onChange={event => patch('prediction_enabled', event.target.checked)} />} label="预测" /><FormControlLabel control={<Switch size="small" checked={data.security_password_check} onChange={event => patch('security_password_check', event.target.checked)} />} label="安全校验" /></Stack>
+					    <Stack direction="row" gap={{ xs: .5, sm: 1 }} flexWrap="wrap" sx={{ '& .MuiFormControlLabel-root': { m: 0 }, '& .MuiFormControlLabel-label': { fontSize: 11.5, fontWeight: 700 } }}><FormControlLabel control={<Switch size="small" checked={data.show_odds} onChange={event => patch('show_odds', event.target.checked)} />} label="显示赔率" /><FormControlLabel control={<Switch size="small" checked={data.prediction_enabled} onChange={event => patch('prediction_enabled', event.target.checked)} />} label="预测" /><FormControlLabel control={<Switch size="small" checked={data.security_password_check} onChange={event => patch('security_password_check', event.target.checked)} />} label="安全校验" /><FormControlLabel control={<Switch size="small" checked={Boolean(data.game.pc28_gray_push)} onChange={event => setData(current => current ? { ...current, game: { ...current.game, pc28_gray_push: event.target.checked } } : current)} />} label="PC28 灰/黄波返本" /></Stack>
 					  </Stack>
 					</Paper>
+					<Alert severity="info">PC28 灰/黄波返本开启后，和值 0、13、14、27 开灰/黄波时，当前房间的色波注单返还本金；下注时会冻结本房间设置。</Alert>
 					<GameOddsNavigation games={games.filter(game => game.platform_enabled).map(game => ({ ...game, enabled: game.platform_enabled }))} gameId={trading?.game_id ?? ''} onSelect={gameId => void loadTrading(gameId)} />
 					{!trading || tradingLoading ? <Box py={5} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={24} /></Box> : <>
 					  <Paper variant="outlined" sx={{ p: .8, borderRadius: 1.1 }}>

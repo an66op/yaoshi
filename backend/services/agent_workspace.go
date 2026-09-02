@@ -52,15 +52,17 @@ func (s *AgentWorkspaceService) DashboardForWorkspace(workspaceID uint64) (*Agen
 		return nil, apperrors.NewBusinessError("WORKSPACE_NOT_FOUND", "房间不存在或已停用")
 	}
 	result := &AgentWorkspaceDashboard{AgentID: workspace.OwnerUserID, RoomCode: workspace.RoomCode, RoomName: workspace.Name, RoomLogo: workspace.Logo}
-	members := excludeRobotProfileUsers(s.db.Model(&user.User{})).Where("workspace_id = ? AND role = ?", workspaceID, "member")
+	members := WorkspaceHumanMemberQuery(s.db, workspaceID)
 	if err := members.Count(&result.MemberCount).Error; err != nil {
 		return nil, err
 	}
-	if err := excludeRobotProfileUsers(s.db.Model(&user.User{})).Where("workspace_id = ? AND role = ? AND status = 1", workspaceID, "member").Count(&result.ActiveMemberCount).Error; err != nil {
+	if err := WorkspaceHumanMemberQuery(s.db, workspaceID).Where(`"user".workspace_id = ? AND "user".status = ?`, workspaceID, 1).Count(&result.ActiveMemberCount).Error; err != nil {
 		return nil, err
 	}
 	var balance int64
-	if err := members.Select("COALESCE(SUM(balance_cents),0)").Scan(&balance).Error; err != nil {
+	// Keep the existing financial aggregation independent of this headcount fix.
+	balanceQuery := excludeRobotProfileUsers(s.db.Model(&user.User{})).Where("workspace_id = ? AND role = ?", workspaceID, "member")
+	if err := balanceQuery.Select("COALESCE(SUM(balance_cents),0)").Scan(&balance).Error; err != nil {
 		return nil, err
 	}
 	result.MemberBalance = centsToAmount(balance)
@@ -99,41 +101,12 @@ func (s *AgentWorkspaceService) Dashboard(agentID uint64) (*AgentWorkspaceDashbo
 	return s.DashboardForWorkspace(workspace.ID)
 }
 
-func (s *AgentWorkspaceService) Users(agentID uint64, filter UserListFilter) (*UserList, error) {
-	if _, err := s.agent(agentID); err != nil {
+func (s *AgentWorkspaceService) Users(agentID uint64, filter UserListFilter) (*WorkspaceMemberList, error) {
+	agent, err := s.agent(agentID)
+	if err != nil {
 		return nil, err
 	}
-	if filter.Page < 1 {
-		filter.Page = 1
-	}
-	if filter.PageSize < 1 || filter.PageSize > 100 {
-		filter.PageSize = 20
-	}
-	query := excludeRobotProfileUsers(s.db.Model(&user.User{})).Where("parent_agent_id = ?", agentID)
-	if keyword := strings.TrimSpace(filter.Query); keyword != "" {
-		like := "%" + strings.ToLower(keyword) + "%"
-		query = query.Where("LOWER(username) LIKE ? OR LOWER(nickname) LIKE ? OR CAST(public_id AS TEXT) LIKE ?", like, like, "%"+keyword+"%")
-	}
-	if filter.Status == "active" {
-		query = query.Where("status = 1")
-	}
-	if filter.Status == "disabled" {
-		query = query.Where("status = 0")
-	}
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, err
-	}
-	var rows []user.User
-	if err := query.Order("created_at DESC, user_id DESC").Offset((filter.Page - 1) * filter.PageSize).Limit(filter.PageSize).Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	items := make([]AdminUser, 0, len(rows))
-	for _, row := range rows {
-		items = append(items, adminUser(row))
-	}
-	populateAdminUserPresence(items)
-	return &UserList{Items: items, Total: total, Page: filter.Page, PageSize: filter.PageSize}, nil
+	return NewWorkspaceMemberService(s.db).List(agent.WorkspaceID, filter)
 }
 
 func (s *AgentWorkspaceService) Bets(agentID uint64, filter BetListFilter) (*BetListResult, error) {
@@ -165,7 +138,7 @@ func (s *AgentWorkspaceService) Bets(agentID uint64, filter BetListFilter) (*Bet
 	}
 	if filter.Status != "" && filter.Status != "all" {
 		if filter.Status == "settled" {
-			query = query.Where("status IN ?", []string{"won", "lost", "cancelled"})
+			query = query.Where("status IN ?", []string{"won", "lost", "push", "cancelled"})
 		} else {
 			query = query.Where("status = ?", filter.Status)
 		}
@@ -217,11 +190,19 @@ func (s *AgentWorkspaceService) ReviewApplication(agentID, applicationID uint64,
 }
 
 func (s *AgentWorkspaceService) AdjustBalance(agentID, userID uint64, amount float64, remark, operator string) (*AdminUser, error) {
-	return NewUserAdminService(s.db).AdjustBalanceOwned(userID, agentID, amount, remark, operator)
+	agent, err := s.agent(agentID)
+	if err != nil {
+		return nil, err
+	}
+	return NewUserAdminService(s.db).AdjustBalanceInWorkspace(userID, agent.WorkspaceID, amount, remark, operator)
 }
 
 func (s *AgentWorkspaceService) SetUserStatus(agentID, userID uint64, status int) (*AdminUser, error) {
-	return NewUserAdminService(s.db).SetStatusOwned(userID, agentID, status)
+	agent, err := s.agent(agentID)
+	if err != nil {
+		return nil, err
+	}
+	return NewUserAdminService(s.db).SetStatusInWorkspace(userID, agent.WorkspaceID, status)
 }
 
 func (s *AgentWorkspaceService) EnsureOwnedUser(agentID, userID uint64) error {

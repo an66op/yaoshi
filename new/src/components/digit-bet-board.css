@@ -1,0 +1,37 @@
+.digit-bet-board.full-bet-board .full-bet-current > div {
+  flex: 0 1 auto;
+  display: flex;
+  gap: 5px;
+}
+.digit-bet-board.full-bet-board .full-bet-current b {
+  width: 24px;
+  height: 26px;
+  border-radius: 4px;
+  background: #248d9d;
+  color: #fff;
+  font-size: 14px;
+}
+.digit-bet-board.full-bet-board .full-bet-close { border-radius: 6px; }
+.digit-bet-board.full-bet-board .digit-ball-selector-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.digit-bet-board.full-bet-board .digit-dragon-selector { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.digit-bet-board.full-bet-board .digit-dragon-selector-1 { grid-template-columns: minmax(0, 1fr); }
+.digit-bet-board.full-bet-board .digit-dragon-selector button { padding-inline: 5px; font-size: 11px; }
+.digit-bet-board.full-bet-board .digit-pattern-selector { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.digit-bet-board.full-bet-board .full-bet-content > header { gap: 8px; align-items: flex-start; }
+.digit-bet-board.full-bet-board .full-bet-content > header small { text-align: right; }
+.digit-bet-board.full-bet-board .full-bet-numbers .board-choice > b { font-size: 21px; line-height: 1.2; }
+.digit-bet-board.full-bet-board .digit-pattern-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.digit-bet-board .digit-board-amount-note,
+.digit-bet-board .digit-board-error,
+.digit-bet-board .digit-board-notice { margin: 0; font-size: 10px; line-height: 1.5; }
+.digit-bet-board .digit-board-amount-note { color: #69828b; }
+.digit-bet-board .digit-board-error { color: #b74337; overflow-wrap: anywhere; }
+.digit-bet-board .digit-board-notice { margin-bottom: 12px; padding: 8px; border-radius: 4px; color: #856012; background: #fff4d8; }
+.theme-night.game-room .digit-bet-board .digit-board-amount-note { color: #a6cbd1; }
+.theme-night.game-room .digit-bet-board .digit-board-error { color: #ffb1a4; }
+.theme-night.game-room .digit-bet-board .digit-board-notice { color: #ffdb8a; background: #51441f; }
+@media (max-height: 620px) {
+  .digit-bet-board.full-bet-board .full-bet-header { min-height: 48px; }
+  .digit-bet-board.full-bet-board .full-bet-footer { gap: 5px; }
+  .digit-bet-board.full-bet-board .full-bet-selection-list { max-height: 100px; }
+}

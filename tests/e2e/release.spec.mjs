@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { createLoginCaptchaFixture } from '../system/login-captcha-fixture.mjs'
 
 const memberBaseURL = process.env.E2E_MEMBER_BASE_URL || 'https://127.0.0.1:4173'
 const adminBaseURL = process.env.E2E_ADMIN_BASE_URL || 'https://127.0.0.1:4174'
@@ -9,6 +10,36 @@ const memberPassword = process.env.E2E_MEMBER_PASSWORD || 'MemberPass#2026_x9Q'
 const boundaryUsername = process.env.E2E_BOUNDARY_USERNAME || `${'u'.repeat(46)}2026`
 const boundaryPassword = process.env.E2E_BOUNDARY_PASSWORD || `Aa1#${'z'.repeat(68)}`
 const roomCode = process.env.E2E_ROOM_CODE || '88001'
+
+for (const origin of [memberBaseURL, adminBaseURL]) {
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(new URL(origin).hostname)) {
+    throw new Error('Release browser fixtures are restricted to loopback test servers')
+  }
+}
+
+async function prepareLoginCaptcha(page, purpose, clientIP) {
+  const pathname = purpose === 'management' ? '/api/login/captcha' : '/api/member/login/captcha'
+  let answer = ''
+  // Exercise the public PNG endpoint, then point this isolated browser test
+  // at a known-answer, one-shot Redis fixture. The login POST is never mocked
+  // and the release server has no fixed answer, test switch or bypass route.
+  // The fixture helper refuses non-loopback/non-test Redis namespaces.
+  await page.route(url => url.pathname === pathname, async route => {
+    const response = await route.fetch()
+    expect(response.status()).toBe(200)
+    expect(response.headers()['cache-control']).toContain('no-store')
+    const body = await response.json()
+    expect(body.data.image).toMatch(/^data:image\/png;base64,/)
+    expect(body.data.expires_in).toBe(120)
+    const fixture = await createLoginCaptchaFixture(purpose, clientIP)
+    answer = fixture.captcha_code
+    await route.fulfill({ response, json: { ...body, data: { ...body.data, id: fixture.captcha_id } } })
+  })
+  return async () => {
+    await expect.poll(() => answer).toMatch(/^\d{6}$/)
+    await page.getByLabel('验证码', { exact: true }).fill(answer)
+  }
+}
 
 test('release mode rejects legacy public management registration', async ({ request }) => {
   const response = await request.post(`${adminBaseURL}/api/register`, {
@@ -73,12 +104,14 @@ test('member registration UI uses the release endpoint and receives a protected 
 
 test('platform administrator can sign in and open critical management pages', async ({ page }) => {
   await page.setExtraHTTPHeaders({ 'x-forwarded-for': '198.51.100.42' })
+  const enterCaptcha = await prepareLoginCaptcha(page, 'management', '198.51.100.42')
   await page.goto(adminBaseURL)
   const astralAdminAccount = '🚀'.repeat(50)
   await page.getByLabel('登录帐号').fill(astralAdminAccount)
   await expect(page.getByLabel('登录帐号')).toHaveValue(astralAdminAccount)
   await page.getByLabel('登录帐号').fill(adminUsername)
   await page.getByLabel('密码').fill(adminPassword)
+  await enterCaptcha()
   await page.getByRole('button', { name: '登录平台管理员' }).click()
 
   await expect(page.getByText('运营首页', { exact: true }).first()).toBeVisible()
@@ -101,9 +134,11 @@ test('platform administrator can sign in and open critical management pages', as
 
 test('member can sign in, enter the assigned room and use primary navigation', async ({ page }) => {
   await page.setExtraHTTPHeaders({ 'x-forwarded-for': '198.51.100.43' })
+  const enterCaptcha = await prepareLoginCaptcha(page, 'member', '198.51.100.43')
   await page.goto(`${memberBaseURL}/login`)
   await page.getByPlaceholder('输入帐号').fill(memberUsername)
   await page.getByPlaceholder('输入登录密码').fill(memberPassword)
+  await enterCaptcha()
   await page.getByRole('button', { name: /验证并继续/ }).click()
 
   await expect(page.getByRole('heading', { name: '输入房间号' })).toBeVisible()
@@ -123,6 +158,7 @@ test('member login accepts the backend 50-character username and 72-byte passwor
   expect([...boundaryUsername]).toHaveLength(50)
   expect(Buffer.byteLength(boundaryPassword)).toBe(72)
   await page.setExtraHTTPHeaders({ 'x-forwarded-for': '198.51.100.44' })
+  const enterCaptcha = await prepareLoginCaptcha(page, 'member', '198.51.100.44')
   await page.goto(`${memberBaseURL}/login`)
   const astralMemberAccount = '🚀'.repeat(50)
   await page.getByPlaceholder('输入帐号').fill(astralMemberAccount)
@@ -131,6 +167,7 @@ test('member login accepts the backend 50-character username and 72-byte passwor
   await page.getByPlaceholder('输入登录密码').fill(boundaryPassword)
   await expect(page.getByPlaceholder('输入帐号')).toHaveValue(boundaryUsername)
   await expect(page.getByPlaceholder('输入登录密码')).toHaveValue(boundaryPassword)
+  await enterCaptcha()
   await page.getByRole('button', { name: /验证并继续/ }).click()
   await expect(page.getByRole('heading', { name: '输入房间号' })).toBeVisible()
 })

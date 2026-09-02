@@ -12,7 +12,6 @@ export const DEFAULT_ADMIN_MENU: AdminMenuItemConfig[] = [
   { path: '/', label: '运营首页', group: '运营总览', order: 10, visible: true },
   { path: '/tenants', label: '租户管理', group: '组织与账号', order: 20, visible: true },
   { path: '/agents', label: '代理管理', group: '组织与账号', order: 30, visible: true },
-  { path: '/users', label: '用户管理', group: '组织与账号', order: 40, visible: true },
   { path: '/applications', label: '申请管理', group: '申请与财务', order: 50, visible: true },
   { path: '/wallet', label: '钱包与收款', group: '申请与财务', order: 60, visible: true },
   { path: '/reports', label: '报表中心', group: '申请与财务', order: 70, visible: true },
@@ -35,6 +34,7 @@ export const DEFAULT_ADMIN_MENU: AdminMenuItemConfig[] = [
   { path: '/menu-management', label: '菜单管理', group: '系统管理', order: 180, visible: true },
   { path: '/audit', label: '操作审计', group: '系统管理', order: 190, visible: true },
   { path: '/data-maintenance', label: '数据维护', group: '系统管理', order: 195, visible: true },
+  { path: '/game-guide', label: '游戏说明', group: '系统管理', order: 196, visible: true },
   { path: '/interface-test', label: '接口测试', group: '系统管理', order: 197, visible: true },
   { path: '/system', label: '系统设置', group: '系统管理', order: 200, visible: true },
 ]

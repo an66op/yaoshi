@@ -21,12 +21,28 @@ const playCategory: Record<string, string> = {
   two_sided: '两面盘',
   ball_1_5: '号码',
   dragon_tiger: '龙虎',
+  dragon_tiger_tie: '龙虎',
   sum: '冠亚和',
   leopard: '形态',
   straight: '形态',
   pair: '形态',
   half_straight: '形态',
   mixed: '形态',
+}
+
+function categoryForPlay(playCode: string, playName = '') {
+  if (/^sum_(?:big|small|odd|even|\d+)$/.test(playCode)) return '冠亚和'
+  if (playCode === 'sum' && playName.includes('总和')) return '总和'
+  return playCategory[playCode] || '其他玩法'
+}
+
+function oddsConfirmationLabel(item: PlayLimitItem, configured: boolean) {
+  if (item.configuration_source === 'pending_admin_save') return '待保存确认'
+  if (!configured) return item.configuration_source === 'legacy_unconfirmed' ? '待后台确认' : '未配置'
+  if (item.configuration_source === 'admin_save') return '后台已确认'
+  if (item.configuration_source === 'legacy_compatible') return '旧版兼容'
+  if (item.configuration_source === 'system_default') return '系统默认'
+  return '已配置'
 }
 
 const categoryOrder = ['彩票', '168', '宾果', 'PC', '六合彩', '高频彩', '境外彩', '全国彩', '未分类']
@@ -108,7 +124,7 @@ export function OddsOverrideGrid({ items, level, onChange }: {
   const groups = useMemo(() => {
     const grouped = new Map<string, Array<{ item: OddsOverrideItem; index: number }>>()
     items.forEach((item, index) => {
-      const category = playCategory[item.play_code] || '其他玩法'
+      const category = categoryForPlay(item.play_code, item.play_name)
       grouped.set(category, [...(grouped.get(category) ?? []), { item, index }])
     })
     return Array.from(grouped.entries())
@@ -179,7 +195,7 @@ export function PlatformOddsGrid({ items, catalog, onChange }: {
 }) {
   const update = (index: number, patch: Partial<PlayLimitItem>) => onChange(items.map((item, rowIndex) => rowIndex === index ? { ...item, ...patch } : item))
   const fields: Array<{ key: keyof Pick<PlayLimitItem, 'odds' | 'min_bet' | 'max_bet' | 'max_user_period' | 'max_period_total'>; label: string; step?: number }> = [
-    { key: 'odds', label: '平台赔率', step: .001 },
+    { key: 'odds', label: '平台赔率（0关闭）', step: .001 },
     { key: 'min_bet', label: '单注最低' },
     { key: 'max_bet', label: '单注最高' },
     { key: 'max_user_period', label: '会员单期' },
@@ -189,10 +205,12 @@ export function PlatformOddsGrid({ items, catalog, onChange }: {
     {items.map((item, index) => {
       const meta = catalog[item.play_code]
       const modified = typeof meta?.default_odds === 'number' && Math.abs(item.odds - meta.default_odds) > .001
-      return <Paper key={item.play_code} variant="outlined" sx={{ p: .75, borderRadius: 1, borderColor: modified ? 'warning.main' : 'divider' }}>
+      const configured = item.configured !== false && item.odds > 1
+      const confirmationLabel = oddsConfirmationLabel(item, configured)
+      return <Paper key={item.play_code} variant="outlined" sx={{ p: .75, borderRadius: 1, borderColor: !configured ? 'error.light' : modified ? 'warning.main' : 'divider' }}>
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', lg: 'minmax(155px,1.2fr) repeat(5,minmax(92px,1fr))' }, gap: .65, alignItems: 'center' }}>
           <Box sx={{ gridColumn: { xs: '1 / -1', lg: 'auto' } }}>
-            <Stack direction="row" gap={.6} alignItems="center"><Typography fontSize={12.5} fontWeight={900}>{item.play_name}</Typography><Chip size="small" variant="outlined" label={meta?.category || '玩法'} sx={{ height: 19, fontSize: 8.5 }} /></Stack>
+            <Stack direction="row" gap={.6} alignItems="center"><Typography fontSize={12.5} fontWeight={900}>{item.play_name}</Typography><Chip size="small" variant="outlined" label={meta?.category || categoryForPlay(item.play_code, item.play_name)} sx={{ height: 19, fontSize: 8.5 }} /><Chip size="small" color={configured ? (item.configuration_source === 'pending_admin_save' ? 'warning' : 'success') : 'error'} variant="outlined" label={confirmationLabel} sx={{ height: 19, fontSize: 8.5 }} /></Stack>
             <Typography fontSize={9} color="text.secondary">{item.play_code}{meta?.example ? ` · 例：${meta.example}` : ''}</Typography>
           </Box>
           {fields.map(field => <TextField
@@ -201,8 +219,11 @@ export function PlatformOddsGrid({ items, catalog, onChange }: {
             type="number"
             label={field.label}
             value={item[field.key]}
-            onChange={event => update(index, { [field.key]: Number(event.target.value) })}
-            inputProps={{ min: field.key === 'odds' ? 1.001 : 0, step: field.step ?? 1, 'aria-label': `${item.play_name}${field.label}` }}
+            onChange={event => {
+              const next = Number(event.target.value)
+              update(index, field.key === 'odds' ? { odds: next, configured: next > 1, configuration_source: 'pending_admin_save', configured_at: null } : { [field.key]: next })
+            }}
+            inputProps={{ min: 0, step: field.step ?? 1, 'aria-label': `${item.play_name}${field.label}` }}
             sx={{ '& .MuiOutlinedInput-root': { borderRadius: 1 } }}
           />)}
         </Box>

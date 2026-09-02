@@ -195,6 +195,30 @@ for executable in \
   [[ -x "$SOURCE_DIR/$executable" ]] || { echo "发布文件不可执行：$executable" >&2; exit 1; }
 done
 "$TRUSTED_SCRIPT_DIR/release-integrity.sh" verify "$SOURCE_DIR"
+
+# A cryptographically intact package can still be an obsolete build.  The
+# Bingo Mark Six rollout spans both the backend rule contract and the member
+# board, so refuse a package that contains only one side (or neither side).
+validate_member_betting_contract() {
+  local candidate="$1"
+  grep -aFq 'mark6-v1' "$candidate/bin/wangzhe-backend" || {
+    echo "发布包后端缺少宾果六合彩历史 mark6-v1 规则" >&2
+    return 1
+  }
+  grep -aFq 'mark6-v2' "$candidate/bin/wangzhe-backend" || {
+    echo "发布包后端缺少宾果六合彩当前 mark6-v2 规则" >&2
+    return 1
+  }
+  grep -aFRq 'mark-six-bet-board' "$candidate/member/assets" || {
+    echo "发布包会员端缺少宾果六合彩网投面板" >&2
+    return 1
+  }
+  grep -aFRq 'web-bets' "$candidate/member/assets" || {
+    echo "发布包会员端缺少批量网投接口" >&2
+    return 1
+  }
+}
+validate_member_betting_contract "$SOURCE_DIR"
 read -r release_target <"$SOURCE_DIR/TARGET"
 case "$(uname -m)" in
   x86_64) host_target=linux/amd64 ;;
@@ -327,6 +351,7 @@ staging_manifest_digest="$(sha256sum "$staging/SHA256SUMS" | awk '{print $1}')"
   exit 1
 }
 "$TRUSTED_SCRIPT_DIR/release-integrity.sh" verify "$staging"
+validate_member_betting_contract "$staging"
 mv -T "$staging" "$target"
 staging=""
 trap - EXIT INT TERM

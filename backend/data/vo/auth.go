@@ -10,7 +10,9 @@ type RegisterRequest struct {
 
 // LoginRequest 登录请求
 type LoginRequest struct {
-	Username  string `json:"username" binding:"required,max=50"`
-	Password  string `json:"password" binding:"required"`
-	Workspace string `json:"workspace" binding:"omitempty,max=80"`
+	Username    string `json:"username" binding:"required,max=50"`
+	Password    string `json:"password" binding:"required"`
+	Workspace   string `json:"workspace" binding:"omitempty,max=80"`
+	CaptchaID   string `json:"captcha_id"`
+	CaptchaCode string `json:"captcha_code"`
 }

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"backend/data/models/lottery"
 	"backend/data/models/odds"
 	"backend/data/models/settings"
 	"backend/data/models/user"
@@ -133,6 +134,7 @@ type UpdateRoomTradingInput struct {
 
 type ResolvedTradeParams struct {
 	Odds        float64
+	PricingCode string // audited platform/room/member price row used for this quote
 	FlyAmount   float64
 	FlyRateUsed float64
 	OddsSource  string // user / room / request / fallback
@@ -449,7 +451,7 @@ func (s *TradingAdminService) Resolve(userID uint64, gameID, playCode string, am
 		}
 		return nil, err
 	}
-	return s.ResolveForAccount(account, gameID, playCode, amount, requestOdds, requestFly)
+	return s.resolveForAccount(account, gameID, playCode, "", amount, requestOdds, requestFly)
 }
 
 // ResolveForAccount resolves all room-scoped trading terms from an account
@@ -457,29 +459,54 @@ func (s *TradingAdminService) Resolve(userID uint64, gameID, playCode string, am
 // transaction. This prevents a concurrent room transfer from mixing the old
 // room's odds with a bet persisted in the new workspace.
 func (s *TradingAdminService) ResolveForAccount(account user.User, gameID, playCode string, amount, requestOdds, requestFly float64) (*ResolvedTradeParams, error) {
-	playCode = defaultString(strings.TrimSpace(playCode), "ball_1_5")
-	result := &ResolvedTradeParams{}
+	return s.resolveForAccount(account, gameID, playCode, "", amount, requestOdds, requestFly)
+}
 
-	// Odds are always server-owned: user override → room override →
-	// platform limit. requestOdds is retained only for API compatibility and
-	// must never become authoritative; otherwise a member can submit their own
-	// payout multiplier when a platform row is missing.
+// ResolveForAccountSelection is the placement boundary for markets whose
+// price depends on the concrete selection while their persisted bet play code
+// remains stable.  Today that applies only to Bingo Racing A's crown sum.
+func (s *TradingAdminService) ResolveForAccountSelection(account user.User, gameID, playCode, selection string, amount, requestOdds, requestFly float64) (*ResolvedTradeParams, error) {
+	return s.resolveForAccount(account, gameID, playCode, selection, amount, requestOdds, requestFly)
+}
+
+func (s *TradingAdminService) resolveForAccount(account user.User, gameID, playCode, selection string, amount, requestOdds, requestFly float64) (*ResolvedTradeParams, error) {
+	playCode = defaultString(strings.TrimSpace(playCode), "ball_1_5")
+	pricingCode, pricingErr := oddsPricingCode(gameID, playCode, selection)
+	if pricingErr != nil {
+		return nil, pricingErr
+	}
+	result := &ResolvedTradeParams{PricingCode: pricingCode}
+	profile, rulesReady := rulesForGame(&lottery.Game{ID: strings.TrimSpace(gameID)})
+
+	// Odds are always server-owned. A valid platform PlayLimit is the market's
+	// enablement record; orphaned room/member overrides must not resurrect a
+	// play which the platform removed. Once enabled, precedence remains exact
+	// user override → room override → platform price. requestOdds is retained
+	// only for API compatibility and must never become authoritative.
 	_ = requestOdds
 	multiplier, err := s.membershipOddsMultiplier(account.WorkspaceID, account.UserID)
 	if err != nil {
 		return nil, err
 	}
 	var override odds.UserPlayOdds
-	overrideErr := s.db.Where("workspace_id = ? AND user_id = ? AND game_id = ? AND play_code = ?", account.WorkspaceID, account.UserID, gameID, playCode).First(&override).Error
+	overrideErr := s.db.Where("workspace_id = ? AND user_id = ? AND game_id = ? AND play_code = ?", account.WorkspaceID, account.UserID, gameID, pricingCode).First(&override).Error
+	if overrideErr != nil && overrideErr != gorm.ErrRecordNotFound {
+		return nil, overrideErr
+	}
+	var platform odds.PlayLimit
+	platformErr := s.db.Where("game_id = ? AND play_code = ?", gameID, pricingCode).First(&platform).Error
+	if platformErr != nil && platformErr != gorm.ErrRecordNotFound {
+		return nil, platformErr
+	}
+	if platformErr == gorm.ErrRecordNotFound || platform.Odds <= 1 || !rulesReady || !platform.ExplicitlyConfigured || strings.TrimSpace(platform.RuleVersion) != profile.Version {
+		return nil, apperrors.NewBusinessError("ODDS_NOT_CONFIGURED", "当前玩法赔率尚未配置，请联系房间管理员")
+	}
 	if overrideErr == nil && override.Odds > 1 {
 		result.Odds, result.OddsSource = resolveEffectiveOdds(override.Odds, 0, 0, multiplier)
 	} else {
-		if overrideErr != nil && overrideErr != gorm.ErrRecordNotFound {
-			return nil, overrideErr
-		}
 		var room odds.RoomPlayOdds
 		if account.WorkspaceID > 0 {
-			roomErr := s.db.Where("workspace_id = ? AND game_id = ? AND play_code = ?", account.WorkspaceID, gameID, playCode).First(&room).Error
+			roomErr := s.db.Where("workspace_id = ? AND game_id = ? AND play_code = ?", account.WorkspaceID, gameID, pricingCode).First(&room).Error
 			if roomErr != nil && roomErr != gorm.ErrRecordNotFound {
 				return nil, roomErr
 			}
@@ -487,16 +514,12 @@ func (s *TradingAdminService) ResolveForAccount(account user.User, gameID, playC
 		if room.Odds > 1 {
 			result.Odds, result.OddsSource = resolveEffectiveOdds(0, room.Odds, 0, multiplier)
 		} else {
-			var platform odds.PlayLimit
-			platformErr := s.db.Where("game_id = ? AND play_code = ?", gameID, playCode).First(&platform).Error
-			if platformErr == nil && platform.Odds > 1 {
-				result.Odds, result.OddsSource = resolveEffectiveOdds(0, 0, platform.Odds, multiplier)
-			} else if platformErr != nil && platformErr != gorm.ErrRecordNotFound {
-				return nil, platformErr
-			} else {
-				return nil, apperrors.NewBusinessError("ODDS_NOT_CONFIGURED", "当前玩法赔率尚未配置，请联系房间管理员")
-			}
+			result.Odds, result.OddsSource = resolveEffectiveOdds(0, 0, platform.Odds, multiplier)
 		}
+	}
+
+	if err := s.checkFrontThreeOddsRisk(account, gameID, playCode, result.Odds); err != nil {
+		return nil, err
 	}
 
 	// Fly: explicit amount ≥ 0 with request flag — if requestFly > 0 use it; if caller passes negative sentinel means auto.

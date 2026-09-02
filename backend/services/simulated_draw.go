@@ -23,11 +23,18 @@ func StartSimulatedDrawLoop(ctx context.Context, db *gorm.DB) {
 			}
 			service := NewBetAdminService(db)
 			for _, game := range games {
+				if _, supported := rulesForGame(&game); !supported {
+					// Unknown PC/Mark Six products need verified rules, not a guessed
+					// five-digit result. Leave their issue and historic draws intact.
+					continue
+				}
 				issue, err := service.CurrentIssue(game.ID)
 				if err != nil {
 					continue
 				}
-				_, _ = service.PublishDraw(game.ID, issue, nil, "王者自动开奖")
+				if _, err := service.PublishDraw(game.ID, issue, nil, "王者自动开奖"); err != nil {
+					log.Printf("自动开奖失败: game=%s issue=%s error=%v", game.ID, issue, err)
+				}
 			}
 			return nil
 		}

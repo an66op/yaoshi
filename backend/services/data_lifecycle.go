@@ -7,7 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -42,6 +44,10 @@ var lifecycleSpecs = map[string]lifecycleSpec{
 		Action: lifecycle.ActionSoftDelete, DefaultDays: 30, MinimumDays: 1,
 		Description: "仅软删除独立机器人账号发送的普通聊天；真人消息、红包和账务记录不受影响，可按任务恢复。",
 	},
+	lifecycle.ClassGameChatMessages: {
+		Action: lifecycle.ActionSoftDelete, DefaultDays: 7, MinimumDays: 1,
+		Description: "仅清理游戏房普通聊天及正常已结算期的结算、积分榜展示，保留最新开奖一期；投注指令及回执、上下分、红包、注单和账务不处理。默认不自动永久删除。",
+	},
 	lifecycle.ClassNotifications: {
 		Action: lifecycle.ActionSoftDelete, DefaultDays: 180, MinimumDays: 1,
 		Description: "会员与后台通知到期后软删除，不删除其关联的注单和余额流水。",
@@ -68,16 +74,48 @@ var protectedFinancialTables = map[string]struct{}{
 var hardDeleteDataClasses = map[string]struct{}{
 	lifecycle.ClassChatMessages:      {},
 	lifecycle.ClassRobotChatMessages: {},
+	lifecycle.ClassGameChatMessages:  {},
 	lifecycle.ClassNotifications:     {},
 }
+
+// Ordinary chat retention never removes command idempotency anchors or
+// red-packet snapshots, even when a legacy row still uses the text type.
+// Every preview, count, soft-delete and hard-delete path shares this boundary.
+const unlinkedChatLifecyclePredicate = `
+	message.request_id = ''
+	AND message.red_packet_count = 0
+	AND message.red_packet_total_cents = 0
+	AND message.red_packet_min_turnover_cents = 0
+	AND message.red_packet_cover = ''
+	AND NOT EXISTS (
+		SELECT 1 FROM user_applications application
+		WHERE application.chat_message_id = message.id
+		  AND application.workspace_id = message.workspace_id
+	)
+	AND NOT EXISTS (
+		SELECT 1 FROM chat_red_packets packet
+		WHERE packet.message_id = message.id
+		  AND packet.workspace_id = message.workspace_id
+	)`
+
+const ordinaryChatTextPredicate = `message.message_type = 'text' AND message.reference_id = 0`
+
+const ordinaryChatLifecyclePredicate = ordinaryChatTextPredicate + ` AND ` + unlinkedChatLifecyclePredicate
 
 // Generic chat retention excludes durable service greetings and ordinary
 // robot chatter. Greetings must remain the first persisted service message;
 // robot chatter has its own independently controlled retention policy.
-const genericChatLifecyclePredicate = `
-	message.message_type = 'text'
-	AND message.reference_id = 0
+const genericChatLifecyclePredicate = ordinaryChatLifecyclePredicate + `
+	AND NOT (` + gameChatRoomPredicate + `)
 	AND NOT EXISTS (
+		SELECT 1 FROM workspace_robot_profiles robot
+		WHERE robot.user_id = message.user_id
+		  AND robot.workspace_id = message.workspace_id
+	)`
+
+const robotChatLifecyclePredicate = ordinaryChatLifecyclePredicate + `
+	AND NOT (` + gameChatRoomPredicate + `)
+	AND EXISTS (
 		SELECT 1 FROM workspace_robot_profiles robot
 		WHERE robot.user_id = message.user_id
 		  AND robot.workspace_id = message.workspace_id
@@ -116,9 +154,10 @@ type PolicyView struct {
 }
 
 type UpdateRetentionPolicyInput struct {
-	WorkspaceID   uint64 `json:"workspace_id"`
-	Enabled       bool   `json:"enabled"`
-	RetentionDays int    `json:"retention_days"`
+	WorkspaceID    uint64 `json:"workspace_id"`
+	Enabled        bool   `json:"enabled"`
+	RetentionDays  int    `json:"retention_days"`
+	PurgeAfterDays *int   `json:"purge_after_days,omitempty"`
 }
 
 type CleanupPreviewInput struct {
@@ -254,9 +293,28 @@ type normalizedCleanupCriteria struct {
 	DeleteMode    string   `json:"delete_mode"`
 }
 
+// PostgreSQL jsonb normalizes object key order and spacing. Compare the typed
+// frozen scope instead of its serialized bytes, without accepting unknown
+// fields or trailing JSON that a future criteria version might introduce.
+func sameCleanupCriteria(storedJSON string, expected normalizedCleanupCriteria) bool {
+	decoder := json.NewDecoder(strings.NewReader(storedJSON))
+	decoder.DisallowUnknownFields()
+	var stored normalizedCleanupCriteria
+	if err := decoder.Decode(&stored); err != nil {
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return false
+	}
+	return stored.WorkspaceID == expected.WorkspaceID && stored.AllWorkspaces == expected.AllWorkspaces &&
+		stored.BatchLimit == expected.BatchLimit && normalizeDeleteMode(stored.DeleteMode) == normalizeDeleteMode(expected.DeleteMode) &&
+		slices.Equal(stored.DataClasses, expected.DataClasses)
+}
+
 type MaintenanceSummary struct {
 	SoftDeletedChatCount         int64     `json:"soft_deleted_chat_count"`
 	SoftDeletedRobotChatCount    int64     `json:"soft_deleted_robot_chat_count"`
+	SoftDeletedGameChatCount     int64     `json:"soft_deleted_game_chat_count"`
 	SoftDeletedNotificationCount int64     `json:"soft_deleted_notification_count"`
 	StaleIdempotencyCount        int64     `json:"stale_idempotency_count"`
 	DeliveredSessionReceiptCount int64     `json:"delivered_session_receipt_count"`
@@ -327,7 +385,8 @@ func (s *DataLifecycleService) Summary(actor LifecycleActor) (*MaintenanceSummar
 		target *int64
 	}{
 		{query: `SELECT COUNT(*) FROM member_chat_messages message WHERE message.deleted_at IS NOT NULL AND ` + genericChatLifecyclePredicate, target: &result.SoftDeletedChatCount},
-		{query: `SELECT COUNT(*) FROM member_chat_messages message JOIN workspace_robot_profiles robot ON robot.user_id = message.user_id AND robot.workspace_id = message.workspace_id WHERE message.deleted_at IS NOT NULL AND message.message_type = 'text' AND message.reference_id = 0`, target: &result.SoftDeletedRobotChatCount},
+		{query: `SELECT COUNT(*) FROM member_chat_messages message WHERE message.deleted_at IS NOT NULL AND ` + robotChatLifecyclePredicate, target: &result.SoftDeletedRobotChatCount},
+		{query: `SELECT COUNT(*) FROM member_chat_messages message WHERE message.deleted_at IS NOT NULL AND ` + gameChatLifecyclePredicate, target: &result.SoftDeletedGameChatCount},
 		{query: `SELECT (SELECT COUNT(*) FROM member_notifications notice WHERE notice.deleted_at IS NOT NULL AND ` + disposableMemberNotificationPredicate + `) + (SELECT COUNT(*) FROM admin_notifications notice WHERE notice.deleted_at IS NOT NULL AND ` + disposableAdminNotificationPredicate + `)`, target: &result.SoftDeletedNotificationCount},
 		{query: `SELECT (SELECT COUNT(*) FROM lottery_bet_requests WHERE status = 'processing' AND updated_at <= ?) + (SELECT COUNT(*) FROM lottery_assistant_requests WHERE status = 'processing' AND updated_at <= ?)`, args: []any{result.GeneratedAt.Add(-idempotencyReservationTimeout), result.GeneratedAt.Add(-idempotencyReservationTimeout)}, target: &result.StaleIdempotencyCount},
 		{query: `SELECT COUNT(*) FROM ws_session_revocation_outbox WHERE delivered_at IS NOT NULL AND delivered_at < ?`, args: []any{result.GeneratedAt.AddDate(0, 0, -30)}, target: &result.DeliveredSessionReceiptCount},
@@ -348,30 +407,65 @@ func (s *DataLifecycleService) UpdatePolicy(dataClass string, input UpdateRetent
 	if err := s.EnsurePlatformAdmin(actor); err != nil {
 		return nil, err
 	}
-	spec, ok := lifecycleSpecs[strings.TrimSpace(dataClass)]
+	dataClass = strings.TrimSpace(dataClass)
+	spec, ok := lifecycleSpecs[dataClass]
 	if !ok {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "不支持的数据类型")
 	}
 	if input.RetentionDays < spec.MinimumDays || input.RetentionDays > 3650 {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("保留天数应为 %d–3650 天", spec.MinimumDays))
 	}
+	if err := validateLifecyclePurgeDays(dataClass, input.PurgeAfterDays); err != nil {
+		return nil, err
+	}
 	if input.WorkspaceID > 0 {
 		if err := s.ensureWorkspace(input.WorkspaceID); err != nil {
 			return nil, err
 		}
 	}
+	var result *PolicyView
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Serialize operator changes with maintenance batches. In particular,
+		// disabling automatic permanent purge takes effect before the next batch.
+		if tx.Dialector.Name() == "postgres" {
+			if err := tx.Exec(`SELECT pg_advisory_xact_lock(?)`, int64(729421118)).Error; err != nil {
+				return err
+			}
+		}
+		atomic := &DataLifecycleService{db: tx, now: s.now}
+		var err error
+		result, err = atomic.updatePolicyLocked(dataClass, spec, input, actor)
+		return err
+	})
+	return result, err
+}
+
+func (s *DataLifecycleService) updatePolicyLocked(dataClass string, spec lifecycleSpec, input UpdateRetentionPolicyInput, actor LifecycleActor) (*PolicyView, error) {
+	previous, _, err := s.policyForWorkspace(input.WorkspaceID, dataClass)
+	if err != nil {
+		return nil, err
+	}
+	purgeDays := previous.PurgeAfterDays
+	if input.PurgeAfterDays != nil {
+		purgeDays = *input.PurgeAfterDays
+	}
 	now := s.now()
 	policy := lifecycle.RetentionPolicy{
 		WorkspaceID: input.WorkspaceID, DataClass: dataClass, Enabled: input.Enabled,
-		RetentionDays: input.RetentionDays, Action: spec.Action,
+		RetentionDays: input.RetentionDays, PurgeAfterDays: purgeDays, Action: spec.Action,
 		UpdatedByID: actor.UserID, UpdatedByName: actor.Username, CreatedAt: now, UpdatedAt: now,
 	}
-	err := s.db.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "workspace_id"}, {Name: "data_class"}},
-		DoUpdates: clause.Assignments(map[string]any{
-			"enabled": input.Enabled, "retention_days": input.RetentionDays, "action": spec.Action,
-			"updated_by_id": actor.UserID, "updated_by_name": actor.Username, "updated_at": now,
-		}),
+	updates := map[string]any{
+		"enabled": input.Enabled, "retention_days": input.RetentionDays, "action": spec.Action,
+		"updated_by_id": actor.UserID, "updated_by_name": actor.Username, "updated_at": now,
+	}
+	// Omitted by older clients: preserve any concurrently updated purge setting.
+	if input.PurgeAfterDays != nil {
+		updates["purge_after_days"] = purgeDays
+	}
+	err = s.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "data_class"}},
+		DoUpdates: clause.Assignments(updates),
 	}).Create(&policy).Error
 	if err != nil {
 		return nil, err
@@ -400,7 +494,7 @@ func (s *DataLifecycleService) Preview(input CleanupPreviewInput, actor Lifecycl
 	var existing lifecycle.CleanupRun
 	err = s.db.Where("request_id = ?", requestID).First(&existing).Error
 	if err == nil {
-		if existing.CriteriaJSON != string(criteriaJSON) {
+		if !sameCleanupCriteria(existing.CriteriaJSON, criteria) {
 			return nil, apperrors.NewBusinessError("INVALID_REQUEST", "request_id 已被其他清理条件使用")
 		}
 		return previewFromRun(existing)
@@ -427,6 +521,10 @@ func (s *DataLifecycleService) Preview(input CleanupPreviewInput, actor Lifecycl
 		if criteria.DeleteMode == DeleteModeHard {
 			item.Action = lifecycle.ActionHardDelete
 			item.Description = "永久清除已软删除且超过保留期的非账务内容；操作不可恢复。"
+			if dataClass == lifecycle.ClassGameChatMessages && policy.PurgeAfterDays > 0 {
+				item.RetentionDays = policy.PurgeAfterDays
+				item.CutoffAt = s.now().AddDate(0, 0, -policy.PurgeAfterDays)
+			}
 		}
 		if policy.Enabled {
 			count, err := s.countCandidates(criteria, item)
@@ -461,7 +559,7 @@ func (s *DataLifecycleService) Preview(input CleanupPreviewInput, actor Lifecycl
 	if err := s.db.Create(&run).Error; err != nil {
 		// A concurrent identical preview may have reserved the request first.
 		if queryErr := s.db.Where("request_id = ?", requestID).First(&existing).Error; queryErr == nil {
-			if existing.CriteriaJSON != string(criteriaJSON) {
+			if !sameCleanupCriteria(existing.CriteriaJSON, criteria) {
 				return nil, apperrors.NewBusinessError("INVALID_REQUEST", "request_id 已被其他清理条件使用")
 			}
 			return previewFromRun(existing)
@@ -739,6 +837,10 @@ func (s *DataLifecycleService) RestoreSoftDeleted(requestID string, actor Lifecy
 				fmt.Sprintf("恢复数量校验失败：应恢复 %d 条，实际 %d 条；本次操作已回滚", expected, restored),
 			)
 		}
+		items, err = classifyRestoredChatResults(items, run.ResultJSON)
+		if err != nil {
+			return err
+		}
 		encoded, _ := json.Marshal(items)
 		if err := tx.Model(&run).Updates(map[string]any{
 			"soft_restored_at": now, "soft_restore_result_json": string(encoded),
@@ -761,7 +863,7 @@ func expectedSoftRestoreCount(resultJSON string) (int64, error) {
 	var expected int64
 	for _, item := range items {
 		switch item.DataClass {
-		case lifecycle.ClassChatMessages, lifecycle.ClassRobotChatMessages, lifecycle.ClassNotifications:
+		case lifecycle.ClassChatMessages, lifecycle.ClassRobotChatMessages, lifecycle.ClassGameChatMessages, lifecycle.ClassNotifications:
 			expected += item.AffectedCount
 		}
 	}
@@ -1068,16 +1170,28 @@ func lifecycleCandidateFingerprint(db *gorm.DB, criteria normalizedCleanupCriter
 		err := db.Raw(`
 			SELECT ? || message.id::text AS candidate_key
 			FROM member_chat_messages message
-			JOIN workspace_robot_profiles robot
-			  ON robot.user_id = message.user_id
-			 AND robot.workspace_id = message.workspace_id
 			WHERE `+deletedPredicate+`
-			  AND message.message_type = 'text'
-			  AND message.reference_id = 0
+			  AND `+robotChatLifecyclePredicate+`
 			  AND `+scopeSQL+`
 			ORDER BY message.id ASC LIMIT ?
 		`, append([]any{prefix}, args...)...).Scan(&rows).Error
 		if err != nil {
+			return "", err
+		}
+	case lifecycle.ClassGameChatMessages:
+		scopeSQL, scopeArgs := lifecycleScope(criteria, "message.workspace_id")
+		args := append([]any{item.CutoffAt}, scopeArgs...)
+		args = append(args, limit)
+		deletedPredicate := "message.deleted_at IS NULL AND message.created_at < ?"
+		prefix := "game-chat:"
+		if criteria.DeleteMode == DeleteModeHard {
+			deletedPredicate = "message.deleted_at IS NOT NULL AND message.deleted_at < ?"
+			prefix = "hard-game-chat:"
+		}
+		if err := db.Raw(`SELECT ? || message.id::text AS candidate_key
+			FROM member_chat_messages message WHERE `+deletedPredicate+`
+			AND `+gameChatLifecyclePredicate+` AND `+scopeSQL+`
+			ORDER BY message.id ASC LIMIT ?`, append([]any{prefix}, args...)...).Scan(&rows).Error; err != nil {
 			return "", err
 		}
 	case lifecycle.ClassNotifications:
@@ -1253,6 +1367,26 @@ func (s *DataLifecycleService) materializeHardDeleteCandidates(tx *gorm.DB, crit
 			return "", result.Error
 		}
 		inserted = result.RowsAffected
+	case lifecycle.ClassGameChatMessages:
+		scopeSQL, scopeArgs := lifecycleScope(criteria, "message.workspace_id")
+		args := append([]any{item.CutoffAt}, scopeArgs...)
+		args = append(args, limit, item.DataClass)
+		result := tx.Exec(`
+			WITH locked AS (
+				SELECT message.id, COALESCE(message.cleanup_request_id, '') AS cleanup_request_id
+				FROM member_chat_messages message
+				WHERE message.deleted_at IS NOT NULL AND message.deleted_at < ?
+				  AND `+gameChatLifecyclePredicate+` AND `+scopeSQL+`
+				ORDER BY message.id ASC LIMIT ? FOR UPDATE OF message
+			)
+			INSERT INTO lifecycle_hard_delete_candidates
+				(data_class, source_kind, source_order, id, cleanup_request_id, candidate_key)
+			SELECT ?, 'game_chat', 0, id, cleanup_request_id, 'hard-game-chat:' || id::text FROM locked
+		`, args...)
+		if result.Error != nil {
+			return "", result.Error
+		}
+		inserted = result.RowsAffected
 	case lifecycle.ClassRobotChatMessages:
 		scopeSQL, scopeArgs := lifecycleScope(criteria, "message.workspace_id")
 		args := []any{item.CutoffAt}
@@ -1262,12 +1396,9 @@ func (s *DataLifecycleService) materializeHardDeleteCandidates(tx *gorm.DB, crit
 			WITH locked AS (
 				SELECT message.id, COALESCE(message.cleanup_request_id, '') AS cleanup_request_id
 				FROM member_chat_messages message
-				JOIN workspace_robot_profiles robot
-				  ON robot.user_id = message.user_id AND robot.workspace_id = message.workspace_id
 				WHERE message.deleted_at IS NOT NULL
 				  AND message.deleted_at < ?
-				  AND message.message_type = 'text'
-				  AND message.reference_id = 0
+				  AND `+robotChatLifecyclePredicate+`
 				  AND `+scopeSQL+`
 				ORDER BY message.id ASC LIMIT ? FOR UPDATE OF message
 			)
@@ -1349,6 +1480,16 @@ func (s *DataLifecycleService) countCandidates(criteria normalizedCleanupCriteri
 	scopeSQL, scopeArgs := lifecycleScope(criteria, "workspace_id")
 	var count int64
 	switch item.DataClass {
+	case lifecycle.ClassGameChatMessages:
+		chatScope, chatArgs := lifecycleScope(criteria, "message.workspace_id")
+		deletedPredicate := "message.deleted_at IS NULL AND message.created_at < ?"
+		if criteria.DeleteMode == DeleteModeHard {
+			deletedPredicate = "message.deleted_at IS NOT NULL AND message.deleted_at < ?"
+		}
+		err := s.db.Raw(`SELECT COUNT(*) FROM member_chat_messages message
+			WHERE `+deletedPredicate+` AND `+gameChatLifecyclePredicate+` AND `+chatScope,
+			append([]any{item.CutoffAt}, chatArgs...)...).Scan(&count).Error
+		return count, err
 	case lifecycle.ClassChatMessages:
 		chatScope, chatArgs := lifecycleScope(criteria, "message.workspace_id")
 		deletedPredicate := "message.deleted_at IS NULL AND message.created_at < ?"
@@ -1371,12 +1512,8 @@ func (s *DataLifecycleService) countCandidates(criteria normalizedCleanupCriteri
 		err := s.db.Raw(`
 			SELECT COUNT(*)
 			FROM member_chat_messages message
-			JOIN workspace_robot_profiles robot
-			  ON robot.user_id = message.user_id
-			 AND robot.workspace_id = message.workspace_id
 			WHERE `+deletedPredicate+`
-			  AND message.message_type = 'text'
-			  AND message.reference_id = 0
+			  AND `+robotChatLifecyclePredicate+`
 			  AND `+robotScope,
 			append([]any{item.CutoffAt}, robotArgs...)...).Scan(&count).Error
 		return count, err
@@ -1493,6 +1630,26 @@ func (s *DataLifecycleService) executeClass(tx *gorm.DB, criteria normalizedClea
 	}
 	scopeSQL, scopeArgs := lifecycleScope(criteria, "workspace_id")
 	switch item.DataClass {
+	case lifecycle.ClassGameChatMessages:
+		chatScope, chatScopeArgs := lifecycleScope(criteria, "message.workspace_id")
+		args := append([]any{item.CutoffAt}, chatScopeArgs...)
+		args = append(args, limit, s.now(), lifecycleOperator(operator, requestID), requestID)
+		result := tx.Exec(`WITH candidates AS (
+			SELECT message.id FROM member_chat_messages message
+			WHERE message.deleted_at IS NULL AND message.created_at < ?
+			  AND `+gameChatLifecyclePredicate+` AND `+chatScope+`
+			ORDER BY message.id ASC LIMIT ? FOR UPDATE OF message
+		)
+		UPDATE member_chat_messages AS row
+		SET deleted_at = ?, deleted_by = ?, cleanup_request_id = ?
+		FROM candidates WHERE row.id = candidates.id`, args...)
+		if result.Error != nil {
+			return 0, result.Error
+		}
+		if result.RowsAffected != int64(limit) {
+			return 0, apperrors.NewBusinessError("PREVIEW_CHANGED", "候选数据已变化，请重新预览游戏房展示记录")
+		}
+		return result.RowsAffected, nil
 	case lifecycle.ClassChatMessages:
 		chatScope, chatScopeArgs := lifecycleScope(criteria, "message.workspace_id")
 		args := []any{item.CutoffAt}
@@ -1521,12 +1678,8 @@ func (s *DataLifecycleService) executeClass(tx *gorm.DB, criteria normalizedClea
 			WITH candidates AS (
 				SELECT message.id
 				FROM member_chat_messages message
-				JOIN workspace_robot_profiles robot
-				  ON robot.user_id = message.user_id
-				 AND robot.workspace_id = message.workspace_id
 				WHERE message.deleted_at IS NULL
-				  AND message.message_type = 'text'
-				  AND message.reference_id = 0
+				  AND `+robotChatLifecyclePredicate+`
 				  AND message.created_at < ?
 				  AND `+robotScope+`
 				ORDER BY message.id ASC LIMIT ? FOR UPDATE OF message SKIP LOCKED
@@ -1573,6 +1726,12 @@ func (s *DataLifecycleService) hardDeleteClass(tx *gorm.DB, item CleanupPreviewI
 		return 0, apperrors.NewBusinessError("INVALID_REQUEST", "该数据类型禁止硬删除")
 	}
 	switch item.DataClass {
+	case lifecycle.ClassGameChatMessages:
+		result := tx.Exec(`DELETE FROM member_chat_messages AS message
+			USING lifecycle_hard_delete_candidates candidate
+			WHERE candidate.data_class = ? AND candidate.source_kind = 'game_chat'
+			AND message.id = candidate.id`, item.DataClass)
+		return exactHardDeleteResult(item.DataClass, limit, result)
 	case lifecycle.ClassChatMessages:
 		result := tx.Exec(`
 			DELETE FROM member_chat_messages AS message
@@ -1771,6 +1930,8 @@ func (s *DataLifecycleService) archiveRobotBets(tx *gorm.DB, criteria normalized
 	args := []any{cutoff}
 	args = append(args, scopeArgs...)
 	args = append(args, limit, requestID)
+	// A data-modifying CTE shares its statement snapshot with DELETE. Read the
+	// inserted rows through RETURNING, not a second scan of the cold table.
 	result := tx.Exec(`
 		WITH candidates AS (
 			SELECT source.* FROM lottery_bets source
@@ -1785,21 +1946,23 @@ func (s *DataLifecycleService) archiveRobotBets(tx *gorm.DB, criteria normalized
 		), archived AS (
 			INSERT INTO lottery_bet_archives (
 				id, workspace_id, game_id, issue, room_scope, user_id, username,
-				play_code, play_name, position, selection, amount_cents, odds, status,
+				play_code, play_name, position, selection, rule_version, amount_cents, odds,
+				valid_turnover_cents, settlement_odds, user_issue_stake_cents_snapshot, settlement_policy, pc28_gray_push, status,
 				payout_cents, fly_cents, rebate_rate_snapshot, rebate_cents,
 				agent_share_rate_snapshot, agent_share_cents, settled_at, remark,
 				operator, reconciliation_status, reconciliation_note, created_at,
 				updated_at, source_json, row_hash, archived_at, cleanup_request_id
 			)
 			SELECT id, workspace_id, game_id, issue, room_scope, user_id, username,
-				play_code, play_name, position, selection, amount_cents, odds, status,
+				play_code, play_name, position, selection, rule_version, amount_cents, odds,
+				valid_turnover_cents, settlement_odds, user_issue_stake_cents_snapshot, settlement_policy, pc28_gray_push, status,
 				payout_cents, fly_cents, rebate_rate_snapshot, rebate_cents,
 				agent_share_rate_snapshot, agent_share_cents, settled_at, remark,
 				operator, reconciliation_status, reconciliation_note, created_at,
 				updated_at, to_jsonb(candidates), md5(to_jsonb(candidates)::text), now(), ?
-			FROM candidates ON CONFLICT (id) DO NOTHING RETURNING id
+			FROM candidates ON CONFLICT (id) DO NOTHING RETURNING id, row_hash
 		)
-		DELETE FROM lottery_bets hot USING candidates, lottery_bet_archives archive
+		DELETE FROM lottery_bets hot USING candidates, archived archive
 		WHERE hot.id = candidates.id AND archive.id = hot.id
 		  AND archive.row_hash = md5(to_jsonb(hot)::text)
 	`, args...)
@@ -1892,7 +2055,16 @@ func restoreRobotBetArchive(tx *gorm.DB, requestID string) (int64, error) {
 	if expected == 0 {
 		return 0, nil
 	}
-	if err := tx.Raw(`SELECT COUNT(*) FROM lifecycle_restore_bets WHERE row_hash <> md5(source_json::text)`).Scan(&invalid).Error; err != nil {
+	if err := tx.Raw(`
+		SELECT COUNT(*) FROM lifecycle_restore_bets
+		WHERE row_hash <> md5(source_json::text)
+		   OR rule_version IS DISTINCT FROM COALESCE(source_json ->> 'rule_version', '')
+		   OR valid_turnover_cents IS DISTINCT FROM (source_json ->> 'valid_turnover_cents')::bigint
+		   OR settlement_odds IS DISTINCT FROM (source_json ->> 'settlement_odds')::numeric
+		   OR user_issue_stake_cents_snapshot IS DISTINCT FROM (source_json ->> 'user_issue_stake_cents_snapshot')::bigint
+		   OR settlement_policy IS DISTINCT FROM COALESCE(source_json ->> 'settlement_policy', '')
+		   OR pc28_gray_push IS DISTINCT FROM COALESCE((source_json ->> 'pc28_gray_push')::boolean, false)
+	`).Scan(&invalid).Error; err != nil {
 		return 0, err
 	}
 	if invalid != 0 {
@@ -1907,13 +2079,16 @@ func restoreRobotBetArchive(tx *gorm.DB, requestID string) (int64, error) {
 	result := tx.Exec(`
 		INSERT INTO lottery_bets (
 			id, workspace_id, game_id, issue, room_scope, user_id, username,
-			play_code, play_name, position, selection, amount_cents, odds, status,
+			play_code, play_name, position, selection, rule_version, request_reference, amount_cents, odds,
+			valid_turnover_cents, settlement_odds, user_issue_stake_cents_snapshot, settlement_policy, pc28_gray_push, status,
 			payout_cents, fly_cents, rebate_rate_snapshot, rebate_cents,
 			agent_share_rate_snapshot, agent_share_cents, settled_at, remark,
 			operator, reconciliation_status, reconciliation_note, created_at, updated_at
 		)
 		SELECT id, workspace_id, game_id, issue, room_scope, user_id, username,
-			play_code, play_name, position, selection, amount_cents, odds, status,
+			play_code, play_name, position, selection, rule_version,
+			COALESCE(source_json ->> 'request_reference', ''), amount_cents, odds,
+			valid_turnover_cents, settlement_odds, user_issue_stake_cents_snapshot, settlement_policy, pc28_gray_push, status,
 			payout_cents, fly_cents, rebate_rate_snapshot, rebate_cents,
 			agent_share_rate_snapshot, agent_share_cents, settled_at, remark,
 			operator, reconciliation_status, reconciliation_note, created_at, updated_at
@@ -1925,10 +2100,28 @@ func restoreRobotBetArchive(tx *gorm.DB, requestID string) (int64, error) {
 	if result.RowsAffected != expected {
 		return 0, fmt.Errorf("robot bet restore count mismatch: expected=%d restored=%d", expected, result.RowsAffected)
 	}
+	// Compare every field the original snapshot knew about. Only newly added
+	// columns absent from an old snapshot are excluded; existing request/rule
+	// evidence and all financial fields must still match byte-for-byte JSONB.
 	if err := tx.Raw(`
 		SELECT COUNT(*) FROM lifecycle_restore_bets archive
 		JOIN lottery_bets hot ON hot.id = archive.id
-		WHERE archive.row_hash <> md5(to_jsonb(hot)::text)
+		WHERE archive.row_hash <> md5((to_jsonb(hot)
+			- CASE WHEN archive.source_json ? 'request_reference'
+				THEN ARRAY[]::text[] ELSE ARRAY['request_reference']::text[] END
+			- CASE WHEN archive.source_json ? 'rule_version'
+				THEN ARRAY[]::text[] ELSE ARRAY['rule_version']::text[] END
+			- CASE WHEN archive.source_json ? 'valid_turnover_cents'
+				THEN ARRAY[]::text[] ELSE ARRAY['valid_turnover_cents']::text[] END
+			- CASE WHEN archive.source_json ? 'settlement_odds'
+				THEN ARRAY[]::text[] ELSE ARRAY['settlement_odds']::text[] END
+			- CASE WHEN archive.source_json ? 'user_issue_stake_cents_snapshot'
+				THEN ARRAY[]::text[] ELSE ARRAY['user_issue_stake_cents_snapshot']::text[] END
+			- CASE WHEN archive.source_json ? 'settlement_policy'
+				THEN ARRAY[]::text[] ELSE ARRAY['settlement_policy']::text[] END
+			- CASE WHEN archive.source_json ? 'pc28_gray_push'
+				THEN ARRAY[]::text[] ELSE ARRAY['pc28_gray_push']::text[] END
+		)::text)
 	`).Scan(&invalid).Error; err != nil {
 		return 0, err
 	}

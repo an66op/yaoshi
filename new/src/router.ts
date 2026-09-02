@@ -29,10 +29,11 @@ export type AppRoute =
   | { kind: "login" }
   | { kind: "register" }
   | { kind: "room" }
-  | { kind: "tab"; tab: Exclude<Tab, "chat">; walletAction?: WalletActionSlug; returnGameId?: string }
-  | { kind: "chat"; tab: "chat"; view: ChatView; returnGameId?: string; planGameId?: string }
-  | { kind: "results"; gameId?: string; returnGameId?: string }
-  | { kind: "game"; gameId: string; quickMenu?: boolean };
+  | { kind: "tab"; tab: Exclude<Tab, "chat">; walletAction?: WalletActionSlug; returnGameId?: string; lobbyFilter?: string; returnLobbyFilter?: string }
+  | { kind: "chat"; tab: "chat"; view: ChatView; returnGameId?: string; planGameId?: string; returnLobbyFilter?: string }
+  | { kind: "results"; gameId?: string; returnGameId?: string; returnLobbyFilter?: string }
+  | { kind: "game-guide"; tab: "rules" | "odds" }
+  | { kind: "game"; gameId: string; quickMenu?: boolean; returnLobbyFilter?: string };
 
 const tabPaths: Record<Tab, string> = {
   lobby: "/lobby",
@@ -53,16 +54,21 @@ export function parseRoute(pathname: string): AppRoute {
   if (path === "/" || path === "/login") return { kind: "login" };
   if (path === "/register") return { kind: "register" };
   if (path === "/room") return { kind: "room" };
-  if (path === "/lobby") return { kind: "tab", tab: "lobby" };
+  if (path === "/lobby") {
+    const lobbyFilter = boundedQueryValue(query, "category");
+    return lobbyFilter ? { kind: "tab", tab: "lobby", lobbyFilter } : { kind: "tab", tab: "lobby" };
+  }
   const returnGameId = query.get("from_game")?.trim() || undefined;
+  const returnLobbyFilter = boundedQueryValue(query, "from_lobby");
   if (path === "/wallet" || path === "/shop")
-    return { kind: "tab", tab: "shop", returnGameId };
+    return { kind: "tab", tab: "shop", returnGameId, ...(returnLobbyFilter ? { returnLobbyFilter } : {}) };
   if (path.startsWith("/wallet/")) {
     const slug = path.slice("/wallet/".length) as WalletActionSlug;
-    return { kind: "tab", tab: "shop", walletAction: slug, returnGameId };
+    return { kind: "tab", tab: "shop", walletAction: slug, returnGameId, ...(returnLobbyFilter ? { returnLobbyFilter } : {}) };
   }
+  if (path === "/profile/game-guide") return { kind: "game-guide", tab: query.get("tab") === "odds" ? "odds" : "rules" };
   if (path === "/profile") return { kind: "tab", tab: "profile" };
-  if (path === "/results") return { kind: "results", gameId: query.get("game")?.trim() || undefined, returnGameId };
+  if (path === "/results") return { kind: "results", gameId: query.get("game")?.trim() || undefined, returnGameId, ...(returnLobbyFilter ? { returnLobbyFilter } : {}) };
   if (path === "/messages/system")
     return { kind: "chat", tab: "chat", view: "system" };
   if (path === "/messages/account")
@@ -79,15 +85,18 @@ export function parseRoute(pathname: string): AppRoute {
     return { kind: "chat", tab: "chat", view: "plans" };
   if (path === "/messages/service") {
     const returnGameId = query.get("from_game")?.trim();
-    return { kind: "chat", tab: "chat", view: "service", returnGameId: returnGameId || undefined };
+    return { kind: "chat", tab: "chat", view: "service", returnGameId: returnGameId || undefined, ...(returnLobbyFilter ? { returnLobbyFilter } : {}) };
   }
   if (path === "/messages") return { kind: "chat", tab: "chat", view: "list" };
-  if (path.startsWith("/games/"))
+  if (path.startsWith("/games/")) {
+    const returnLobbyFilter = boundedQueryValue(query, "from_lobby");
     return {
       kind: "game",
       gameId: decodeURIComponent(path.slice("/games/".length)),
       quickMenu: query.get("quick_menu") === "1",
+      ...(returnLobbyFilter ? { returnLobbyFilter } : {}),
     };
+  }
   return { kind: "login" };
 }
 
@@ -99,12 +108,17 @@ export function pathForTab(tab: Tab) {
   return tabPaths[tab];
 }
 
-export function pathForWallet(action?: WalletActionSlug, fromGameId?: string) {
-  const path = action ? `/wallet/${action}` : tabPaths.shop;
-  return fromGameId ? `${path}?from_game=${encodeURIComponent(fromGameId)}` : path;
+export function pathForLobby(filter?: string) {
+  const value = filter?.trim();
+  return value ? `${tabPaths.lobby}?category=${encodeURIComponent(value)}` : tabPaths.lobby;
 }
 
-export function pathForChat(view: ChatView, fromGameId?: string) {
+export function pathForWallet(action?: WalletActionSlug, fromGameId?: string, fromLobbyFilter?: string) {
+  const path = action ? `/wallet/${action}` : tabPaths.shop;
+  return pathWithReturnContext(path, fromGameId, fromLobbyFilter);
+}
+
+export function pathForChat(view: ChatView, fromGameId?: string, fromLobbyFilter?: string) {
   const routes: Record<ChatView, string> = {
     list: tabPaths.chat,
     system: "/messages/system",
@@ -116,22 +130,31 @@ export function pathForChat(view: ChatView, fromGameId?: string) {
     service: "/messages/service",
   };
   const path = routes[view];
-  return view === "service" && fromGameId ? `${path}?from_game=${encodeURIComponent(fromGameId)}` : path;
+  return view === "service" ? pathWithReturnContext(path, fromGameId, fromLobbyFilter) : path;
 }
 
 export function pathForPlanGame(gameId: string) {
   return `/messages/plans/${encodeURIComponent(gameId)}`;
 }
 
-export function pathForGame(gameId: string, quickMenu = false) {
+export function pathForGame(gameId: string, quickMenu = false, fromLobbyFilter?: string) {
   const path = `/games/${encodeURIComponent(gameId)}`;
-  return quickMenu ? `${path}?quick_menu=1` : path;
+  const query = new URLSearchParams();
+  if (quickMenu) query.set("quick_menu", "1");
+  if (fromLobbyFilter?.trim()) query.set("from_lobby", fromLobbyFilter.trim());
+  const suffix = query.toString();
+  return suffix ? `${path}?${suffix}` : path;
 }
 
-export function pathForResults(gameId?: string, fromGameId?: string) {
+export function pathForGameGuide(tab: "rules" | "odds" = "rules") {
+  return `/profile/game-guide?tab=${tab}`;
+}
+
+export function pathForResults(gameId?: string, fromGameId?: string, fromLobbyFilter?: string) {
   const query = new URLSearchParams();
   if (gameId) query.set("game", gameId);
   if (fromGameId) query.set("from_game", fromGameId);
+  if (fromLobbyFilter?.trim()) query.set("from_lobby", fromLobbyFilter.trim());
   const suffix = query.toString();
   return `/results${suffix ? `?${suffix}` : ""}`;
 }
@@ -162,4 +185,17 @@ export function useAppRouter() {
   }, []);
 
   return { route: parseRoute(pathname), pathname, navigate, replace };
+}
+
+function boundedQueryValue(query: URLSearchParams, key: string) {
+  const value = query.get(key)?.trim();
+  return value && value.length <= 40 ? value : undefined;
+}
+
+function pathWithReturnContext(path: string, fromGameId?: string, fromLobbyFilter?: string) {
+  const query = new URLSearchParams();
+  if (fromGameId?.trim()) query.set("from_game", fromGameId.trim());
+  if (fromLobbyFilter?.trim()) query.set("from_lobby", fromLobbyFilter.trim());
+  const suffix = query.toString();
+  return suffix ? `${path}?${suffix}` : path;
 }

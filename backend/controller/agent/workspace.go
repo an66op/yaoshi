@@ -317,9 +317,18 @@ func (h *WorkspaceHandler) Users(c *gin.Context) {
 	if !ok {
 		return
 	}
+	var memberID uint64
+	if rawID := c.Query("user_id"); rawID != "" {
+		var err error
+		memberID, err = strconv.ParseUint(rawID, 10, 63)
+		if err != nil || memberID == 0 {
+			constants.SendError(c, http.StatusBadRequest, "会员编号不正确", nil)
+			return
+		}
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	size, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	result, err := h.work.Users(id, services.UserListFilter{Query: c.Query("query"), Status: c.DefaultQuery("status", "all"), Page: page, PageSize: size})
+	result, err := h.work.Users(id, services.UserListFilter{UserID: memberID, Query: c.Query("query"), Status: c.DefaultQuery("status", "all"), Page: page, PageSize: size})
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取房间用户失败", err)
 		return

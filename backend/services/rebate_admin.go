@@ -63,7 +63,7 @@ func (s *RebateAdminService) PreviewTodayForWorkspace(workspaceID uint64) (*Reba
 	}
 	var rows []previewRow
 	betQuery := s.db.Model(&bet.Bet{}).
-		Select("user_id, COALESCE(SUM(amount_cents),0) AS turnover, COALESCE(SUM(rebate_cents),0) AS rebate_cents").
+		Select("user_id, COALESCE(SUM(COALESCE(valid_turnover_cents,amount_cents)),0) AS turnover, COALESCE(SUM(rebate_cents),0) AS rebate_cents").
 		Where("COALESCE(settled_at,updated_at,created_at) >= ? AND status IN ?", start, []string{"won", "lost"})
 	betQuery = excludeRobotProfileBets(betQuery)
 	if workspaceID > 0 {
@@ -134,9 +134,9 @@ func (s *RebateAdminService) RunTodayForWorkspace(workspaceID uint64, operator s
 	}
 	var rows []row
 	rebateQuery := s.db.Model(&bet.Bet{}).
-		Select("user_id, MAX(username) as username, COALESCE(SUM(amount_cents),0) as turnover, COALESCE(SUM(rebate_cents),0) as rebate_cents").
+		Select("user_id, MAX(username) as username, COALESCE(SUM(COALESCE(valid_turnover_cents,amount_cents)),0) as turnover, COALESCE(SUM(rebate_cents),0) as rebate_cents").
 		Where("workspace_id = ? AND COALESCE(settled_at,updated_at,created_at) >= ? AND status IN ?", workspaceID, start, []string{"won", "lost"}).
-		Group("user_id").Having("COALESCE(SUM(amount_cents),0) > 0")
+		Group("user_id").Having("COALESCE(SUM(COALESCE(valid_turnover_cents,amount_cents)),0) > 0")
 	rebateQuery = excludeRobotProfileBets(rebateQuery)
 	if err := rebateQuery.Scan(&rows).Error; err != nil {
 		return nil, apperrors.NewSystemError("REBATE_READ_FAILED", "统计回水流水失败", err)

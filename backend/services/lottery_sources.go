@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -58,6 +59,14 @@ type sourceDraw struct {
 	DrawAt     time.Time
 	NextIssue  string
 	NextDrawAt time.Time
+	// BingoSourceTail is the optional 21st value exposed by the 168 Taiwan
+	// Bingo endpoint. It duplicates the actual final/super ball and is retained
+	// only so order-dependent derived games can cross-check a second feed.
+	BingoSourceTail    int
+	HasBingoSourceTail bool
+	BingoOrderVerified bool
+	SourceRevision     string
+	ConversionRevision string
 }
 
 // SyncOfficialSources imports public draw results from the official lottery
@@ -167,11 +176,10 @@ func (s *LotteryService) syncOfficialGameWithPublisher(ctx context.Context, game
 	if err != nil {
 		return s.recordSyncErrorWithPublisher(gameID, err, publish)
 	}
-	// Validate the complete upstream batch before writing any row. Racing,
-	// flying and Lucky 10 results are permutations of 1..10; accepting a
-	// partial, duplicated or out-of-range result would make the immutable draw
-	// impossible to settle correctly. Doing this before the insert loop also
-	// prevents a response whose later row is malformed from being half-imported.
+	// Validate the complete transformed game batch before writing any row.
+	// Profiles are keyed by game ID, not the source's raw ball count (a Bingo
+	// feed can contain 20 balls before its racing/SSC transform is applied).
+	// Checking first prevents a malformed later row from being half-imported.
 	if err := validateSourceDrawBatch(game, draws); err != nil {
 		return s.recordSyncErrorWithPublisher(gameID, err, publish)
 	}
@@ -282,9 +290,30 @@ func validateSourceDrawBatch(game lottery.Game, draws []sourceDraw) error {
 }
 
 func insertOfficialDraws(db *gorm.DB, gameID string, draws []sourceDraw) (int, error) {
+	verifiedExisting, err := verifiedBingoExistingDraws(db, gameID, draws)
+	if err != nil {
+		return 0, err
+	}
 	imported := 0
 	for _, item := range draws {
-		draw := lottery.Draw{GameID: gameID, Issue: item.Issue, Numbers: joinNumbers(item.Numbers), DrawAt: item.DrawAt.UTC()}
+		draw := lottery.Draw{
+			GameID: gameID, Issue: item.Issue, Numbers: joinNumbers(item.Numbers), DrawAt: item.DrawAt.UTC(),
+			SourceRevision: item.SourceRevision, ConversionRevision: item.ConversionRevision,
+		}
+		if item.BingoOrderVerified {
+			if verifiedExisting[item.Issue] {
+				continue
+			}
+			// A verified missing issue is inserted without ON CONFLICT. If another
+			// writer races this transaction, the uniqueness error keeps the source
+			// unhealthy rather than silently accepting a row we did not compare.
+			result := db.Create(&draw)
+			if result.Error != nil {
+				return 0, result.Error
+			}
+			imported += int(result.RowsAffected)
+			continue
+		}
 		result := db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "game_id"}, {Name: "issue"}}, DoNothing: true}).Create(&draw)
 		if result.Error != nil {
 			return 0, result.Error
@@ -292,6 +321,199 @@ func insertOfficialDraws(db *gorm.DB, gameID string, draws []sourceDraw) (int, e
 		imported += int(result.RowsAffected)
 	}
 	return imported, nil
+}
+
+var errVerifiedBingoDrawConflict = errors.New("双源验证开奖与既有历史冲突")
+
+type verifiedBingoIncoming struct {
+	Numbers            []int
+	DrawAt             time.Time
+	SourceRevision     string
+	ConversionRevision string
+}
+
+type verifiedBingoLegacyUpdate struct {
+	ID     uint64
+	Values map[string]any
+}
+
+// verifiedBingoExistingDraws protects both the legacy transition and all
+// later verified revisions. Exact legacy results can be claimed by the new
+// revision. A mismatching legacy result may be corrected only when no live or
+// archived bet exists and its issue is not settled. Settled legacy history is
+// deliberately isolated (kept blank/non-current) so new periods can proceed;
+// unresolved financial evidence and current-revision mismatches fail closed.
+func verifiedBingoExistingDraws(db *gorm.DB, gameID string, draws []sourceDraw) (map[string]bool, error) {
+	incoming := make(map[string]verifiedBingoIncoming)
+	issues := make([]string, 0, len(draws))
+	for _, draw := range draws {
+		if !draw.BingoOrderVerified {
+			continue
+		}
+		issue := strings.TrimSpace(draw.Issue)
+		if issue == "" || strings.TrimSpace(draw.SourceRevision) == "" || strings.TrimSpace(draw.ConversionRevision) == "" {
+			return nil, fmt.Errorf("%w: 游戏 %s 的双源记录缺少期号或持久化版本", errVerifiedBingoDrawConflict, gameID)
+		}
+		if previous, exists := incoming[issue]; exists {
+			if !sameIntSequence(previous.Numbers, draw.Numbers) || !previous.DrawAt.Equal(draw.DrawAt.UTC()) ||
+				previous.SourceRevision != draw.SourceRevision || previous.ConversionRevision != draw.ConversionRevision {
+				return nil, verifiedBingoDrawConflictError(gameID, issue, joinNumbers(previous.Numbers), draw.Numbers)
+			}
+			return nil, fmt.Errorf("%w: 游戏 %s 第 %s 期在同一批次重复", errVerifiedBingoDrawConflict, gameID, issue)
+		}
+		incoming[issue] = verifiedBingoIncoming{
+			Numbers: append([]int(nil), draw.Numbers...), DrawAt: draw.DrawAt.UTC(),
+			SourceRevision: draw.SourceRevision, ConversionRevision: draw.ConversionRevision,
+		}
+		issues = append(issues, issue)
+	}
+	existingByIssue := make(map[string]bool, len(issues))
+	if len(issues) == 0 {
+		return existingByIssue, nil
+	}
+	var existing []lottery.Draw
+	if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("game_id = ? AND issue IN ?", gameID, issues).Find(&existing).Error; err != nil {
+		return nil, err
+	}
+	settled, err := settledBingoIssues(db, gameID, issues)
+	if err != nil {
+		return nil, err
+	}
+	evidence, err := bingoBetEvidenceByIssue(db, gameID, issues)
+	if err != nil {
+		return nil, err
+	}
+	updates := make([]verifiedBingoLegacyUpdate, 0, len(existing))
+	for _, row := range existing {
+		verified, ok := incoming[row.Issue]
+		if !ok {
+			return nil, fmt.Errorf("%w: 游戏 %s 查询到未请求的第 %s 期", errVerifiedBingoDrawConflict, gameID, row.Issue)
+		}
+		matchingNumbers := storedDrawNumbersEqual(row.Numbers, verified.Numbers)
+		matchingDraw := matchingNumbers && !row.DrawAt.IsZero() && row.DrawAt.UTC().Equal(verified.DrawAt.UTC())
+		currentRevision := row.SourceRevision == verified.SourceRevision && row.ConversionRevision == verified.ConversionRevision
+		if currentRevision {
+			if !matchingDraw {
+				return nil, fmt.Errorf("%w: 游戏 %s 第 %s 期的当前版本已有号码/时间 %q @ %s，与双源验证值 %q @ %s 不一致；同步已停止且不会自动覆盖，请转人工对账",
+					errVerifiedBingoDrawConflict, gameID, row.Issue, row.Numbers, row.DrawAt.UTC().Format(time.RFC3339Nano),
+					joinNumbers(verified.Numbers), verified.DrawAt.UTC().Format(time.RFC3339Nano))
+			}
+			existingByIssue[row.Issue] = true
+			continue
+		}
+		if matchingDraw {
+			updates = append(updates, verifiedBingoLegacyUpdate{ID: row.ID, Values: map[string]any{
+				"source_revision": verified.SourceRevision, "conversion_revision": verified.ConversionRevision,
+			}})
+			existingByIssue[row.Issue] = true
+			continue
+		}
+		if settled[row.Issue] {
+			// This published financial history remains intentionally legacy. It is
+			// never passed off as verified and settleImportedDrawBatch skips it.
+			existingByIssue[row.Issue] = true
+			continue
+		}
+		if evidence[row.Issue] > 0 {
+			return nil, verifiedBingoFinancialConflictError(gameID, row.Issue, evidence[row.Issue])
+		}
+		updates = append(updates, verifiedBingoLegacyUpdate{ID: row.ID, Values: map[string]any{
+			"numbers": joinNumbers(verified.Numbers), "draw_at": verified.DrawAt,
+			"source_revision": verified.SourceRevision, "conversion_revision": verified.ConversionRevision,
+		}})
+		existingByIssue[row.Issue] = true
+	}
+	// All rows are classified before the first mutation. In production this is
+	// inside the same import transaction and the earlier FOR UPDATE lock makes
+	// the financial-evidence decision and correction atomic.
+	for _, update := range updates {
+		result := db.Model(&lottery.Draw{}).Where("id = ?", update.ID).Updates(update.Values)
+		if result.Error != nil {
+			return nil, result.Error
+		}
+		if result.RowsAffected != 1 {
+			return nil, fmt.Errorf("%w: 旧开奖 %d 的原子升级未生效", errVerifiedBingoDrawConflict, update.ID)
+		}
+	}
+	return existingByIssue, nil
+}
+
+func settledBingoIssues(db *gorm.DB, gameID string, issues []string) (map[string]bool, error) {
+	var rows []string
+	if err := db.Model(&lottery.Issue{}).
+		Where("game_id = ? AND issue IN ? AND status = ?", gameID, issues, lottery.IssueStatusSettled).
+		Pluck("issue", &rows).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[string]bool, len(rows))
+	for _, issue := range rows {
+		result[issue] = true
+	}
+	return result, nil
+}
+
+func bingoBetEvidenceByIssue(db *gorm.DB, gameID string, issues []string) (map[string]int64, error) {
+	type evidenceRow struct {
+		Issue string
+		Count int64
+	}
+	var rows []evidenceRow
+	if err := db.Raw(`
+		SELECT evidence.issue, COUNT(*) AS count
+		FROM (
+			SELECT issue FROM lottery_bets WHERE game_id = ? AND issue IN ?
+			UNION ALL
+			SELECT issue FROM lottery_bet_archives WHERE game_id = ? AND issue IN ?
+		) AS evidence
+		GROUP BY evidence.issue`, gameID, issues, gameID, issues).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		result[row.Issue] = row.Count
+	}
+	return result, nil
+}
+
+func verifiedBingoDrawConflictError(gameID, issue, stored string, verified []int) error {
+	return fmt.Errorf("%w: 游戏 %s 第 %s 期的当前版本已有号码 %q，与双源验证号码 %q 不一致；同步已停止且不会自动覆盖，请转人工对账",
+		errVerifiedBingoDrawConflict, gameID, issue, stored, joinNumbers(verified))
+}
+
+func verifiedBingoFinancialConflictError(gameID, issue string, evidence int64) error {
+	return fmt.Errorf("%w: 游戏 %s 第 %s 期旧开奖与双源结果不一致，且存在 %d 条未隔离的投注证据；已保持原开奖与资金状态并停止同步，请转人工对账",
+		errVerifiedBingoDrawConflict, gameID, issue, evidence)
+}
+
+func storedDrawNumbersEqual(stored string, verified []int) bool {
+	tokens := strings.Split(stored, ",")
+	if len(tokens) != len(verified) {
+		return false
+	}
+	for index, token := range tokens {
+		token = strings.TrimSpace(token)
+		if token == "" || strings.IndexFunc(token, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+			return false
+		}
+		number, err := strconv.Atoi(token)
+		if err != nil || number != verified[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func sameIntSequence(first, second []int) bool {
+	if len(first) != len(second) {
+		return false
+	}
+	for index := range first {
+		if first[index] != second[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func settleImportedDrawBatch(db *gorm.DB, gameID string, draws []sourceDraw) {
@@ -363,30 +585,19 @@ func (s *LotteryService) importOfficialHistory(ctx context.Context, gameID strin
 }
 
 func validateOfficialDraws(game lottery.Game, draws []sourceDraw) error {
-	if !requiresTenUniqueDrawNumbers(game) {
+	profile, supported := rulesForGame(&game)
+	if !supported {
+		// Unmodelled products may retain/display raw external history. They
+		// cannot take new bets or perform financial settlement, and must never
+		// be inferred to be racing simply because they have 10 or 20 balls.
 		return nil
 	}
 	for _, draw := range draws {
-		if len(draw.Numbers) != 10 {
-			return fmt.Errorf("%s 第 %s 期开奖数据无效：赛车类必须包含恰好 10 个号码，实际为 %d 个", game.Name, sourceIssueLabel(draw.Issue), len(draw.Numbers))
-		}
-		seen := make(map[int]struct{}, 10)
-		for _, number := range draw.Numbers {
-			if number < 1 || number > 10 {
-				return fmt.Errorf("%s 第 %s 期开奖数据无效：号码 %d 超出 1~10", game.Name, sourceIssueLabel(draw.Issue), number)
-			}
-			if _, exists := seen[number]; exists {
-				return fmt.Errorf("%s 第 %s 期开奖数据无效：号码 %d 重复", game.Name, sourceIssueLabel(draw.Issue), number)
-			}
-			seen[number] = struct{}{}
+		if err := profile.validateDraw(draw.Numbers); err != nil {
+			return fmt.Errorf("%s 第 %s 期开奖数据无效：%w", game.Name, sourceIssueLabel(draw.Issue), err)
 		}
 	}
 	return nil
-}
-
-func requiresTenUniqueDrawNumbers(game lottery.Game) bool {
-	identity := game.Name + " " + game.Category
-	return strings.Contains(identity, "赛车") || strings.Contains(identity, "飞艇") || strings.Contains(identity, "幸运10")
 }
 
 func sourceIssueLabel(issue string) string {

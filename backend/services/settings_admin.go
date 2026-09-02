@@ -8,6 +8,7 @@ import (
 	"backend/ws"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -16,6 +17,8 @@ import (
 )
 
 type SettingsAdminService struct{ db *gorm.DB }
+
+const defaultLotterySourceURL = "https://www.www-163kai.cc/mobile.html"
 
 var defaultGameSettings = map[string]any{
 	"seal_seconds":                      defaultSealSeconds,
@@ -31,10 +34,12 @@ var defaultGameSettings = map[string]any{
 	"show_member_profit":                true,
 	"show_member_rebate":                true,
 	"web_keyboard_enabled":              true,
+	"pc28_gray_push":                    false,
 	"show_mipai_tool":                   true,
 	"show_orders_tool":                  true,
 	"show_streak_tool":                  true,
 	"show_prediction_tool":              true,
+	"lottery_source_url":                defaultLotterySourceURL,
 }
 
 // normalizeGameSettings keeps legacy room JSON compatible with settings added
@@ -47,11 +52,86 @@ func normalizeGameSettings(value string) json.RawMessage {
 	var stored map[string]any
 	if json.Unmarshal([]byte(value), &stored) == nil {
 		for key, item := range stored {
+			if key == "lottery_source_url" {
+				candidate, ok := item.(string)
+				if !ok {
+					continue
+				}
+				normalized, err := normalizeLotterySourceURL(candidate)
+				if err != nil {
+					continue
+				}
+				merged[key] = normalized
+				continue
+			}
 			merged[key] = item
 		}
 	}
 	encoded, _ := json.Marshal(merged)
 	return json.RawMessage(encoded)
+}
+
+// normalizeLotterySourceURL keeps the member-facing shortcut inside the same
+// external-link boundary as the rest of the product: absolute, credential-free
+// HTTPS only. In particular javascript:, data:, protocol-relative and embedded
+// credential URLs can never be persisted or returned to a member client.
+func normalizeLotterySourceURL(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = defaultLotterySourceURL
+	}
+	if len(value) > 2048 {
+		return "", apperrors.NewBusinessError("INVALID_SETTINGS", "开奖源地址过长")
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" {
+		return "", apperrors.NewBusinessError("INVALID_SETTINGS", "开奖源地址必须是完整的 HTTPS 地址")
+	}
+	parsed.Scheme = "https"
+	return parsed.String(), nil
+}
+
+func lotterySourceURLFromGame(value string) string {
+	var game map[string]any
+	if json.Unmarshal(normalizeGameSettings(value), &game) == nil {
+		if source, ok := game["lottery_source_url"].(string); ok {
+			return source
+		}
+	}
+	return defaultLotterySourceURL
+}
+
+func normalizedGameSettingsForUpdate(raw json.RawMessage, existing string, explicit *string) (json.RawMessage, error) {
+	source := lotterySourceURLFromGame(existing)
+	var requested map[string]any
+	if len(raw) > 0 && json.Unmarshal(raw, &requested) == nil {
+		if value, exists := requested["lottery_source_url"]; exists {
+			candidate, ok := value.(string)
+			if !ok {
+				return nil, apperrors.NewBusinessError("INVALID_SETTINGS", "开奖源地址格式不正确")
+			}
+			normalized, err := normalizeLotterySourceURL(candidate)
+			if err != nil {
+				return nil, err
+			}
+			source = normalized
+		}
+	}
+	if explicit != nil {
+		normalized, err := normalizeLotterySourceURL(*explicit)
+		if err != nil {
+			return nil, err
+		}
+		source = normalized
+	}
+	normalized := normalizeGameSettings(string(raw))
+	var game map[string]any
+	if err := json.Unmarshal(normalized, &game); err != nil {
+		return nil, apperrors.NewBusinessError("INVALID_SETTINGS", "游戏设置格式不正确")
+	}
+	game["lottery_source_url"] = source
+	encoded, _ := json.Marshal(game)
+	return json.RawMessage(encoded), nil
 }
 
 type AnnouncementItem struct {
@@ -80,6 +160,7 @@ type SystemSettingsView struct {
 	AbnormalLoginAlert    bool               `json:"abnormal_login_alert"`
 	SecurityPasswordCheck bool               `json:"security_password_check"`
 	RoomNotice            string             `json:"room_notice"`
+	LotterySourceURL      string             `json:"lottery_source_url"`
 	Announcements         []AnnouncementItem `json:"announcements"`
 	Game                  json.RawMessage    `json:"game"`
 	QuickReplies          json.RawMessage    `json:"quick_replies"`
@@ -103,6 +184,7 @@ type UpdateSystemSettingsInput struct {
 	AbnormalLoginAlert    bool               `json:"abnormal_login_alert"`
 	SecurityPasswordCheck bool               `json:"security_password_check"`
 	RoomNotice            string             `json:"room_notice"`
+	LotterySourceURL      *string            `json:"lottery_source_url"`
 	Announcements         []AnnouncementItem `json:"announcements"`
 	Game                  json.RawMessage    `json:"game"`
 	QuickReplies          json.RawMessage    `json:"quick_replies"`
@@ -210,11 +292,15 @@ func (s *SettingsAdminService) UpdateRoomIdentityForWorkspace(workspaceID uint64
 }
 
 func (s *SettingsAdminService) UpdateForWorkspace(workspaceID uint64, input UpdateSystemSettingsInput) (*SystemSettingsView, error) {
-	if err := validateGameTimingSettings(input.Game); err != nil {
-		return nil, err
-	}
 	row, err := s.ensure(workspaceID)
 	if err != nil {
+		return nil, err
+	}
+	gameSettings, err := normalizedGameSettingsForUpdate(input.Game, row.GameSettingsJSON, input.LotterySourceURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateGameTimingSettings(gameSettings); err != nil {
 		return nil, err
 	}
 	roomName := strings.Join(strings.Fields(input.RoomName), " ")
@@ -260,7 +346,7 @@ func (s *SettingsAdminService) UpdateForWorkspace(workspaceID uint64, input Upda
 		row.RoomNotice = strings.TrimSpace(input.RoomNotice)
 	}
 	previousGameSettings := row.GameSettingsJSON
-	row.GameSettingsJSON = string(normalizeGameSettings(string(input.Game)))
+	row.GameSettingsJSON = string(gameSettings)
 	row.QuickRepliesJSON = rawOrEmptyArray(input.QuickReplies)
 	row.RebateSettingsJSON = rawOrEmptyObject(input.Rebate)
 	var notificationWorkspace workspacemodel.Workspace
@@ -411,6 +497,7 @@ func (s *SettingsAdminService) ensure(workspaceID uint64) (*settings.SystemConfi
 
 func toSettingsView(row *settings.SystemConfig) *SystemSettingsView {
 	announcements := decodeAnnouncements(row.AnnouncementsJSON, row.RoomNotice)
+	game := normalizeGameSettings(row.GameSettingsJSON)
 	return &SystemSettingsView{
 		RoomName:              defaultString(strings.TrimSpace(row.RoomName), "王者大厅"),
 		RoomLogo:              row.RoomLogo,
@@ -428,8 +515,9 @@ func toSettingsView(row *settings.SystemConfig) *SystemSettingsView {
 		AbnormalLoginAlert:    row.AbnormalLoginAlert,
 		SecurityPasswordCheck: row.SecurityPasswordCheck,
 		RoomNotice:            row.RoomNotice,
+		LotterySourceURL:      lotterySourceURLFromGame(string(game)),
 		Announcements:         announcements,
-		Game:                  normalizeGameSettings(row.GameSettingsJSON),
+		Game:                  game,
 		QuickReplies:          json.RawMessage(defaultJSON(row.QuickRepliesJSON, `[]`)),
 		Rebate:                json.RawMessage(defaultJSON(row.RebateSettingsJSON, `{"enabled":true,"rate_percent":0.5,"min_turnover":0,"settle_mode":"daily","auto_credit":false}`)),
 	}

@@ -38,8 +38,8 @@ func (h *DashboardHandler) overview() (gin.H, error) {
 		key   string
 		query *gorm.DB
 	}{
-		{"member_count", h.db.Model(&user.User{}).Where("role = ?", "member")},
-		{"active_member_count", h.db.Model(&user.User{}).Where("role = ? AND status = ?", "member", 1)},
+		{"member_count", platformMemberCountQuery(h.db, false)},
+		{"active_member_count", platformMemberCountQuery(h.db, true)},
 		{"agent_count", h.db.Model(&user.User{}).Where("role = ?", "agent")},
 		{"active_agent_count", h.db.Model(&user.User{}).Where("role = ? AND status = ?", "agent", 1)},
 		{"tenant_count", h.db.Model(&user.User{}).Where("role = ?", "tenant")},
@@ -69,6 +69,14 @@ func (h *DashboardHandler) overview() (gin.H, error) {
 func platformPendingApplicationQuery(db *gorm.DB) *gorm.DB {
 	return db.Model(&application.Application{}).
 		Where("status = ? AND request_type <> ?", "pending", "join")
+}
+
+func platformMemberCountQuery(db *gorm.DB, activeOnly bool) *gorm.DB {
+	query := services.HumanMemberQuery(db)
+	if activeOnly {
+		query = query.Where(`"user".status = ?`, 1)
+	}
+	return query
 }
 
 func (h *DashboardHandler) SyncOfficialSources(c *gin.Context) {

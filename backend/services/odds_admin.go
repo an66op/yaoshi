@@ -4,8 +4,12 @@ import (
 	"backend/data/models/lottery"
 	"backend/data/models/odds"
 	apperrors "backend/errors"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -14,29 +18,46 @@ import (
 type OddsAdminService struct{ db *gorm.DB }
 
 type PlayLimitItem struct {
-	PlayCode       string  `json:"play_code"`
-	PlayName       string  `json:"play_name"`
-	Odds           float64 `json:"odds"`
-	MinBet         float64 `json:"min_bet"`
-	MaxBet         float64 `json:"max_bet"`
-	MaxUserPeriod  float64 `json:"max_user_period"`
-	MaxPeriodTotal float64 `json:"max_period_total"`
-	SortOrder      int     `json:"sort_order"`
+	PlayCode            string     `json:"play_code"`
+	PlayName            string     `json:"play_name"`
+	Odds                float64    `json:"odds"`
+	MinBet              float64    `json:"min_bet"`
+	MaxBet              float64    `json:"max_bet"`
+	MaxUserPeriod       float64    `json:"max_user_period"`
+	MaxPeriodTotal      float64    `json:"max_period_total"`
+	SortOrder           int        `json:"sort_order"`
+	Configured          bool       `json:"configured"`
+	RuleVersion         string     `json:"rule_version"`
+	ConfigurationSource string     `json:"configuration_source"`
+	ConfiguredAt        *time.Time `json:"configured_at,omitempty"`
 }
 
+const (
+	oddsSourceAdminSave           = "admin_save"
+	oddsSourceUnconfigured        = "unconfigured"
+	oddsSourceRuleVersionMismatch = "rule_version_mismatch"
+)
+
 type GameOddsLimits struct {
-	GameID   string          `json:"game_id"`
-	GameName string          `json:"game_name"`
-	Items    []PlayLimitItem `json:"items"`
+	GameID         string            `json:"game_id"`
+	GameName       string            `json:"game_name"`
+	Items          []PlayLimitItem   `json:"items"`
+	RulesReady     bool              `json:"rules_ready"`
+	RuleVersion    string            `json:"rule_version"`
+	ConfigRevision string            `json:"config_revision"`
+	RulesMessage   string            `json:"rules_message"`
+	RiskWarnings   []OddsRiskWarning `json:"risk_warnings"`
 }
 
 type UpdateOddsLimitsInput struct {
-	Items []PlayLimitItem `json:"items"`
+	ExpectedRuleVersion string          `json:"expected_rule_version"`
+	ExpectedRevision    string          `json:"expected_revision"`
+	Items               []PlayLimitItem `json:"items"`
 }
 
-type SyncOddsLimitsResult struct {
-	GameCount   int      `json:"game_count"`
-	SeededGames []string `json:"seeded_games"`
+type OddsMutationGuard struct {
+	ExpectedRuleVersion string `json:"expected_rule_version"`
+	ExpectedRevision    string `json:"expected_revision"`
 }
 
 func NewOddsAdminService(db *gorm.DB) *OddsAdminService {
@@ -48,27 +69,82 @@ func (s *OddsAdminService) Get(gameID string) (*GameOddsLimits, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.ensureDefaults(game.ID); err != nil {
-		return nil, err
+	profile, ready := rulesForGame(game)
+	if !ready {
+		return &GameOddsLimits{GameID: game.ID, GameName: game.Name, Items: []PlayLimitItem{}, RulesMessage: gameRulesUnavailableMessage}, nil
 	}
 	var rows []odds.PlayLimit
 	if err := s.db.Where("game_id = ?", game.ID).Order("sort_order asc, id asc").Find(&rows).Error; err != nil {
 		return nil, apperrors.NewSystemError("ODDS_READ_FAILED", "读取赔率限额失败", err)
 	}
-	items := make([]PlayLimitItem, 0, len(rows))
+	// Get is deliberately read-only. Missing, unconfirmed, or older-version
+	// prices remain unavailable until an administrator explicitly saves the
+	// complete current catalogue.
+	items := playLimitItemsForProfile(game.ID, profile, PlayCatalogForGame(game.ID), rows)
+	return &GameOddsLimits{
+		GameID: game.ID, GameName: game.Name, Items: items, RulesReady: true,
+		RuleVersion: profile.Version, ConfigRevision: oddsConfigRevision(profile.Version, items),
+		RiskWarnings: playLimitOddsRisks(game.ID, items),
+	}, nil
+}
+
+func playLimitItemsForProfile(gameID string, profile gameRuleProfile, catalog []PlayCatalogItem, rows []odds.PlayLimit) []PlayLimitItem {
+	allowed := make(map[string]struct{}, len(catalog))
+	for _, item := range catalog {
+		allowed[item.PlayCode] = struct{}{}
+	}
+	configured := make(map[string]odds.PlayLimit, len(rows))
 	for _, row := range rows {
+		if _, ok := allowed[row.PlayCode]; ok {
+			configured[row.PlayCode] = row
+		}
+	}
+	items := make([]PlayLimitItem, 0, len(catalog))
+	for _, item := range catalog {
+		row, ok := configured[item.PlayCode]
+		if ok {
+			rowConfigured := row.Odds > 1 && row.ExplicitlyConfigured && strings.TrimSpace(row.RuleVersion) == profile.Version
+			source := strings.TrimSpace(row.ConfigurationSource)
+			if strings.TrimSpace(row.RuleVersion) != "" && strings.TrimSpace(row.RuleVersion) != profile.Version {
+				source = oddsSourceRuleVersionMismatch
+			} else if source == "" || !rowConfigured {
+				source = oddsSourceUnconfigured
+			}
+			value := row.Odds
+			configuredAt := row.ConfiguredAt
+			if !rowConfigured {
+				value, configuredAt = 0, nil
+			}
+			items = append(items, PlayLimitItem{
+				PlayCode: row.PlayCode, PlayName: profile.playName(row.PlayCode, row.PlayName), Odds: value,
+				MinBet: row.MinBet, MaxBet: row.MaxBet, MaxUserPeriod: row.MaxUserPeriod,
+				MaxPeriodTotal: row.MaxPeriodTotal, SortOrder: item.SortOrder, Configured: rowConfigured,
+				RuleVersion: row.RuleVersion, ConfigurationSource: source, ConfiguredAt: configuredAt,
+			})
+			continue
+		}
 		items = append(items, PlayLimitItem{
-			PlayCode:       row.PlayCode,
-			PlayName:       row.PlayName,
-			Odds:           row.Odds,
-			MinBet:         row.MinBet,
-			MaxBet:         row.MaxBet,
-			MaxUserPeriod:  row.MaxUserPeriod,
-			MaxPeriodTotal: row.MaxPeriodTotal,
-			SortOrder:      row.SortOrder,
+			PlayCode: item.PlayCode, PlayName: item.PlayName, Odds: 0,
+			MinBet: 1, MaxBet: 50000, MaxUserPeriod: 50000, MaxPeriodTotal: 100000,
+			SortOrder: item.SortOrder, Configured: false, ConfigurationSource: oddsSourceUnconfigured,
 		})
 	}
-	return &GameOddsLimits{GameID: game.ID, GameName: game.Name, Items: items}, nil
+	return items
+}
+
+func oddsConfigRevision(ruleVersion string, items []PlayLimitItem) string {
+	hash := sha256.New()
+	_, _ = fmt.Fprintf(hash, "rule=%s\n", strings.TrimSpace(ruleVersion))
+	for _, item := range items {
+		configuredAt := ""
+		if item.ConfiguredAt != nil {
+			configuredAt = item.ConfiguredAt.UTC().Format(time.RFC3339Nano)
+		}
+		_, _ = fmt.Fprintf(hash, "%s\x00%.4f\x00%.2f\x00%.2f\x00%.2f\x00%.2f\x00%t\x00%s\x00%s\x00%s\n",
+			item.PlayCode, item.Odds, item.MinBet, item.MaxBet, item.MaxUserPeriod, item.MaxPeriodTotal,
+			item.Configured, item.RuleVersion, item.ConfigurationSource, configuredAt)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func (s *OddsAdminService) Update(gameID string, input UpdateOddsLimitsInput) (*GameOddsLimits, error) {
@@ -76,97 +152,187 @@ func (s *OddsAdminService) Update(gameID string, input UpdateOddsLimitsInput) (*
 	if err != nil {
 		return nil, err
 	}
-	if len(input.Items) == 0 {
-		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "至少需要一条玩法配置")
+	if err := ensureGameRulesSupported(game); err != nil {
+		return nil, err
 	}
-	seen := map[string]struct{}{}
-	for i, item := range input.Items {
-		code := strings.TrimSpace(item.PlayCode)
-		name := strings.TrimSpace(item.PlayName)
-		if code == "" || name == "" {
-			return nil, apperrors.NewBusinessError("INVALID_REQUEST", "玩法编号和名称不能为空")
-		}
-		if _, ok := seen[code]; ok {
-			return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("玩法编号重复: %s", code))
-		}
-		seen[code] = struct{}{}
-		if item.Odds <= 1 {
-			return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 赔率必须大于 1", name))
-		}
-		if item.MinBet < 0 || item.MaxBet < 0 || item.MaxUserPeriod < 0 || item.MaxPeriodTotal < 0 {
-			return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 限额不能为负数", name))
-		}
-		if item.MaxBet > 0 && item.MinBet > item.MaxBet {
-			return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 单注最低不能高于单注最高", name))
-		}
-		input.Items[i].PlayCode = code
-		input.Items[i].PlayName = name
-		if input.Items[i].SortOrder == 0 {
-			input.Items[i].SortOrder = i
-		}
+	profile, _ := rulesForGame(game)
+	if err := validateOddsMutationGuard(profile.Version, input.ExpectedRuleVersion, input.ExpectedRevision); err != nil {
+		return nil, err
+	}
+	catalog := PlayCatalogForGame(game.ID)
+	normalized, err := normalizeOddsLimitItems(catalog, input.Items)
+	if err != nil {
+		return nil, err
 	}
 
 	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var locked lottery.Game
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, "id = ?", game.ID).Error; err != nil {
+			return err
+		}
+		current, err := NewOddsAdminService(tx).Get(game.ID)
+		if err != nil {
+			return err
+		}
+		if current.RuleVersion != input.ExpectedRuleVersion || current.ConfigRevision != input.ExpectedRevision {
+			return apperrors.NewBusinessError("ODDS_CONFIGURATION_CONFLICT", "赔率配置已被其他操作更新，请刷新后重新编辑")
+		}
 		if err := tx.Where("game_id = ?", game.ID).Delete(&odds.PlayLimit{}).Error; err != nil {
 			return err
 		}
-		rows := make([]odds.PlayLimit, 0, len(input.Items))
-		for _, item := range input.Items {
+		rows := make([]odds.PlayLimit, 0, len(normalized))
+		closedCodes := make([]string, 0, len(normalized))
+		configuredAt := time.Now().UTC()
+		for _, item := range normalized {
+			if item.Odds == 0 {
+				closedCodes = append(closedCodes, item.PlayCode)
+				continue
+			}
 			rows = append(rows, odds.PlayLimit{
-				GameID:         game.ID,
-				PlayCode:       item.PlayCode,
-				PlayName:       item.PlayName,
-				Odds:           item.Odds,
-				MinBet:         item.MinBet,
-				MaxBet:         item.MaxBet,
-				MaxUserPeriod:  item.MaxUserPeriod,
-				MaxPeriodTotal: item.MaxPeriodTotal,
-				SortOrder:      item.SortOrder,
+				GameID:               game.ID,
+				PlayCode:             item.PlayCode,
+				PlayName:             item.PlayName,
+				Odds:                 roundOdds(item.Odds),
+				MinBet:               item.MinBet,
+				MaxBet:               item.MaxBet,
+				MaxUserPeriod:        item.MaxUserPeriod,
+				MaxPeriodTotal:       item.MaxPeriodTotal,
+				SortOrder:            item.SortOrder,
+				ExplicitlyConfigured: true,
+				RuleVersion:          profile.Version,
+				ConfigurationSource:  oddsSourceAdminSave,
+				ConfiguredAt:         &configuredAt,
 			})
 		}
-		return tx.Create(&rows).Error
+		if len(rows) > 0 {
+			if err := tx.Create(&rows).Error; err != nil {
+				return err
+			}
+		}
+		return deleteLowerLevelOddsOverrides(tx, game.ID, closedCodes)
 	})
 	if err != nil {
+		if apperrors.IsBusinessError(err) {
+			return nil, err
+		}
 		return nil, apperrors.NewSystemError("ODDS_SAVE_FAILED", "保存赔率限额失败", err)
 	}
 	return s.Get(game.ID)
 }
 
-func (s *OddsAdminService) Reset(gameID string) (*GameOddsLimits, error) {
+func validateOddsMutationGuard(currentRuleVersion, expectedRuleVersion, expectedRevision string) error {
+	if strings.TrimSpace(expectedRuleVersion) == "" || strings.TrimSpace(expectedRevision) == "" {
+		return apperrors.NewBusinessError("INVALID_REQUEST", "缺少赔率配置版本，请刷新页面后重试")
+	}
+	if strings.TrimSpace(expectedRuleVersion) != strings.TrimSpace(currentRuleVersion) {
+		return apperrors.NewBusinessError("RULE_VERSION_CONFLICT", "玩法规则版本已更新，请刷新赔率页面后重新配置")
+	}
+	return nil
+}
+
+func normalizeOddsLimitItems(catalog []PlayCatalogItem, input []PlayLimitItem) ([]PlayLimitItem, error) {
+	if len(input) != len(catalog) {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "必须提交当前彩种的完整玩法目录")
+	}
+	provided := make(map[string]PlayLimitItem, len(input))
+	for _, item := range input {
+		code := strings.TrimSpace(item.PlayCode)
+		if code == "" {
+			return nil, apperrors.NewBusinessError("INVALID_REQUEST", "玩法编号不能为空")
+		}
+		if _, exists := provided[code]; exists {
+			return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("玩法编号重复: %s", code))
+		}
+		provided[code] = item
+	}
+	normalized := make([]PlayLimitItem, 0, len(catalog))
+	for index, spec := range catalog {
+		item, exists := provided[spec.PlayCode]
+		if !exists {
+			return nil, apperrors.NewBusinessError("INVALID_REQUEST", "缺少玩法配置: "+spec.PlayCode)
+		}
+		item.PlayCode, item.PlayName, item.SortOrder = spec.PlayCode, spec.PlayName, index
+		item.Odds = roundOdds(item.Odds)
+		values := []float64{item.Odds, item.MinBet, item.MaxBet, item.MaxUserPeriod, item.MaxPeriodTotal}
+		for _, value := range values {
+			if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+				return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 赔率与限额必须是非负有限数值", item.PlayName))
+			}
+		}
+		if item.Odds != 0 && item.Odds <= 1 {
+			return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 赔率必须大于 1，填 0 表示关闭", item.PlayName))
+		}
+		for _, limit := range []float64{item.MinBet, item.MaxBet, item.MaxUserPeriod, item.MaxPeriodTotal} {
+			if math.Abs(roundMoney(limit)-limit) > 0.0000001 {
+				return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 限额最多保留两位小数", item.PlayName))
+			}
+		}
+		if item.Odds > 1 && item.MinBet <= 0 {
+			return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 开启时单注最低必须大于 0", item.PlayName))
+		}
+		if item.MaxBet > 0 && item.MinBet > item.MaxBet {
+			return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 单注最低不能高于单注最高", item.PlayName))
+		}
+		if item.MaxUserPeriod > 0 && item.MaxBet > item.MaxUserPeriod {
+			return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 单注最高不能高于会员单期限额", item.PlayName))
+		}
+		if item.MaxPeriodTotal > 0 && item.MaxUserPeriod > item.MaxPeriodTotal {
+			return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 会员单期限额不能高于全房单期限额", item.PlayName))
+		}
+		normalized = append(normalized, item)
+	}
+	return normalized, nil
+}
+
+func deleteLowerLevelOddsOverrides(tx *gorm.DB, gameID string, playCodes []string) error {
+	if len(playCodes) == 0 {
+		return nil
+	}
+	if err := tx.Where("game_id = ? AND play_code IN ?", gameID, playCodes).Delete(&odds.RoomPlayOdds{}).Error; err != nil {
+		return err
+	}
+	return tx.Where("game_id = ? AND play_code IN ?", gameID, playCodes).Delete(&odds.UserPlayOdds{}).Error
+}
+
+func (s *OddsAdminService) Reset(gameID string, guard OddsMutationGuard) (*GameOddsLimits, error) {
 	game, err := s.loadGame(gameID)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.db.Where("game_id = ?", game.ID).Delete(&odds.PlayLimit{}).Error; err != nil {
-		return nil, apperrors.NewSystemError("ODDS_RESET_FAILED", "重置赔率限额失败", err)
-	}
-	if err := s.ensureDefaults(game.ID); err != nil {
+	if err := ensureGameRulesSupported(game); err != nil {
 		return nil, err
 	}
+	profile, _ := rulesForGame(game)
+	if err := validateOddsMutationGuard(profile.Version, guard.ExpectedRuleVersion, guard.ExpectedRevision); err != nil {
+		return nil, err
+	}
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var locked lottery.Game
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, "id = ?", game.ID).Error; err != nil {
+			return err
+		}
+		current, err := NewOddsAdminService(tx).Get(game.ID)
+		if err != nil {
+			return err
+		}
+		if current.RuleVersion != guard.ExpectedRuleVersion || current.ConfigRevision != guard.ExpectedRevision {
+			return apperrors.NewBusinessError("ODDS_CONFIGURATION_CONFLICT", "赔率配置已被其他操作更新，请刷新后重试")
+		}
+		if err := tx.Where("game_id = ?", game.ID).Delete(&odds.PlayLimit{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("game_id = ?", game.ID).Delete(&odds.RoomPlayOdds{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("game_id = ?", game.ID).Delete(&odds.UserPlayOdds{}).Error
+	})
+	if err != nil {
+		if apperrors.IsBusinessError(err) {
+			return nil, err
+		}
+		return nil, apperrors.NewSystemError("ODDS_RESET_FAILED", "清空赔率限额失败", err)
+	}
 	return s.Get(game.ID)
-}
-
-func (s *OddsAdminService) SyncAllGames() (*SyncOddsLimitsResult, error) {
-	var games []lottery.Game
-	if err := s.db.Order("sort_order asc, id asc").Find(&games).Error; err != nil {
-		return nil, apperrors.NewSystemError("GAME_READ_FAILED", "读取游戏列表失败", err)
-	}
-	result := &SyncOddsLimitsResult{SeededGames: make([]string, 0)}
-	for _, game := range games {
-		var count int64
-		if err := s.db.Model(&odds.PlayLimit{}).Where("game_id = ?", game.ID).Count(&count).Error; err != nil {
-			return nil, err
-		}
-		if count > 0 {
-			continue
-		}
-		if err := s.ensureDefaults(game.ID); err != nil {
-			return nil, err
-		}
-		result.SeededGames = append(result.SeededGames, game.ID)
-	}
-	result.GameCount = len(games)
-	return result, nil
 }
 
 func (s *OddsAdminService) loadGame(gameID string) (*lottery.Game, error) {
@@ -184,31 +350,5 @@ func (s *OddsAdminService) loadGame(gameID string) (*lottery.Game, error) {
 	return &game, nil
 }
 
-func (s *OddsAdminService) EnsureGameDefaults(gameID string) error {
-	return s.ensureDefaults(gameID)
-}
-
-func (s *OddsAdminService) ensureDefaults(gameID string) error {
-	var count int64
-	if err := s.db.Model(&odds.PlayLimit{}).Where("game_id = ?", gameID).Count(&count).Error; err != nil {
-		return apperrors.NewSystemError("ODDS_READ_FAILED", "读取赔率限额失败", err)
-	}
-	if count > 0 {
-		return nil
-	}
-	rows := make([]odds.PlayLimit, 0, len(defaultPlays))
-	for i, play := range defaultPlays {
-		rows = append(rows, odds.PlayLimit{
-			GameID:         gameID,
-			PlayCode:       play.Code,
-			PlayName:       play.Name,
-			Odds:           play.Odds,
-			MinBet:         1,
-			MaxBet:         50000,
-			MaxUserPeriod:  50000,
-			MaxPeriodTotal: 100000,
-			SortOrder:      i,
-		})
-	}
-	return s.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
-}
+// odds writes are intentionally never initialized from code. The catalogue
+// supplies structure only; administrators own every numeric quote.

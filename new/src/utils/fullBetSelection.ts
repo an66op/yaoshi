@@ -1,11 +1,11 @@
-import type { PlayOdds } from './gameRoomSafety'
+import type { BasePlayCode } from './gameRoomSafety'
 import { formatBetAmount } from './betAmount'
 
 export const racingRanks = ['冠军', '亚军', '第三名', '第四名', '第五名', '第六名', '第七名', '第八名', '第九名', '第十名']
-export type BoardSelection = { position: number; selection: string; playCode: keyof PlayOdds }
+export type BoardSelection = { position: number; selection: string; playCode: BasePlayCode }
 export const boardSelectionKey = (item: BoardSelection) => `${item.playCode}:${item.position}:${item.selection}`
 export const boardRankLabel = (position: number) => racingRanks[position - 1] ?? `第${position}名`
-export const boardChoiceCode = (choice: string): keyof PlayOdds => /^\d+$/.test(choice) ? 'ball_1_5' : /[龙虎]/.test(choice) ? 'dragon_tiger' : 'two_sided'
+export const boardChoiceCode = (choice: string): BasePlayCode => /^\d+$/.test(choice) ? 'ball_1_5' : /[龙虎]/.test(choice) ? 'dragon_tiger' : 'two_sided'
 
 export function boardChoiceState(items: BoardSelection[], positions: number[], choice: string, sum = false): boolean | 'mixed' {
   const count = positions.filter(position => items.some(item => item.position === position && item.selection === choice && item.playCode === (sum ? 'sum' : boardChoiceCode(choice)))).length

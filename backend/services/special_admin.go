@@ -294,7 +294,7 @@ func (s *SpecialAdminService) ResolveRoom(code string) (*RoomResolveResult, erro
 	return &RoomResolveResult{
 		RoomCode:      code,
 		RoomName:      defaultString(strings.TrimSpace(workspace.Name), owner.Username),
-		RoomLogo:      workspace.Logo,
+		RoomLogo:      roomLogoForDisplay(workspace.Logo),
 		AgentID:       agentID,
 		AgentUsername: owner.Username,
 		AgentNickname: defaultString(owner.Nickname, owner.Username),

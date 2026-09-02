@@ -25,6 +25,9 @@ export type Game = {
   sourceHealthy: boolean
   syncStatus: string
   sourceError: string
+  rulesReady?: boolean
+  ruleVersion?: string
+  rulesMessage?: string
   lastSyncAt?: string
 }
 

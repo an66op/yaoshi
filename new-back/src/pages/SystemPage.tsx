@@ -26,18 +26,22 @@ import SaveRounded from '@mui/icons-material/SaveRounded'
 import AddRounded from '@mui/icons-material/AddRounded'
 import DeleteRounded from '@mui/icons-material/DeleteRounded'
 import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
-import { adminApi, type AuditLogPage, type RebatePreview, type ReconciliationSummary, type SystemSettings } from '../api'
+import { adminApi, type AdminGame, type AuditLogPage, type RebatePreview, type ReconciliationSummary, type SystemSettings } from '../api'
+import { GameSealSecondsOverrides } from '../components/GameSealSecondsOverrides'
+import { validGameTimingOverrides } from '../utils/gameTimingOverrides'
 import { PageHeader } from '../components/PageHeader'
 import { RoomLogoPicker } from '../components/RoomLogoPicker'
 import { SealSecondsField } from '../components/SealSecondsField'
 import { useFeedback } from '../components/feedback'
 import { prepareRoomLogo } from '../utils/roomLogo'
 import { SEAL_SECONDS_ERROR, isValidSealSeconds } from '../utils/sealSeconds'
+import { DEFAULT_LOTTERY_SOURCE_URL, isValidLotterySourceURL } from '../utils/lotterySourceURL'
 
 const emptySettings = (): SystemSettings => ({
   room_name: '王者大厅',
   room_logo: '',
   chat_nickname: '群主',
+  lottery_source_url: DEFAULT_LOTTERY_SOURCE_URL,
   nickname_display_length: 0,
   min_chat_score: 0,
   min_credit_amount: 0,
@@ -65,6 +69,7 @@ const emptySettings = (): SystemSettings => ({
     show_member_profit: true,
     show_member_rebate: true,
     web_keyboard_enabled: true,
+    pc28_gray_push: false,
     show_mipai_tool: true,
     show_orders_tool: true,
     show_streak_tool: true,
@@ -106,6 +111,7 @@ const money = (value: number) => new Intl.NumberFormat('zh-CN', { minimumFractio
 export function SystemPage() {
   const [tab, setTab] = useState(0)
   const [settings, setSettings] = useState<SystemSettings>(emptySettings)
+  const [games, setGames] = useState<AdminGame[]>([])
   const [rebatePreview, setRebatePreview] = useState<RebatePreview | null>(null)
   const [auditLogs, setAuditLogs] = useState<AuditLogPage | null>(null)
   const [reconciliation, setReconciliation] = useState<ReconciliationSummary | null>(null)
@@ -139,8 +145,8 @@ export function SystemPage() {
     setLoading(true)
     setError('')
     try {
-      const [result, preview, logs, check] = await Promise.all([
-        adminApi.settings(), adminApi.rebatePreview(), adminApi.auditLogs(), adminApi.reconciliation(),
+      const [result, preview, logs, check, gameRows] = await Promise.all([
+        adminApi.settings(), adminApi.rebatePreview(), adminApi.auditLogs(), adminApi.reconciliation(), adminApi.games(),
       ])
       setSettings({
         ...emptySettings(),
@@ -152,6 +158,7 @@ export function SystemPage() {
       setRebatePreview(preview)
       setAuditLogs(logs)
       setReconciliation(check)
+      setGames(gameRows)
       if (notify) showMessage('系统设置已刷新')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '读取系统设置失败')
@@ -165,6 +172,14 @@ export function SystemPage() {
   const save = async () => {
     if (!isValidSealSeconds(settings.game.seal_seconds)) {
       setError(SEAL_SECONDS_ERROR)
+      return
+    }
+    if (!validGameTimingOverrides(settings.game.game_timing_overrides)) {
+      setError('彩种封盘秒数必须为 0～86400 的整数')
+      return
+    }
+    if (!isValidLotterySourceURL(settings.lottery_source_url)) {
+      setError('开奖源地址必须是完整、无账号密码的 HTTPS 地址')
       return
     }
     setSaving(true)
@@ -283,6 +298,20 @@ export function SystemPage() {
                 </Box>
               </Paper>
               <Paper variant="outlined" sx={{ p: 2 }}>
+                <Typography fontWeight={850} mb={.4}>外部开奖信息快捷入口</Typography>
+                <Typography variant="caption" color="text.secondary" display="block" mb={1.5}>配置平台大厅会员右侧工具栏最上方的跳转；租户/代理专属房间在各自“房间设置”中独立配置，不改变实际抓取和结算来源。</Typography>
+                <TextField
+                  fullWidth
+                  type="url"
+                  label="开奖源 HTTPS 地址"
+                  placeholder={DEFAULT_LOTTERY_SOURCE_URL}
+                  value={settings.lottery_source_url}
+                  onChange={event => setSettings(current => ({ ...current, lottery_source_url: event.target.value }))}
+                  inputProps={{ maxLength: 2048 }}
+                  helperText="仅允许完整 HTTPS 地址；留空会恢复 163 默认开奖源。"
+                />
+              </Paper>
+              <Paper variant="outlined" sx={{ p: 2 }}>
                 <Typography fontWeight={850} mb={1.5}>访问、声音与安全</Typography>
                 <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)', xl: 'repeat(3,1fr)' }, gap: 1.25 }}>
                   {toggles.map(item => (
@@ -328,7 +357,24 @@ export function SystemPage() {
                     label="允许待结算撤单"
                   />
                 </Paper>
+                <Paper variant="outlined" sx={{ p: 1.2 }}>
+                  <FormControlLabel
+                    control={<Switch checked={Boolean(settings.game.pc28_gray_push)} onChange={e => setSettings(current => ({ ...current, game: { ...current.game, pc28_gray_push: e.target.checked } }))} />}
+                    label="PC28 灰/黄波返本"
+                  />
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    开启后和值 0、13、14、27 开灰/黄波时，色波注单返还本金；关闭时按未中奖结算。下注时会冻结该设置。
+                  </Typography>
+                </Paper>
               </Box>
+              <GameSealSecondsOverrides
+                scope="platform"
+                games={games}
+                defaultSeconds={settings.game.seal_seconds}
+                value={settings.game.game_timing_overrides}
+                disabled={saving}
+                onChange={game_timing_overrides => setSettings(current => ({ ...current, game: { ...current.game, game_timing_overrides } }))}
+              />
               <Alert severity="info">自动下注账号、运行时段和安全限额统一在“机器人管理”中按房间配置。</Alert>
             </Stack>
           ) : tab === 2 ? (

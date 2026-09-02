@@ -396,13 +396,22 @@ func (h *WorkspaceHandler) Agents(c *gin.Context) {
 func (h *WorkspaceHandler) DirectUsers(c *gin.Context) {
 	raw, ok := c.Get("tenant_user")
 	account, valid := raw.(user.User)
-	if !ok || !valid {
+	if !ok || !valid || account.UserID == 0 || account.WorkspaceID == 0 {
 		constants.SendError(c, http.StatusUnauthorized, "请先登录", nil)
 		return
 	}
+	var memberID uint64
+	if rawID := c.Query("user_id"); rawID != "" {
+		var err error
+		memberID, err = strconv.ParseUint(rawID, 10, 63)
+		if err != nil || memberID == 0 {
+			constants.SendError(c, http.StatusBadRequest, "会员编号不正确", nil)
+			return
+		}
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	result, err := services.NewUserAdminService(h.db).List(services.UserListFilter{WorkspaceID: account.WorkspaceID, Kind: "member", Query: c.Query("query"), Status: c.DefaultQuery("status", "all"), Page: page, PageSize: pageSize})
+	result, err := services.NewWorkspaceMemberService(h.db).List(account.WorkspaceID, services.UserListFilter{UserID: memberID, Query: c.Query("query"), Status: c.DefaultQuery("status", "all"), Page: page, PageSize: pageSize})
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取直属房间会员失败", err)
 		return

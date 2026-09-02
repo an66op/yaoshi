@@ -18,14 +18,30 @@ type Bet struct {
 	PlayName  string `gorm:"size:40;not null" json:"play_name"`
 	Position  int    `gorm:"not null;default:0;uniqueIndex:idx_bet_dedupe" json:"position"`
 	Selection string `gorm:"size:40;not null;uniqueIndex:idx_bet_dedupe" json:"selection"`
+	// Empty versions preserve the legacy contract. New stakes freeze their
+	// version so a rules fix cannot reinterpret or merge into an older ticket.
+	RuleVersion string `gorm:"size:32;not null;default:'';uniqueIndex:idx_bet_dedupe" json:"rule_version,omitempty"`
 	// RequestReference links an idempotent debit ledger to the exact bet rows
 	// committed by that request. Empty references retain legacy aggregation.
 	RequestReference string  `gorm:"size:180;not null;default:'';index:idx_bet_request_evidence,priority:3;uniqueIndex:idx_bet_dedupe" json:"-"`
 	AmountCents      int64   `gorm:"not null" json:"-"`
 	Odds             float64 `gorm:"not null;default:1.993" json:"odds"`
-	Status           string  `gorm:"size:20;not null;default:pending;index" json:"status"`
-	PayoutCents      int64   `gorm:"not null;default:0" json:"-"`
-	FlyCents         int64   `gorm:"not null;default:0" json:"-"`
+	// ValidTurnoverCents is separate from the actual stake. New tickets freeze
+	// the stake here; settlement may set it to zero for a push or pc28-v1
+	// 13/14 without changing actual GGR. NULL preserves legacy rows so reports
+	// can safely COALESCE to AmountCents.
+	ValidTurnoverCents *int64 `json:"-"`
+	// SettlementOdds is the effective payout multiplier after versioned PC28
+	// 13/14 rules. Odds remains the immutable price quoted at placement.
+	SettlementOdds              *float64 `json:"settlement_odds,omitempty"`
+	UserIssueStakeCentsSnapshot *int64   `json:"-"`
+	SettlementPolicy            string   `gorm:"size:64;not null;default:''" json:"settlement_policy,omitempty"`
+	// PC28GrayPush freezes the room's gray/yellow-wave return setting when the
+	// ticket is accepted; editing room settings later cannot rewrite history.
+	PC28GrayPush bool   `gorm:"not null;default:false" json:"-"`
+	Status       string `gorm:"size:20;not null;default:pending;index" json:"status"`
+	PayoutCents  int64  `gorm:"not null;default:0" json:"-"`
+	FlyCents     int64  `gorm:"not null;default:0" json:"-"`
 	// Financial terms are immutable placement/settlement snapshots.  Reports
 	// must never recalculate old business after room settings change.
 	RebateRateSnapshot     float64    `gorm:"not null;default:0" json:"rebate_rate_snapshot"`

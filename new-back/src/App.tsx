@@ -8,6 +8,7 @@ import { FeedbackProvider } from './components/FeedbackProvider'
 import { createAdminTheme } from './theme'
 import { LoginPage } from './pages/LoginPage'
 import { useManagementWebSocket } from './hooks/useManagementWebSocket'
+import { isRetiredAccountPath, resolveAdminPath } from './adminRoutes'
 
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(module => ({ default: module.DashboardPage })))
 const ResultsPage = lazy(() => import('./pages/ResultsPage').then(module => ({ default: module.ResultsPage })))
@@ -36,9 +37,9 @@ const RoomSettingsPage = lazy(() => import('./pages/RoomSettingsPage').then(modu
 const WorkspaceGamesPage = lazy(() => import('./pages/WorkspaceGamesPage').then(module => ({ default: module.WorkspaceGamesPage })))
 const DataMaintenancePage = lazy(() => import('./pages/DataMaintenancePage').then(module => ({ default: module.DataMaintenancePage })))
 const FlyOrderPage = lazy(() => import('./pages/FlyOrderPage').then(module => ({ default: module.FlyOrderPage })))
+const GameDocumentationPage = lazy(() => import('./pages/GameDocumentationPage').then(module => ({ default: module.GameDocumentationPage })))
 
-const routes = new Set(['/', '/users', '/members', '/robots', '/fly-orders', '/tenants', '/agents', '/applications', '/room-reviews', '/chat', '/lottery-chat', '/announcements', '/plans', '/reports', '/wallet', '/activities', '/monitor', '/bets', '/results', '/limits', '/board-report', '/lottery-network', '/interface-test', '/entertainment', '/special-numbers', '/menu-management', '/audit', '/data-maintenance', '/system'])
-const currentPath = () => routes.has(window.location.pathname) ? window.location.pathname : '/'
+const currentPath = () => resolveAdminPath(window.location.pathname)
 const storedPaletteMode = (): PaletteMode => {
   try { return window.localStorage.getItem('yaotu-back-theme') === 'dark' ? 'dark' : 'light' } catch { return 'light' }
 }
@@ -52,7 +53,12 @@ function App() {
   useManagementWebSocket(user?.role, Boolean(user))
 
   useEffect(() => {
-    const listener = () => setPath(currentPath())
+    const listener = () => {
+      const next = currentPath()
+      if (isRetiredAccountPath(window.location.pathname)) window.history.replaceState({}, '', next)
+      setPath(next)
+    }
+    listener()
     window.addEventListener('popstate', listener)
     return () => window.removeEventListener('popstate', listener)
   }, [])
@@ -99,7 +105,12 @@ function App() {
     return () => { cancelled = true }
   }, [])
 
-  const navigate = (next: string) => { if (next === path) return; window.history.pushState({}, '', next); setPath(next) }
+  const navigate = (next: string) => {
+    const destination = resolveAdminPath(next)
+    if (destination === path) return
+    window.history.pushState({}, '', destination)
+    setPath(destination)
+  }
   const toggleMode = () => setMode(current => {
     const next = current === 'light' ? 'dark' : 'light'
     try { window.localStorage.setItem('yaotu-back-theme', next) } catch { /* Theme still changes for this tab. */ }
@@ -166,8 +177,7 @@ function App() {
     : user.role === 'tenant' ? tenantPage
     : path === '/' ? <DashboardPage />
     : path === '/results' ? <ResultsPage />
-    : path === '/users' ? <UsersPage view="accounts" />
-    : path === '/members' ? <UsersPage view="members" />
+    : path === '/members' ? <UsersPage />
     : path === '/robots' ? <RobotsPage />
 		: path === '/fly-orders' ? <FlyOrderPage role="admin" />
     : path === '/agents' ? <AgentsPage />
@@ -184,6 +194,7 @@ function App() {
     : path === '/menu-management' ? <MenuManagementPage />
     : path === '/audit' ? <ReportsPage initialReport="logs" />
     : path === '/data-maintenance' ? <DataMaintenancePage />
+    : path === '/game-guide' ? <GameDocumentationPage />
     : path === '/system' ? <SystemPage />
     : path === '/interface-test' || path === '/lottery-network' ? <NetworkPage />
     : path === '/monitor' ? <MonitorPage />

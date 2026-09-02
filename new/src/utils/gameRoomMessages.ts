@@ -1,6 +1,7 @@
 import type { ChatMessage } from '../api/chat'
 import type { DrawResult } from '../api/lottery'
 import type { GameFeedItem } from '../api/portal'
+import { recentGameTimelineItems } from './gameTimelineBudget'
 
 export type AcceptedTicket = {
   gameId: string
@@ -22,7 +23,7 @@ export function ticketsForGame(tickets: AcceptedTicket[], gameId: string) {
   return tickets.filter(ticket => ticket.gameId === gameId)
 }
 
-const incompleteBetPattern = /^(?:买)?(?:冠军|亚军|第[三四五六七八九十]名|冠亚(?:和)?)?[0-9大小单双龙虎#\s,，.]*$/
+const incompleteBetPattern = /^(?:买)?(?:冠军|亚军|第[三四五六七八九十]名|前三|中三|后三|前五|后五|冠亚(?:和)?)?[0-9大小单双龙虎和豹子顺对半杂六#\s,，.]*$/
 const applicationCommandPattern = /^(?:申请)?\s*(?:上分|下分)\s*[/：:]?\s*([0-9]+(?:\.[0-9]{1,2})?)(?:\s+.*)?$/
 
 /** Repeat is an editable draft, not another server command. Keep financial
@@ -65,7 +66,14 @@ export function isRoomCommandContent(content: string) {
     || Boolean(application && Number(application[1]) > 0)
     || normalized.includes('/')
     || normalized.includes('梭哈')
-    || (/[0-9大小单双龙虎冠亚军第名]/.test(normalized) && incompleteBetPattern.test(normalized))
+    || (/[0-9大小单双龙虎和冠亚军第名豹子顺对半杂六]/.test(normalized) && incompleteBetPattern.test(normalized))
+}
+
+/** Query/cancel/financial-service commands remain available in read-only games. */
+export function isBettingCommandContent(content: string) {
+  const normalized = content.trim()
+  if (normalized === '查' || normalized === '取消' || applicationCommandPattern.test(normalized)) return false
+  return isRoomCommandContent(normalized)
 }
 
 /** Keep durable audit text untouched; compact only accepted-ticket display. */
@@ -129,6 +137,14 @@ export function buildGameTimelineEntries({ gameId, messages, draws = [], feed, t
   // fixed entry boundary applies to every message source, not only draw cards.
   const priority: Record<GameTimelineEntry['kind'], number> = { draw: 0, chat: 1, feed: 2, ticket: 3 }
   const isAnchor = (entry: GameTimelineEntry) => entry.kind === 'draw' && entry.value.issue === anchorIssue
-  return entries.filter(entry => isAnchor(entry) || startAt === undefined || entry.at >= startAt)
-    .sort((left, right) => Number(isAnchor(right)) - Number(isAnchor(left)) || left.at - right.at || priority[left.kind] - priority[right.kind] || left.key.localeCompare(right.key))
+  const ordered = entries.filter(entry => isAnchor(entry) || startAt === undefined || entry.at >= startAt)
+    .sort((left, right) => Number(isAnchor(right)) - Number(isAnchor(left)) || left.at - right.at || priority[left.kind] - priority[right.kind]
+      || (left.kind === 'chat' && right.kind === 'chat' ? left.value.id - right.value.id : left.key.localeCompare(right.key)))
+  const recent = recentGameTimelineItems(ordered)
+  if (recent === ordered) return ordered
+  // A busy room must not lose its most recent confirmed result just because
+  // the next issue receives hundreds of messages. Reserve one display slot
+  // for that announcement, inside (not in addition to) the shared budget.
+  const latestDraw = ordered.reduce<GameTimelineEntry | undefined>((latest, entry) => entry.kind === 'draw' && (!latest || entry.at >= latest.at) ? entry : latest, undefined)
+  return latestDraw && !recent.includes(latestDraw) ? [latestDraw, ...recent.slice(1)] : recent
 }

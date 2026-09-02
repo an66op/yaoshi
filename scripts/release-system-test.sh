@@ -125,6 +125,7 @@ trap cleanup EXIT INT TERM
 
 echo "[1/9] 先验证待测 release/SHA256SUMS"
 bash "$repository_root/scripts/release-integrity.sh" verify "$release_dir"
+node --test "$repository_root/tests/system/login-captcha-fixture.test.mjs" "$repository_root/tests/system/member-session-file.test.mjs"
 [[ -x "$release_dir/bin/wangzhe-backend" && -x "$release_dir/bin/wangzhe-bootstrap-admin" ]] || \
   fail "release/bin 缺少可执行后端或管理员引导工具"
 [[ -f "$release_dir/member/index.html" && -f "$release_dir/admin/index.html" ]] || \
@@ -205,6 +206,20 @@ backend_environment=(
   "BACKEND_ROOM_ACTIVITY_MAX_WORKSPACES=1"
 )
 
+# Only test processes receive out-of-band fixture access. The verified release
+# backend keeps its mandatory CAPTCHA checks in every environment and has no
+# test bypass endpoint, known answer or disable flag.
+member_cookie_file="$runtime_dir/member-session.json"
+captcha_fixture_environment=(
+  "SYSTEM_TEST_ALLOW_LOCAL=1"
+  "SYSTEM_TEST_BACKEND_ORIGIN=$backend_origin"
+  "SYSTEM_TEST_REDIS_ADDR=$redis_addr"
+  "SYSTEM_TEST_REDIS_USERNAME=$redis_username"
+  "SYSTEM_TEST_REDIS_PASSWORD=$redis_password"
+  "SYSTEM_TEST_REDIS_PREFIX=wangzhe-system-test:$run_id"
+  "SYSTEM_TEST_MEMBER_COOKIE_FILE=$member_cookie_file"
+)
+
 echo "[5/9] 在空库执行版本化迁移并安全创建首位管理员"
 (cd "$runtime_dir" && env "${backend_environment[@]}" "$bootstrap_binary" \
   --username "$admin_username" --password-file "$password_file" --nickname "E2E 平台管理员")
@@ -258,7 +273,7 @@ start_backend
 wait_for_ready
 
 echo "[7/9] 验证 API、release 注册边界并创建一次性验收数据"
-SYSTEM_TEST_ALLOW_LOCAL=1 SYSTEM_TEST_BACKEND_ORIGIN="$backend_origin" \
+env "${captcha_fixture_environment[@]}" \
   E2E_ADMIN_USERNAME="$admin_username" E2E_ADMIN_PASSWORD="$admin_password" \
   node "$repository_root/tests/system/release-api.mjs"
 
@@ -302,6 +317,7 @@ if [[ "$suite" == "all" || "$suite" == "e2e" ]]; then
     fail "HTTPS E2E 代理未在 20 秒内 ready"
   fi
   (cd "$repository_root/tests/e2e" && \
+    env "${captcha_fixture_environment[@]}" \
     E2E_MEMBER_BASE_URL="https://127.0.0.1:$member_port" E2E_ADMIN_BASE_URL="https://127.0.0.1:$admin_port" \
     E2E_ADMIN_USERNAME="$admin_username" E2E_ADMIN_PASSWORD="$admin_password" \
     npm test)
@@ -313,7 +329,7 @@ if [[ "$suite" == "all" || "$suite" == "load" ]]; then
   echo "[9/9] 执行安全 HTTP/WebSocket/关键读写负载烟测"
   [[ -d "$repository_root/tests/system/node_modules/ws" ]] || \
     fail "负载测试依赖未安装；先运行 make production-test-install"
-  SYSTEM_TEST_ALLOW_LOCAL=1 SYSTEM_TEST_BACKEND_ORIGIN="$backend_origin" \
+  SYSTEM_TEST_ALLOW_LOCAL=1 SYSTEM_TEST_BACKEND_ORIGIN="$backend_origin" SYSTEM_TEST_MEMBER_COOKIE_FILE="$member_cookie_file" \
     node "$repository_root/tests/system/load-smoke.mjs"
 else
   echo "[9/9] 跳过负载烟测（SYSTEM_TEST_SUITE=${suite}）"

@@ -11,7 +11,7 @@ import ArrowUpwardRounded from '@mui/icons-material/ArrowUpwardRounded'
 import CampaignRounded from '@mui/icons-material/CampaignRounded'
 import SearchRounded from '@mui/icons-material/SearchRounded'
 import TuneRounded from '@mui/icons-material/TuneRounded'
-import { agentApi, tenantApi, type AdminApplication, type AdminBet, type AdminChatConversation, type AdminChatMessage, type AdminUser, type AgentDashboard, type ManagementWsEvent, type SystemSettings, type UserTradingConfig, type WorkspaceGame } from '../api'
+import { agentApi, tenantApi, type AdminApplication, type AdminBet, type AdminChatConversation, type AdminChatMessage, type WorkspaceMember, type AgentDashboard, type ManagementWsEvent, type SystemSettings, type UserTradingConfig, type WorkspaceGame } from '../api'
 import { useFeedback } from '../components/feedback'
 import { OperatingReportPanel } from '../components/OperatingReportPanel'
 import { GameOddsNavigation, OddsOverrideGrid } from '../components/OddsEditors'
@@ -42,6 +42,15 @@ const countdownText = (target: string | undefined, now: number) => {
 }
 const ballColor = (value: number) => ['#f97316', '#ef4444', '#0ea5e9', '#8b5cf6', '#16a34a'][Math.abs(value) % 5]
 const roleText: Record<string, string> = { member: '会员', agent: '代理', tenant: '租户', admin: '管理员' }
+const canManageMember = (member?: WorkspaceMember | null) => member?.in_current_room === true && member?.can_manage === true
+// Treat membership flags as the boundary even if a stale response still contains private fields.
+const publicMember = (member: WorkspaceMember): WorkspaceMember => ({
+  id: member.id, public_id: member.public_id, username: member.username, nickname: member.nickname,
+  avatar: member.avatar, public_title: member.public_title, badge: member.badge, role: 'member',
+  in_current_room: member.in_current_room === true, can_manage: false,
+  balance: null, status: null, online: null,
+})
+const safeMember = (member: WorkspaceMember) => canManageMember(member) ? member : publicMember(member)
 const riskText: Record<string, string> = { normal: '正常', watch: '关注', restricted: '受限' }
 const oddsMultiplierPresets = [.8, .9, 1, 1.1, 1.2]
 type MemberActivitySummary = { betCount: number; pendingCount: number; recentStake: number; recentPayout: number; sampleSize: number }
@@ -57,7 +66,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [dashboard, setDashboard] = useState<AgentDashboard | null>(null)
-  const [users, setUsers] = useState<AdminUser[]>([])
+  const [users, setUsers] = useState<WorkspaceMember[]>([])
   const [applications, setApplications] = useState<AdminApplication[]>([])
   const [applicationCategory, setApplicationCategory] = useState<ApplicationCategory>(section === 'room-reviews' ? 'join' : 'wallet')
   const [bets, setBets] = useState<AdminBet[]>([])
@@ -68,7 +77,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(20)
   const [total, setTotal] = useState(0)
-  const [balanceUser, setBalanceUser] = useState<AdminUser | null>(null)
+  const [balanceUser, setBalanceUser] = useState<WorkspaceMember | null>(null)
   const [amount, setAmount] = useState('')
   const [remark, setRemark] = useState('')
   const [reviewing, setReviewing] = useState<AdminApplication | null>(null)
@@ -100,11 +109,11 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
   const [now, setNow] = useState(() => Date.now())
   const [attentionRevision, setAttentionRevision] = useState(0)
   const [memberOpen, setMemberOpen] = useState(false)
-  const [memberInfo, setMemberInfo] = useState<AdminUser | null>(null)
+  const [memberInfo, setMemberInfo] = useState<WorkspaceMember | null>(null)
   const [memberActivity, setMemberActivity] = useState<MemberActivitySummary | null>(null)
   const [memberLoading, setMemberLoading] = useState(false)
   const [memberError, setMemberError] = useState('')
-  const [tradingUser, setTradingUser] = useState<AdminUser | null>(null)
+  const [tradingUser, setTradingUser] = useState<WorkspaceMember | null>(null)
   const [userTrading, setUserTrading] = useState<UserTradingConfig | null>(null)
   const [userTradingLoading, setUserTradingLoading] = useState(false)
   const [userTradingSaving, setUserTradingSaving] = useState(false)
@@ -136,6 +145,88 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
   const connectionStatusInitialized = useRef(false)
   const loadRequestRef = useRef(0)
   const chatMessageRequestRef = useRef(0)
+  const knownMembers = useRef(new Map<number, WorkspaceMember>())
+  const memberVersions = useRef(new Map<number, number>())
+  const membershipSequence = useRef(0)
+  const memberRequestRef = useRef(0)
+  const memberIDRef = useRef<number | null>(null)
+  const tradingRequestRef = useRef(0)
+  const tradingIDRef = useRef<number | null>(null)
+  const balanceIDRef = useRef<number | null>(null)
+  const pendingMemberActions = useRef(new Set<string>())
+  const alive = useRef(true)
+  const activeRoomApi = useRef(roomApi)
+  const [balanceSaving, setBalanceSaving] = useState(false)
+  useEffect(() => {
+    alive.current = true
+    activeRoomApi.current = roomApi
+    return () => {
+      alive.current = false
+      loadRequestRef.current += 1
+      memberRequestRef.current += 1
+      tradingRequestRef.current += 1
+      tradingIDRef.current = null
+      balanceIDRef.current = null
+    }
+  }, [roomApi])
+  const acceptMember = useCallback((member: WorkspaceMember, version: number) => {
+    if ((memberVersions.current.get(member.id) ?? 0) > version) return knownMembers.current.get(member.id) ?? publicMember(member)
+    const next = safeMember(member)
+    memberVersions.current.set(member.id, version)
+    knownMembers.current.set(member.id, next)
+    if (!canManageMember(next)) {
+      if (balanceIDRef.current === next.id) { balanceIDRef.current = null; setBalanceUser(null); setAmount(''); setRemark('') }
+      if (tradingIDRef.current === next.id) {
+        tradingRequestRef.current += 1
+        tradingIDRef.current = null
+        setTradingUser(null); setUserTrading(null); setUserTradingDirty(false); setUserTradingLoading(false)
+      }
+      if (memberIDRef.current === next.id) { setMemberInfo(next); setMemberActivity(null) }
+    }
+    return next
+  }, [])
+  const refreshMember = async (target: Pick<WorkspaceMember, 'id'>) => {
+    const version = ++membershipSequence.current
+    const result = await roomApi.users({ userId: target.id, page: 1, pageSize: 1 })
+    if (!alive.current || activeRoomApi.current !== roomApi) return null
+    const found = (Array.isArray(result?.items) ? result.items : []).find(row => row.id === target.id)
+    if (!found) {
+      const previous = knownMembers.current.get(target.id)
+      if (previous) {
+        const denied = acceptMember({ ...publicMember(previous), in_current_room: false }, version)
+        setUsers(rows => rows.map(row => row.id === target.id ? denied : row))
+      }
+      return null
+    }
+    const next = acceptMember(found, version)
+    setUsers(rows => rows.map(row => row.id === next.id ? next : row))
+    return next
+  }
+  const requireCurrentMember = async (target: WorkspaceMember) => {
+    if (!canManageMember(knownMembers.current.get(target.id) ?? target)) return null
+    const current = await refreshMember(target)
+    if (!canManageMember(current)) {
+      if (alive.current) showMessage('该会员已不在本房间或无管理权限，请刷新会员列表', 'warning')
+      return null
+    }
+    return current
+  }
+  const closeTrading = () => {
+    if (userTradingSaving) return
+    tradingRequestRef.current += 1
+    tradingIDRef.current = null
+    setTradingUser(null); setUserTrading(null); setUserTradingDirty(false); setUserTradingLoading(false)
+  }
+  const closeBalance = () => {
+    if (balanceSaving) return
+    balanceIDRef.current = null
+    setBalanceUser(null); setAmount(''); setRemark('')
+  }
+  const closeMember = () => {
+    memberRequestRef.current += 1
+    memberIDRef.current = null
+    setMemberOpen(false); setMemberInfo(null); setMemberActivity(null); setMemberLoading(false)
+  }
   useEffect(() => { selectedRef.current = selected }, [selected])
   const focusConversation = useCallback((target: ChatConversationTarget) => {
     if (!chatSection || chatPageForTarget(target) !== (lotteryChat ? '/lottery-chat' : '/chat')) return
@@ -180,9 +271,10 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
       setRoomLogo(settings.room_logo)
       if (chatSection || section === 'users') setGames(Array.isArray(roomGames) ? roomGames : [])
       if (section === 'users') {
+        const version = ++membershipSequence.current
         const result = await roomApi.users({ query, page: page + 1, pageSize })
         if (requestID !== loadRequestRef.current) return
-        setUsers(Array.isArray(result?.items) ? result.items : []); setTotal(Number(result?.total) || 0)
+        setUsers((Array.isArray(result?.items) ? result.items : []).map(row => acceptMember(row, version))); setTotal(Number(result?.total) || 0)
       }
       if (section === 'applications' || section === 'room-reviews') {
         const result = await roomApi.applications({ query, type: applicationCategory, page: page + 1, pageSize })
@@ -236,7 +328,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
         setTransitioningChatMode(null)
       }
     }
-  }, [applicationCategory, chatMode, chatSection, lotteryChat, page, pageSize, query, roomApi, section])
+  }, [acceptMember, applicationCategory, chatMode, chatSection, lotteryChat, page, pageSize, query, roomApi, section])
 
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load])
   useEffect(() => {
@@ -357,7 +449,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
   }, [chatSection, loadChatMessages, lotteryChat])
 
   const cards = useMemo(() => dashboard ? [
-    ['房间成员', `${dashboard.active_member_count} / ${dashboard.member_count}`], ['成员余额', `¥ ${money(dashboard.member_balance)}`],
+    ['在房启用 / 已加入', `${dashboard.active_member_count} / ${dashboard.member_count}`], ['成员余额', `¥ ${money(dashboard.member_balance)}`],
     ['今日投注', `¥ ${money(dashboard.today_stake)}`], ['今日派彩', `¥ ${money(dashboard.today_payout)}`],
     ['今日净额', `¥ ${money(dashboard.today_net)}`], ['待处理', `${dashboard.pending_applications} 申请 · ${dashboard.pending_bets} 注单`],
   ] : [], [dashboard])
@@ -395,39 +487,76 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
 
   const openMember = async (message: AdminChatMessage) => {
     if (!message.user_id || message.is_staff) return
-    setMemberOpen(true)
-    setMemberLoading(true)
-    setMemberError('')
-    setMemberInfo(null)
-    setMemberActivity(null)
+    const requestID = ++memberRequestRef.current
+    memberIDRef.current = message.user_id
+    setMemberOpen(true); setMemberLoading(true); setMemberError(''); setMemberInfo(null); setMemberActivity(null)
     try {
-      const [members, allBets, pendingBets] = await Promise.all([
-        roomApi.users({ query: message.username || message.nickname, page: 1, pageSize: 100 }),
+      const profile = await refreshMember({ id: message.user_id })
+      if (requestID !== memberRequestRef.current || !alive.current) return
+      if (!profile) throw new Error('未找到该会员的本房间加入记录')
+      setMemberInfo(profile)
+      if (!canManageMember(profile)) return
+      const [allBets, pendingBets] = await Promise.all([
         roomApi.bets({ userId: message.user_id, page: 1, pageSize: 100 }),
         roomApi.bets({ userId: message.user_id, status: 'pending', page: 1, pageSize: 1 }),
       ])
-      const profile = (Array.isArray(members?.items) ? members.items : []).find(item => item.id === message.user_id)
-      if (!profile) throw new Error('当前房间中未找到该会员资料')
+      if (requestID !== memberRequestRef.current || !alive.current) return
+      // Membership may have changed while private activity was loading.
+      const latest = await refreshMember(profile)
+      if (requestID !== memberRequestRef.current || !alive.current) return
+      if (!latest) { setMemberInfo(publicMember({ ...profile, in_current_room: false })); return }
+      setMemberInfo(latest)
+      if (!canManageMember(latest)) return
       const recent = Array.isArray(allBets?.items) ? allBets.items : []
-      setMemberInfo(profile)
       setMemberActivity({
-        betCount: Number(allBets?.total) || 0,
-        pendingCount: Number(pendingBets?.total) || 0,
+        betCount: Number(allBets?.total) || 0, pendingCount: Number(pendingBets?.total) || 0,
         recentStake: recent.reduce((sum, item) => sum + Number(item.amount || 0), 0),
-        recentPayout: recent.reduce((sum, item) => sum + Number(item.payout || 0), 0),
-        sampleSize: recent.length,
+        recentPayout: recent.reduce((sum, item) => sum + Number(item.payout || 0), 0), sampleSize: recent.length,
       })
     } catch (reason) {
-      setMemberError(reason instanceof Error ? reason.message : '读取会员资料失败')
+      if (requestID === memberRequestRef.current && alive.current) {
+        setMemberInfo(null); setMemberActivity(null)
+        setMemberError(reason instanceof Error ? reason.message : '读取会员资料失败')
+      }
     } finally {
-      setMemberLoading(false)
+      if (requestID === memberRequestRef.current && alive.current) setMemberLoading(false)
     }
   }
 
+  const changeMemberStatus = async (target: WorkspaceMember) => {
+    const key = `status:${target.id}`
+    if (!canManageMember(target) || pendingMemberActions.current.has(key)) return
+    pendingMemberActions.current.add(key)
+    try {
+      const current = await requireCurrentMember(target)
+      if (!current || current.status === null) return
+      await roomApi.setUserStatus(current.id, current.status === 1 ? 0 : 1)
+      if (alive.current) await load()
+    } catch (reason) { if (alive.current) showMessage(reason instanceof Error ? reason.message : '修改会员状态失败', 'error') }
+    finally { pendingMemberActions.current.delete(key) }
+  }
+  const openBalance = async (target: WorkspaceMember) => {
+    if (!canManageMember(target) || !canManageMember(knownMembers.current.get(target.id) ?? target) || balanceSaving) return
+    balanceIDRef.current = target.id
+    try {
+      const current = await requireCurrentMember(target)
+      if (current && balanceIDRef.current === target.id) { setBalanceUser(current); setAmount(''); setRemark('') }
+    } catch (reason) { if (alive.current) showMessage(reason instanceof Error ? reason.message : '读取会员权限失败', 'error') }
+  }
   const adjustBalance = async () => {
-    if (!balanceUser || !Number(amount) || !remark.trim()) return
-    try { await roomApi.adjustUserBalance(balanceUser.id, Number(amount), remark.trim()); showMessage('余额调整成功'); setBalanceUser(null); setAmount(''); setRemark(''); await load() }
-    catch (reason) { showMessage(reason instanceof Error ? reason.message : '余额调整失败', 'error') }
+    const target = balanceUser
+    const key = `balance:${target?.id}`
+    if (!target || !canManageMember(target) || balanceIDRef.current !== target.id || !Number.isFinite(Number(amount)) || !Number(amount) || !remark.trim() || pendingMemberActions.current.has(key)) return
+    pendingMemberActions.current.add(key)
+    setBalanceSaving(true)
+    try {
+      const current = await requireCurrentMember(target)
+      if (!current || balanceIDRef.current !== target.id) return
+      await roomApi.adjustUserBalance(current.id, Number(amount), remark.trim())
+      if (!alive.current) return
+      showMessage('余额调整成功'); balanceIDRef.current = null; setBalanceUser(null); setAmount(''); setRemark(''); await load()
+    } catch (reason) { if (alive.current) showMessage(reason instanceof Error ? reason.message : '余额调整失败', 'error') }
+    finally { pendingMemberActions.current.delete(key); if (alive.current) setBalanceSaving(false) }
   }
   const saveRoomProfile = async () => {
     const next = roomName.trim()
@@ -490,36 +619,55 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
         remark: reviewRemark.trim(),
       })
       setReviewing(null)
-      showMessage(reviewDecision === 'approved' ? '申请已通过并完成账户处理' : '申请已拒绝')
+      showMessage(reviewing.request_type === 'join' ? reviewDecision === 'approved' ? '入房申请已通过' : '入房申请已拒绝' : reviewDecision === 'approved' ? '申请已通过并完成账户处理' : '申请已拒绝')
       await load()
     }
     catch (reason) { showMessage(reason instanceof Error ? reason.message : '审核失败', 'error') }
     finally { setReviewSaving(false) }
   }
-  const loadUserTrading = async (target: AdminUser, gameId?: string) => {
+  const loadUserTrading = async (target: WorkspaceMember, gameId?: string) => {
+    if (!canManageMember(target) || !canManageMember(knownMembers.current.get(target.id) ?? target) || userTradingSaving) return
+    const requestID = ++tradingRequestRef.current
+    tradingIDRef.current = target.id
     setTradingUser(target)
+    setUserTrading(null)
+    setUserTradingDirty(false)
     setUserTradingLoading(true)
     try {
+      const current = await requireCurrentMember(target)
+      if (!current || requestID !== tradingRequestRef.current || tradingIDRef.current !== target.id) return
       const next = await roomApi.userTrading(target.id, gameId)
+      if (requestID !== tradingRequestRef.current || !alive.current) return
+      const latest = await refreshMember(current)
+      if (!canManageMember(latest) || requestID !== tradingRequestRef.current || tradingIDRef.current !== target.id) return
+      setTradingUser(latest)
       setUserTrading(next)
       setUserTradingDirty(false)
     } catch (reason) {
+      if (requestID !== tradingRequestRef.current || !alive.current) return
       showMessage(reason instanceof Error ? reason.message : '读取会员赔率失败', 'error')
+      tradingIDRef.current = null
       setTradingUser(null)
       setUserTrading(null)
     } finally {
-      setUserTradingLoading(false)
+      if (requestID === tradingRequestRef.current && alive.current) setUserTradingLoading(false)
     }
   }
   const saveUserTrading = async () => {
-    if (!tradingUser || !userTrading) return
+    if (!tradingUser || !canManageMember(tradingUser) || tradingIDRef.current !== tradingUser.id || !userTrading) return
+    const target = tradingUser
+    const key = `trading:${target.id}`
+    if (pendingMemberActions.current.has(key)) return
     const multiplier = Number(userTrading.odds_multiplier || 1)
     if (!Number.isFinite(multiplier) || multiplier < .5 || multiplier > 1.5) {
       showMessage('会员赔率倍率需在 0.50–1.50 之间', 'error')
       return
     }
+    pendingMemberActions.current.add(key)
     setUserTradingSaving(true)
     try {
+      const current = await requireCurrentMember(target)
+      if (!current || tradingIDRef.current !== target.id) return
       const next = await roomApi.updateUserTrading(tradingUser.id, {
         odds_multiplier: multiplier,
         fly_mode: userTrading.fly.mode,
@@ -529,13 +677,17 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
         game_id: userTrading.game_id,
         odds: userTrading.odds.map(item => ({ play_code: item.play_code, override: item.has_override ? item.override : null })),
       })
+      if (!alive.current || tradingIDRef.current !== target.id) return
+      const latest = await refreshMember(current)
+      if (!canManageMember(latest) || tradingIDRef.current !== target.id) return
       setUserTrading(next)
       setUserTradingDirty(false)
       showMessage(`${tradingUser.nickname || tradingUser.username} 的会员赔率已保存`)
     } catch (reason) {
-      showMessage(reason instanceof Error ? reason.message : '保存会员赔率失败', 'error')
+      if (alive.current && tradingIDRef.current === target.id) showMessage(reason instanceof Error ? reason.message : '保存会员赔率失败', 'error')
     } finally {
-      setUserTradingSaving(false)
+      pendingMemberActions.current.delete(key)
+      if (alive.current) setUserTradingSaving(false)
     }
   }
   const sendReply = async () => {
@@ -574,7 +726,18 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
 
     {section !== 'dashboard' && !chatSection && section !== 'reports' && <Paper variant="outlined" sx={{ p: 1.3, mb: 1.5 }}><Stack direction="row" gap={1}><TextField size="small" fullWidth placeholder="搜索当前房间数据" value={query} onChange={event => { setQuery(event.target.value); setPage(0) }} onKeyDown={event => { if (event.key === 'Enter') void load() }} /><Button variant="contained" onClick={() => void load()}>查询</Button></Stack></Paper>}
 
-    {section === 'users' && <Card><TableContainer><Table size="small"><TableHead><TableRow><TableCell>用户</TableCell><TableCell>余额</TableCell><TableCell>在线状态</TableCell><TableCell>账号状态</TableCell><TableCell align="right">操作</TableCell></TableRow></TableHead><TableBody>{users.map(row => <TableRow key={row.id}><TableCell><Stack direction="row" gap={1} alignItems="center"><Avatar src={memberAvatar(row.id, row.robot_avatar || row.avatar)} sx={{ width: 34, height: 34 }}>{(row.nickname || row.username).slice(0, 1)}</Avatar><Box><Typography fontWeight={750}>{row.nickname || row.username}</Typography><Typography variant="caption" color="text.secondary">@{row.username} · {row.public_id}</Typography></Box></Stack></TableCell><TableCell>¥ {money(row.balance)}</TableCell><TableCell><UserPresenceChip online={row.online === true} /></TableCell><TableCell><FormControlLabel control={<Switch size="small" checked={row.status === 1} onChange={async () => { await roomApi.setUserStatus(row.id, row.status === 1 ? 0 : 1); await load() }} />} label={row.status === 1 ? '账号正常' : '账号停用'} /></TableCell><TableCell align="right"><Stack direction="row" justifyContent="flex-end" gap={.5}><Button size="small" startIcon={<TuneRounded />} onClick={() => void loadUserTrading(row)}>赔率设置</Button><Button size="small" onClick={() => setBalanceUser(row)}>调整余额</Button></Stack></TableCell></TableRow>)}</TableBody></Table></TableContainer><WorkspacePagination total={total} page={page} pageSize={pageSize} onPage={setPage} onPageSize={value => { setPageSize(value); setPage(0) }} /></Card>}
+    {section === 'users' && <Card><TableContainer><Table size="small">
+      <TableHead><TableRow><TableCell>用户</TableCell><TableCell>房间状态</TableCell><TableCell>余额</TableCell><TableCell>在线状态</TableCell><TableCell>账号状态</TableCell><TableCell align="right">操作</TableCell></TableRow></TableHead>
+      <TableBody>{users.map(row => <TableRow key={row.id}>
+        <TableCell><Stack direction="row" gap={1} alignItems="center"><Avatar src={memberAvatar(row.id, row.avatar)} sx={{ width: 34, height: 34 }}>{(row.nickname || row.username).slice(0, 1)}</Avatar><Box><Typography fontWeight={750}>{row.nickname || row.username}</Typography><Typography variant="caption" color="text.secondary">@{row.username} · {row.public_id}</Typography></Box></Stack></TableCell>
+        <TableCell><Chip size="small" color={row.in_current_room === true ? 'success' : 'default'} variant="outlined" label={row.in_current_room === true ? '在本房间' : '已切换'} /></TableCell>
+        <TableCell>{canManageMember(row) && row.balance !== null ? `¥ ${money(row.balance)}` : '—'}</TableCell>
+        <TableCell>{canManageMember(row) && row.online !== null ? <UserPresenceChip online={row.online === true} /> : '—'}</TableCell>
+        <TableCell>{canManageMember(row) && row.status !== null ? <FormControlLabel control={<Switch size="small" checked={row.status === 1} onChange={() => void changeMemberStatus(row)} />} label={row.status === 1 ? '账号正常' : '账号停用'} /> : '—'}</TableCell>
+        <TableCell align="right">{canManageMember(row) ? <Stack direction="row" justifyContent="flex-end" gap={.5}><Button size="small" startIcon={<TuneRounded />} onClick={() => void loadUserTrading(row)}>赔率设置</Button><Button size="small" onClick={() => void openBalance(row)}>调整余额</Button></Stack> : '—'}</TableCell>
+      </TableRow>)}
+      {!loading && users.length === 0 && <TableRow><TableCell colSpan={6} align="center" sx={{ py: 5, color: 'text.secondary' }}>{query.trim() ? '未找到匹配的房间会员' : '还没有会员加入过本房间'}</TableCell></TableRow>}
+      </TableBody></Table></TableContainer><WorkspacePagination total={total} page={page} pageSize={pageSize} onPage={setPage} onPageSize={value => { setPageSize(value); setPage(0) }} /></Card>}
 
     {(section === 'applications' || section === 'room-reviews') && <Stack gap={1.25}>
       <Paper variant="outlined" sx={{ borderRadius: 2.5, overflow: 'hidden' }}><Tabs value={applicationCategory} onChange={(_, next: ApplicationCategory) => { setApplicationCategory(next); setQuery(''); setPage(0); setApplications([]) }} variant="fullWidth" sx={{ minHeight: 56, '& .MuiTab-root': { minHeight: 56, fontSize: { xs: 12, sm: 14 }, fontWeight: 800 } }}><Tab value="wallet" label="上下分申请" /><Tab value="join" label="入房申请" /><Tab value="entertainment" label="娱乐上下分" /></Tabs></Paper>
@@ -689,35 +852,42 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
     </Box>{loading && transitioningChatMode && <Stack role="status" aria-live="polite" alignItems="center" justifyContent="center" gap={.8} sx={{ position: 'absolute', zIndex: 3, inset: 0, color: 'text.primary', bgcolor: theme => theme.palette.mode === 'dark' ? 'rgba(7,26,46,.34)' : 'rgba(247,251,252,.40)', transition: 'opacity 160ms ease', '@media (prefers-reduced-motion: reduce)': { transition: 'none' } }}><Box sx={{ display: 'flex', alignItems: 'center', gap: .8, px: 1.3, py: .8, border: 1, borderColor: 'divider', borderRadius: 1.2, bgcolor: 'background.paper', boxShadow: 3 }}><CircularProgress size={18} /><Typography fontSize={11.5} fontWeight={800}>{transitioningChatMode === 'service' ? '正在切换到在线客服' : '正在切换到房间群聊'}</Typography></Box></Stack>}</Paper>}
 
     <Dialog open={!lotteryChat && redPacketOpen} onClose={() => setRedPacketOpen(false)} fullWidth maxWidth="sm" slotProps={{ paper: { sx: { width: 'min(560px, calc(100% - 24px))', maxHeight: 'calc(100dvh - 32px)', borderRadius: 2, overflow: 'hidden' } } }}><DialogTitle sx={{ color: '#fff', background: 'linear-gradient(135deg,#d94b45,#ed7954)' }}><Typography fontSize={18} fontWeight={900}>发送房间红包</Typography><Typography fontSize={10.5} sx={{ opacity: .82 }}>红包会实时发送到当前房间聊天室</Typography></DialogTitle><DialogContent sx={{ pt: '18px !important', bgcolor: 'background.default' }}><RedPacketForm count={redPacketCount} total={redPacketTotal} greeting={redPacketGreeting} cover={redPacketCover} minTurnover={redPacketMinTurnover} onCount={setRedPacketCount} onTotal={setRedPacketTotal} onGreeting={setRedPacketGreeting} onCover={setRedPacketCover} onMinTurnover={setRedPacketMinTurnover} /></DialogContent><DialogActions sx={{ px: 2.5, py: 1.25, bgcolor: 'background.paper' }}><Button size="small" onClick={() => setRedPacketOpen(false)}>取消</Button><Button size="small" variant="contained" color="error" disabled={loading || Boolean(transitioningChatMode) || !Number.isInteger(Number(redPacketCount)) || Number(redPacketCount) < 1 || Number(redPacketTotal) < Number(redPacketCount) * .01 || Number(redPacketMinTurnover) < 0} onClick={() => void sendRedPacket()} sx={{ minWidth: 88, height: 34, px: 1.5 }}>发送红包</Button></DialogActions></Dialog>
-    <Dialog open={memberOpen} onClose={() => !memberLoading && setMemberOpen(false)} fullWidth maxWidth="sm">
+    <Dialog open={memberOpen} onClose={closeMember} fullWidth maxWidth="sm">
       <DialogTitle>会员资料</DialogTitle>
       <DialogContent dividers>
-        {memberLoading && <Box py={5} textAlign="center"><CircularProgress size={28} /><Typography mt={1} fontSize={12} color="text.secondary">正在读取会员与注单资料…</Typography></Box>}
+        {memberLoading && <Box py={5} textAlign="center"><CircularProgress size={28} /><Typography mt={1} fontSize={12} color="text.secondary">正在读取会员资料…</Typography></Box>}
         {!memberLoading && memberError && <Alert severity="warning">{memberError}</Alert>}
         {!memberLoading && memberInfo && <Stack gap={1.5}>
-          <Stack direction="row" alignItems="center" gap={1.2}><Avatar src={memberAvatar(memberInfo.id, memberInfo.robot_avatar || memberInfo.avatar)} sx={{ width: 58, height: 58, border: 1, borderColor: 'divider' }}>{(memberInfo.nickname || memberInfo.username).slice(0, 1)}</Avatar><Box minWidth={0} flex={1}><Stack direction="row" alignItems="center" gap={.65} flexWrap="wrap"><Typography fontSize={17} fontWeight={900} noWrap>{memberInfo.nickname || memberInfo.username}</Typography>{memberInfo.public_title?.trim() && <Chip size="small" color="primary" variant="outlined" label={memberInfo.public_title.trim()} />}{memberInfo.badge?.trim() && <Chip size="small" color="warning" variant="outlined" label={memberInfo.badge.trim()} />}{memberInfo.is_robot && <Chip size="small" color="secondary" label="房间机器人" />}</Stack><Typography fontSize={11} color="text.secondary">会员 ID {memberInfo.public_id} · @{memberInfo.username}</Typography></Box><Chip size="small" color={memberInfo.status === 1 ? 'success' : 'default'} label={memberInfo.status === 1 ? '账号正常' : '账号停用'} /></Stack>
-          <Box display="grid" gridTemplateColumns={{ xs: '1fr 1fr', sm: 'repeat(4,1fr)' }} gap={1}>{[
-            ['可用积分', money(memberInfo.balance)],
-            ['总注单', `${memberActivity?.betCount ?? 0} 笔`],
-            ['待结算', `${memberActivity?.pendingCount ?? 0} 笔`],
-            ['登录次数', `${memberInfo.login_count} 次`],
-          ].map(([label, value]) => <Paper key={label} variant="outlined" sx={{ p: 1.05, borderRadius: 1.6 }}><Typography fontSize={9.5} color="text.secondary">{label}</Typography><Typography mt={.25} fontSize={13} fontWeight={900}>{value}</Typography></Paper>)}</Box>
-          {memberActivity && <Paper variant="outlined" sx={{ p: 1.2, borderRadius: 1.8 }}><Typography fontSize={10} color="text.secondary" mb={.7}>最近 {memberActivity.sampleSize} 笔注单活动</Typography><Stack direction="row" justifyContent="space-between" gap={2}><Box><Typography fontSize={10} color="text.secondary">投注额</Typography><Typography fontWeight={900}>¥ {money(memberActivity.recentStake)}</Typography></Box><Box textAlign="right"><Typography fontSize={10} color="text.secondary">派彩额</Typography><Typography fontWeight={900}>¥ {money(memberActivity.recentPayout)}</Typography></Box></Stack></Paper>}
-          <Divider />
-          <Box display="grid" gridTemplateColumns={{ xs: '1fr', sm: '1fr 1fr' }} columnGap={2.5} rowGap={1}>{[
-            ['账号角色', roleText[memberInfo.role] || memberInfo.role],
-            ['风险等级', riskText[memberInfo.risk_level] || memberInfo.risk_level],
-            ['所属房间', `${roomDisplayName} · ${dashboard?.room_code || '—'}`],
-            ['最近登录', compactTime(memberInfo.last_login_at)],
-            ['注册时间', compactTime(memberInfo.created_at)],
-            ['联系电话', memberInfo.phone || '未填写'],
-          ].map(([label, value]) => <Stack key={label} direction="row" justifyContent="space-between" gap={1}><Typography fontSize={11} color="text.secondary">{label}</Typography><Typography fontSize={11} fontWeight={750} textAlign="right">{value}</Typography></Stack>)}</Box>
-          {memberInfo.remark && <Alert severity="info" icon={false}><Typography fontSize={11}><Box component="span" fontWeight={900}>备注：</Box>{memberInfo.remark}</Typography></Alert>}
+          <Stack direction="row" alignItems="center" gap={1.2}>
+            <Avatar src={memberAvatar(memberInfo.id, memberInfo.avatar)} sx={{ width: 58, height: 58, border: 1, borderColor: 'divider' }}>{(memberInfo.nickname || memberInfo.username).slice(0, 1)}</Avatar>
+            <Box minWidth={0} flex={1}><Stack direction="row" alignItems="center" gap={.65} flexWrap="wrap"><Typography fontSize={17} fontWeight={900} noWrap>{memberInfo.nickname || memberInfo.username}</Typography>{memberInfo.public_title?.trim() && <Chip size="small" color="primary" variant="outlined" label={memberInfo.public_title.trim()} />}{memberInfo.badge?.trim() && <Chip size="small" color="warning" variant="outlined" label={memberInfo.badge.trim()} />}</Stack><Typography fontSize={11} color="text.secondary">会员 ID {memberInfo.public_id} · @{memberInfo.username}</Typography></Box>
+            <Chip size="small" color={memberInfo.in_current_room === true ? 'success' : 'default'} label={memberInfo.in_current_room === true ? '在本房间' : '已切换'} />
+          </Stack>
+          {!canManageMember(memberInfo) ? <Alert severity="info">该会员已切换房间或无当前管理权限，仅显示曾加入本房间的公开资料。</Alert> : <>
+            <Chip size="small" sx={{ alignSelf: 'flex-start' }} color={memberInfo.status === 1 ? 'success' : 'default'} label={memberInfo.status === null ? '—' : memberInfo.status === 1 ? '账号正常' : '账号停用'} />
+            <Box display="grid" gridTemplateColumns={{ xs: '1fr 1fr', sm: 'repeat(4,1fr)' }} gap={1}>{[
+              ['可用积分', memberInfo.balance === null ? '—' : money(memberInfo.balance)],
+              ['总注单', memberActivity ? `${memberActivity.betCount} 笔` : '—'],
+              ['待结算', memberActivity ? `${memberActivity.pendingCount} 笔` : '—'],
+              ['登录次数', memberInfo.login_count === undefined ? '—' : `${memberInfo.login_count} 次`],
+            ].map(([label, value]) => <Paper key={label} variant="outlined" sx={{ p: 1.05, borderRadius: 1.6 }}><Typography fontSize={9.5} color="text.secondary">{label}</Typography><Typography mt={.25} fontSize={13} fontWeight={900}>{value}</Typography></Paper>)}</Box>
+            {memberActivity && <Paper variant="outlined" sx={{ p: 1.2, borderRadius: 1.8 }}><Typography fontSize={10} color="text.secondary" mb={.7}>最近 {memberActivity.sampleSize} 笔注单活动</Typography><Stack direction="row" justifyContent="space-between" gap={2}><Box><Typography fontSize={10} color="text.secondary">投注额</Typography><Typography fontWeight={900}>¥ {money(memberActivity.recentStake)}</Typography></Box><Box textAlign="right"><Typography fontSize={10} color="text.secondary">派彩额</Typography><Typography fontWeight={900}>¥ {money(memberActivity.recentPayout)}</Typography></Box></Stack></Paper>}
+            <Divider />
+            <Box display="grid" gridTemplateColumns={{ xs: '1fr', sm: '1fr 1fr' }} columnGap={2.5} rowGap={1}>{[
+              ['账号角色', roleText[memberInfo.role] || memberInfo.role],
+              ['风险等级', memberInfo.risk_level ? riskText[memberInfo.risk_level] || memberInfo.risk_level : '—'],
+              ['所属房间', `${roomDisplayName} · ${dashboard?.room_code || '—'}`],
+              ['最近登录', compactTime(memberInfo.last_login_at)],
+              ['注册时间', compactTime(memberInfo.created_at)],
+              ['联系电话', memberInfo.phone || '—'],
+            ].map(([label, value]) => <Stack key={label} direction="row" justifyContent="space-between" gap={1}><Typography fontSize={11} color="text.secondary">{label}</Typography><Typography fontSize={11} fontWeight={750} textAlign="right">{value}</Typography></Stack>)}</Box>
+            {memberInfo.remark && <Alert severity="info" icon={false}><Typography fontSize={11}><Box component="span" fontWeight={900}>备注：</Box>{memberInfo.remark}</Typography></Alert>}
+          </>}
         </Stack>}
       </DialogContent>
-      <DialogActions><Button onClick={() => setMemberOpen(false)} disabled={memberLoading}>关闭</Button></DialogActions>
+      <DialogActions><Button onClick={closeMember}>关闭</Button></DialogActions>
     </Dialog>
-    <Dialog open={Boolean(tradingUser)} onClose={() => !userTradingSaving && setTradingUser(null)} fullWidth maxWidth="lg" slotProps={{ paper: { sx: { borderRadius: 1.25, maxHeight: 'calc(100dvh - 24px)' } } }}>
+    <Dialog open={Boolean(tradingUser)} onClose={closeTrading} fullWidth maxWidth="lg" slotProps={{ paper: { sx: { borderRadius: 1.25, maxHeight: 'calc(100dvh - 24px)' } } }}>
       <DialogTitle sx={{ px: 1.5, py: 1.1 }}>
         <Stack direction="row" gap={1} alignItems="center" justifyContent="space-between">
           <Box minWidth={0}><Typography fontSize={16.5} fontWeight={900} noWrap>会员赔率 · {tradingUser?.nickname || tradingUser?.username}</Typography><Typography fontSize={9.8} color="text.secondary">仅当前房间生效，会员换房后不继承</Typography></Box>
@@ -726,7 +896,7 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
       </DialogTitle>
       <DialogContent dividers sx={{ bgcolor: 'background.default', p: '12px !important' }}>
         {userTradingLoading && <Box py={8} textAlign="center"><CircularProgress size={28} /><Typography mt={1} fontSize={12} color="text.secondary">正在读取当前房间赔率…</Typography></Box>}
-        {!userTradingLoading && userTrading && <Stack gap={.9}>
+        {!userTradingLoading && canManageMember(tradingUser) && userTrading && <Stack gap={.9}>
           <Paper variant="outlined" sx={{ p: 1, borderRadius: 1.1 }}>
             <Stack direction={{ xs: 'column', md: 'row' }} gap={.8} alignItems={{ md: 'center' }}>
               <Box flex={1}>
@@ -751,10 +921,10 @@ export function AgentWorkspacePage({ section, tenantDirect = false }: {
           <OddsOverrideGrid items={userTrading.odds} level="member" onChange={odds => { setUserTrading(current => current ? { ...current, odds: odds.map(item => ({ ...item, room_odds: item.room_odds ?? item.base_odds })) } : current); setUserTradingDirty(true) }} />
         </Stack>}
       </DialogContent>
-      <DialogActions sx={{ px: 1.5, py: .75 }}><Button onClick={() => { setTradingUser(null); setUserTradingDirty(false) }} disabled={userTradingSaving}>取消</Button><Button variant="contained" disabled={userTradingSaving || userTradingLoading || !userTrading || !userTradingDirty} onClick={() => void saveUserTrading()}>{userTradingSaving ? '保存中…' : userTradingDirty ? '保存会员赔率' : '已保存'}</Button></DialogActions>
+      <DialogActions sx={{ px: 1.5, py: .75 }}><Button onClick={closeTrading} disabled={userTradingSaving}>取消</Button><Button variant="contained" disabled={userTradingSaving || userTradingLoading || !canManageMember(tradingUser) || !userTrading || !userTradingDirty} onClick={() => void saveUserTrading()}>{userTradingSaving ? '保存中…' : userTradingDirty ? '保存会员赔率' : '已保存'}</Button></DialogActions>
     </Dialog>
-    <Dialog open={Boolean(balanceUser)} onClose={() => setBalanceUser(null)} fullWidth maxWidth="xs"><DialogTitle>调整余额 · {balanceUser?.nickname || balanceUser?.username}</DialogTitle><DialogContent><Stack gap={2} pt={1}><TextField type="number" label="调整金额" helperText="正数为上分，负数为下分" value={amount} onChange={event => setAmount(event.target.value)} /><TextField label="原因" value={remark} onChange={event => setRemark(event.target.value)} /></Stack></DialogContent><DialogActions><Button onClick={() => setBalanceUser(null)}>取消</Button><Button variant="contained" onClick={() => void adjustBalance()}>确认</Button></DialogActions></Dialog>
-    <Dialog open={Boolean(reviewing)} onClose={() => !reviewSaving && setReviewing(null)} fullWidth maxWidth="sm"><DialogTitle>{reviewing?.request_type === 'join' ? '审核入房申请' : '审核上下分申请'} #{reviewing?.id}</DialogTitle><DialogContent>{reviewing && <Stack gap={1.5} pt={1}><Paper variant="outlined" sx={{ p: 1.4 }}><Typography fontWeight={850}>{reviewing.username}</Typography><Typography variant="caption" color="text.secondary">{reviewing.request_type === 'join' ? `目标房间 ${reviewing.target_room_code || '当前房间'}` : `申请金额 ¥ ${money(reviewing.requested_amount)}`}</Typography>{reviewing.remark && <Typography fontSize={12} mt={1}>{reviewing.remark}</Typography>}</Paper><Tabs value={reviewDecision} onChange={(_, next: 'approved' | 'rejected') => setReviewDecision(next)} variant="fullWidth"><Tab value="approved" label="通过申请" /><Tab value="rejected" label="拒绝申请" /></Tabs>{reviewDecision === 'approved' && reviewing.request_type === 'join' && <Paper variant="outlined" sx={{ p: 1.4, borderColor: 'primary.light', bgcolor: 'action.hover' }}><Typography fontSize={13} fontWeight={900}>入房赔率倍率</Typography><Typography fontSize={10} color="text.secondary">只写入本房间会员关系；换房后自动采用目标房间对应配置。</Typography><Stack direction="row" gap={.6} flexWrap="wrap" useFlexGap mt={1.2}>{oddsMultiplierPresets.map(value => <Button key={value} size="small" variant={Number(reviewOddsMultiplier) === value ? 'contained' : 'outlined'} onClick={() => setReviewOddsMultiplier(String(value))}>{value.toFixed(2)}×</Button>)}</Stack><TextField fullWidth size="small" type="number" label="自定义倍率" value={reviewOddsMultiplier} onChange={event => setReviewOddsMultiplier(event.target.value)} inputProps={{ min: .5, max: 1.5, step: .01 }} helperText="0.50–1.50；1.00 为正常房间赔率" sx={{ mt: 1.2 }} /></Paper>}{reviewDecision === 'approved' && isBalanceApplication(reviewing) && <><TextField type="number" fullWidth label={reviewing.request_type === 'credit' ? '实际到账金额' : '实际出款金额'} value={reviewReceivedAmount} onChange={event => setReviewReceivedAmount(event.target.value)} helperText={reviewing.request_type === 'credit' ? '余额按实际到账金额增加' : '余额按申请金额扣减，实际出款金额进入审核记录'} inputProps={{ min: .01, step: .01 }} /><Paper variant="outlined" sx={{ p: 1.4 }}><Stack direction="row" justifyContent="space-between"><Typography color="text.secondary" fontSize={12}>变动前余额</Typography><Typography fontWeight={850}>¥ {money(reviewing.user_balance)}</Typography></Stack><Stack direction="row" justifyContent="space-between" mt={.8}><Typography color="text.secondary" fontSize={12}>预计变动后余额</Typography><Typography fontWeight={900} color="primary.main">¥ {money(reviewedBalance(reviewing, Number(reviewReceivedAmount) || 0))}</Typography></Stack></Paper></>}<TextField fullWidth multiline minRows={3} label={reviewDecision === 'rejected' ? '拒绝原因' : '审核备注'} value={reviewRemark} onChange={event => setReviewRemark(event.target.value)} required={reviewDecision === 'rejected'} inputProps={{ maxLength: 500 }} /><Alert severity={reviewDecision === 'approved' ? 'info' : 'warning'}>{reviewDecision === 'approved' ? reviewing.request_type === 'join' ? `通过后会员将进入房间 ${reviewing.target_room_code || '当前房间'}，倍率为 ${(Number(reviewOddsMultiplier) || 1).toFixed(2)}×。` : '通过后立即写入余额与资金流水，不能重复审核。' : '拒绝不会改变余额或房间归属。'}</Alert></Stack>}</DialogContent><DialogActions><Button onClick={() => setReviewing(null)} disabled={reviewSaving}>取消</Button><Button variant="contained" color={reviewDecision === 'approved' ? 'success' : 'error'} disabled={reviewSaving} onClick={() => void review()}>{reviewSaving ? '处理中…' : reviewDecision === 'approved' ? '确认通过' : '确认拒绝'}</Button></DialogActions></Dialog>
+    <Dialog open={Boolean(balanceUser)} onClose={closeBalance} fullWidth maxWidth="xs"><DialogTitle>调整余额 · {balanceUser?.nickname || balanceUser?.username}</DialogTitle><DialogContent><Stack gap={2} pt={1}><TextField type="number" label="调整金额" helperText="正数为上分，负数为下分" value={amount} disabled={balanceSaving} onChange={event => setAmount(event.target.value)} /><TextField label="原因" value={remark} disabled={balanceSaving} onChange={event => setRemark(event.target.value)} /></Stack></DialogContent><DialogActions><Button disabled={balanceSaving} onClick={closeBalance}>取消</Button><Button variant="contained" disabled={balanceSaving || !canManageMember(balanceUser)} onClick={() => void adjustBalance()}>{balanceSaving ? '处理中…' : '确认'}</Button></DialogActions></Dialog>
+    <Dialog open={Boolean(reviewing)} onClose={() => !reviewSaving && setReviewing(null)} fullWidth maxWidth="sm"><DialogTitle>{reviewing?.request_type === 'join' ? '审核入房申请' : '审核上下分申请'} #{reviewing?.id}</DialogTitle><DialogContent>{reviewing && <Stack gap={1.5} pt={1}><Paper variant="outlined" sx={{ p: 1.4 }}><Typography fontWeight={850}>{reviewing.username}</Typography><Typography variant="caption" color="text.secondary">{reviewing.request_type === 'join' ? `目标房间 ${reviewing.target_room_code || '当前房间'}` : `申请金额 ¥ ${money(reviewing.requested_amount)}`}</Typography>{reviewing.remark && <Typography fontSize={12} mt={1}>{reviewing.remark}</Typography>}</Paper><Tabs value={reviewDecision} onChange={(_, next: 'approved' | 'rejected') => setReviewDecision(next)} variant="fullWidth"><Tab value="approved" label="通过申请" /><Tab value="rejected" label="拒绝申请" /></Tabs>{reviewDecision === 'approved' && reviewing.request_type === 'join' && <Paper variant="outlined" sx={{ p: 1.4, borderColor: 'primary.light', bgcolor: 'action.hover' }}><Typography fontSize={13} fontWeight={900}>入房赔率倍率</Typography><Typography fontSize={10} color="text.secondary">只写入本房间会员关系；换房后自动采用目标房间对应配置。</Typography><Stack direction="row" gap={.6} flexWrap="wrap" useFlexGap mt={1.2}>{oddsMultiplierPresets.map(value => <Button key={value} size="small" variant={Number(reviewOddsMultiplier) === value ? 'contained' : 'outlined'} onClick={() => setReviewOddsMultiplier(String(value))}>{value.toFixed(2)}×</Button>)}</Stack><TextField fullWidth size="small" type="number" label="自定义倍率" value={reviewOddsMultiplier} onChange={event => setReviewOddsMultiplier(event.target.value)} inputProps={{ min: .5, max: 1.5, step: .01 }} helperText="0.50–1.50；1.00 为正常房间赔率" sx={{ mt: 1.2 }} /></Paper>}{reviewDecision === 'approved' && isBalanceApplication(reviewing) && <><TextField type="number" fullWidth label={reviewing.request_type === 'credit' ? '实际到账金额' : '实际出款金额'} value={reviewReceivedAmount} onChange={event => setReviewReceivedAmount(event.target.value)} helperText={reviewing.request_type === 'credit' ? '余额按实际到账金额增加' : '余额按申请金额扣减，实际出款金额进入审核记录'} inputProps={{ min: .01, step: .01 }} /><Paper variant="outlined" sx={{ p: 1.4 }}><Stack direction="row" justifyContent="space-between"><Typography color="text.secondary" fontSize={12}>变动前余额</Typography><Typography fontWeight={850}>¥ {money(reviewing.user_balance)}</Typography></Stack><Stack direction="row" justifyContent="space-between" mt={.8}><Typography color="text.secondary" fontSize={12}>预计变动后余额</Typography><Typography fontWeight={900} color="primary.main">¥ {money(reviewedBalance(reviewing, Number(reviewReceivedAmount) || 0))}</Typography></Stack></Paper></>}<TextField fullWidth multiline minRows={3} label={reviewDecision === 'rejected' ? '拒绝原因' : '审核备注'} value={reviewRemark} onChange={event => setReviewRemark(event.target.value)} required={reviewDecision === 'rejected'} inputProps={{ maxLength: 500 }} /><Alert severity={reviewDecision === 'approved' ? 'info' : 'warning'}>{reviewDecision === 'approved' ? reviewing.request_type === 'join' ? `通过后会员将进入房间 ${reviewing.target_room_code || '当前房间'}，倍率为 ${(Number(reviewOddsMultiplier) || 1).toFixed(2)}×。` : '通过后立即写入余额与资金流水，不能重复审核。' : reviewing.request_type === 'join' ? '拒绝不会改变会员的房间归属。' : '拒绝不会改变余额或房间归属。'}</Alert></Stack>}</DialogContent><DialogActions><Button onClick={() => setReviewing(null)} disabled={reviewSaving}>取消</Button><Button variant="contained" color={reviewDecision === 'approved' ? 'success' : 'error'} disabled={reviewSaving} onClick={() => void review()}>{reviewSaving ? '处理中…' : reviewDecision === 'approved' ? '确认通过' : '确认拒绝'}</Button></DialogActions></Dialog>
   </Box>
 }
 

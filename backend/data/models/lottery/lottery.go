@@ -105,12 +105,14 @@ func (IssueWindow) TableName() string { return "lottery_issue_windows" }
 // comma-separated value so the schema remains portable between local Postgres
 // and production Postgres deployments.
 type Draw struct {
-	ID        uint64    `gorm:"primaryKey" json:"id"`
-	GameID    string    `gorm:"size:40;not null;index;uniqueIndex:idx_lottery_draw_game_issue" json:"game_id"`
-	Issue     string    `gorm:"size:64;not null;index;uniqueIndex:idx_lottery_draw_game_issue" json:"issue"`
-	Numbers   string    `gorm:"size:120;not null" json:"-"`
-	DrawAt    time.Time `gorm:"not null;index" json:"draw_at"`
-	CreatedAt time.Time `json:"created_at"`
+	ID                 uint64    `gorm:"primaryKey" json:"id"`
+	GameID             string    `gorm:"size:40;not null;index;uniqueIndex:idx_lottery_draw_game_issue" json:"game_id"`
+	Issue              string    `gorm:"size:64;not null;index;uniqueIndex:idx_lottery_draw_game_issue" json:"issue"`
+	Numbers            string    `gorm:"size:120;not null" json:"-"`
+	SourceRevision     string    `gorm:"size:64;not null;default:''" json:"source_revision,omitempty"`
+	ConversionRevision string    `gorm:"size:64;not null;default:''" json:"conversion_revision,omitempty"`
+	DrawAt             time.Time `gorm:"not null;index" json:"draw_at"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 func (Draw) TableName() string { return "lottery_draws" }

@@ -1,10 +1,43 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_AGENT_MENU, DEFAULT_TENANT_MENU, normalizeAdminMenu, normalizeRoleMenu } from './adminMenu'
+import { DEFAULT_ADMIN_MENU, DEFAULT_AGENT_MENU, DEFAULT_TENANT_MENU, normalizeAdminMenu, normalizeRoleMenu, resetAdminMenu, resetRoleMenu } from './adminMenu'
+
+describe('retired mixed-account management', () => {
+  const legacy = [{ path: '/users', label: '用户管理', group: '组织与账号', order: 1, visible: true }]
+
+  it('removes the entry rather than merely hiding it in platform defaults, saved menus and resets', () => {
+    for (const menu of [DEFAULT_ADMIN_MENU, normalizeAdminMenu(legacy), resetAdminMenu()]) {
+      expect(menu.some(item => item.path === '/users')).toBe(false)
+      expect(menu.find(item => item.path === '/members')).toMatchObject({ label: '会员管理', visible: true })
+      expect(menu.find(item => item.path === '/tenants')).toMatchObject({ label: '租户管理', visible: true })
+      expect(menu.find(item => item.path === '/agents')).toMatchObject({ label: '代理管理', visible: true })
+    }
+  })
+
+  it.each(['tenant', 'agent'] as const)('does not restore a legacy user-management entry in %s templates', role => {
+    for (const menu of [normalizeRoleMenu(role, legacy), resetRoleMenu(role)]) {
+      expect(menu.some(item => item.path === '/users')).toBe(false)
+      expect(menu.find(item => item.path === '/members')).toMatchObject({ label: '会员管理', visible: true })
+    }
+  })
+})
 
 describe('interface test menu boundary', () => {
   it('adds plan management to the platform menu, including saved menus predating it', () => {
     const platform = normalizeAdminMenu([{ path: '/announcements', visible: true }])
     expect(platform.find(item => item.path === '/plans')).toMatchObject({ label: '计划管理', group: '内容与服务', visible: true })
+  })
+
+  it('adds the admin-only game documentation page to legacy platform menus', () => {
+    const platform = normalizeAdminMenu([{ path: '/system', visible: true }])
+    expect(platform.find(item => item.path === '/game-guide')).toMatchObject({
+      label: '游戏说明',
+      group: '系统管理',
+      order: 196,
+      visible: true,
+    })
+    for (const role of ['tenant', 'agent'] as const) {
+      expect(normalizeRoleMenu(role, [{ path: '/game-guide', label: '伪造入口', visible: true }]).some(item => item.path === '/game-guide')).toBe(false)
+    }
   })
 
   it.each(['tenant', 'agent'] as const)('does not grant %s plan automation through a forged menu entry', role => {

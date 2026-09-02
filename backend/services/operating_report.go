@@ -103,6 +103,7 @@ type OperatingReport struct {
 
 type operatingAggregate struct {
 	TurnoverCents   int64 `gorm:"column:turnover_cents"`
+	StakeCents      int64 `gorm:"column:stake_cents"`
 	PayoutCents     int64 `gorm:"column:payout_cents"`
 	RebateCents     int64 `gorm:"column:rebate_cents"`
 	AgentShareCents int64 `gorm:"column:agent_share_cents"`
@@ -148,7 +149,8 @@ func (s *OperatingReportService) Report(filter OperatingReportFilter) (*Operatin
 
 	settled := s.filteredBets(filter, period, true)
 	var agg operatingAggregate
-	if err := settled.Select(`COALESCE(SUM(b.amount_cents),0) turnover_cents,
+	if err := settled.Select(`COALESCE(SUM(COALESCE(b.valid_turnover_cents,b.amount_cents)),0) turnover_cents,
+		COALESCE(SUM(b.amount_cents),0) stake_cents,
 		COALESCE(SUM(b.payout_cents),0) payout_cents, COALESCE(SUM(b.rebate_cents),0) rebate_cents,
 		COALESCE(SUM(b.agent_share_cents),0) agent_share_cents, COALESCE(SUM(b.fly_cents),0) fly_cents,
 		COUNT(*) tickets, COUNT(DISTINCT b.user_id) bettors`).Scan(&agg).Error; err != nil {
@@ -168,19 +170,19 @@ func (s *OperatingReportService) Report(filter OperatingReportFilter) (*Operatin
 		return nil, err
 	}
 
-	gross, platform := operatingProfitCents(agg.TurnoverCents, agg.PayoutCents, agg.RebateCents, welfareCents, agg.AgentShareCents)
+	gross, platform := operatingProfitCents(agg.StakeCents, agg.PayoutCents, agg.RebateCents, welfareCents, agg.AgentShareCents)
 	summary := OperatingSummary{
 		PeriodStart: period.StartDate, PeriodEnd: period.EndDate,
 		SettledTurnover: centsToAmount(agg.TurnoverCents), Payout: centsToAmount(agg.PayoutCents),
-		MemberNet: centsToAmount(agg.PayoutCents - agg.TurnoverCents), GrossProfit: centsToAmount(gross),
+		MemberNet: centsToAmount(agg.PayoutCents - agg.StakeCents), GrossProfit: centsToAmount(gross),
 		RebateAccrued: centsToAmount(agg.RebateCents), WelfareCost: centsToAmount(welfareCents),
 		AgentShare: centsToAmount(agg.AgentShareCents), PlatformNetProfit: centsToAmount(platform),
 		PendingTurnover: centsToAmount(pendingAgg.AmountCents), FlyAmount: centsToAmount(agg.FlyCents),
 		SettledTickets: agg.Tickets, PendingTickets: pendingAgg.Tickets, Bettors: agg.Bettors,
 	}
-	if agg.TurnoverCents > 0 {
-		summary.GrossMargin = roundMoney(float64(gross) / float64(agg.TurnoverCents) * 100)
-		summary.NetMargin = roundMoney(float64(platform) / float64(agg.TurnoverCents) * 100)
+	if agg.StakeCents > 0 {
+		summary.GrossMargin = roundMoney(float64(gross) / float64(agg.StakeCents) * 100)
+		summary.NetMargin = roundMoney(float64(platform) / float64(agg.StakeCents) * 100)
 	}
 	trend, err := s.trend(filter, period)
 	if err != nil {
@@ -346,9 +348,9 @@ func (s *OperatingReportService) welfareByDate(filter OperatingReportFilter, per
 }
 
 type groupedOperatingRow struct {
-	Key, Label                                               string
-	TurnoverCents, PayoutCents, RebateCents, AgentShareCents int64
-	Tickets                                                  int64
+	Key, Label                                                           string
+	TurnoverCents, StakeCents, PayoutCents, RebateCents, AgentShareCents int64
+	Tickets                                                              int64
 }
 
 // operatingProfitCents is the accounting identity used by the summary,
@@ -381,7 +383,8 @@ func (s *OperatingReportService) breakdown(filter OperatingReportFilter, period 
 		groupExpr += ", " + labelExpr
 	}
 	var rows []groupedOperatingRow
-	selectSQL := fmt.Sprintf(`%s key, %s label, COALESCE(SUM(b.amount_cents),0) turnover_cents,
+	selectSQL := fmt.Sprintf(`%s key, %s label, COALESCE(SUM(COALESCE(b.valid_turnover_cents,b.amount_cents)),0) turnover_cents,
+		COALESCE(SUM(b.amount_cents),0) stake_cents,
 		COALESCE(SUM(b.payout_cents),0) payout_cents, COALESCE(SUM(b.rebate_cents),0) rebate_cents,
 		COALESCE(SUM(b.agent_share_cents),0) agent_share_cents, COUNT(*) tickets`, keyExpr, labelExpr)
 	if err := q.Select(selectSQL).Group(groupExpr).Order("turnover_cents DESC").Limit(100).Scan(&rows).Error; err != nil {
@@ -418,7 +421,7 @@ func (s *OperatingReportService) breakdown(filter OperatingReportFilter, period 
 	result := make([]OperatingBreakdown, 0, len(rows))
 	for _, row := range rows {
 		welfare := welfareByKey[row.Key]
-		gross, platform := operatingProfitCents(row.TurnoverCents, row.PayoutCents, row.RebateCents, welfare, row.AgentShareCents)
+		gross, platform := operatingProfitCents(row.StakeCents, row.PayoutCents, row.RebateCents, welfare, row.AgentShareCents)
 		if label := roomLabels[row.Key]; label != "" {
 			row.Label = label
 		}
@@ -436,11 +439,12 @@ func (s *OperatingReportService) trend(filter OperatingReportFilter, period repo
 		dateExpr = "strftime('%Y-%m-%d',COALESCE(b.settled_at,b.updated_at,b.created_at))"
 	}
 	var rows []struct {
-		Date                                                     string
-		TurnoverCents, PayoutCents, RebateCents, AgentShareCents int64
+		Date                                                                 string
+		TurnoverCents, StakeCents, PayoutCents, RebateCents, AgentShareCents int64
 	}
 	q := s.filteredBets(filter, period, true)
-	if err := q.Select(fmt.Sprintf(`%s date, COALESCE(SUM(b.amount_cents),0) turnover_cents, COALESCE(SUM(b.payout_cents),0) payout_cents,
+	if err := q.Select(fmt.Sprintf(`%s date, COALESCE(SUM(COALESCE(b.valid_turnover_cents,b.amount_cents)),0) turnover_cents,
+		COALESCE(SUM(b.amount_cents),0) stake_cents, COALESCE(SUM(b.payout_cents),0) payout_cents,
 		COALESCE(SUM(b.rebate_cents),0) rebate_cents, COALESCE(SUM(b.agent_share_cents),0) agent_share_cents`, dateExpr)).Group(dateExpr).Order("date").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -451,7 +455,7 @@ func (s *OperatingReportService) trend(filter OperatingReportFilter, period repo
 	}
 	for _, row := range rows {
 		welfare := welfareByDate[row.Date]
-		gross, platform := operatingProfitCents(row.TurnoverCents, row.PayoutCents, row.RebateCents, welfare, row.AgentShareCents)
+		gross, platform := operatingProfitCents(row.StakeCents, row.PayoutCents, row.RebateCents, welfare, row.AgentShareCents)
 		byDate[row.Date] = OperatingPoint{Date: row.Date, Turnover: centsToAmount(row.TurnoverCents), Payout: centsToAmount(row.PayoutCents), GrossProfit: centsToAmount(gross), Rebate: centsToAmount(row.RebateCents), Welfare: centsToAmount(welfare), AgentShare: centsToAmount(row.AgentShareCents), PlatformProfit: centsToAmount(platform)}
 	}
 	result := make([]OperatingPoint, 0, 93)

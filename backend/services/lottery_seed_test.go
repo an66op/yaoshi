@@ -58,6 +58,46 @@ func TestOfficialGameSeedKeepsExplicitDisabledState(t *testing.T) {
 	}
 }
 
+func TestBingoMarkSixDefaultCadenceIsFiveMinutes(t *testing.T) {
+	for _, game := range defaultGames {
+		if game.ID == "bingo-mark-six" {
+			if game.Interval != 300 {
+				t.Fatalf("bingo-mark-six interval=%d, want 300", game.Interval)
+			}
+			return
+		}
+	}
+	t.Fatal("bingo-mark-six seed missing")
+}
+
+func TestDefaultGameCatalogRowStartsOrderedProductsFailClosed(t *testing.T) {
+	now := time.Date(2026, 9, 2, 8, 0, 0, 0, time.UTC)
+	wantOrdered := map[string]bool{
+		"bingo-ssc-1": true, "bingo-racing-a": true, "bingo-mark-six": true,
+	}
+	seen := make(map[string]bool, len(wantOrdered))
+	for index, item := range defaultGames {
+		if _, target := wantOrdered[item.ID]; !target && item.ID != "bingo-racing-b" {
+			continue
+		}
+		game := defaultGameCatalogRow(item, index, now)
+		if wantOrdered[item.ID] {
+			seen[item.ID] = true
+			if game.SourceKind != "external" || game.SourceName != bingoVerifiedSourceName || game.SourceURL != bingoVerifiedSourceURL ||
+				game.SyncStatus != "stale" || game.LastSyncError != bingoOrderPendingMessage || sourceHealthyForGame(&game) {
+				t.Fatalf("%s can become visible between catalog insert and source revision: %+v", item.ID, game)
+			}
+			continue
+		}
+		if game.ID == "bingo-racing-b" && (game.SourceKind != "external" || game.SourceName != "168开奖网" || game.SyncStatus != "idle" || !sourceHealthyForGame(&game)) {
+			t.Fatalf("order-independent target inherited the ordered gate: %+v", game)
+		}
+	}
+	if !reflect.DeepEqual(seen, wantOrdered) {
+		t.Fatalf("ordered target seed coverage=%+v want=%+v", seen, wantOrdered)
+	}
+}
+
 func TestOfficialGameSeedPreservesExplicitPlacementAndOrder(t *testing.T) {
 	game := officialGames[0]
 	game.LobbyCategory = "自定义分类"

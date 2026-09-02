@@ -40,7 +40,10 @@ func (s *MemberPortalService) WalletSummary(userID uint64) (*MemberWalletSummary
 
 	var todayStake int64
 	if err := s.db.Model(&bet.Bet{}).Where("user_id = ? AND created_at >= ? AND status <> ?", userID, start, "cancelled").
-		Select("COALESCE(SUM(amount_cents),0)").Scan(&todayStake).Error; err != nil {
+		Select(`COALESCE(SUM(CASE
+			WHEN status IN ('won','lost') THEN COALESCE(valid_turnover_cents,amount_cents)
+			WHEN status IN ('pending','settling') THEN amount_cents
+			ELSE 0 END),0)`).Scan(&todayStake).Error; err != nil {
 		return nil, err
 	}
 	summary.TodayTurnover = centsToAmount(todayStake)
@@ -102,7 +105,7 @@ func (s *MemberPortalService) RebatePreview(userID uint64) (*MemberRebatePreview
 	bizDate := bizDateCST(time.Now())
 	var turnover int64
 	if err := s.db.Model(&bet.Bet{}).Where("user_id = ? AND created_at >= ? AND status IN ?", userID, start, []string{"won", "lost"}).
-		Select("COALESCE(SUM(amount_cents),0)").Scan(&turnover).Error; err != nil {
+		Select("COALESCE(SUM(COALESCE(valid_turnover_cents,amount_cents)),0)").Scan(&turnover).Error; err != nil {
 		return nil, err
 	}
 	turnoverAmount := centsToAmount(turnover)

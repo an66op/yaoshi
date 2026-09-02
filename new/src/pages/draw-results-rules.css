@@ -1,0 +1,63 @@
+.draw-results-page .draw-results-table > article > span { min-width: 0; }
+.draw-results-page .draw-results-table > article > span b {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  line-height: 1.35;
+}
+.draw-results-page .draw-results-table > article > .draw-result-cells { row-gap: 6px; }
+.draw-results-page .draw-results-table > article > .draw-result-cells.trend-cells {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.draw-results-page .draw-results-table > article > .draw-result-cells.trend-cells > b {
+  flex: 0 0 23px;
+  width: 23px;
+  height: 25px;
+}
+.draw-results-page .draw-results-table .trend-cells > i { flex: 0 0 7px; }
+.draw-results-page .draw-result-cells .result-neutral { background: #758791; }
+.draw-results-page .draw-results-table > article > .result-unavailable {
+  display: block;
+  color: #78909c;
+  font-size: 11px;
+}
+.theme-night .draw-results-page .draw-results-table > article > .result-unavailable { color: #a8cbd2; }
+
+.draw-results-page .mark-six-result-balls {
+  align-items: start;
+  overflow: visible;
+}
+.draw-results-page .mark-six-result-balls .mark-six-draw-cell {
+  width: 100%;
+  min-width: 0;
+}
+.draw-results-page .mark-six-result-balls .mark-six-draw-cell > .mark-six-ball {
+  width: min(30px, 100%);
+  height: auto;
+  min-width: 22px;
+  aspect-ratio: 1;
+}
+.draw-results-page .mark-six-result-balls .mark-six-draw-cell > small { font-size: 9px; }
+.draw-results-page .mark-six-special-summary .mark-six-ball {
+  width: auto !important;
+  min-width: 50px;
+  padding: 0 7px;
+  border-radius: 7px !important;
+  color: #fff !important;
+  font-size: 10px;
+  text-shadow: 0 1px 1px rgb(0 0 0 / 24%) !important;
+}
+.draw-results-page .mark-six-special-summary .mark-six-ball.wave-red { background: linear-gradient(145deg, #f36b70, #c92f42) !important; }
+.draw-results-page .mark-six-special-summary .mark-six-ball.wave-blue { background: linear-gradient(145deg, #65aade, #246ba7) !important; }
+.draw-results-page .mark-six-special-summary .mark-six-ball.wave-green { background: linear-gradient(145deg, #62b987, #248058) !important; }
+
+@media (max-width: 390px) {
+  .draw-results-page .mark-six-result-balls .mark-six-draw-cell > .mark-six-ball { min-width: 20px; }
+  .draw-results-page .mark-six-result-balls .mark-six-draw-cell > small { font-size: 8px; }
+  .draw-results-page .mark-six-result-balls .mark-six-draw-cell.is-special { margin-left: 7px; }
+  .draw-results-page .mark-six-result-balls .mark-six-draw-cell.is-special::before { left: -8px; font-size: 11px; }
+}

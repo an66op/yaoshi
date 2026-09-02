@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { DrawResult } from '../api/lottery'
-import { CURRENT_DRAW_CARD_SIZE, drawCardIssueLabel, paintCurrentDrawCard, paintRecentDrawCard, recentDrawCardSize, releaseDrawCardCanvas } from './drawResultCardCanvas'
+import { CURRENT_DRAW_CARD_SIZE, currentDrawCardSize, drawCardIssueLabel, paintCurrentDrawCard, paintRecentDrawCard, recentDrawCardSize, releaseDrawCardCanvas } from './drawResultCardCanvas'
 
 function recordingCanvas() {
   const gradient = { addColorStop: vi.fn() }
@@ -43,7 +43,7 @@ describe('shared draw-result racing artwork', () => {
     const before = structuredClone(draw)
     paintCurrentDrawCard(canvas, { title: '极速飞艇' }, draw, artwork)
     expect(draw).toEqual(before)
-    expect(ctx.fillText).toHaveBeenCalledWith('第 54776094 期 · 开奖结果', 29, 76)
+    expect(ctx.fillText).toHaveBeenCalledWith('第 54776094 期 · 开奖结果', 29, 76, 662)
     expect(ctx.fillText).toHaveBeenCalledWith('7', 360, 303)
     expect(ctx.fillText).toHaveBeenCalledWith('6', 225, 279)
     expect(ctx.fillText).toHaveBeenCalledWith('10', 495, 281)
@@ -71,6 +71,51 @@ describe('shared draw-result racing artwork', () => {
     expect(ctx.fillText).toHaveBeenCalledWith('9', 495, 281)
   })
 
+  it('uses the same five-ball sum and tie labels in both image layouts', () => {
+    const result = { ...draw, game_id: 'speed-ssc', numbers: [7, 1, 2, 3, 7] }
+    const current = recordingCanvas()
+    const recent = recordingCanvas()
+    paintCurrentDrawCard(current.canvas, { title: '极速时时彩' }, result, artwork)
+    paintRecentDrawCard(recent.canvas, { title: '极速时时彩' }, [result], artwork)
+    expect(current.ctx.fillText).toHaveBeenCalledWith('20 小 双', 40, 423)
+    expect(current.ctx.fillText).toHaveBeenCalledWith('和 虎', 275, 423)
+    expect(recent.ctx.fillText).toHaveBeenCalledWith('20 小 双', 520, 128)
+    expect(recent.ctx.fillText).toHaveBeenCalledWith('和 虎', 625, 128, 80)
+  })
+
+  it('paints one first-versus-fifth outcome only for an exact v3 product', () => {
+    const result = { ...draw, game_id: 'speed-ssc', numbers: [7, 1, 2, 3, 7] }
+    const v3 = recordingCanvas()
+    paintCurrentDrawCard(v3.canvas, { title: '极速时时彩', ruleVersion: 'digits5-v3' }, result, artwork)
+    expect(v3.ctx.fillText).toHaveBeenCalledWith('和', 275, 423)
+    expect(v3.ctx.fillText).not.toHaveBeenCalledWith('和 虎', 275, 423)
+
+    const sg = recordingCanvas()
+    paintCurrentDrawCard(sg.canvas, { title: 'SG时时彩', ruleVersion: 'digits5-v3' }, { ...result, game_id: 'sg-ssc' }, artwork)
+    expect(sg.ctx.fillText).toHaveBeenCalledWith('和 虎', 275, 423)
+  })
+
+  it('keeps all twenty numbers and a long issue without inventing unknown-game derivatives', () => {
+    const result = { ...draw, game_id: 'official-tw-bingo', issue: '9'.repeat(80), numbers: Array.from({ length: 20 }, (_, index) => index + 40) }
+    const current = recordingCanvas()
+    const recent = recordingCanvas()
+    paintCurrentDrawCard(current.canvas, { title: '宾果' }, result, artwork)
+    paintRecentDrawCard(recent.canvas, { title: '宾果' }, [result], artwork)
+    const currentText = current.ctx.fillText.mock.calls.map(call => call[0])
+    const recentText = recent.ctx.fillText.mock.calls.map(call => call[0])
+    for (const number of result.numbers) {
+      expect(currentText).toContain(String(number))
+      expect(recentText).toContain(String(number))
+    }
+    expect(currentText.join(' ')).not.toMatch(/冠亚和|龙虎| 大 | 小 /)
+    expect(recentText.join(' ')).not.toMatch(/冠亚和|龙虎| 大 | 小 /)
+    expect(currentText.filter(value => typeof value === 'string' && value.includes('999')).join('')).toBe(`第 ${result.issue} 期 · 开奖结果`)
+    expect(recentText.filter(value => typeof value === 'string' && /^9+$/.test(value)).join('')).toBe(result.issue)
+    expect(current.canvas.height).toBe(currentDrawCardSize(20, result.issue).height)
+    expect(recent.canvas.height).toBe(recentDrawCardSize([result]).height)
+    expect(current.canvas.height).toBeGreaterThan(450)
+  })
+
   it('caps retina scaling and keeps the recent table within its fifteen-row limit', () => {
     const current = recordingCanvas()
     const recent = recordingCanvas()
@@ -83,8 +128,8 @@ describe('shared draw-result racing artwork', () => {
     expect(recent.ctx.fillText).toHaveBeenCalledWith('极速飞艇 · 最近 15 期', 18, 31)
   })
 
-  it('keeps existing display issue normalization without modifying the source issue', () => {
-    expect(drawCardIssueLabel('20260830-12345')).toBe('12345')
+  it('preserves the complete source issue, including date-prefixed identifiers', () => {
+    expect(drawCardIssueLabel('20260830-12345')).toBe('20260830-12345')
     expect(drawCardIssueLabel('54776094')).toBe('54776094')
   })
 

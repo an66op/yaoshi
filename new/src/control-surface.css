@@ -1,0 +1,19 @@
+/* 操作面板不选字、不弹长按菜单；不要套到聊天、回单或整个页面上。 */
+[data-control-surface],
+[data-control-surface] * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+[data-control-surface] img {
+  -webkit-user-drag: none;
+}
+
+/* 金额输入等仍可定位光标、选中、复制和粘贴；保留原生编辑体验。 */
+[data-control-surface] :is(input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-allow-selection]),
+[data-control-surface] :is([contenteditable]:not([contenteditable="false"]), [data-allow-selection]) * {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}

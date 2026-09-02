@@ -204,9 +204,6 @@ func TestPlanAutomationOtherGamesPostgresPersistenceAndRoomBoundaries(t *testing
 	if _, err := visit(); err == nil {
 		t.Fatal("disabled configuration executed")
 	}
-	if err := svc.RunEnabled(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 	if view, err := svc.Get(room.ID); err != nil || view.Enabled || len(view.GameIDs) != 2 {
 		t.Fatalf("disable did not preserve game selection: %#v, %v", view, err)
 	}

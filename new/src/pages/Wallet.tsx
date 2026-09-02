@@ -5,6 +5,7 @@ import { betsApi, type MemberBet } from '../api/bets'
 import { memberApi, type BalanceRecord, type InviteInfo, type MemberApplication, type MemberPaymentAccount, type RebatePreview, type WalletChannel, type WalletSummary } from '../api/member'
 import { pathForWallet, type WalletActionSlug } from '../router'
 import { balanceRecordLabel } from '../utils/balanceRecordLabels'
+import { betStatusText, betStatusTone } from '../utils/betStatus'
 
 type WalletAction = '上分申请' | '下分申请' | '收款方式' | '申请记录' | '娱乐额度' | '游戏记录' | '竞猜列表' | '积分账变' | '自助回水' | '福利报表' | '红包报表' | '邀请好友'
 
@@ -31,10 +32,6 @@ const actions: Array<{ icon: string; name: WalletAction; tone: string }> = [
   { icon: '/icons/duo/chart-pie.svg', name: '竞猜列表', tone: 'blue' }, { icon: '/icons/duo/coin-stack.svg', name: '积分账变', tone: 'gold' }, { icon: '/icons/duo/clock.svg', name: '自助回水', tone: 'aqua' },
   { icon: '/icons/duo/confetti.svg', name: '福利报表', tone: 'coral' }, { icon: '/icons/duo/discount.svg', name: '红包报表', tone: 'aqua' }, { icon: '/icons/lucide/gift.svg', name: '邀请好友', tone: 'blue' },
 ]
-
-const betStatusLabel: Record<string, string> = {
-  pending: '待开奖', won: '已中奖', lost: '未中奖', cancelled: '已撤销',
-}
 
 const applicationStatus: Record<string, { label: string; tone: string }> = {
   pending: { label: '审核中', tone: 'pending' },
@@ -108,7 +105,7 @@ function BetDetail({ bet, onClose, onCancel }: { bet: MemberBet; onClose: () => 
     >
       <section className="wallet-bet-detail" role="dialog" aria-modal="true" aria-label="注单详情">
         <header><div><small>注单详情</small><b>{bet.play_name || bet.selection}</b></div><button type="button" aria-label="关闭" onClick={onClose}>×</button></header>
-        <dl><div><dt>彩种</dt><dd>{bet.game_id}</dd></div><div><dt>期号</dt><dd>{bet.issue}</dd></div><div><dt>投注内容</dt><dd>{bet.play_name || '选号'} · {bet.selection}</dd></div><div><dt>投注金额</dt><dd>¥ {formatMoney(bet.amount)}</dd></div><div><dt>赔率</dt><dd>{bet.odds.toFixed(3)}</dd></div><div><dt>当前状态</dt><dd><span className={`wallet-bet-status ${bet.status}`}>{betStatusLabel[bet.status] ?? bet.status}</span></dd></div><div><dt>派彩</dt><dd className={bet.payout > 0 ? 'is-income' : ''}>¥ {formatMoney(bet.payout)}</dd></div><div><dt>投注时间</dt><dd>{formatDate(bet.created_at)}</dd></div></dl>
+        <dl><div><dt>彩种</dt><dd>{bet.game_id}</dd></div><div><dt>期号</dt><dd>{bet.issue}</dd></div><div><dt>投注内容</dt><dd>{bet.play_name || '选号'} · {bet.selection}</dd></div><div><dt>投注金额</dt><dd>¥ {formatMoney(bet.amount)}</dd></div><div><dt>赔率</dt><dd>{bet.odds.toFixed(3)}</dd></div><div><dt>当前状态</dt><dd><span className={`wallet-bet-status ${betStatusTone(bet.status, bet.remark)}`}>{betStatusText(bet.status, bet.remark)}</span></dd></div><div><dt>派彩</dt><dd className={bet.payout > 0 ? 'is-income' : ''}>¥ {formatMoney(bet.payout)}</dd></div><div><dt>投注时间</dt><dd>{formatDate(bet.created_at)}</dd></div></dl>
         {isPending && <p>开奖前可撤销本注，撤销后金额将退回余额。</p>}
         <footer>{isPending && <button type="button" className="wallet-bet-cancel" onClick={onCancel}>撤销本注</button>}<button type="button" className="wallet-submit" onClick={onClose}>关闭</button></footer>
       </section>
@@ -540,7 +537,7 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
           {activeAction === '竞猜列表' && <div className="wallet-bet-filter" role="tablist"><button type="button" className={betFilter === 'all' ? 'is-active' : ''} onClick={() => setBetFilter('all')}>全部</button><button type="button" className={betFilter === 'pending' ? 'is-active' : ''} onClick={() => setBetFilter('pending')}>待开奖</button><button type="button" className={betFilter === 'settled' ? 'is-active' : ''} onClick={() => setBetFilter('settled')}>已结算</button></div>}
           {subpageLoading ? <EmptyHint text="正在读取注单…" /> : bets.length ? bets.map((bet) => (
             <button type="button" className="wallet-row wallet-bet-row" key={bet.id} onClick={() => setSelectedBet({ ...bet })}>
-              <div><b>{bet.play_name || bet.selection}</b><small>{bet.game_id} · 第 {bet.issue} 期</small></div><aside><strong>¥ {formatMoney(bet.amount)}</strong><span className={`wallet-bet-status ${bet.status}`}>{betStatusLabel[bet.status] ?? bet.status}</span></aside><Icon name="arrow" />
+              <div><b>{bet.play_name || bet.selection}</b><small>{bet.game_id} · 第 {bet.issue} 期</small></div><aside><strong>¥ {formatMoney(bet.amount)}</strong><span className={`wallet-bet-status ${betStatusTone(bet.status, bet.remark)}`}>{betStatusText(bet.status, bet.remark)}</span></aside><Icon name="arrow" />
             </button>
           )) : <EmptyHint text={activeAction === '竞猜列表' && betFilter === 'pending' ? '暂无待开奖注单' : '暂无注单'} />}
           {betHasMore && <button className="wallet-load-more" disabled={betLoadingMore} onClick={() => void loadMoreBets()}>{betLoadingMore ? '正在加载…' : '加载更早注单'}</button>}

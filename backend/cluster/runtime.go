@@ -28,16 +28,18 @@ type Options struct {
 }
 
 var (
-	mu       sync.RWMutex
-	client   *redis.Client
-	prefix   = "wangzhe"
-	instance = randomToken()
-	required bool
+	mu         sync.RWMutex
+	client     *redis.Client
+	prefix     = "wangzhe"
+	instance   = randomToken()
+	required   bool
+	configured bool
 )
 
 func Init(ctx context.Context, options Options) error {
 	mu.Lock()
 	required = options.Required
+	configured = strings.TrimSpace(options.Addr) != ""
 	if value := normalizePrefix(options.Prefix); value != "" {
 		prefix = value
 	}
@@ -45,6 +47,7 @@ func Init(ctx context.Context, options Options) error {
 	addr := strings.TrimSpace(options.Addr)
 	if addr == "" {
 		if options.Required {
+			disableClient()
 			return errors.New("Redis is required but redis.addr is empty")
 		}
 		disableClient()
@@ -64,6 +67,7 @@ func Init(ctx context.Context, options Options) error {
 	if err := next.Ping(pingCtx).Err(); err != nil {
 		_ = next.Close()
 		if options.Required {
+			disableClient()
 			return fmt.Errorf("Redis unavailable at %s: %w", addr, err)
 		}
 		disableClient()
@@ -107,6 +111,14 @@ func Client() *redis.Client {
 }
 
 func Enabled() bool { return Client() != nil }
+
+// Configured remains true after an optional connection failure or Close, so
+// security controls cannot mistake an unavailable shared store for local mode.
+func Configured() bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	return configured
+}
 func Required() bool {
 	mu.RLock()
 	defer mu.RUnlock()

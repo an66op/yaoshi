@@ -1,10 +1,11 @@
 import MeetingRoomRounded from '@mui/icons-material/MeetingRoomRounded'
 import VerifiedUserRounded from '@mui/icons-material/VerifiedUserRounded'
-import { Alert, Avatar, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControlLabel, Stack, Switch, Tooltip, Typography } from '@mui/material'
+import { Alert, Avatar, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControlLabel, Stack, Switch, TextField, Tooltip, Typography } from '@mui/material'
 import { useEffect, useMemo, useState } from 'react'
 import { adminApi, type SystemSettings, type WorkspaceGame } from '../api'
 import { gameLogo } from '../gameLogos'
 import { workspaceGameAvailability } from '../utils/workspaceGameAvailability'
+import { DEFAULT_LOTTERY_SOURCE_URL, isValidLotterySourceURL } from '../utils/lotterySourceURL'
 
 type Props = {
   open: boolean
@@ -45,6 +46,10 @@ export function RoomOperationsDialog({ open, title, target, onClose, onSaved }: 
   const activeGames = useMemo(() => games.filter(game => workspaceGameAvailability(game).available).length, [games])
   const save = async () => {
     if (!settings || !target) return
+    if (!isValidLotterySourceURL(settings.lottery_source_url)) {
+      setError('开奖源地址必须是完整、无账号密码的 HTTPS 地址')
+      return
+    }
     setSaving(true); setError('')
     try {
       const result = target.kind === 'tenant' ? await adminApi.updateTenantRoomSettings(target.id, settings) : await adminApi.updateAgentRoomSettings(target.id, settings)
@@ -93,6 +98,16 @@ export function RoomOperationsDialog({ open, title, target, onClose, onSaved }: 
             </Stack>
           </Box>
         </Box>
+        <TextField
+          fullWidth
+          type="url"
+          label="外部开奖信息 HTTPS 地址"
+          placeholder={DEFAULT_LOTTERY_SOURCE_URL}
+          value={settings.lottery_source_url ?? ''}
+          onChange={event => setSettings(current => current ? { ...current, lottery_source_url: event.target.value } : current)}
+          inputProps={{ maxLength: 2048 }}
+          helperText="总管理员代配当前房间的会员快捷跳转；不改变实际开奖抓取来源，留空恢复 163 默认地址。"
+        />
         <Divider />
         <Stack direction="row" alignItems="center" justifyContent="space-between"><Typography fontWeight={900}>房间游戏</Typography><Chip size="small" color="primary" label={`${activeGames}/${games.length} 开放`} /></Stack>
         <Typography variant="caption" color="text.secondary">分类沿用平台；新房间游戏默认关闭，可按需开启。未分类游戏暂不上架。</Typography>
@@ -112,6 +127,6 @@ export function RoomOperationsDialog({ open, title, target, onClose, onSaved }: 
         </Box>
       </Stack>}
     </DialogContent>
-    <DialogActions><Button onClick={onClose}>关闭</Button><Button variant="contained" disabled={!settings || saving} onClick={() => void save()}>{saving ? '保存中…' : '保存营业与审核'}</Button></DialogActions>
+    <DialogActions><Button onClick={onClose}>关闭</Button><Button variant="contained" disabled={!settings || saving} onClick={() => void save()}>{saving ? '保存中…' : '保存房间配置'}</Button></DialogActions>
   </Dialog>
 }

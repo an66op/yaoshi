@@ -48,6 +48,7 @@ import {
   type LifecycleDataClass,
   type LifecycleDeleteMode,
   type RetentionPolicyView,
+  type UpdateRetentionPolicyInput,
 } from '../api'
 import { PageHeader } from '../components/PageHeader'
 import { useFeedback } from '../components/feedback'
@@ -56,10 +57,12 @@ import { createRequestId } from '../utils/requestId'
 type WorkspaceOption = { id: number; label: string; kind: '租户' | '代理' }
 type ScopeMode = '' | 'workspace' | 'all'
 type RestoreKind = 'soft' | 'robot'
+type PolicySave = { workspaceID: number; updates: Array<{ dataClass: LifecycleDataClass; input: UpdateRetentionPolicyInput }> }
 
 const DATA_CLASSES: ReadonlyArray<{ value: LifecycleDataClass; label: string }> = [
-  { value: 'chat_messages', label: '真人与业务聊天' },
-  { value: 'robot_chat_messages', label: '机器人普通聊天' },
+  { value: 'chat_messages', label: '普通聊天（非游戏房）' },
+  { value: 'robot_chat_messages', label: '机器人普通聊天（非游戏房）' },
+  { value: 'game_chat_messages', label: '游戏房聊天' },
   { value: 'notifications', label: '通知消息' },
   { value: 'audit_logs', label: '审计日志' },
   { value: 'robot_test_data', label: '机器人测试数据' },
@@ -72,7 +75,7 @@ const actionLabels: Record<string, string> = {
   archive_then_purge_hot: '归档后移出热表',
   cold_archive: '冷归档',
 }
-const HARD_DELETE_CLASSES: LifecycleDataClass[] = ['chat_messages', 'robot_chat_messages', 'notifications']
+const HARD_DELETE_CLASSES: LifecycleDataClass[] = ['chat_messages', 'robot_chat_messages', 'game_chat_messages', 'notifications']
 const statusLabels: Record<string, string> = {
   previewed: '待确认',
   running: '执行中',
@@ -133,6 +136,8 @@ export function DataMaintenancePage() {
   const [policyLoading, setPolicyLoading] = useState(true)
   const [policySaving, setPolicySaving] = useState(false)
   const [policyDirty, setPolicyDirty] = useState<Set<string>>(new Set())
+  const [pendingPolicySave, setPendingPolicySave] = useState<PolicySave | null>(null)
+  const [policyConfirmWord, setPolicyConfirmWord] = useState('')
   const [scopeMode, setScopeMode] = useState<ScopeMode>('')
   const [cleanupWorkspace, setCleanupWorkspace] = useState(0)
   const [selectedClasses, setSelectedClasses] = useState<LifecycleDataClass[]>(DATA_CLASSES.map(item => item.value))
@@ -264,24 +269,47 @@ export function DataMaintenancePage() {
     setPolicyDirty(current => new Set(current).add(dataClass))
   }
 
-  const savePolicies = async () => {
-    const dirty = policies.filter(item => policyDirty.has(item.data_class))
-    if (!dirty.length) return
+  const persistPolicies = async (save: PolicySave) => {
+    if (policySaving) return
     setPolicySaving(true)
     setError('')
     try {
-      await Promise.all(dirty.map(item => adminApi.updateRetentionPolicy(item.data_class, {
-        workspace_id: policyWorkspace,
-        enabled: Boolean(item.enabled),
-        retention_days: Math.min(3650, Math.max(item.data_class === 'audit_logs' ? 365 : 1, Math.round(asCount(item.retention_days)))),
-      })))
-      await loadPolicies(policyWorkspace)
+      await Promise.all(save.updates.map(item => adminApi.updateRetentionPolicy(item.dataClass, item.input)))
+      setPendingPolicySave(null)
+      setPolicyConfirmWord('')
+      await loadPolicies(save.workspaceID)
       showMessage('数据保留策略已保存')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '保存保留策略失败')
     } finally {
       setPolicySaving(false)
     }
+  }
+
+  const savePolicies = () => {
+    const dirty = policies.filter(item => policyDirty.has(item.data_class))
+    if (!dirty.length || policySaving) return
+    const save: PolicySave = { workspaceID: policyWorkspace, updates: dirty.map(item => ({
+      dataClass: item.data_class,
+      input: {
+        workspace_id: policyWorkspace,
+        enabled: Boolean(item.enabled),
+        retention_days: Math.min(3650, Math.max(item.data_class === 'audit_logs' ? 365 : 1, Math.round(asCount(item.retention_days)))),
+        ...(item.data_class === 'game_chat_messages' ? { purge_after_days: Math.min(3650, Math.max(0, Math.round(asCount(item.purge_after_days)))) } : {}),
+      },
+    })) }
+    if (save.updates.some(item => item.dataClass === 'game_chat_messages' && item.input.enabled && asCount(item.input.purge_after_days) > 0)) {
+      setPendingPolicySave(save)
+      setPolicyConfirmWord('')
+      return
+    }
+    void persistPolicies(save)
+  }
+
+  const closePolicyConfirmation = () => {
+    if (policySaving) return
+    setPendingPolicySave(null)
+    setPolicyConfirmWord('')
   }
 
   const invalidatePreview = () => {
@@ -416,12 +444,12 @@ export function DataMaintenancePage() {
   const plannedTotal = previewItems.reduce((sum, item) => sum + asCount(item.planned_count), 0)
   const protectedTotal = previewItems.reduce((sum, item) => sum + asCount(item.protected_from_deletion), 0)
   const selectedRunClasses = safeArray(selectedRun?.preview).map(item => item.data_class)
-  const canRestoreSoft = selectedRun?.status === 'completed' && selectedRun.delete_mode !== 'hard' && !selectedRun.soft_restored_at && !selectedRun.content_purged_at && asCount(selectedRun.content_purge_count) === 0 && selectedRunClasses.some(item => item === 'chat_messages' || item === 'robot_chat_messages' || item === 'notifications')
+  const canRestoreSoft = selectedRun?.status === 'completed' && selectedRun.delete_mode !== 'hard' && !selectedRun.soft_restored_at && !selectedRun.content_purged_at && asCount(selectedRun.content_purge_count) === 0 && selectedRunClasses.some(item => HARD_DELETE_CLASSES.includes(item))
   const canRestoreRobot = selectedRun?.status === 'completed' && !selectedRun.financial_restored_at && selectedRunClasses.includes('robot_test_data')
   const runHasArchive = (run: CleanupRunView) => safeArray(run.preview).some(item => item.data_class === 'robot_test_data' || item.data_class === 'audit_logs')
   const selectedScopeText = preview?.all_workspaces ? '全部工作区' : preview ? workspaceLabel(preview.workspace_id) : '—'
   const confirmWord = preview?.delete_mode === 'hard' ? '永久删除' : '执行'
-  const recycleBinTotal = asCount(summary?.soft_deleted_chat_count) + asCount(summary?.soft_deleted_robot_chat_count) + asCount(summary?.soft_deleted_notification_count)
+  const recycleBinTotal = asCount(summary?.soft_deleted_chat_count) + asCount(summary?.soft_deleted_robot_chat_count) + asCount(summary?.soft_deleted_game_chat_count) + asCount(summary?.soft_deleted_notification_count)
   const protectedEvidenceTotal = asCount(summary?.protected_bet_count) + asCount(summary?.protected_ledger_count) + asCount(summary?.protected_audit_count)
 
   return <Box p={{ xs: 1.5, md: 2, xl: 2.5 }}>
@@ -430,7 +458,7 @@ export function DataMaintenancePage() {
 
     <Box mt={1.5} display="grid" gridTemplateColumns={{ xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', xl: 'repeat(4, minmax(0, 1fr))' }} gap={1}>
       {[
-        { title: '回收站内容', value: recycleBinTotal, note: `聊天 ${asCount(summary?.soft_deleted_chat_count)} · 机器人 ${asCount(summary?.soft_deleted_robot_chat_count)} · 通知 ${asCount(summary?.soft_deleted_notification_count)}`, icon: <DeleteSweepRounded color="warning" /> },
+        { title: '回收站内容', value: recycleBinTotal, note: `普通聊天 ${asCount(summary?.soft_deleted_chat_count)} · 机器人普通聊天 ${asCount(summary?.soft_deleted_robot_chat_count)} · 游戏房 ${asCount(summary?.soft_deleted_game_chat_count)} · 通知 ${asCount(summary?.soft_deleted_notification_count)}`, icon: <DeleteSweepRounded color="warning" /> },
         { title: '自动恢复中的请求', value: asCount(summary?.stale_idempotency_count), note: '超时的下注幂等请求由后台自动恢复', icon: <HistoryRounded color="info" /> },
         { title: '待整理临时记录', value: asCount(summary?.delivered_session_receipt_count) + asCount(summary?.orphan_chat_cursor_count), note: `已投递会话票据 ${asCount(summary?.delivered_session_receipt_count)} · 孤立游标 ${asCount(summary?.orphan_chat_cursor_count)}`, icon: <ArchiveRounded color="primary" /> },
         { title: '永久保护凭证', value: protectedEvidenceTotal, note: '注单、余额流水和审计不可直接硬删', icon: <ShieldRounded color="success" /> },
@@ -443,6 +471,11 @@ export function DataMaintenancePage() {
       </Paper>)}
     </Box>
 
+    <Alert severity="info" sx={{ mt: 1.5 }}>
+      游戏房聊天默认保留 7 天、策略默认停用。启用后每小时第 10 分钟小批处理，每批 1,000 条，每房间每种模式最多 5 批，整轮最多运行 2 分钟。
+      正式注单、余额流水、下注命令与回执、红包及申请记录受保护，不是清空整张聊天表。
+    </Alert>
+
     <Paper variant="outlined" sx={{ mt: 1.5, overflow: 'hidden', borderRadius: 2 }}>
       <Tabs value={tab} onChange={(_, value: typeof tab) => setTab(value)} variant="fullWidth">
         <Tab value="policies" label="保留策略" />
@@ -453,18 +486,19 @@ export function DataMaintenancePage() {
 
     {tab === 'policies' && <Stack gap={1.25} mt={1.5}>
       <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2 }}>
-        <TextField select size="small" label="策略范围" value={policyWorkspace} onChange={event => setPolicyWorkspace(Number(event.target.value))} sx={{ minWidth: { xs: '100%', sm: 340 } }}>
+        <TextField select size="small" label="策略范围" value={policyWorkspace} disabled={policySaving || Boolean(pendingPolicySave)} onChange={event => setPolicyWorkspace(Number(event.target.value))} sx={{ minWidth: { xs: '100%', sm: 340 } }}>
           <MenuItem value={0}>平台默认策略</MenuItem>
           {workspaces.map(item => <MenuItem key={item.id} value={item.id}>{item.label} · {item.kind}</MenuItem>)}
         </TextField>
       </Paper>
       <Paper variant="outlined" sx={{ overflow: 'hidden', borderRadius: 2 }}>
-        {policyLoading ? <Box minHeight={180} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26} /></Box> : <TableContainer><Table size="small" sx={{ minWidth: 850 }}>
-          <TableHead><TableRow><TableCell>数据类</TableCell><TableCell>状态</TableCell><TableCell>保留天数</TableCell><TableCell>处理动作</TableCell><TableCell>规则</TableCell></TableRow></TableHead>
+        {policyLoading ? <Box minHeight={180} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26} /></Box> : <TableContainer><Table size="small" sx={{ minWidth: 1040 }}>
+          <TableHead><TableRow><TableCell>数据类</TableCell><TableCell>状态</TableCell><TableCell>保留天数</TableCell><TableCell>回收站保留天数</TableCell><TableCell>处理动作</TableCell><TableCell>规则</TableCell></TableRow></TableHead>
           <TableBody>{safeArray(policies).map(item => <TableRow key={item.data_class}>
             <TableCell><Typography fontSize={13} fontWeight={850}>{dataClassLabels[item.data_class] ?? item.data_class}</Typography>{item.inherited && <Chip size="small" variant="outlined" label="继承平台" sx={{ mt: .5 }} />}</TableCell>
-            <TableCell><Stack direction="row" alignItems="center"><Switch size="small" checked={Boolean(item.enabled)} onChange={event => patchPolicy(item.data_class, { enabled: event.target.checked, inherited: false })} /><Typography fontSize={12}>{item.enabled ? '已启用' : '已停用'}</Typography></Stack></TableCell>
-            <TableCell><TextField size="small" type="number" value={asCount(item.retention_days)} onChange={event => patchPolicy(item.data_class, { retention_days: Number(event.target.value), inherited: false })} slotProps={{ htmlInput: { min: item.data_class === 'audit_logs' ? 365 : 1, max: 3650, step: 1 } }} sx={{ width: 120 }} /></TableCell>
+            <TableCell><Stack direction="row" alignItems="center"><Switch size="small" checked={Boolean(item.enabled)} disabled={policySaving || Boolean(pendingPolicySave)} onChange={event => patchPolicy(item.data_class, { enabled: event.target.checked, inherited: false })} /><Typography fontSize={12}>{item.enabled ? '已启用' : '已停用'}</Typography></Stack></TableCell>
+            <TableCell><TextField size="small" type="number" value={asCount(item.retention_days)} disabled={policySaving || Boolean(pendingPolicySave)} onChange={event => patchPolicy(item.data_class, { retention_days: Number(event.target.value), inherited: false })} slotProps={{ htmlInput: { 'aria-label': `${dataClassLabels[item.data_class]}保留天数`, min: item.data_class === 'audit_logs' ? 365 : 1, max: 3650, step: 1 } }} sx={{ width: 120 }} /></TableCell>
+            <TableCell>{item.data_class === 'game_chat_messages' ? <TextField size="small" type="number" label="回收站保留天数" value={asCount(item.purge_after_days)} disabled={policySaving || Boolean(pendingPolicySave)} onChange={event => patchPolicy(item.data_class, { purge_after_days: Number(event.target.value), inherited: false })} slotProps={{ htmlInput: { min: 0, max: 3650, step: 1 } }} helperText="0 = 不自动永久清理；正数 = 软删除后等待该天数再永久清除，不可恢复。" sx={{ width: 220, my: 1 }} /> : '—'}</TableCell>
             <TableCell><Chip size="small" color={item.enabled ? 'primary' : 'default'} variant="outlined" label={actionLabels[item.action] ?? item.action} /></TableCell>
             <TableCell><Typography fontSize={12} color="text.secondary">{item.description || '—'}</Typography></TableCell>
           </TableRow>)}</TableBody>
@@ -479,7 +513,7 @@ export function DataMaintenancePage() {
       <Paper variant="outlined" sx={{ p: 1.4, borderRadius: 2 }}>
         <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1} mb={1.2}>
           <Stack direction="row" flexWrap="wrap" gap={.7}>
-            <Button size="small" variant="outlined" onClick={() => applyPreset('soft', ['chat_messages', 'robot_chat_messages', 'notifications'])}>日常内容清理</Button>
+            <Button size="small" variant="outlined" onClick={() => applyPreset('soft', [...HARD_DELETE_CLASSES])}>日常内容清理</Button>
             <Button size="small" variant="outlined" onClick={() => applyPreset('soft', ['audit_logs', 'robot_test_data'])}>安全归档</Button>
             <Button size="small" color="error" variant="outlined" startIcon={<DeleteForeverRounded />} onClick={() => applyPreset('hard', [...HARD_DELETE_CLASSES])}>永久清理回收站</Button>
           </Stack>
@@ -490,7 +524,7 @@ export function DataMaintenancePage() {
         </Stack>
         <Alert severity={deleteMode === 'hard' ? 'error' : 'info'} sx={{ mb: 1.2 }}>
           {deleteMode === 'hard'
-            ? '仅永久清除已经软删除、超过保留期的普通聊天和非账务通知；红包、申请、开奖回执、注单、余额流水及审计均受保护。'
+            ? '仅永久清除已经软删除、超过保留期的普通聊天、游戏房聊天和非账务通知；下注命令与回执、红包、申请、注单、余额流水及审计均受保护。'
             : '聊天与通知进入回收站后可按任务恢复；审计和机器人财务数据沿用经过校验的只读归档流程。'}
         </Alert>
         <Stack direction={{ xs: 'column', lg: 'row' }} gap={1.2} alignItems={{ lg: 'center' }}>
@@ -553,6 +587,18 @@ export function DataMaintenancePage() {
       </Paper>
     </Stack>}
 
+    <Dialog open={Boolean(pendingPolicySave)} onClose={closePolicyConfirmation} fullWidth maxWidth="sm">
+      <DialogTitle>确认启用自动永久清理</DialogTitle>
+      <DialogContent><Stack gap={1.5} pt={.5}>
+        <Alert severity="error">该策略会自动永久删除达到回收站保留天数的游戏房聊天，删除后不可恢复。保存后由定时任务执行，不会再次逐批询问确认。</Alert>
+        <Typography fontSize={13}>策略范围：{pendingPolicySave?.workspaceID ? workspaceLabel(pendingPolicySave.workspaceID) : '平台默认策略（影响继承该策略的房间）'}</Typography>
+        {pendingPolicySave?.updates.filter(item => item.dataClass === 'game_chat_messages' && item.input.enabled && asCount(item.input.purge_after_days) > 0).map(item => <Typography key={item.dataClass} fontSize={13}>游戏房聊天保留 {item.input.retention_days} 天后软删除，再在回收站保留 {item.input.purge_after_days} 天后永久清除。</Typography>)}
+        <TextField autoFocus label="输入“永久删除”确认自动清理" value={policyConfirmWord} disabled={policySaving} onChange={event => setPolicyConfirmWord(event.target.value)} error={Boolean(policyConfirmWord && policyConfirmWord !== '永久删除')} helperText="仅开启可恢复软删除时，请取消并将回收站保留天数设为 0。" />
+        {error && <Alert severity="error">{error}</Alert>}
+      </Stack></DialogContent>
+      <DialogActions><Button onClick={closePolicyConfirmation} disabled={policySaving}>取消</Button><Button color="error" variant="contained" disabled={policySaving || policyConfirmWord !== '永久删除'} onClick={() => { if (pendingPolicySave && policyConfirmWord === '永久删除') void persistPolicies(pendingPolicySave) }}>{policySaving ? '保存中…' : '确认启用自动永久清理'}</Button></DialogActions>
+    </Dialog>
+
     <Dialog open={executeOpen} onClose={() => !executing && setExecuteOpen(false)} fullWidth maxWidth="sm">
       <DialogTitle>{preview?.delete_mode === 'hard' ? '二次确认永久删除' : '二次确认数据维护'}</DialogTitle>
       <DialogContent><Stack gap={1.5} pt={.5}>
@@ -599,7 +645,7 @@ export function DataMaintenancePage() {
 
     <Dialog open={Boolean(restoreKind)} onClose={() => !restoring && setRestoreKind(null)} fullWidth maxWidth="xs">
       <DialogTitle>确认恢复数据</DialogTitle>
-      <DialogContent><Alert severity="warning">{restoreKind === 'soft' ? '将恢复本任务软删除的聊天、机器人普通聊天与通知数据。' : '将把本任务归档的机器人注单与安全流水恢复到热表。'}恢复操作按任务幂等执行。</Alert></DialogContent>
+      <DialogContent><Alert severity="warning">{restoreKind === 'soft' ? '将恢复本任务软删除的普通聊天、机器人普通聊天、游戏房聊天与通知数据。' : '将把本任务归档的机器人注单与安全流水恢复到热表。'}恢复操作按任务幂等执行。</Alert></DialogContent>
       <DialogActions><Button onClick={() => setRestoreKind(null)} disabled={restoring}>取消</Button><Button variant="contained" color="warning" disabled={restoring} onClick={() => void restore()}>{restoring ? '恢复中…' : '确认恢复'}</Button></DialogActions>
     </Dialog>
 

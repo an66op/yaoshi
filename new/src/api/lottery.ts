@@ -28,6 +28,9 @@ export type LotteryGame = {
   issue_status: string
   seal_at?: string | null
   source_healthy: boolean
+  rules_ready?: boolean
+  rule_version?: string
+  rules_message?: string
   betting_window?: LotteryBettingWindow | null
 }
 

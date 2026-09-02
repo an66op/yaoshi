@@ -29,6 +29,33 @@ func TestNormalizeCleanupPreviewRequiresExplicitWorkspaceScope(t *testing.T) {
 	}
 }
 
+func TestCleanupCriteriaComparisonUsesJSONSemanticsWithoutExpandingScope(t *testing.T) {
+	expected := normalizedCleanupCriteria{WorkspaceID: 9, DataClasses: []string{lifecycle.ClassGameChatMessages}, BatchLimit: 1000, DeleteMode: DeleteModeSoft}
+	for _, value := range []string{
+		`{"workspace_id":9,"all_workspaces":false,"data_classes":["game_chat_messages"],"batch_limit":1000,"delete_mode":"soft"}`,
+		`{ "delete_mode": "soft", "batch_limit": 1000, "data_classes": ["game_chat_messages"], "all_workspaces": false, "workspace_id": 9 }`,
+		`{"workspace_id":9,"data_classes":["game_chat_messages"],"batch_limit":1000}`,
+	} {
+		if !sameCleanupCriteria(value, expected) {
+			t.Fatalf("same criteria rejected after jsonb normalization: %s", value)
+		}
+	}
+	for _, value := range []string{
+		`{"workspace_id":10,"data_classes":["game_chat_messages"],"batch_limit":1000}`,
+		`{"workspace_id":9,"all_workspaces":true,"data_classes":["game_chat_messages"],"batch_limit":1000}`,
+		`{"workspace_id":9,"data_classes":["chat_messages"],"batch_limit":1000}`,
+		`{"workspace_id":9,"data_classes":["game_chat_messages"],"batch_limit":2000}`,
+		`{"workspace_id":9,"data_classes":["game_chat_messages"],"batch_limit":1000,"delete_mode":"hard"}`,
+		`{"workspace_id":9,"data_classes":["game_chat_messages"],"batch_limit":1000,"future_scope":true}`,
+		`{"workspace_id":9,"data_classes":["game_chat_messages"],"batch_limit":1000} {}`,
+		`{broken`,
+	} {
+		if sameCleanupCriteria(value, expected) {
+			t.Fatalf("changed or malformed criteria accepted: %s", value)
+		}
+	}
+}
+
 func TestLifecycleCandidateFingerprintIsDeterministicAndOrderSensitive(t *testing.T) {
 	first := []lifecycleCandidateKey{{Key: "chat:1"}, {Key: "chat:23"}}
 	if fingerprintCandidateKeys(first) != fingerprintCandidateKeys(append([]lifecycleCandidateKey(nil), first...)) {
@@ -46,6 +73,67 @@ func TestGenericChatLifecycleExcludesWelcomeAndRobotPolicyRows(t *testing.T) {
 	for _, fragment := range []string{"message.message_type = 'text'", "workspace_robot_profiles", "reference_id = 0"} {
 		if !strings.Contains(genericChatLifecyclePredicate, fragment) {
 			t.Fatalf("generic chat lifecycle predicate is missing %q", fragment)
+		}
+	}
+}
+
+func TestOrdinaryChatLifecycleProtectsCommandAndRedPacketEvidence(t *testing.T) {
+	for _, fragment := range []string{
+		"message.message_type = 'text'", "message.reference_id = 0", "message.request_id = ''",
+		"message.red_packet_count = 0", "message.red_packet_total_cents = 0",
+		"message.red_packet_min_turnover_cents = 0", "message.red_packet_cover = ''",
+		"application.chat_message_id = message.id", "application.workspace_id = message.workspace_id",
+		"packet.message_id = message.id", "packet.workspace_id = message.workspace_id",
+	} {
+		if !strings.Contains(ordinaryChatLifecyclePredicate, fragment) {
+			t.Fatalf("ordinary chat retention does not protect %q", fragment)
+		}
+	}
+	for name, predicate := range map[string]string{
+		"member": genericChatLifecyclePredicate, "robot": robotChatLifecyclePredicate,
+	} {
+		if !strings.HasPrefix(predicate, ordinaryChatLifecyclePredicate) {
+			t.Fatalf("%s chat retention does not share the ordinary-message safety boundary", name)
+		}
+		for _, fragment := range []string{"robot.user_id = message.user_id", "robot.workspace_id = message.workspace_id"} {
+			if !strings.Contains(predicate, fragment) {
+				t.Fatalf("%s chat retention lacks scoped robot identity: %q", name, fragment)
+			}
+		}
+	}
+	if !strings.Contains(genericChatLifecyclePredicate, "AND NOT EXISTS") || !strings.Contains(robotChatLifecyclePredicate, "AND EXISTS") {
+		t.Fatal("member and robot ordinary-message policies must be disjoint")
+	}
+}
+
+func TestOrdinaryChatLifecycleUsesSameBoundaryThroughoutCleanup(t *testing.T) {
+	contents, err := os.ReadFile("data_lifecycle.go")
+	if err != nil {
+		t.Fatalf("read lifecycle service: %v", err)
+	}
+	source := string(contents)
+	for _, declaration := range []string{
+		"func (s *DataLifecycleService) Summary(",
+		"func lifecycleCandidateFingerprint(",
+		"func (s *DataLifecycleService) materializeHardDeleteCandidates(",
+		"func (s *DataLifecycleService) countCandidates(",
+		"func (s *DataLifecycleService) executeClass(",
+	} {
+		start := strings.Index(source, declaration)
+		if start < 0 {
+			t.Fatalf("cleanup path %q not found", declaration)
+		}
+		block := source[start:]
+		if end := strings.Index(block[len(declaration):], "\nfunc "); end >= 0 {
+			block = block[:len(declaration)+end]
+		}
+		for _, predicate := range []string{"genericChatLifecyclePredicate", "robotChatLifecyclePredicate"} {
+			if !strings.Contains(block, predicate) {
+				t.Fatalf("%s does not reuse %s", declaration, predicate)
+			}
+		}
+		if strings.Contains(block, "message.message_type = 'text'") {
+			t.Fatalf("%s inlines a weaker ordinary-chat selection boundary", declaration)
 		}
 	}
 }
@@ -75,7 +163,7 @@ func TestCleanupDeleteModeIsFrozenAndHardDeleteIsAllowListed(t *testing.T) {
 		t.Fatalf("hard delete mode = %q", hard.DeleteMode)
 	}
 	wantAllowed := map[string]struct{}{
-		lifecycle.ClassChatMessages: {}, lifecycle.ClassRobotChatMessages: {}, lifecycle.ClassNotifications: {},
+		lifecycle.ClassChatMessages: {}, lifecycle.ClassRobotChatMessages: {}, lifecycle.ClassGameChatMessages: {}, lifecycle.ClassNotifications: {},
 	}
 	if !reflect.DeepEqual(hardDeleteDataClasses, wantAllowed) {
 		t.Fatalf("hard-delete allow-list = %#v, want %#v", hardDeleteDataClasses, wantAllowed)
@@ -108,7 +196,7 @@ func TestHardDeletePredicatesRejectBusinessEvidence(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{"welcome", "application", "redpacket"} {
-		if strings.Contains(strings.ToLower(genericChatLifecyclePredicate), forbidden) {
+		if strings.Contains(strings.ToLower(genericChatLifecyclePredicate), "'"+forbidden+"'") {
 			t.Fatalf("generic chat predicate directly admits protected message type %q", forbidden)
 		}
 	}
@@ -175,6 +263,7 @@ func TestExpectedSoftRestoreCountExcludesArchiveClasses(t *testing.T) {
 	items := []CleanupResultItem{
 		{DataClass: lifecycle.ClassChatMessages, AffectedCount: 2},
 		{DataClass: lifecycle.ClassRobotChatMessages, AffectedCount: 3},
+		{DataClass: lifecycle.ClassGameChatMessages, AffectedCount: 5},
 		{DataClass: lifecycle.ClassNotifications, AffectedCount: 4},
 		{DataClass: lifecycle.ClassAuditLogs, AffectedCount: 100},
 		{DataClass: lifecycle.ClassRobotTestData, AffectedCount: 200},
@@ -184,8 +273,8 @@ func TestExpectedSoftRestoreCountExcludesArchiveClasses(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := expectedSoftRestoreCount(string(encoded))
-	if err != nil || got != 9 {
-		t.Fatalf("expected soft restore count = %d, %v; want 9", got, err)
+	if err != nil || got != 14 {
+		t.Fatalf("expected soft restore count = %d, %v; want 14", got, err)
 	}
 }
 

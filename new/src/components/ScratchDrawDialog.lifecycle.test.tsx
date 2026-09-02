@@ -19,7 +19,7 @@ const elements = (node: ReactNode): Node[] => {
   if (Array.isArray(node)) return node.flatMap(elements)
   return isValidElement<NodeProps>(node) ? [node, ...elements(node.props.children)] : []
 }
-const game = { id: 'pc-canada', title: 'PC加拿大', period: '20260830002', latestIssue: '20260830001', balls: [3, 7, 8] } as Game
+const game = { id: 'official-fc3d', title: '福彩3D', period: '20260830002', latestIssue: '20260830001', balls: [3, 7, 8] } as Game
 
 describe('scratch surface pointer lifecycle', () => {
   let outer: HookHarness
@@ -40,10 +40,10 @@ describe('scratch surface pointer lifecycle', () => {
     runtime.hooks = outer
     const dialog = outer.render(() => ScratchDrawDialog({ game: current, onClose: () => {} }))
     const wrapper = (dialog.props as NodeProps).children as Node
-    const child = wrapper.props.children as ReactElement<{ numbers: number[] }>
+    const child = wrapper.props.children as ReactElement<{ numbers: number[]; gameId: string }>
     if (child.key !== key) { surface.unmount(); surface = new HookHarness(); key = child.key }
     runtime.hooks = surface
-    const tree = surface.render(() => (child.type as (props: { numbers: number[] }) => Node)(child.props))
+    const tree = surface.render(() => (child.type as (props: { numbers: number[]; gameId: string }) => Node)(child.props))
     elements(tree).find((node) => node.props.className?.startsWith('scratch-draw-surface'))!.props.ref!.current = scrollSurface
     elements(tree).find((node) => node.type === 'canvas')!.props.ref!.current = canvas
     surface.flushEffects()
@@ -141,5 +141,33 @@ describe('scratch surface pointer lifecycle', () => {
     expect(mask.reset).toHaveBeenCalledOnce()
     tree = render(longResult)
     expect(elements(tree).some((node) => node.props.className?.includes('is-revealed'))).toBe(false)
+  })
+
+  it.each(['hk-marksix', 'official-tw-bingo'])('does not invent a sum for an unknown %s game with three drawn numbers', id => {
+    const unknown = { ...game, id }
+    render(unknown)
+    let tree = render(unknown)
+    elements(tree).find(node => node.type === 'button' && node.props.children === '全部揭晓')!.props.onClick!()
+    tree = render(unknown)
+    expect(elements(tree).some(node => node.props.className?.includes('is-revealed'))).toBe(true)
+    expect(elements(tree).some(node => node.props.className === 'scratch-draw-total')).toBe(false)
+    expect(elements(tree).filter(node => node.props.className === 'scratch-draw-cell')).toHaveLength(3)
+  })
+
+  it.each([
+    { id: 'speed-ssc', balls: [9, 8, 1, 2, 3], label: '总和', total: 23 },
+    { id: 'speed-racing', balls: [5, 6, 1, 2, 3, 4, 7, 8, 9, 10], label: '冠亚和', total: 11 },
+    { id: 'pc-canada', balls: [9, 1, 9], label: '和值', total: 19 },
+    { id: 'canada-28', balls: [3, 7, 8], label: '和值', total: 18 },
+    { id: 'canada-20', balls: [0, 0, 0], label: '和值', total: 0 },
+  ])('uses the shared $label definition for $id', ({ id, balls, label, total }) => {
+    const known = { ...game, id, balls }
+    render(known)
+    let tree = render(known)
+    elements(tree).find(node => node.type === 'button' && node.props.children === '全部揭晓')!.props.onClick!()
+    tree = render(known)
+    const result = elements(tree).find(node => node.props.className === 'scratch-draw-total')!
+    expect((result.props.children as ReactNode[])[0]).toBe(label)
+    expect(elements(result).find(node => node.type === 'b')!.props.children).toBe(total)
   })
 })

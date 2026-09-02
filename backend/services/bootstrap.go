@@ -29,7 +29,6 @@ const (
 	bootstrapExperienceAccount bootstrapStep = "experience_accounts"
 	bootstrapWorkspaces        bootstrapStep = "workspaces"
 	bootstrapBaseCatalogs      bootstrapStep = "base_catalogs"
-	bootstrapDebugPlans        bootstrapStep = "debug_plans"
 )
 
 func bootstrapSteps(mode string) ([]bootstrapStep, error) {
@@ -41,7 +40,8 @@ func bootstrapSteps(mode string) ([]bootstrapStep, error) {
 		}, nil
 	case "release", "test":
 		return []bootstrapStep{
-			bootstrapAdmin, bootstrapLotteryCatalog, bootstrapWorkspaces, bootstrapBaseCatalogs,
+			bootstrapAdmin, bootstrapLotteryCatalog,
+			bootstrapWorkspaces, bootstrapBaseCatalogs,
 		}, nil
 	default:
 		return nil, fmt.Errorf("不支持的启动模式 %q", mode)
@@ -131,13 +131,10 @@ func ensureBootstrapAdmin(db *gorm.DB, mode string) error {
 	return nil
 }
 
-// EnsureBaseCatalogs eagerly materializes records that were historically
-// created as a side effect of the first page read. That makes readiness checks
-// and fresh-database behavior deterministic.
+// EnsureBaseCatalogs eagerly materializes non-financial reference records.
+// Lottery odds are intentionally excluded: every quote must be entered and
+// confirmed by an administrator against the current rules version.
 func EnsureBaseCatalogs(db *gorm.DB) error {
-	if _, err := NewOddsAdminService(db).SyncAllGames(); err != nil {
-		return fmt.Errorf("初始化赔率目录: %w", err)
-	}
 	if err := NewEntertainmentAdminService(db).EnsureDefaults(); err != nil {
 		return fmt.Errorf("初始化娱乐目录: %w", err)
 	}

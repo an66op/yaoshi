@@ -612,7 +612,7 @@ func (s *MemberChatService) claimPersistedRedPacket(userID, packetID uint64) (*A
 			dayEnd := dayStart.Add(24 * time.Hour)
 			if err := tx.Model(&bet.Bet{}).
 				Where("workspace_id = ? AND user_id = ? AND created_at >= ? AND created_at < ? AND status IN ?", packet.WorkspaceID, userID, dayStart, dayEnd, []string{"won", "lost"}).
-				Select("COALESCE(SUM(amount_cents),0)").Scan(&turnoverCents).Error; err != nil {
+				Select("COALESCE(SUM(COALESCE(valid_turnover_cents,amount_cents)),0)").Scan(&turnoverCents).Error; err != nil {
 				return err
 			}
 			if turnoverCents < packet.MinDailyTurnoverCents {

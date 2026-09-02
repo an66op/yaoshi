@@ -1,0 +1,105 @@
+/* Mark Six balls use a white centre and three coloured outer lobes. The wave
+   colour remains visible at small result sizes without reusing racing tiles. */
+.mark-six-ball {
+  --mark-six-wave: #3a9b62;
+  --mark-six-wave-light: #70be8a;
+  --mark-six-wave-dark: #217448;
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: visible;
+  box-sizing: border-box;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background:
+    radial-gradient(circle at 50% 50%, #fff 0 50%, #f8fbfa 51% 58%, transparent 59%),
+    conic-gradient(
+      from -22deg,
+      var(--mark-six-wave-dark) 0 96deg,
+      #fff 96deg 120deg,
+      var(--mark-six-wave) 120deg 216deg,
+      #fff 216deg 240deg,
+      var(--mark-six-wave-light) 240deg 336deg,
+      #fff 336deg 360deg
+    ) !important;
+  color: #16242a !important;
+  font-family: "Rajdhani", "DM Mono", system-ui, sans-serif;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow: 0 1px 0 #fff !important;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 55%), 0 1px 3px rgb(26 62 70 / 25%);
+}
+.mark-six-ball.wave-red {
+  --mark-six-wave: #d94351;
+  --mark-six-wave-light: #ef7c84;
+  --mark-six-wave-dark: #a82235;
+}
+.mark-six-ball.wave-blue {
+  --mark-six-wave: #3e86ba;
+  --mark-six-wave-light: #77b2d7;
+  --mark-six-wave-dark: #24628f;
+}
+.mark-six-ball.wave-green {
+  --mark-six-wave: #3a9b62;
+  --mark-six-wave-light: #70be8a;
+  --mark-six-wave-dark: #217448;
+}
+
+/* Direct result balls still use this separator (chat cards and compact tools). */
+.mark-six-special-ball { position: relative; margin-left: 10px !important; }
+.mark-six-special-ball::before {
+  position: absolute;
+  left: -9px;
+  color: #718691;
+  content: '+';
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  text-shadow: none;
+}
+
+.mark-six-draw-cell {
+  display: grid;
+  grid-template-rows: auto auto;
+  place-items: center;
+  align-self: center;
+  flex: none;
+  gap: 2px;
+  min-width: 29px;
+  color: #526b76;
+  line-height: 1;
+}
+.mark-six-draw-cell > .mark-six-ball {
+  width: 29px;
+  height: 29px;
+  min-width: 29px;
+  margin: 0 !important;
+  font-size: 13px !important;
+}
+.mark-six-draw-cell > .mark-six-special-ball::before { content: none; }
+.mark-six-draw-cell > small {
+  color: inherit;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+.mark-six-draw-cell.is-special {
+  position: relative;
+  margin-left: 11px;
+}
+.mark-six-draw-cell.is-special::before {
+  position: absolute;
+  top: 7px;
+  left: -11px;
+  color: #718691;
+  content: '+';
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.theme-night .mark-six-draw-cell { color: #c2dce1; }
+.theme-night .mark-six-draw-cell.is-special::before { color: #91afb8; }

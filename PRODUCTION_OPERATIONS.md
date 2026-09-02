@@ -23,7 +23,9 @@ make release
 
 ## 首次服务器准备
 
-现有 `wz6688.app` 主机也可使用 `deploy/nginx/wz6688.split-hosts.conf`：会员端为 `https://wz6688.app`，管理端为 `https://www.wz6688.app`，适用于 DNS 和现有 SAN 证书仅覆盖 apex/www 的情况。此布局构建管理端时设置 `VITE_MEMBER_ASSET_BASE_URL=https://wz6688.app`；两端仍分别使用同源 `/api`，会员域名拒绝管理接口。不要与同域名的旧 vhost 同时启用，也不要为切换此站点修改其他域名的配置。
+`deploy/nginx/wz6688.split-hosts.conf` 的目标布局：会员端为 `https://wz6688.app` 和 `https://www.wz6688.app`，管理端为 `https://admin.wz888.site`。三个域名都需解析到应用服务器；会员端沿用覆盖 apex/www 的 `wz6688.app` SAN 证书，后台使用独立的 `/etc/letsencrypt/live/admin.wz888.site/` 证书。此布局构建管理端时设置 `VITE_MEMBER_ASSET_BASE_URL=https://wz6688.app`；两端仍分别使用同源 `/api`，两个会员域名均拒绝管理接口。不要与同域名的旧 vhost 同时启用，也不要为切换此站点修改其他域名的配置。
+
+从旧的 `www.wz6688.app` 后台迁移时，先确认 `admin.wz888.site` 的 DNS 生效、通过仅开放 ACME 验证的 HTTP 配置签发证书，再备份并替换 Nginx 配置。后台环境的 `BACKEND_SERVER_ALLOWED_ORIGINS` 应为 `https://wz6688.app,https://www.wz6688.app,https://admin.wz888.site`。检查 Nginx 配置、重载、重启后台应用以加载来源设置，并验证三个入口及原账号登录；新域名尚不可用时不要提前切走旧后台。域名变更不改数据库、账号密码或业务配置，新后台需重新登录。使用通用发布检查脚本时显式设置 `ADMIN_URL=https://admin.wz888.site`，并独立核验新后台证书和续期后的 Nginx 重载。
 
 从旧系统重新安装时，使用新的应用数据库、独立角色和 Redis 实例，先加密备份旧数据库及原站点配置，校验发布包、迁移和就绪接口后再切换 Nginx。仅初始化默认目录与首位管理员，不导入本地测试余额、注单或开发账号。数据库切换成功不等于完整生产就绪：异机加密备份、PITR、恢复演练、告警接收端及主机访问加固仍须按下文完成；单机回滚备份不能替代这些要求，不得通过放宽正式发布门禁来宣称已完成。
 
@@ -444,7 +446,7 @@ sudo rm /etc/wangzhe/maintenance
 
 ### 独立测试站的账号填充
 
-现有双域名 Nginx 模板支持可关闭的测试站体验账号，不影响正常 release 登录校验。默认不存在 `/etc/wangzhe/test-login.enabled`，两个域名的 `/test-login.json` 都返回 404。只有明确用于测试且可接受访客修改测试数据时才启用；它不属于正式上线配置。
+现有前后台分域 Nginx 模板支持可关闭的测试站体验账号，不影响正常 release 登录校验。默认不存在 `/etc/wangzhe/test-login.enabled`，所有入口域名的 `/test-login.json` 都返回 404。只有明确用于测试且可接受访客修改测试数据时才启用；它不属于正式上线配置。
 
 - 使用 `release/bin/wangzhe-test-site-accounts --confirm-test-site --config-file /etc/wangzhe/test-site-accounts.json` 显式创建独立管理员、租户、代理和会员。JSON 必须为执行用户所有的 0600 普通文件，包含 `site` 和四类 `username/password`，租户/代理另有 `room_code/room_name`，会员的 `room_code` 与代理一致。四份密码分别随机生成，不得使用原管理员的私有密码。
 - 命令需以应用用户运行，读取受保护的正式数据库环境配置；不会被启动流程自动调用，没有公开初始化 API。既有同名账号、已停用账号或房间冲突会拒绝，不能重置已有密码。四个人类账号余额为零，不伪造下注、开奖或计划记录；新房间游戏仍默认关闭。

@@ -1,0 +1,106 @@
+.pc28-bet-board.full-bet-board .full-bet-workspace { grid-template-columns: 72px minmax(0, 1fr); }
+.pc28-bet-board .full-bet-workspace > aside {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.pc28-bet-board .full-bet-workspace > aside::-webkit-scrollbar { display: none; }
+.pc28-bet-board.full-bet-board .full-bet-workspace > aside button {
+  min-height: 48px;
+  padding: 7px 2px;
+  font-size: 10px;
+  line-height: 1.25;
+}
+.pc28-bet-board .full-bet-content { padding: 10px 8px 16px; }
+.pc28-bet-board .full-bet-content > header { gap: 8px; align-items: flex-start; }
+.pc28-rule-notice,
+.pc28-market-notice,
+.pc28-market-note,
+.pc28-accepted {
+  margin: 0 0 9px;
+  padding: 8px 9px;
+  border-radius: 7px;
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.pc28-rule-notice,
+.pc28-market-notice { background: #fff3df; color: #825119; }
+.pc28-market-note { background: #eaf5f8; color: #42717f; }
+.pc28-dynamic-settlement-note { display: grid; gap: 5px; }
+.pc28-dynamic-settlement-note b { color: #2e6574; font-size: 10px; }
+.pc28-dynamic-settlement-note span { color: #6a858e; font-size: 9px; }
+.pc28-accepted { margin: 0; background: #e7f8f2; color: #177b72; }
+.pc28-market-tabs {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  margin: 0 -2px 10px;
+  padding: 2px;
+  scrollbar-width: none;
+}
+.pc28-market-tabs::-webkit-scrollbar { display: none; }
+.pc28-market-tabs button {
+  flex: none;
+  min-height: 32px;
+  padding: 5px 9px;
+  border: 1px solid #dbe5e8;
+  border-radius: 7px;
+  background: #fff;
+  color: #647c86;
+  font-size: 9px;
+}
+.pc28-market-tabs button.active { border-color: #249ba5; background: #e5f6f6; color: #197e88; font-weight: 800; }
+.pc28-position-selector { margin-bottom: 10px; }
+.pc28-number-grid { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 6px !important; }
+.pc28-bet-board.full-bet-board .pc28-number-grid button { min-height: 53px; }
+.pc28-digit-grid { grid-template-columns: repeat(5, minmax(0, 1fr)) !important; }
+.pc28-value-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.pc28-value-grid button { min-height: 45px; padding-inline: 9px; border-radius: 7px; }
+.pc28-package-bar {
+  position: sticky;
+  bottom: -16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 10px -8px -16px;
+  padding: 8px;
+  border-top: 1px solid #dce7e9;
+  background: #f8fbfbf2;
+  backdrop-filter: blur(5px);
+  color: #6b8088;
+  font-size: 9px;
+}
+.pc28-package-bar button {
+  min-height: 31px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: #238f9c;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+}
+.pc28-bet-board .pc28-amount-pills { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.pc28-bet-board .full-bet-footer { gap: 6px; }
+.pc28-bet-board .board-selected-preview { max-height: 32px; }
+.pc28-bet-board .full-bet-selection-list { max-height: min(150px, 23vh); }
+
+.theme-night.game-room .pc28-rule-notice,
+.theme-night.game-room .pc28-market-notice { background: #51411f; color: #ffda91; }
+.theme-night.game-room .pc28-market-note { background: #163f54; color: #b7dce4; }
+.theme-night.game-room .pc28-dynamic-settlement-note b { color: #d5f1f4; }
+.theme-night.game-room .pc28-dynamic-settlement-note span { color: #a9cbd2; }
+.theme-night.game-room .pc28-accepted { background: #164b46; color: #9ce6d8; }
+.theme-night.game-room .pc28-market-tabs button { border-color: #477989; background: #143954; color: #bedce1; }
+.theme-night.game-room .pc28-market-tabs button.active { border-color: #6bd3d8; background: #155364; color: #e1f5f6; }
+.theme-night.game-room .pc28-package-bar { border-color: #376779; background: #10324aec; color: #b1d2d8; }
+
+@media (max-width: 350px) {
+  .pc28-bet-board.full-bet-board .full-bet-workspace { grid-template-columns: 62px minmax(0, 1fr); }
+  .pc28-bet-board.full-bet-board .full-bet-workspace > aside button { font-size: 9px; }
+  .pc28-number-grid { gap: 4px !important; }
+  .pc28-digit-grid { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+}

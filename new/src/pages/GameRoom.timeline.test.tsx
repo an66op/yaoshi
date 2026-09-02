@@ -63,6 +63,18 @@ describe('clock-independent game timeline', () => {
     expect(html.match(/grid-template-columns:repeat\(10, minmax\(0, 1fr\)\)/g)).toHaveLength(2)
   })
 
+  it('renders Mark Six announcements with fixed wave colours, a separated special ball and no racing canvas', () => {
+    const markSix: DrawResult = { id: 19, game_id: 'bingo-mark-six', issue: '115049455', numbers: [5, 9, 40, 47, 29, 2, 18], draw_at: '2026-09-01T06:45:00Z' }
+    const html = markup({ gameId: markSix.game_id, gameTitle: '宾果六合彩', draws: [markSix], drawHistory: [markSix] })
+    expect(html).toContain('lottery-ball mark-six-ball wave-green')
+    expect(html).toContain('lottery-ball mark-six-ball wave-blue')
+    expect(html).toContain('lottery-ball mark-six-ball wave-red mark-six-special-ball')
+    expect(html).toContain('特码：18 红波 小双')
+    expect(html).not.toContain('龙虎：')
+    expect(html).not.toContain('draw-result-card')
+    expect(html).not.toContain('aria-label="预览宾果六合彩')
+  })
+
   it('keeps all shortcuts compact without a description output row', () => {
     const noop = () => undefined
     const html = renderToStaticMarkup(<BetKeyboard mode="quick" odds={{}} oddsHidden oddsResponseReady selectedCount={0} showModes={false} onShortcut={noop} onBackspace={noop} onClear={noop} onConfirm={noop} onModeChange={noop} onSelectNumber={noop} onSelectOption={noop} />)
@@ -70,11 +82,25 @@ describe('clock-independent game timeline', () => {
     expect(html).not.toContain('keyboard-shortcut-notice')
     expect(html).not.toContain('<output')
   })
+
+  it('adds the chat tie key only to exact contracts that support a tie selection', () => {
+    const noop = () => undefined
+    const keyboard = (gameId: string, ruleVersion?: string) => renderToStaticMarkup(<BetKeyboard gameId={gameId} ruleVersion={ruleVersion} mode="quick" odds={{}} oddsHidden oddsResponseReady selectedCount={0} showModes={false} onShortcut={noop} onBackspace={noop} onClear={noop} onConfirm={noop} onModeChange={noop} onSelectNumber={noop} onSelectOption={noop} />)
+    for (const gameId of ['speed-ssc', 'au-lucky-5', 'bingo-ssc-1']) expect(keyboard(gameId, 'digits5-v3')).toMatch(/<button[^>]*>和<\/button>/)
+    expect(keyboard('speed-ssc')).not.toMatch(/<button[^>]*>和<\/button>/)
+    expect(keyboard('speed-ssc', 'digits5-v2')).not.toMatch(/<button[^>]*>和<\/button>/)
+    expect(keyboard('sg-ssc', 'digits5-v3')).not.toMatch(/<button[^>]*>和<\/button>/)
+    for (const gameId of ['bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4']) expect(keyboard(gameId, 'digits5-v3')).not.toMatch(/<button[^>]*>和<\/button>/)
+    expect(keyboard('pc-canada', 'pc28-v1')).toMatch(/<button[^>]*>和<\/button>/)
+    expect(keyboard('canada-28', 'pc28-v2')).toMatch(/<button[^>]*>和<\/button>/)
+    expect(keyboard('canada-20', 'pc28-v3')).toMatch(/<button[^>]*>和<\/button>/)
+    expect(keyboard('canada-28', 'pc28-v1')).not.toMatch(/<button[^>]*>和<\/button>/)
+  })
 })
 
 describe('server-confirmed room betting target', () => {
   const timing = resolveLotteryTiming({ issue_status: 'awaiting_draw', next_draw_at: '2026-08-30T06:46:00Z', seal_seconds: 30 }, Date.parse('2026-08-30T06:46:05Z'))
-  const game = { period: '34136854', timing } as Game
+  const game = { id: 'speed-racing', rulesReady: true, period: '34136854', timing } as Game
 
   it('does not invent a next issue when the source has not confirmed one', () => {
     expect(roomBettingTarget(game)).toEqual({ issue: '34136854', timing })
@@ -87,5 +113,12 @@ describe('server-confirmed room betting target', () => {
     expect(roomBettingTarget(nextGame)).toEqual(nextGame.betting)
     expect(nextGame.period).toBe('34136854')
     expect(nextGame.timing.accepting).toBe(false)
+  })
+
+  it('cannot open a next betting window for unknown rules or an explicit server denial', () => {
+    const next = { ...game, betting: { issue: '34136855', timing: { ...timing, accepting: true } } }
+    for (const blocked of [{ ...next, id: 'canada-28' }, { ...next, rulesReady: false }]) {
+      expect(roomBettingTarget(blocked)).toMatchObject({ issue: game.period, timing: { accepting: false, phaseLabel: '玩法待配置' } })
+    }
   })
 })

@@ -39,23 +39,23 @@ func (h *OddsHandler) Update(c *gin.Context) {
 }
 
 func (h *OddsHandler) Catalog(c *gin.Context) {
+	if gameID := c.Query("game_id"); gameID != "" {
+		constants.SendSuccess(c, http.StatusOK, "ok", services.PlayCatalogForGame(gameID))
+		return
+	}
 	constants.SendSuccess(c, http.StatusOK, "ok", services.PlayCatalog())
 }
 
 func (h *OddsHandler) Reset(c *gin.Context) {
-	result, err := h.odds.Reset(c.Param("id"))
-	if err != nil {
-		constants.SendError(c, http.StatusInternalServerError, "重置赔率限额失败", err)
+	var request services.OddsMutationGuard
+	if err := c.ShouldBindJSON(&request); err != nil {
+		constants.SendError(c, http.StatusBadRequest, "赔率配置版本参数不正确", err)
 		return
 	}
-	constants.SendSuccess(c, http.StatusOK, "已恢复默认玩法赔率", result)
-}
-
-func (h *OddsHandler) SyncAll(c *gin.Context) {
-	result, err := h.odds.SyncAllGames()
+	result, err := h.odds.Reset(c.Param("id"), request)
 	if err != nil {
-		constants.SendError(c, http.StatusInternalServerError, "同步玩法赔率失败", err)
+		constants.SendError(c, http.StatusInternalServerError, "清空赔率限额失败", err)
 		return
 	}
-	constants.SendSuccess(c, http.StatusOK, "玩法赔率已同步", result)
+	constants.SendSuccess(c, http.StatusOK, "已清空当前彩种赔率，全部玩法暂停受理", result)
 }

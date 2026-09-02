@@ -2,6 +2,7 @@ package services
 
 import (
 	"backend/data/models/activity"
+	"backend/data/models/lottery"
 	membernotify "backend/data/models/notify"
 	"backend/data/models/user"
 	workspacemodel "backend/data/models/workspace"
@@ -39,20 +40,33 @@ type MemberRoomSettingsView struct {
 	ChatAvatar        string             `json:"chat_avatar"`
 	OperatorTitle     string             `json:"operator_title"`
 	OperatorAvatar    string             `json:"operator_avatar"`
+	LotterySourceURL  string             `json:"lottery_source_url"`
 	Game              json.RawMessage    `json:"game"`
 	QuickReplies      json.RawMessage    `json:"quick_replies"`
 }
 
 type MemberOddsView struct {
-	GameID   string           `json:"game_id"`
-	GameName string           `json:"game_name"`
-	ShowOdds bool             `json:"show_odds"`
-	Items    []MemberOddsItem `json:"items"`
+	RulesReady   bool             `json:"rules_ready"`
+	RuleVersion  string           `json:"rule_version,omitempty"`
+	RulesMessage string           `json:"rules_message,omitempty"`
+	BetModes     MemberBetModes   `json:"bet_modes"`
+	GameID       string           `json:"game_id"`
+	GameName     string           `json:"game_name"`
+	ShowOdds     bool             `json:"show_odds"`
+	Items        []MemberOddsItem `json:"items"`
+}
+
+type MemberBetModes struct {
+	Chat bool `json:"chat"`
+	Web  bool `json:"web"`
 }
 
 type MemberOddsItem struct {
 	PlayCode      string  `json:"play_code"`
 	PlayName      string  `json:"play_name"`
+	Category      string  `json:"category,omitempty"`
+	Description   string  `json:"description,omitempty"`
+	Example       string  `json:"example,omitempty"`
 	Odds          float64 `json:"odds"`
 	MinBet        float64 `json:"min_bet"`
 	MaxBet        float64 `json:"max_bet"`
@@ -126,12 +140,13 @@ func (s *MemberPortalService) RoomSettings(userID uint64) (*MemberRoomSettingsVi
 	}
 	operatorAvatar := defaultString(strings.TrimSpace(cfg.ChatAvatar), cfg.RoomLogo)
 	return &MemberRoomSettingsView{
-		RoomName: cfg.RoomName, RoomLogo: cfg.RoomLogo, RoomNotice: cfg.RoomNotice, Announcements: cfg.Announcements, ShowOdds: cfg.ShowOdds,
+		RoomName: cfg.RoomName, RoomLogo: roomLogoForDisplay(cfg.RoomLogo), RoomNotice: cfg.RoomNotice, Announcements: cfg.Announcements, ShowOdds: cfg.ShowOdds,
 		SoundEnabled: cfg.SoundEnabled, PredictionEnabled: cfg.PredictionEnabled, MinCreditAmount: cfg.MinCreditAmount,
 		MinDebitAmount: cfg.MinDebitAmount, MinChatScore: cfg.MinChatScore,
 		ChatNickname: cfg.ChatNickname, ChatAvatar: operatorAvatar,
 		OperatorTitle: cfg.ChatNickname, OperatorAvatar: operatorAvatar,
-		Game: cfg.Game, QuickReplies: cfg.QuickReplies,
+		LotterySourceURL: cfg.LotterySourceURL,
+		Game:             cfg.Game, QuickReplies: cfg.QuickReplies,
 	}, nil
 }
 
@@ -156,22 +171,52 @@ func (s *MemberPortalService) GameOdds(userID uint64, gameID string) (*MemberOdd
 	for _, item := range limits.Items {
 		limitMap[item.PlayCode] = item
 	}
+	catalogMap := map[string]PlayCatalogItem{}
+	for _, item := range PlayCatalogForGame(trading.GameID) {
+		catalogMap[item.PlayCode] = item
+	}
 	items := make([]MemberOddsItem, 0, len(trading.Odds))
 	for _, row := range trading.Odds {
-		limit := limitMap[row.PlayCode]
+		limit, exists := limitMap[row.PlayCode]
+		if !exists || !limit.Configured || limit.Odds <= 1 {
+			continue
+		}
+		catalog := catalogMap[row.PlayCode]
 		odds := row.Effective
 		if !cfg.ShowOdds {
 			odds = 0
 		}
 		items = append(items, MemberOddsItem{
-			PlayCode: row.PlayCode, PlayName: row.PlayName, Odds: odds,
+			PlayCode: row.PlayCode, PlayName: row.PlayName, Category: catalog.Category,
+			Description: catalog.Description, Example: catalog.Example, Odds: odds,
 			MinBet: limit.MinBet, MaxBet: limit.MaxBet, MaxUserPeriod: limit.MaxUserPeriod,
 		})
 	}
+	ready, ruleVersion, rulesMessage, betModes := memberOddsRuleStatus(trading.GameID)
 	return &MemberOddsView{
-		GameID: trading.GameID, GameName: trading.GameName,
+		RulesReady: ready, RuleVersion: ruleVersion, RulesMessage: rulesMessage,
+		BetModes: betModes,
+		GameID:   trading.GameID, GameName: trading.GameName,
 		ShowOdds: cfg.ShowOdds, Items: items,
 	}, nil
+}
+
+// Betting modes describe product capability, not the optional on-screen input
+// keyboard. Mark Six is intentionally typed-web-only; compact chat parsing is
+// retained only for the existing racing and digit contracts.
+func memberOddsRuleStatus(gameID string) (bool, string, string, MemberBetModes) {
+	rules, ready := rulesForGame(&lottery.Game{ID: strings.TrimSpace(gameID)})
+	if !ready {
+		return false, "", gameRulesUnavailableMessage, MemberBetModes{}
+	}
+	switch rules.Version {
+	case "racing-v2", "digits5-v2", "digits5-v3", "digits3-v2", pc28RuleV1, pc28RuleV2, pc28RuleV3:
+		return true, rules.Version, "", MemberBetModes{Chat: true, Web: true}
+	case markSixRuleVersion:
+		return true, rules.Version, "", MemberBetModes{Chat: false, Web: true}
+	default:
+		return false, "", gameRulesUnavailableMessage, MemberBetModes{}
+	}
 }
 
 func (s *MemberPortalService) ListActivities(userID uint64, activityType string) ([]ActivityView, error) {

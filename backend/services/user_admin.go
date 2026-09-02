@@ -66,6 +66,7 @@ type AdminUser struct {
 }
 
 type UserListFilter struct {
+	UserID      uint64 // Exact roster lookup; it never replaces the authenticated room scope.
 	Query       string
 	Status      string
 	Role        string
@@ -255,7 +256,7 @@ func (s *UserAdminService) List(filter UserListFilter) (*UserList, error) {
 	}
 	switch strings.TrimSpace(filter.Kind) {
 	case "member":
-		query = excludeRobotProfileUsers(query.Where("role = ? AND COALESCE(remark, '') NOT LIKE ?", "member", "测试机器人专用账号%"))
+		query = HumanMemberQuery(query)
 	case "robot":
 		if filter.WorkspaceID == 0 {
 			return nil, apperrors.NewBusinessError("WORKSPACE_REQUIRED", "请选择要查看的机器人工作区")
@@ -293,7 +294,7 @@ func (s *UserAdminService) Stats(kind string) (*UserStats, error) {
 	applyKind := func(query *gorm.DB) *gorm.DB {
 		switch strings.TrimSpace(kind) {
 		case "member":
-			return excludeRobotProfileUsers(query.Where("role = ? AND COALESCE(remark, '') NOT LIKE ?", "member", "测试机器人专用账号%"))
+			return HumanMemberQuery(query)
 		case "robot":
 			return query.Joins(`JOIN workspace_robot_profiles AS robot_profile
 				ON robot_profile.workspace_id = "user".workspace_id
@@ -949,6 +950,10 @@ func (s *UserAdminService) SetStatusOwned(id, ownerAgentID uint64, status int) (
 }
 
 func (s *UserAdminService) SetStatusInWorkspace(id, workspaceID uint64, status int) (*AdminUser, error) {
+	if workspaceID == 0 {
+		return nil, apperrors.NewBusinessError("FORBIDDEN", "请选择当前房间")
+	}
+	var result *AdminUser
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var row user.User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, id).Error; err != nil {
@@ -957,13 +962,20 @@ func (s *UserAdminService) SetStatusInWorkspace(id, workspaceID uint64, status i
 		if row.WorkspaceID != workspaceID || row.Role != "member" {
 			return apperrors.NewBusinessError("FORBIDDEN", "该用户不属于当前房间")
 		}
-		return tx.Model(&row).Update("status", normalizeStatus(status)).Error
+		if err := tx.Model(&row).Update("status", normalizeStatus(status)).Error; err != nil {
+			return err
+		}
+		// Read the response while the membership/account row is still locked;
+		// a concurrent switch must not enrich it with the destination room.
+		var err error
+		result, err = NewUserAdminService(tx).Get(id)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	ws.DisconnectUser(id)
-	return s.Get(id)
+	return result, nil
 }
 
 func (s *UserAdminService) setStatus(id uint64, status int, ownerAgentID *uint64) (*AdminUser, error) {
@@ -1014,10 +1026,14 @@ func (s *UserAdminService) AdjustBalanceOwned(id, ownerAgentID uint64, amount fl
 }
 
 func (s *UserAdminService) AdjustBalanceInWorkspace(id, workspaceID uint64, amount float64, remark, operator string) (*AdminUser, error) {
+	if workspaceID == 0 {
+		return nil, apperrors.NewBusinessError("FORBIDDEN", "请选择当前房间")
+	}
 	amountCents := int64(math.Round(amount * 100))
 	if amountCents == 0 || math.Abs(amount) > 100000000 {
 		return nil, apperrors.NewBusinessError("INVALID_AMOUNT", "调整金额不正确")
 	}
+	var result *AdminUser
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var row user.User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, id).Error; err != nil {
@@ -1033,12 +1049,17 @@ func (s *UserAdminService) AdjustBalanceInWorkspace(id, workspaceID uint64, amou
 		if err := tx.Model(&row).Update("balance_cents", after).Error; err != nil {
 			return err
 		}
-		return tx.Create(&record).Error
+		if err := tx.Create(&record).Error; err != nil {
+			return err
+		}
+		var err error
+		result, err = NewUserAdminService(tx).Get(id)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	return s.Get(id)
+	return result, nil
 }
 
 func (s *UserAdminService) adjustBalance(id uint64, amount float64, remark, operator string, ownerAgentID *uint64) (*AdminUser, error) {

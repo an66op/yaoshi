@@ -3,6 +3,7 @@ import { HookHarness } from './test/hookHarness'
 import type { AppRoute } from './router'
 import { AuthError } from './api/client'
 import { Login } from './pages/Login'
+import { RoomEntry } from './pages/RoomEntry'
 import { SessionStartup } from './components/SessionStartup'
 import App from './App'
 
@@ -148,5 +149,54 @@ describe('App startup authentication boundary', () => {
     expect(result.type).toBe('main')
     expect(result.props.className).toContain('theme-day')
     expect(runtime.refreshSession).toHaveBeenCalledOnce()
+  })
+
+  it('loads and passes real room history after login even when the account has no current room', async () => {
+    runtime.route = { kind: 'room' }
+    runtime.me.mockResolvedValue({ username: 'verified-user', nickname: 'Verified name', balance: 123 })
+    runtime.roomHistory.mockResolvedValue([
+      { room_code: '10002', room_name: '最近房间', room_logo: '/images/recent.png', status: 'available', current: false, last_entered_at: '2026-08-31T12:00:00Z' },
+      { room_code: '10001', room_name: '较早房间', status: 'pending', current: false, last_entered_at: '2026-08-30T12:00:00Z' },
+    ])
+
+    expect(render().type).toBe(SessionStartup)
+    await settle()
+    expect(render().type).toBe(RoomEntry)
+    await settle()
+    const roomEntry = render()
+    expect(runtime.roomHistory).toHaveBeenCalledExactlyOnceWith()
+    expect(roomEntry.type).toBe(RoomEntry)
+    expect(roomEntry.props.roomHistory).toEqual([
+      { code: '10002', name: '最近房间', logo: '/images/recent.png', status: 'available', lastUsedAt: Date.parse('2026-08-31T12:00:00Z') },
+      { code: '10001', name: '较早房间', logo: undefined, status: 'pending', lastUsedAt: Date.parse('2026-08-30T12:00:00Z') },
+    ])
+  })
+
+  it('keeps failed history empty and clears previously loaded rooms when authentication is lost', async () => {
+    runtime.route = { kind: 'room' }
+    runtime.me.mockResolvedValue({ username: 'verified-user', nickname: 'Verified name', balance: 123 })
+    runtime.roomHistory.mockResolvedValueOnce([
+      { room_code: '10002', room_name: '历史房间', status: 'available', current: false, last_entered_at: '2026-08-31T12:00:00Z' },
+    ])
+    render()
+    await settle()
+    render()
+    await settle()
+    expect(render().props.roomHistory).toHaveLength(1)
+
+    const authListener = vi.mocked(window.addEventListener).mock.calls.find(([name]) => name === 'yaotu-member-auth-expired')?.[1]
+    expect(authListener).toBeTypeOf('function')
+    if (typeof authListener === 'function') authListener(new Event('yaotu-member-auth-expired'))
+    const login = render()
+    expect(login.type).toBe(Login)
+
+    runtime.roomHistory.mockRejectedValueOnce(new Error('历史房间读取失败'))
+    login.props.onContinue('verified-user', 'Verified name')
+    const clearedEntry = render()
+    expect(clearedEntry.type).toBe(RoomEntry)
+    expect(clearedEntry.props.roomHistory).toEqual([])
+    await settle()
+    expect(render().props.roomHistory).toEqual([])
+    expect(runtime.roomHistory).toHaveBeenCalledTimes(2)
   })
 })

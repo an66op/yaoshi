@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState, type RefObject } from 'react'
 import type { DrawResult } from '../api/lottery'
 import { SPEED_RACING_TRIO_SRC } from '../data/gameArtwork'
 import { useCanvasVisibility } from '../hooks/useCanvasVisibility'
-import { CURRENT_DRAW_CARD_SIZE, drawCardIssueLabel, paintCurrentDrawCard, paintRecentDrawCard, recentDrawCardSize, releaseDrawCardCanvas } from '../utils/drawResultCardCanvas'
+import { currentDrawCardSize, drawCardIssueLabel, paintCurrentDrawCard, paintRecentDrawCard, recentDrawCardSize, releaseDrawCardCanvas } from '../utils/drawResultCardCanvas'
 
 let cachedRacingCars: HTMLImageElement | null = null
 let racingCarsRequest: Promise<HTMLImageElement> | null = null
@@ -26,7 +26,7 @@ function loadRacingCars() {
   return racingCarsRequest
 }
 
-export const DrawResultCards = memo(function DrawResultCards({ title, draw, draws }: { title: string; draw: DrawResult; draws: DrawResult[] }) {
+export const DrawResultCards = memo(function DrawResultCards({ title, ruleVersion = '', draw, draws }: { title: string; ruleVersion?: string; draw: DrawResult; draws: DrawResult[] }) {
   const currentRef = useRef<HTMLCanvasElement>(null)
   const rangeRef = useRef<HTMLCanvasElement>(null)
   const currentNearViewport = useCanvasVisibility(currentRef)
@@ -51,18 +51,18 @@ export const DrawResultCards = memo(function DrawResultCards({ title, draw, draw
   useEffect(() => {
     const canvas = currentRef.current
     if (!canvas) return
-    if (currentNearViewport) paintCurrentDrawCard(canvas, { title }, draw, racingCars, window.devicePixelRatio)
+    if (currentNearViewport) paintCurrentDrawCard(canvas, { title, ruleVersion }, draw, racingCars, window.devicePixelRatio)
     else releaseDrawCardCanvas(canvas)
     return () => releaseDrawCardCanvas(canvas)
-  }, [draw, title, racingCars, currentNearViewport])
+  }, [draw, title, ruleVersion, racingCars, currentNearViewport])
 
   useEffect(() => {
     const canvas = rangeRef.current
     if (!canvas) return
-    if (rangeNearViewport) paintRecentDrawCard(canvas, { title }, draws, racingCars, window.devicePixelRatio)
+    if (rangeNearViewport) paintRecentDrawCard(canvas, { title, ruleVersion }, draws, racingCars, window.devicePixelRatio)
     else releaseDrawCardCanvas(canvas)
     return () => releaseDrawCardCanvas(canvas)
-  }, [draws, title, racingCars, rangeNearViewport])
+  }, [draws, title, ruleVersion, racingCars, rangeNearViewport])
 
   useEffect(() => {
     if (!preview) return
@@ -108,8 +108,8 @@ export const DrawResultCards = memo(function DrawResultCards({ title, draw, draw
     // update must not capture the preceding passive-effect frame.
     const current = ref === currentRef
     try {
-      if (current) paintCurrentDrawCard(canvas, { title }, draw, racingCars, window.devicePixelRatio)
-      else paintRecentDrawCard(canvas, { title }, draws, racingCars, window.devicePixelRatio)
+      if (current) paintCurrentDrawCard(canvas, { title, ruleVersion }, draw, racingCars, window.devicePixelRatio)
+      else paintRecentDrawCard(canvas, { title, ruleVersion }, draws, racingCars, window.devicePixelRatio)
       return canvas.toDataURL('image/png')
     } finally {
       // Keyboard activation may target a card before its observer callback.
@@ -126,11 +126,12 @@ export const DrawResultCards = memo(function DrawResultCards({ title, draw, draw
   const rangeTitle = `${title}最近开奖记录图片`
   const currentFilename = `${title}-${issue}-开奖号码.png`
   const rangeFilename = `${title}-最近开奖记录.png`
-  const recentSize = recentDrawCardSize(draws.length)
+  const currentSize = currentDrawCardSize(draw.numbers.length, draw.issue)
+  const recentSize = recentDrawCardSize(draws)
   return <div className="draw-result-image-cards" aria-busy={!racingCars && !artworkError}>
     {!racingCars && <div className="draw-result-artwork-status" role={artworkError ? 'alert' : 'status'}><span>{artworkError || '正在加载赛车图片…'}</span>{artworkError && <button type="button" onClick={() => { setArtworkError(''); setArtworkAttempt(attempt => attempt + 1) }}>重试</button>}</div>}
     <figure className="draw-result-image-card">
-      <button className="draw-image-trigger" type="button" disabled={!racingCars} aria-label={`预览${currentTitle}`} onClick={() => openPreview(currentRef, currentTitle, currentFilename)}><canvas aria-label={currentTitle} ref={currentRef} width={0} height={0} style={{ width: '100%', height: 'auto', aspectRatio: `${CURRENT_DRAW_CARD_SIZE.width} / ${CURRENT_DRAW_CARD_SIZE.height}` }} /></button>
+      <button className="draw-image-trigger" type="button" disabled={!racingCars} aria-label={`预览${currentTitle}`} onClick={() => openPreview(currentRef, currentTitle, currentFilename)}><canvas aria-label={currentTitle} ref={currentRef} width={0} height={0} style={{ width: '100%', height: 'auto', aspectRatio: `${currentSize.width} / ${currentSize.height}` }} /></button>
     </figure>
     <figure className="draw-result-image-card">
       <button className="draw-image-trigger" type="button" disabled={!racingCars} aria-label={`预览${rangeTitle}`} onClick={() => openPreview(rangeRef, rangeTitle, rangeFilename)}><canvas aria-label={rangeTitle} ref={rangeRef} width={0} height={0} style={{ width: '100%', height: 'auto', aspectRatio: `${recentSize.width} / ${recentSize.height}` }} /></button>

@@ -31,6 +31,9 @@ export type AdminGame = {
   last_sync_at: string | null
   last_sync_error: string
   schedule_mode: 'official-feed' | 'interval' | string
+  rules_ready?: boolean
+  rule_version?: string
+  rules_message?: string
 }
 
 export type WorkspaceGame = AdminGame & {
@@ -164,7 +167,7 @@ export type ReconciliationRefundResult = {
   already_refunded: boolean
 }
 
-export type LifecycleDataClass = 'chat_messages' | 'robot_chat_messages' | 'notifications' | 'audit_logs' | 'robot_test_data'
+export type LifecycleDataClass = 'chat_messages' | 'robot_chat_messages' | 'game_chat_messages' | 'notifications' | 'audit_logs' | 'robot_test_data'
 
 export type LifecycleAction = 'soft_delete' | 'hard_delete' | 'archive_then_purge_hot' | 'cold_archive'
 
@@ -178,6 +181,7 @@ export type RetentionPolicyView = {
   data_class: LifecycleDataClass
   enabled: boolean
   retention_days: number
+  purge_after_days?: number
   action: LifecycleAction
   updated_by_id: number
   updated_by_name: string
@@ -191,6 +195,7 @@ export type UpdateRetentionPolicyInput = {
   workspace_id: number
   enabled: boolean
   retention_days: number
+  purge_after_days?: number
 }
 
 export type CleanupPreviewInput = {
@@ -283,6 +288,7 @@ export type CleanupRunPage = {
 export type DataMaintenanceSummary = {
   soft_deleted_chat_count: number
   soft_deleted_robot_chat_count: number
+  soft_deleted_game_chat_count?: number
   soft_deleted_notification_count: number
   stale_idempotency_count: number
   delivered_session_receipt_count: number
@@ -541,6 +547,38 @@ export type RoomTradingConfig = {
   game_id: string
   game_name: string
   odds: Array<{ play_code: string; play_name: string; base_odds: number; override: number | null; effective: number; has_override: boolean }>
+}
+
+/** A room's membership history. Private fields are current-room-only. */
+export type WorkspaceMember = {
+  id: number
+  public_id: number
+  username: string
+  nickname: string
+  avatar?: string
+  public_title?: string
+  badge?: string
+  role: 'member'
+  in_current_room: boolean
+  can_manage: boolean
+  balance: number | null
+  status: 0 | 1 | null
+  online: boolean | null
+  phone?: string
+  remark?: string
+  risk_level?: 'normal' | 'watch' | 'restricted'
+  login_count?: number
+  last_login_at?: string | null
+  created_at?: string
+  fly_mode?: string
+  fly_rate?: number
+}
+
+export type WorkspaceMemberList = {
+  items: WorkspaceMember[]
+  total: number
+  page: number
+  page_size: number
 }
 
 export type UserListResponse = {
@@ -1031,6 +1069,7 @@ export type SystemSettings = {
   room_name: string
   room_logo: string
   chat_nickname: string
+  lottery_source_url: string
   nickname_display_length: number
   min_chat_score: number
   min_credit_amount: number
@@ -1053,6 +1092,7 @@ export type SystemSettings = {
   }>
   game: {
     seal_seconds?: number
+    game_timing_overrides?: Record<string, { seal_seconds?: number }>
     allow_cancel?: boolean
     default_fly_rate?: number
     max_open_games?: number
@@ -1065,10 +1105,12 @@ export type SystemSettings = {
     show_member_profit?: boolean
     show_member_rebate?: boolean
     web_keyboard_enabled?: boolean
+    pc28_gray_push?: boolean
     show_mipai_tool?: boolean
     show_orders_tool?: boolean
     show_streak_tool?: boolean
     show_prediction_tool?: boolean
+    lottery_source_url?: string
     [key: string]: unknown
   }
   quick_replies: Array<{ title?: string; content?: string; [key: string]: unknown }>
@@ -1201,6 +1243,9 @@ export type PlayLimitItem = {
   max_user_period: number
   max_period_total: number
   sort_order: number
+  configured?: boolean
+  configuration_source?: 'admin_save' | 'legacy_compatible' | 'system_default' | 'legacy_unconfirmed' | 'unconfigured' | 'pending_admin_save' | string
+  configured_at?: string | null
 }
 
 export type PlayCatalogItem = {
@@ -1222,6 +1267,16 @@ export type GameOddsLimits = {
   game_id: string
   game_name: string
   items: PlayLimitItem[]
+  rules_ready?: boolean
+  rule_version?: string
+  rules_message?: string
+  risk_warnings?: OddsRiskWarning[]
+}
+
+export type OddsRiskWarning = {
+  code: string
+  message: string
+  play_codes: string[]
 }
 
 export type PaymentChannel = {
@@ -1474,6 +1529,9 @@ export type LoginResult = {
   }
 }
 
+export type LoginCaptcha = { id: string; image: string; expires_in: number }
+export type LoginCaptchaInput = { captcha_id: string; captcha_code: string }
+
 export type AgentDashboard = {
   agent_id: number
   room_code: string
@@ -1495,7 +1553,11 @@ export const adminApi = {
     if (!response.ok) throw new Error('后端离线')
     return true
   },
-  login: (username: string, password: string) => request<LoginResult>('/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  loginCaptcha: (signal?: AbortSignal) => request<LoginCaptcha>('/login/captcha', { cache: 'no-store', signal }),
+  login: (username: string, password: string, captcha: LoginCaptchaInput) => request<LoginResult>('/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password, captcha_id: captcha.captcha_id, captcha_code: captcha.captcha_code }),
+  }),
 	me: () => request<LoginResult['user']>('/session'),
 	refreshSession: () => request<{ expires_in: number }>('/session/refresh', { method: 'POST' }),
 	logout: async () => {
@@ -1615,7 +1677,7 @@ export const adminApi = {
   runRoomActivityOnce: () => request<RoomActivityStatus>('/admin/room-activity/run-once', { method: 'POST' }),
   oddsLimits: (gameId: string) => request<GameOddsLimits>(`/admin/games/${gameId}/odds-limits`),
   updateOddsLimits: (gameId: string, items: PlayLimitItem[]) => request<GameOddsLimits>(`/admin/games/${gameId}/odds-limits`, { method: 'PUT', body: JSON.stringify({ items }) }),
-  playCatalog: () => request<PlayCatalogItem[]>('/admin/plays/catalog'),
+  playCatalog: (gameId?: string) => request<PlayCatalogItem[]>(`/admin/plays/catalog${gameId ? `?game_id=${encodeURIComponent(gameId)}` : ''}`),
   resetOddsLimits: (gameId: string) => request<GameOddsLimits>(`/admin/games/${gameId}/odds-limits/reset`, { method: 'POST' }),
   syncOddsLimits: () => request<SyncOddsLimitsResult>('/admin/games/sync-odds-limits', { method: 'POST' }),
   walletChannels: (params?: { query?: string; status?: string }) => {
@@ -1762,9 +1824,10 @@ export const tenantApi = {
   createAgent: (payload: { username: string; password: string; email?: string; nickname?: string; phone?: string; room_code: string; room_name?: string; room_logo?: string; rebate_rate?: number; profit_share_rate?: number; remark?: string; status: number }) => request<AgentItem>('/tenant/agents', { method: 'POST', body: JSON.stringify(payload) }),
   updateAgent: (id: number, payload: { email?: string; nickname?: string; phone?: string; room_code: string; room_name?: string; room_logo?: string; rebate_rate?: number; profit_share_rate?: number; remark?: string; status: number }) => request<AgentItem>(`/tenant/agents/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   resetAgentPassword: (id: number, password: string) => request<{ id: number }>(`/tenant/agents/${id}/reset-password`, { method: 'POST', body: JSON.stringify({ password }) }),
-	users: (params?: { query?: string; status?: string; page?: number; pageSize?: number }) => {
+	users: (params?: { query?: string; status?: string; userId?: number; page?: number; pageSize?: number }) => {
 		const query = new URLSearchParams({ query: params?.query ?? '', status: params?.status ?? 'all', page: String(params?.page ?? 1), page_size: String(params?.pageSize ?? 20) })
-		return request<UserListResponse>(`/tenant/users?${query}`)
+    if (params?.userId !== undefined) query.set('user_id', String(params.userId))
+    return request<WorkspaceMemberList>(`/tenant/users?${query}`)
 	},
 	setUserStatus: (id: number, status: 0 | 1) => request<AdminUser>(`/tenant/users/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
 	adjustUserBalance: (id: number, amount: number, remark: string) => request<AdminUser>(`/tenant/users/${id}/balance`, { method: 'POST', body: JSON.stringify({ amount, remark }) }),
@@ -1830,9 +1893,10 @@ export const agentApi = {
   updateRoomSettings: (roomName: string, roomLogo: string) => request<AgentDashboard>('/agent/room/settings', { method: 'PATCH', body: JSON.stringify({ room_name: roomName, room_logo: roomLogo }) }),
   settings: () => request<SystemSettings>('/agent/settings'),
   updateSettings: (payload: SystemSettings) => request<SystemSettings>('/agent/settings', { method: 'PUT', body: JSON.stringify(payload) }),
-  users: (params?: { query?: string; status?: string; page?: number; pageSize?: number }) => {
+  users: (params?: { query?: string; status?: string; userId?: number; page?: number; pageSize?: number }) => {
     const query = new URLSearchParams({ query: params?.query ?? '', status: params?.status ?? 'all', page: String(params?.page ?? 1), page_size: String(params?.pageSize ?? 20) })
-    return request<UserListResponse>(`/agent/users?${query}`)
+    if (params?.userId !== undefined) query.set('user_id', String(params.userId))
+    return request<WorkspaceMemberList>(`/agent/users?${query}`)
   },
   setUserStatus: (id: number, status: 0 | 1) => request<AdminUser>(`/agent/users/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   adjustUserBalance: (id: number, amount: number, remark: string) => request<AdminUser>(`/agent/users/${id}/balance`, { method: 'POST', body: JSON.stringify({ amount, remark }) }),

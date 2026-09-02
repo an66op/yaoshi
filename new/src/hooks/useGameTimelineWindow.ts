@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { DrawResult } from '../api/lottery'
+import { recentGameTimelineItems } from '../utils/gameTimelineBudget'
 
 type TimelineWindow = {
   gameId: string
@@ -9,8 +10,8 @@ type TimelineWindow = {
   draws: DrawResult[]
 }
 
-/** This is a visit boundary, not a moving "latest N" window. Only mounting or
- * switching games opens a new visit; advancing an issue/reconnecting does not. */
+/** Only mounting or switching games opens a new visit. The entry boundary
+ * stays fixed while its bounded display cache follows newly confirmed draws. */
 export function useGameTimelineWindow(gameId: string, incoming: DrawResult[], loading: boolean, error = ''): TimelineWindow {
   const [window, setWindow] = useState<TimelineWindow>(() => ({ gameId, ready: false, draws: [] }))
   useEffect(() => {
@@ -31,7 +32,7 @@ export function useGameTimelineWindow(gameId: string, incoming: DrawResult[], lo
         if (current.startAt === undefined && !byIssue.has(draw.issue) && draw !== rows[0]) continue
         byIssue.set(draw.issue, draw)
       }
-      const draws = [...byIssue.values()].sort((a, b) => Date.parse(a.draw_at) - Date.parse(b.draw_at))
+      const draws = recentGameTimelineItems([...byIssue.values()].sort((a, b) => Date.parse(a.draw_at) - Date.parse(b.draw_at)))
       return draws.length === current.draws.length && draws.every((draw, index) => draw === current.draws[index]) ? current : { ...current, draws }
     })
   }, [gameId, incoming, loading, error])

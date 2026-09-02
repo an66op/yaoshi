@@ -8,6 +8,7 @@ import (
 	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
 	"backend/ws"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -27,25 +28,30 @@ type BetAdminService struct {
 }
 
 type BetView struct {
-	ID        uint64    `json:"id"`
-	GameID    string    `json:"game_id"`
-	Issue     string    `json:"issue"`
-	UserID    uint64    `json:"user_id"`
-	Username  string    `json:"username"`
-	PlayCode  string    `json:"play_code"`
-	PlayName  string    `json:"play_name"`
-	Position  int       `json:"position"`
-	Selection string    `json:"selection"`
-	Amount    float64   `json:"amount"`
-	Odds      float64   `json:"odds"`
-	Status    string    `json:"status"`
-	Payout    float64   `json:"payout"`
-	FlyAmount float64   `json:"fly_amount"`
-	Remark    string    `json:"remark"`
-	Operator  string    `json:"operator"`
-	CreatedAt time.Time `json:"created_at"`
-	Deducted  float64   `json:"deducted,omitempty"`
-	Balance   float64   `json:"balance,omitempty"`
+	ID               uint64    `json:"id"`
+	GameID           string    `json:"game_id"`
+	Issue            string    `json:"issue"`
+	UserID           uint64    `json:"user_id"`
+	Username         string    `json:"username"`
+	PlayCode         string    `json:"play_code"`
+	PlayName         string    `json:"play_name"`
+	RuleVersion      string    `json:"rule_version,omitempty"`
+	Position         int       `json:"position"`
+	Selection        string    `json:"selection"`
+	Amount           float64   `json:"amount"`
+	Odds             float64   `json:"odds"`
+	SettlementOdds   *float64  `json:"settlement_odds,omitempty"`
+	ValidTurnover    *float64  `json:"valid_turnover,omitempty"`
+	UserIssueStake   *float64  `json:"user_issue_stake,omitempty"`
+	SettlementPolicy string    `json:"settlement_policy,omitempty"`
+	Status           string    `json:"status"`
+	Payout           float64   `json:"payout"`
+	FlyAmount        float64   `json:"fly_amount"`
+	Remark           string    `json:"remark"`
+	Operator         string    `json:"operator"`
+	CreatedAt        time.Time `json:"created_at"`
+	Deducted         float64   `json:"deducted,omitempty"`
+	Balance          float64   `json:"balance,omitempty"`
 }
 
 type CancelIssueResult struct {
@@ -69,8 +75,12 @@ type PlaceBetInput struct {
 	FlyAmount *float64 // nil = 按用户/房间飞单策略自动计算
 	Remark    string
 	Operator  string
+	// BetMode is server-owned. mark6-v1 is intentionally available only to
+	// the typed member web ticket and never to compact/chat parsers.
+	BetMode string
 	// LedgerReference links an automatic balance deduction to its idempotent
-	// request. Internal/manual callers may leave it empty.
+	// request. Internal/manual callers may leave it empty; placement then gives
+	// the financial operation its own reference rather than altering an old bet.
 	LedgerReference string
 }
 
@@ -161,6 +171,20 @@ func positiveMoneyCents(value float64, label string) (int64, error) {
 	return cents, nil
 }
 
+// A caller's stake must not be silently rounded into a different order.
+// Internal proportional fly/rebate calculations may still round to cents.
+func validatedStakeCents(value float64) (int64, error) {
+	cents, err := positiveMoneyCents(value, "下注金额")
+	if err != nil {
+		return 0, err
+	}
+	canonical := strconv.FormatFloat(value, 'f', -1, 64)
+	if point := strings.IndexByte(canonical, '.'); point >= 0 && len(canonical)-point-1 > 2 {
+		return 0, apperrors.NewBusinessError("INVALID_REQUEST", "下注金额最多支持两位小数")
+	}
+	return cents, nil
+}
+
 func nonNegativeMoneyCents(value float64, label string) (int64, error) {
 	return moneyCents(value, true, label)
 }
@@ -221,9 +245,105 @@ func idempotencyPayloadHash(value any) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
+// Every financial operation owns its bet rows, including administrative and
+// robot calls without a client request ID. Both the live and archive dedupe
+// keys already include this reference. Giving new calls a fresh reference
+// preserves prior odds/rates/status without rewriting historical contracts or
+// weakening either unique constraint.
+func placementRequestReference(inputs []PlaceBetInput) (string, error) {
+	if len(inputs) == 0 {
+		return "", apperrors.NewBusinessError("INVALID_REQUEST", "请至少提供一注投注内容")
+	}
+	reference := strings.TrimSpace(inputs[0].LedgerReference)
+	for _, input := range inputs[1:] {
+		if strings.TrimSpace(input.LedgerReference) != reference {
+			return "", apperrors.NewBusinessError("INVALID_REQUEST", "同一张投注单的请求标识必须一致")
+		}
+	}
+	if reference != "" {
+		return reference, nil
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", apperrors.NewSystemError("REQUEST_SAVE_FAILED", "生成投注请求凭证失败", err)
+	}
+	return "internal_bet:" + hex.EncodeToString(nonce[:]), nil
+}
+
+type placementBetKey struct {
+	workspaceID                              uint64
+	userID                                   uint64
+	roomScope, gameID, issue, playCode       string
+	selection, requestReference, ruleVersion string
+	position                                 int
+}
+
+// Consolidate duplicate selections only inside this new financial operation.
+// The source-index mapping keeps one result per caller line (the assistant
+// associates odds with those line indexes). Never read or update an older row.
+func aggregatePlacementRows(rows []bet.Bet) ([]bet.Bet, []int, error) {
+	aggregated := make([]bet.Bet, 0, len(rows))
+	indexes := make([]int, 0, len(rows))
+	byKey := make(map[placementBetKey]int, len(rows))
+	for _, row := range rows {
+		if row.ID != 0 || row.Status != "pending" || row.SettledAt != nil || row.PayoutCents != 0 ||
+			row.RebateCents != 0 || row.AgentShareCents != 0 || strings.TrimSpace(row.RequestReference) == "" {
+			return nil, nil, apperrors.NewBusinessError("INVALID_REQUEST", "只能合并本次新建的待结算注单")
+		}
+		if row.AmountCents <= 0 || row.FlyCents < 0 || row.FlyCents > row.AmountCents {
+			return nil, nil, apperrors.NewBusinessError("INVALID_REQUEST", "注单金额异常")
+		}
+		key := placementBetKey{
+			workspaceID: row.WorkspaceID, userID: row.UserID, roomScope: row.RoomScope,
+			gameID: row.GameID, issue: row.Issue, playCode: row.PlayCode, position: row.Position,
+			selection: row.Selection, requestReference: row.RequestReference, ruleVersion: row.RuleVersion,
+		}
+		index, exists := byKey[key]
+		if !exists {
+			byKey[key] = len(aggregated)
+			indexes = append(indexes, len(aggregated))
+			aggregated = append(aggregated, row)
+			continue
+		}
+		previous := &aggregated[index]
+		if previous.Odds != row.Odds || previous.RebateRateSnapshot != row.RebateRateSnapshot ||
+			previous.AgentShareRateSnapshot != row.AgentShareRateSnapshot || previous.PC28GrayPush != row.PC28GrayPush {
+			return nil, nil, apperrors.NewBusinessError("INVALID_REQUEST", "同一投注项的财务条件已变化，请重新提交")
+		}
+		amount, ok := safeAddInt64(previous.AmountCents, row.AmountCents)
+		if !ok || amount <= 0 {
+			return nil, nil, apperrors.NewBusinessError("INVALID_REQUEST", "注单累计金额过大")
+		}
+		fly, ok := safeAddInt64(previous.FlyCents, row.FlyCents)
+		if !ok || fly < 0 || fly > amount {
+			return nil, nil, apperrors.NewBusinessError("INVALID_REQUEST", "注单飞单金额异常")
+		}
+		previous.AmountCents = amount
+		if previous.ValidTurnoverCents != nil && row.ValidTurnoverCents != nil {
+			valid, validOK := safeAddInt64(*previous.ValidTurnoverCents, *row.ValidTurnoverCents)
+			if !validOK || valid < 0 || valid > amount {
+				return nil, nil, apperrors.NewBusinessError("INVALID_REQUEST", "注单有效流水异常")
+			}
+			previous.ValidTurnoverCents = int64Pointer(valid)
+		} else {
+			previous.ValidTurnoverCents = nil
+		}
+		previous.FlyCents = fly
+		indexes = append(indexes, index)
+	}
+	return aggregated, indexes, nil
+}
+
 func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 	game, err := s.loadGame(input.GameID)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureGameRulesSupported(game); err != nil {
+		return nil, err
+	}
+	profile, _ := rulesForGame(game)
+	if err := ensurePlacementBetMode(profile, input.BetMode); err != nil {
 		return nil, err
 	}
 	if !game.Enabled {
@@ -246,18 +366,25 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 	if selection == "" {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "投注内容不能为空")
 	}
-	playCode, playName := InferPlay(input.PlayCode, input.PlayName, input.Position, input.Selection)
+	playCode, playName, inferErr := InferPlayForGame(game, input.PlayCode, input.PlayName, input.Position, input.Selection)
+	if inferErr != nil {
+		return nil, inferErr
+	}
 	selection = normalizeBetSelection(game, playCode, selection)
 	if err := validateBetChoice(game, playCode, input.Position, selection); err != nil {
 		return nil, err
 	}
-	amountCents, amountErr := positiveMoneyCents(input.Amount, "下注金额")
+	amountCents, amountErr := validatedStakeCents(input.Amount)
 	if amountErr != nil {
 		return nil, amountErr
 	}
 	requestFly, flyErr := requestedFlyAmount(input.FlyAmount)
 	if flyErr != nil {
 		return nil, flyErr
+	}
+	requestReference, referenceErr := placementRequestReference([]PlaceBetInput{input})
+	if referenceErr != nil {
+		return nil, referenceErr
 	}
 
 	var view *BetView
@@ -296,8 +423,16 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 		if termsErr != nil {
 			return termsErr
 		}
-		resolved, resolveErr := NewTradingAdminService(tx).ResolveForAccount(
-			account, game.ID, playCode, centsToAmount(amountCents), input.Odds, financialTerms.flyRequest(requestFly),
+		pc28GrayPush := false
+		if profile.PC28 > 0 {
+			rawSettings, _, settingsErr := readTimingSettings(tx, account.WorkspaceID)
+			if settingsErr != nil {
+				return settingsErr
+			}
+			pc28GrayPush = configuredPC28GrayPush(rawSettings, game.ID)
+		}
+		resolved, resolveErr := NewTradingAdminService(tx).ResolveForAccountSelection(
+			account, game.ID, playCode, selection, centsToAmount(amountCents), input.Odds, financialTerms.flyRequest(requestFly),
 		)
 		if resolveErr != nil {
 			return resolveErr
@@ -312,6 +447,11 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 			flyCents = 0
 		}
 		if err := validateBetLimitEntries(tx, game.ID, issue, input.UserID, []betLimitEntry{{
+			PlayCode: playCode, Position: input.Position, Selection: selection, AmountCents: amountCents,
+		}}); err != nil {
+			return err
+		}
+		if err := validatePC28PlacementConstraints(tx, profile, account.WorkspaceID, betRoomScope(account), game.ID, issue, input.UserID, []betLimitEntry{{
 			PlayCode: playCode, Position: input.Position, Selection: selection, AmountCents: amountCents,
 		}}); err != nil {
 			return err
@@ -331,7 +471,7 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 			return err
 		}
 		ledger := user.BalanceTransaction{
-			WorkspaceID: account.WorkspaceID, UserID: account.UserID, Reference: strings.TrimSpace(input.LedgerReference),
+			WorkspaceID: account.WorkspaceID, UserID: account.UserID, Reference: requestReference,
 			AmountCents: -amountCents, BeforeCents: before, AfterCents: after,
 			Type: "bet", Remark: fmt.Sprintf("下注 %s/%s", game.Name, issue), Operator: defaultString(input.Operator, "后台管理员"),
 		}
@@ -340,41 +480,12 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 		}
 		row := bet.Bet{
 			WorkspaceID: account.WorkspaceID, GameID: game.ID, Issue: issue, RoomScope: roomScope, UserID: account.UserID, Username: account.Username,
-			PlayCode: playCode, PlayName: playName, Position: input.Position, Selection: selection, RequestReference: strings.TrimSpace(input.LedgerReference),
-			AmountCents: amountCents, Odds: odds, Status: "pending", FlyCents: flyCents,
+			PlayCode: playCode, PlayName: playName, Position: input.Position, Selection: selection, RequestReference: requestReference,
+			RuleVersion: profile.Version,
+			AmountCents: amountCents, Odds: odds, ValidTurnoverCents: int64Pointer(amountCents), PC28GrayPush: pc28GrayPush,
+			Status: "pending", FlyCents: flyCents,
 			RebateRateSnapshot: financialTerms.rebateRate, AgentShareRateSnapshot: financialTerms.shareRate,
 			Remark: strings.TrimSpace(input.Remark), Operator: defaultString(input.Operator, "后台管理员"),
-		}
-		// Upsert: same user/play/position/selection on same issue accumulates amount.
-		existing := bet.Bet{}
-		findErr := tx.Where("room_scope = ? AND game_id = ? AND issue = ? AND user_id = ? AND play_code = ? AND position = ? AND selection = ? AND request_reference = ?",
-			row.RoomScope, row.GameID, row.Issue, row.UserID, row.PlayCode, row.Position, row.Selection, row.RequestReference).First(&existing).Error
-		if findErr == nil {
-			previousAmount := existing.AmountCents
-			accumulatedAmount, ok := safeAddInt64(existing.AmountCents, amountCents)
-			if !ok || accumulatedAmount <= 0 {
-				return apperrors.NewBusinessError("INVALID_REQUEST", "注单累计金额过大")
-			}
-			accumulatedFly, ok := safeAddInt64(existing.FlyCents, flyCents)
-			if !ok || accumulatedFly < 0 || accumulatedFly > accumulatedAmount {
-				return apperrors.NewBusinessError("INVALID_REQUEST", "注单飞单金额异常")
-			}
-			existing.AmountCents = accumulatedAmount
-			existing.FlyCents = accumulatedFly
-			existing.Odds = odds
-			existing.RebateRateSnapshot = weightedRate(existing.RebateRateSnapshot, previousAmount, financialTerms.rebateRate, amountCents)
-			existing.AgentShareRateSnapshot = weightedRate(existing.AgentShareRateSnapshot, previousAmount, financialTerms.shareRate, amountCents)
-			existing.Remark = row.Remark
-			existing.Operator = row.Operator
-			if err := tx.Save(&existing).Error; err != nil {
-				return err
-			}
-			v := toBetView(existing)
-			view = &v
-			return nil
-		}
-		if findErr != gorm.ErrRecordNotFound {
-			return findErr
 		}
 		if err := tx.Create(&row).Error; err != nil {
 			return err
@@ -609,8 +720,19 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 	if len(inputs) == 0 {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "请至少提供一注投注内容")
 	}
+	requestReference, referenceErr := placementRequestReference(inputs)
+	if referenceErr != nil {
+		return nil, referenceErr
+	}
 	game, err := s.loadGame(inputs[0].GameID)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureGameRulesSupported(game); err != nil {
+		return nil, err
+	}
+	profile, _ := rulesForGame(game)
+	if err := ensurePlacementBetMode(profile, inputs[0].BetMode); err != nil {
 		return nil, err
 	}
 	if !game.Enabled {
@@ -647,6 +769,9 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 		if strings.TrimSpace(input.GameID) != game.ID || input.UserID != userID {
 			return nil, apperrors.NewBusinessError("INVALID_REQUEST", "同一张投注单只能包含同一彩种和用户")
 		}
+		if err := ensurePlacementBetMode(profile, input.BetMode); err != nil {
+			return nil, err
+		}
 		if requestedIssue := strings.TrimSpace(input.Issue); requestedIssue != "" && requestedIssue != issue {
 			return nil, apperrors.NewBusinessError("ISSUE_MISMATCH", "同一张投注单的期号必须一致")
 		}
@@ -654,12 +779,15 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 		if selection == "" {
 			return nil, apperrors.NewBusinessError("INVALID_REQUEST", "投注内容不能为空")
 		}
-		playCode, playName := InferPlay(input.PlayCode, input.PlayName, input.Position, selection)
+		playCode, playName, inferErr := InferPlayForGame(game, input.PlayCode, input.PlayName, input.Position, selection)
+		if inferErr != nil {
+			return nil, inferErr
+		}
 		selection = normalizeBetSelection(game, playCode, selection)
 		if err := validateBetChoice(game, playCode, input.Position, selection); err != nil {
 			return nil, err
 		}
-		amountCents, amountErr := positiveMoneyCents(input.Amount, "下注金额")
+		amountCents, amountErr := validatedStakeCents(input.Amount)
 		if amountErr != nil {
 			return nil, amountErr
 		}
@@ -715,15 +843,27 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 			return termsErr
 		}
 		trading := NewTradingAdminService(tx)
+		pc28GrayPush := false
+		if profile.PC28 > 0 {
+			rawSettings, _, settingsErr := readTimingSettings(tx, account.WorkspaceID)
+			if settingsErr != nil {
+				return settingsErr
+			}
+			pc28GrayPush = configuredPC28GrayPush(rawSettings, game.ID)
+		}
+		quotedShapes := make(map[string]float64)
 		for index := range prepared {
 			item := &prepared[index]
-			resolved, resolveErr := trading.ResolveForAccount(
-				account, game.ID, item.playCode, centsToAmount(item.amountCents), item.input.Odds, financialTerms.flyRequest(item.requestFly),
+			resolved, resolveErr := trading.ResolveForAccountSelection(
+				account, game.ID, item.playCode, item.selection, centsToAmount(item.amountCents), item.input.Odds, financialTerms.flyRequest(item.requestFly),
 			)
 			if resolveErr != nil {
 				return resolveErr
 			}
 			item.odds = resolved.Odds
+			if isFrontThreeShape(item.playCode) && item.odds > quotedShapes[item.playCode] {
+				quotedShapes[item.playCode] = item.odds
+			}
 			resolvedFlyCents, flyErr := nonNegativeMoneyCents(resolved.FlyAmount, "飞单金额")
 			if flyErr != nil {
 				return flyErr
@@ -733,6 +873,12 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 				item.flyCents = 0
 			}
 		}
+		// Each line checks the current full market. A concurrent admin update
+		// can nevertheless leave this batch holding prices from two individually
+		// safe markets. Check the actual accepted quotes too, before any debit.
+		if len(frontThreeOddsRisks(game.ID, quotedShapes)) > 0 {
+			return apperrors.NewBusinessError("ODDS_RISK_UNSAFE", "本次前三形态赔率组合存在风险，请重新选择后提交")
+		}
 		limitEntries := make([]betLimitEntry, 0, len(prepared))
 		for _, item := range prepared {
 			limitEntries = append(limitEntries, betLimitEntry{
@@ -740,6 +886,9 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 			})
 		}
 		if err := validateBetLimitEntries(tx, game.ID, issue, userID, limitEntries); err != nil {
+			return err
+		}
+		if err := validatePC28PlacementConstraints(tx, profile, account.WorkspaceID, betRoomScope(account), game.ID, issue, userID, limitEntries); err != nil {
 			return err
 		}
 		if account.BalanceCents < totalCents {
@@ -755,55 +904,40 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 		if err := tx.Model(&account).Update("balance_cents", afterBalance).Error; err != nil {
 			return err
 		}
-		operator := defaultString(inputs[0].Operator, "开奖助手")
+		operator, action := defaultString(inputs[0].Operator, "开奖助手"), "助手下注"
+		if strings.TrimSpace(inputs[0].BetMode) == "web" {
+			operator, action = defaultString(inputs[0].Operator, "网投"), "网投下注"
+		}
 		if err := tx.Create(&user.BalanceTransaction{
-			WorkspaceID: account.WorkspaceID, UserID: account.UserID, Reference: strings.TrimSpace(inputs[0].LedgerReference),
+			WorkspaceID: account.WorkspaceID, UserID: account.UserID, Reference: requestReference,
 			AmountCents: -totalCents, BeforeCents: before, AfterCents: afterBalance,
-			Type: "bet", Remark: fmt.Sprintf("助手下注 %s/%s（%d 注）", game.Name, issue, len(prepared)), Operator: operator,
+			Type: "bet", Remark: fmt.Sprintf("%s %s/%s（%d 注）", action, game.Name, issue, len(prepared)), Operator: operator,
 		}).Error; err != nil {
 			return err
 		}
+		rows := make([]bet.Bet, 0, len(prepared))
 		for _, item := range prepared {
-			row := bet.Bet{
+			rows = append(rows, bet.Bet{
 				WorkspaceID: account.WorkspaceID, GameID: game.ID, Issue: issue, RoomScope: roomScope, UserID: account.UserID, Username: account.Username,
-				PlayCode: item.playCode, PlayName: item.playName, Position: item.input.Position, Selection: item.selection, RequestReference: strings.TrimSpace(item.input.LedgerReference),
-				AmountCents: item.amountCents, Odds: item.odds, Status: "pending", FlyCents: item.flyCents,
+				PlayCode: item.playCode, PlayName: item.playName, Position: item.input.Position, Selection: item.selection, RequestReference: requestReference,
+				RuleVersion: profile.Version,
+				AmountCents: item.amountCents, Odds: item.odds, ValidTurnoverCents: int64Pointer(item.amountCents), PC28GrayPush: pc28GrayPush,
+				Status: "pending", FlyCents: item.flyCents,
 				RebateRateSnapshot: financialTerms.rebateRate, AgentShareRateSnapshot: financialTerms.shareRate,
 				Remark: strings.TrimSpace(item.input.Remark), Operator: defaultString(item.input.Operator, operator),
-			}
-			existing := bet.Bet{}
-			findErr := tx.Where("room_scope = ? AND game_id = ? AND issue = ? AND user_id = ? AND play_code = ? AND position = ? AND selection = ? AND request_reference = ?",
-				row.RoomScope, row.GameID, row.Issue, row.UserID, row.PlayCode, row.Position, row.Selection, row.RequestReference).First(&existing).Error
-			if findErr == nil {
-				previousAmount := existing.AmountCents
-				accumulatedAmount, ok := safeAddInt64(existing.AmountCents, item.amountCents)
-				if !ok || accumulatedAmount <= 0 {
-					return apperrors.NewBusinessError("INVALID_REQUEST", "注单累计金额过大")
-				}
-				accumulatedFly, ok := safeAddInt64(existing.FlyCents, item.flyCents)
-				if !ok || accumulatedFly < 0 || accumulatedFly > accumulatedAmount {
-					return apperrors.NewBusinessError("INVALID_REQUEST", "注单飞单金额异常")
-				}
-				existing.AmountCents = accumulatedAmount
-				existing.FlyCents = accumulatedFly
-				existing.Odds = item.odds
-				existing.RebateRateSnapshot = weightedRate(existing.RebateRateSnapshot, previousAmount, financialTerms.rebateRate, item.amountCents)
-				existing.AgentShareRateSnapshot = weightedRate(existing.AgentShareRateSnapshot, previousAmount, financialTerms.shareRate, item.amountCents)
-				existing.Remark = row.Remark
-				existing.Operator = row.Operator
-				if err := tx.Save(&existing).Error; err != nil {
-					return err
-				}
-				views = append(views, toBetView(existing))
-				continue
-			}
-			if findErr != gorm.ErrRecordNotFound {
-				return findErr
-			}
-			if err := tx.Create(&row).Error; err != nil {
+			})
+		}
+		aggregated, indexes, aggregateErr := aggregatePlacementRows(rows)
+		if aggregateErr != nil {
+			return aggregateErr
+		}
+		for index := range aggregated {
+			if err := tx.Create(&aggregated[index]).Error; err != nil {
 				return err
 			}
-			views = append(views, toBetView(row))
+		}
+		for _, index := range indexes {
+			views = append(views, toBetView(aggregated[index]))
 		}
 		return nil
 	})
@@ -1138,7 +1272,7 @@ func (s *BetAdminService) List(filter BetListFilter) (*BetListResult, error) {
 	}
 	if st := strings.TrimSpace(filter.Status); st != "" && st != "all" {
 		if st == "settled" {
-			query = query.Where("status IN ?", []string{"won", "lost", "cancelled"})
+			query = query.Where("status IN ?", []string{"won", "lost", "push", "cancelled"})
 		} else {
 			query = query.Where("status = ?", st)
 		}
@@ -1487,7 +1621,7 @@ func (s *BetAdminService) GameMoneyMap() (map[string]gameMoney, error) {
 	}
 	var today []row
 	if err := excludeRobotProfileBets(s.db.Model(&bet.Bet{})).
-		Select("game_id, COALESCE(SUM(CASE WHEN status <> 'cancelled' THEN amount_cents ELSE 0 END),0) as stake_cents, COALESCE(SUM(CASE WHEN status IN ('won','lost') THEN amount_cents ELSE 0 END),0) as settled_stake_cents, COALESCE(SUM(CASE WHEN status IN ('won','lost') THEN payout_cents ELSE 0 END),0) as payout_cents").
+		Select("game_id, COALESCE(SUM(CASE WHEN status NOT IN ('cancelled','push') THEN amount_cents ELSE 0 END),0) as stake_cents, COALESCE(SUM(CASE WHEN status IN ('won','lost') THEN amount_cents ELSE 0 END),0) as settled_stake_cents, COALESCE(SUM(CASE WHEN status IN ('won','lost') THEN payout_cents ELSE 0 END),0) as payout_cents").
 		Where("created_at >= ?", start).
 		Group("game_id").Scan(&today).Error; err != nil {
 		return nil, err
@@ -1524,7 +1658,7 @@ func (s *BetAdminService) currentIssueForGame(game *lottery.Game) (string, error
 		return issue, nil
 	}
 	var draw lottery.Draw
-	err := s.db.Where("game_id = ?", game.ID).Order("draw_at desc").First(&draw).Error
+	err := trustedDrawsForGame(s.db, game.ID).Order("draw_at desc").First(&draw).Error
 	if err == nil && strings.TrimSpace(draw.Issue) != "" {
 		if game.SourceKind == "external" || game.SourceKind == "official" {
 			return inferredNextSourceIssue(draw.Issue, game.NextDrawAt), nil
@@ -1556,41 +1690,28 @@ func (s *BetAdminService) loadGame(gameID string) (*lottery.Game, error) {
 }
 
 func maxBetPosition(game *lottery.Game) int {
-	if game == nil {
-		return 5
+	if profile, ok := rulesForGame(game); ok {
+		return profile.BallCount
 	}
-	category := strings.ToLower(strings.TrimSpace(game.Category))
-	name := strings.ToLower(strings.TrimSpace(game.Name))
-	if strings.Contains(category, "赛车") || strings.Contains(category, "飞艇") || strings.Contains(category, "幸运10") ||
-		strings.Contains(name, "赛车") || strings.Contains(name, "飞艇") || strings.Contains(name, "幸运10") {
-		return 10
-	}
-	return 5
+	return 0
 }
 
 func validBetPosition(game *lottery.Game, playCode string, position int) bool {
+	profile, ok := rulesForGame(game)
+	if !ok || !profile.supportsPlay(playCode) {
+		return false
+	}
 	if strings.EqualFold(strings.TrimSpace(playCode), "sum") {
 		return position == 6
 	}
-	return position >= 1 && position <= settlementPositionCount(game)
+	if profile.PC28 > 0 {
+		return profile.validateChoice(playCode, position, pc28DefaultValidationSelection(playCode)) == nil
+	}
+	return position >= 1 && position <= profile.BallCount
 }
 
 func settlementPositionCount(game *lottery.Game) int {
-	if maxBetPosition(game) == 10 {
-		return 10
-	}
-	if game == nil {
-		return 5
-	}
-	category := strings.ToLower(strings.TrimSpace(game.Category))
-	name := strings.ToLower(strings.TrimSpace(game.Name))
-	// The current catalog's explicit three-ball products are named/category
-	// marked 3D. Other non-racing products retain the established five-column
-	// contract until ball count becomes a first-class game setting.
-	if strings.Contains(category, "3d") || strings.Contains(name, "3d") {
-		return 3
-	}
-	return 5
+	return maxBetPosition(game)
 }
 
 // validateBetChoice is the server-side allowlist shared by direct and assistant
@@ -1598,70 +1719,30 @@ func settlementPositionCount(game *lottery.Game) int {
 // particular a shape bet may not name a different (higher probability) shape
 // while retaining the submitted play's odds.
 func validateBetChoice(game *lottery.Game, playCode string, position int, selection string) error {
-	playCode = strings.ToLower(strings.TrimSpace(playCode))
-	selection = strings.TrimSpace(selection)
-	if _, ok := defaultPlayByCode(playCode); !ok {
-		return apperrors.NewBusinessError("INVALID_REQUEST", "当前彩种不支持该玩法")
+	profile, ok := rulesForGame(game)
+	if !ok {
+		return ensureGameRulesSupported(game)
 	}
-	if !validBetPosition(game, playCode, position) {
-		return apperrors.NewBusinessError("INVALID_REQUEST", "球位不正确")
-	}
-	racing := maxBetPosition(game) == 10
+	return profile.validateChoice(playCode, position, selection)
+}
 
-	switch playCode {
-	case "ball_1_5":
-		number, err := strconv.Atoi(selection)
-		if racing {
-			if err != nil || number < 1 || number > 10 {
-				return apperrors.NewBusinessError("INVALID_REQUEST", "赛车号码只能选择 1 至 10")
-			}
-			return nil
-		}
-		if err != nil || number < 0 || number > 9 || len(selection) != 1 {
-			return apperrors.NewBusinessError("INVALID_REQUEST", "号码玩法只能选择 0 至 9")
-		}
-	case "two_sided":
-		if !isSideSelection(selection) {
-			return apperrors.NewBusinessError("INVALID_REQUEST", "两面玩法仅支持大、小、单、双")
-		}
-	case "dragon_tiger":
-		maxDragonTigerPosition := settlementPositionCount(game) / 2
-		if position < 1 || position > maxDragonTigerPosition {
-			return apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("龙虎仅支持第 1 至第 %d 位", maxDragonTigerPosition))
-		}
-		normalized := normalizeSelection(selection)
-		if normalized != "dragon" && normalized != "tiger" {
-			return apperrors.NewBusinessError("INVALID_REQUEST", "龙虎玩法只能选择龙或虎")
-		}
-	case "sum":
-		if isSideSelection(selection) {
-			return nil
-		}
-		total, err := strconv.Atoi(selection)
-		if racing {
-			if err != nil || total < 3 || total > 19 {
-				return apperrors.NewBusinessError("INVALID_REQUEST", "冠亚和号码只能选择 3 至 19")
-			}
-			return nil
-		}
-		// Non-racing settlement retains the historic sum-tail (0-9) rule.
-		if err != nil || total < 0 || total > 9 || len(selection) != 1 {
-			return apperrors.NewBusinessError("INVALID_REQUEST", "总和尾数只能选择 0 至 9")
-		}
-	case "leopard", "straight", "pair", "half_straight", "mixed":
-		if racing {
-			return apperrors.NewBusinessError("INVALID_REQUEST", "当前赛车不支持形态玩法")
-		}
-		normalized := normalizePlaySelection(selection)
-		if normalized != "yes" && normalized != "中" && normalized != playCode {
-			return apperrors.NewBusinessError("INVALID_REQUEST", "形态玩法与投注内容不一致")
-		}
+func ensurePlacementBetMode(profile gameRuleProfile, mode string) error {
+	if profile.MarkSix && strings.TrimSpace(mode) != "web" {
+		return apperrors.NewBusinessError("BET_MODE_UNAVAILABLE", "宾果六合彩仅支持网投，不支持聊天或通用单注入口")
 	}
 	return nil
 }
 
 func normalizeBetSelection(game *lottery.Game, playCode, selection string) string {
 	selection = strings.TrimSpace(selection)
+	if profile, ok := rulesForGame(game); ok {
+		if profile.MarkSix {
+			return markSixNormalizeSelection(playCode, selection)
+		}
+		if profile.PC28 > 0 {
+			return pc28NormalizeSelection(playCode, selection)
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(playCode)) {
 	case "ball_1_5":
 		if number, err := strconv.Atoi(selection); err == nil {
@@ -1670,7 +1751,7 @@ func normalizeBetSelection(game *lottery.Game, playCode, selection string) strin
 			}
 			return strconv.Itoa(number)
 		}
-	case "two_sided", "dragon_tiger":
+	case "two_sided", "dragon_tiger", "dragon_tiger_tie":
 		return selectionLabel(normalizeSelection(selection))
 	case "sum":
 		if isSideSelection(selection) {
@@ -1691,14 +1772,27 @@ func normalizeBetSelection(game *lottery.Game, playCode, selection string) strin
 }
 
 func toBetView(row bet.Bet) BetView {
-	return BetView{
+	view := BetView{
 		ID: row.ID, GameID: row.GameID, Issue: row.Issue, UserID: row.UserID, Username: row.Username,
 		PlayCode: row.PlayCode, PlayName: row.PlayName, Position: row.Position, Selection: row.Selection,
-		Amount: centsToAmount(row.AmountCents), Odds: row.Odds, Status: row.Status,
+		RuleVersion: row.RuleVersion,
+		Amount:      centsToAmount(row.AmountCents), Odds: row.Odds, SettlementOdds: row.SettlementOdds,
+		SettlementPolicy: row.SettlementPolicy, Status: row.Status,
 		Payout: centsToAmount(row.PayoutCents), FlyAmount: centsToAmount(row.FlyCents),
 		Remark: row.Remark, Operator: row.Operator, CreatedAt: row.CreatedAt,
 	}
+	if row.ValidTurnoverCents != nil {
+		value := centsToAmount(*row.ValidTurnoverCents)
+		view.ValidTurnover = &value
+	}
+	if row.UserIssueStakeCentsSnapshot != nil {
+		value := centsToAmount(*row.UserIssueStakeCentsSnapshot)
+		view.UserIssueStake = &value
+	}
+	return view
 }
+
+func int64Pointer(value int64) *int64 { return &value }
 
 func parseDigit(value string) (int, bool) {
 	n, err := strconv.Atoi(strings.TrimSpace(value))
@@ -1765,34 +1859,50 @@ func validateBetLimitEntries(db *gorm.DB, gameID, issue string, userID uint64, e
 		limitByPlay[limits.Items[i].PlayCode] = limits.Items[i]
 	}
 	type lineKey struct {
-		PlayCode  string
-		Position  int
+		PricingCode string
+		PlayCode    string
+		Position    int
+		Selection   string
+	}
+	type marketKey struct {
+		PricingCode string
+		PlayCode    string
+		// Selection is populated only when one public play has independently
+		// priced outcomes (currently Bingo Racing A crown sum).
 		Selection string
 	}
 	lineDeltas := make(map[lineKey]int64)
-	playDeltas := make(map[string]int64)
+	playDeltas := make(map[marketKey]int64)
 	for _, entry := range entries {
-		limit, ok := limitByPlay[entry.PlayCode]
+		pricingCode, pricingErr := oddsPricingCode(gameID, entry.PlayCode, entry.Selection)
+		if pricingErr != nil {
+			return pricingErr
+		}
+		limit, ok := limitByPlay[pricingCode]
 		if !ok {
 			continue
 		}
 		if limit.MinBet > 0 && centsToAmount(entry.AmountCents) < limit.MinBet {
 			return apperrors.NewBusinessError("BET_TOO_SMALL", fmt.Sprintf("单注最低 %.2f 元", limit.MinBet))
 		}
-		key := lineKey{PlayCode: entry.PlayCode, Position: entry.Position, Selection: entry.Selection}
+		key := lineKey{PricingCode: pricingCode, PlayCode: entry.PlayCode, Position: entry.Position, Selection: entry.Selection}
 		lineTotal, ok := safeAddInt64(lineDeltas[key], entry.AmountCents)
 		if !ok || lineTotal < 0 {
 			return apperrors.NewBusinessError("INVALID_REQUEST", "单注累计金额过大")
 		}
-		playTotal, ok := safeAddInt64(playDeltas[entry.PlayCode], entry.AmountCents)
+		market := marketKey{PricingCode: pricingCode, PlayCode: entry.PlayCode}
+		if pricingCode != entry.PlayCode {
+			market.Selection = entry.Selection
+		}
+		playTotal, ok := safeAddInt64(playDeltas[market], entry.AmountCents)
 		if !ok || playTotal < 0 {
 			return apperrors.NewBusinessError("INVALID_REQUEST", "玩法累计金额过大")
 		}
 		lineDeltas[key] = lineTotal
-		playDeltas[entry.PlayCode] = playTotal
+		playDeltas[market] = playTotal
 	}
 	for key, delta := range lineDeltas {
-		limit := limitByPlay[key.PlayCode]
+		limit := limitByPlay[key.PricingCode]
 		if limit.MaxBet <= 0 {
 			continue
 		}
@@ -1811,14 +1921,18 @@ func validateBetLimitEntries(db *gorm.DB, gameID, issue string, userID uint64, e
 			return apperrors.NewBusinessError("BET_TOO_LARGE", fmt.Sprintf("单注最高 %.2f 元", limit.MaxBet))
 		}
 	}
-	for playCode, delta := range playDeltas {
-		limit := limitByPlay[playCode]
+	for market, delta := range playDeltas {
+		limit := limitByPlay[market.PricingCode]
 		if limit.MaxUserPeriod > 0 {
 			var userPeriodCents int64
-			if err := db.Model(&bet.Bet{}).Where(
+			query := db.Model(&bet.Bet{}).Where(
 				"game_id = ? AND issue = ? AND user_id = ? AND play_code = ? AND status != ?",
-				gameID, issue, userID, playCode, "cancelled",
-			).Select("COALESCE(SUM(amount_cents),0)").Scan(&userPeriodCents).Error; err != nil {
+				gameID, issue, userID, market.PlayCode, "cancelled",
+			)
+			if market.Selection != "" {
+				query = query.Where("selection = ?", market.Selection)
+			}
+			if err := query.Select("COALESCE(SUM(amount_cents),0)").Scan(&userPeriodCents).Error; err != nil {
 				return err
 			}
 			combined, ok := safeAddInt64(userPeriodCents, delta)
@@ -1831,10 +1945,14 @@ func validateBetLimitEntries(db *gorm.DB, gameID, issue string, userID uint64, e
 		}
 		if limit.MaxPeriodTotal > 0 {
 			var totalPeriodCents int64
-			if err := db.Model(&bet.Bet{}).Where(
+			query := db.Model(&bet.Bet{}).Where(
 				"game_id = ? AND issue = ? AND play_code = ? AND status != ?",
-				gameID, issue, playCode, "cancelled",
-			).Select("COALESCE(SUM(amount_cents),0)").Scan(&totalPeriodCents).Error; err != nil {
+				gameID, issue, market.PlayCode, "cancelled",
+			)
+			if market.Selection != "" {
+				query = query.Where("selection = ?", market.Selection)
+			}
+			if err := query.Select("COALESCE(SUM(amount_cents),0)").Scan(&totalPeriodCents).Error; err != nil {
 				return err
 			}
 			combined, ok := safeAddInt64(totalPeriodCents, delta)

@@ -1,6 +1,7 @@
 package user
 
 import (
+	"backend/captcha"
 	"backend/constants"
 	"backend/data/vo"
 	apperrors "backend/errors"
@@ -42,6 +43,7 @@ type MemberHandler interface {
 	GameOdds(c *gin.Context)
 	ListActivities(c *gin.Context)
 	AssistantBet(c *gin.Context)
+	WebBets(c *gin.Context)
 	AssistantBetHistory(c *gin.Context)
 	AssistantStatus(c *gin.Context)
 	ActivityStatus(c *gin.Context)
@@ -81,11 +83,19 @@ type memberHandler struct {
 	wallet          *services.WalletAdminService
 	paymentAccounts *services.MemberPaymentAccountService
 	portal          *services.MemberPortalService
-	assistant       *services.BetAssistantService
+	assistant       memberBetAssistant
 	entertainment   *services.EntertainmentAdminService
 	chat            *services.MemberChatService
 	games           *services.WorkspaceGameService
 	plans           memberPlanService
+}
+
+type memberBetAssistant interface {
+	Place(userID uint64, gameID, issue, content, operator, requestID string) (*services.AssistantBetResult, error)
+	PlaceWeb(userID uint64, gameID, issue string, items []services.WebBetItem, operator, requestID string) (*services.AssistantBetResult, error)
+	History(userID uint64, gameID string, limit int) ([]services.AssistantBetResult, error)
+	DirectHistory(userID uint64, gameID string, limit int) ([]services.AssistantBetResult, error)
+	StatusForUser(userID uint64, gameID string) (*services.AssistantDrawStatus, error)
 }
 
 func NewMemberHandler(db *gorm.DB) MemberHandler {
@@ -211,6 +221,40 @@ func (h *memberHandler) AssistantBet(c *gin.Context) {
 	constants.SendSuccess(c, http.StatusCreated, "开奖助手已受理投注", result)
 }
 
+// WebBets is the typed detailed-board boundary used by web-only Bingo Mark Six
+// and by PC28's web mode. The game comes from the path, the member from the
+// session, and odds from server-side trading configuration; ticket items
+// cannot override any of those fields.
+func (h *memberHandler) WebBets(c *gin.Context) {
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Issue     string                `json:"issue"`
+		Items     []services.WebBetItem `json:"items" binding:"required"`
+		RequestID string                `json:"request_id"`
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Items) == 0 {
+		constants.SendError(c, http.StatusBadRequest, "网投参数不正确", err)
+		return
+	}
+	requestID := strings.TrimSpace(req.RequestID)
+	username, _ := c.Get("username")
+	operator, _ := username.(string)
+	result, err := h.assistant.PlaceWeb(userID, c.Param("id"), req.Issue, req.Items, operator, requestID)
+	if err != nil {
+		if apperrors.IsBusinessError(err) {
+			constants.SendError(c, http.StatusBadRequest, "网投未受理", err)
+			return
+		}
+		constants.SendError(c, http.StatusInternalServerError, "网投暂时不可用", err)
+		return
+	}
+	constants.SendSuccess(c, http.StatusCreated, "网投已受理", result)
+}
+
 // AssistantBetHistory rebuilds the member's own room messages after a refresh.
 // It never returns another member's requests and is scoped to the requested game.
 func (h *memberHandler) AssistantBetHistory(c *gin.Context) {
@@ -252,9 +296,13 @@ func (h *memberHandler) AssistantStatus(c *gin.Context) {
 }
 
 func (h *memberHandler) Login(c *gin.Context) {
+	noLoginCache(c)
 	var req vo.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		constants.SendError(c, http.StatusBadRequest, constants.ErrInvalidRequestFormat, err)
+		return
+	}
+	if !verifyLoginCaptcha(c, captcha.Member, req.CaptchaID, req.CaptchaCode) {
 		return
 	}
 	account, token, err := h.auth.LoginMember(req.Username, req.Password, req.Workspace)
@@ -1037,6 +1085,10 @@ func (h *memberHandler) postChatMessage(c *gin.Context, commandRoute bool) {
 		constants.SendError(c, http.StatusBadRequest, "消息参数不正确", err)
 		return
 	}
+	if bingoMarkSixChatBetBlocked(req.GameID, req.Content) {
+		constants.SendError(c, http.StatusBadRequest, "宾果六合彩仅支持网投，请使用投注面板", apperrors.NewBusinessError("BET_MODE_UNAVAILABLE", "宾果六合彩不支持聊天投注"))
+		return
+	}
 	isCommand := isRoomCommandRequest(req.RoomType, req.GameID, req.Content)
 	if commandRoute != isCommand {
 		if commandRoute {
@@ -1151,7 +1203,7 @@ func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.Ch
 		fmt.Fprintf(&body, "【%s - %s】\n", gameName, issue)
 		var total float64
 		for _, item := range bets.Items {
-			label := roomBetPositionLabel(item.Position, item.PlayCode, item.PlayName)
+			label := services.BetDisplayLabel(item)
 			fmt.Fprintf(&body, "%s [%s/%s]\n", label, item.Selection, services.FormatBetAmount(item.Amount))
 			total += item.Amount
 		}
@@ -1167,7 +1219,12 @@ func (h *memberHandler) handleRoomBetCommand(userID uint64, message *services.Ch
 			post("暂无可以重复的上一笔投注。")
 			return
 		}
-		accepted, err := h.assistant.Place(userID, message.GameID, requestedIssue, history[len(history)-1].Content, message.Nickname, requestID)
+		repeatContent, err := services.AssistantRepeatContent(message.GameID, history[len(history)-1].Lines)
+		if err != nil {
+			post("重复投注失败，" + roomCommandError(err))
+			return
+		}
+		accepted, err := h.assistant.Place(userID, message.GameID, requestedIssue, repeatContent, message.Nickname, requestID)
 		if err != nil {
 			if apperrors.GetErrorCode(err) == "REQUEST_IN_PROGRESS" {
 				return
@@ -1210,20 +1267,6 @@ func roomCommandBettingIssue(status *services.AssistantDrawStatus) string {
 	return status.Issue
 }
 
-func roomBetPositionLabel(position int, playCode, playName string) string {
-	if playCode == "sum" {
-		return "冠亚和"
-	}
-	names := []string{"冠军", "亚军", "第三名", "第四名", "第五名", "第六名", "第七名", "第八名", "第九名", "第十名"}
-	if position >= 1 && position <= len(names) {
-		return names[position-1]
-	}
-	if label := strings.TrimSpace(playName); label != "" && label != "指定名次号码" {
-		return label
-	}
-	return fmt.Sprintf("第%d名", position)
-}
-
 func formatAssistantAccepted(result *services.AssistantBetResult) string {
 	if result == nil {
 		return "投注没有受理，请稍后再试。"
@@ -1253,8 +1296,8 @@ type roomApplicationCommand struct {
 }
 
 var roomApplicationCommandPattern = regexp.MustCompile(`^(申请)?[[:space:]]*(上分|下分)[[:space:]]*[/：:]?[[:space:]]*([0-9]+(\.[0-9]{1,2})?)([[:space:]]+.*)?$`)
-var roomIncompleteBetPattern = regexp.MustCompile(`^(买)?(冠军|亚军|第[三四五六七八九十]名|冠亚(和)?)?[0-9大小单双龙虎#[:space:],，.]*$`)
-var roomBetSemanticPattern = regexp.MustCompile(`[0-9大小单双龙虎冠亚军第名]`)
+var roomIncompleteBetPattern = regexp.MustCompile(`^(买)?(冠军|亚军|第[三四五六七八九十]名|前三|中三|后三|前五|后五|冠亚(和)?)?[0-9大小单双龙虎和豹子顺对半杂六#[:space:],，.]*$`)
+var roomBetSemanticPattern = regexp.MustCompile(`[0-9大小单双龙虎和冠亚军第名豹子顺对半杂六]`)
 
 // Bare numbers/play fragments from the betting keyboard are commands too.
 // They must reach the authoritative parser and receive a failure receipt when
@@ -1276,6 +1319,14 @@ func isRoomCommandRequest(roomType, gameID, content string) bool {
 		return true
 	}
 	return isRoomBetContent(content)
+}
+
+func bingoMarkSixChatBetBlocked(gameID, content string) bool {
+	if strings.TrimSpace(gameID) != "bingo-mark-six" {
+		return false
+	}
+	content = strings.TrimSpace(content)
+	return content == "重复" || isRoomBetContent(content)
 }
 
 func parseRoomApplicationCommand(content string) (roomApplicationCommand, bool) {

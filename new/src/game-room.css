@@ -119,48 +119,51 @@
   padding: 0;
   background: transparent;
 }
-.quick-actions button {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  box-shadow: 0 4px 10px #16758e42;
+.quick-actions > :is(button, a) {
+  flex: none;
 }
-.quick-actions.keyboard-open > button:not(.quick-check-in):not(.quick-red-packet) {
+.quick-actions .quick-action {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid #c9eaf0;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #f8feff, #dff4f7);
+  color: #2c829b;
+  box-shadow: inset 0 1px #fff, 0 5px 12px #176f8b2c;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+.quick-actions .quick-action svg {
+  width: 19px;
+  height: 19px;
+}
+.quick-actions .quick-lottery-source {
+  border-color: #79d4dc;
+  background: linear-gradient(145deg, #3ca3bd, #55c7c2);
+  color: #fff;
+  box-shadow: inset 0 1px #d9ffff8f, 0 6px 14px #167b9650;
+}
+.quick-actions .quick-action:hover {
+  border-color: #6dcbd4;
+  background: linear-gradient(145deg, #fff, #d4f1f4);
+  transform: translateY(-1px);
+}
+.quick-actions .quick-lottery-source:hover {
+  background: linear-gradient(145deg, #338fab, #43b9b5);
+}
+.quick-actions .quick-action:focus-visible {
+  outline: 3px solid #67d5db;
+  outline-offset: 2px;
+}
+.quick-actions.keyboard-open > :not(.quick-check-in):not(.quick-red-packet) {
   display: none;
 }
 .quick-actions .quick-check-in {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  overflow: hidden;
-  border: 1px solid #f4d89c;
-  border-radius: 10px;
-  background:
-    radial-gradient(circle at 28% 18%, #fff8df 0 7%, transparent 8%),
-    linear-gradient(150deg, #ffe3a1 0%, #f4c36f 58%, #eeb15a 100%);
-  color: #8c591d;
-  box-shadow: inset 0 1px #fff9e8, 0 3px 8px #bd853233;
-  text-shadow: 0 1px #fff6d9b8;
-}
-.quick-actions .quick-check-in::after {
-  position: absolute;
-  top: -15px;
-  left: -18px;
-  width: 18px;
-  height: 70px;
-  background: linear-gradient(90deg, transparent, #fff8, transparent);
-  content: "";
-  transform: rotate(24deg);
-  animation: quick-action-shine 4.8s ease-in-out infinite;
-}
-.quick-actions .quick-check-in span {
-  position: relative;
-  z-index: 1;
-  font-size: 15px;
-  font-weight: 900;
-  line-height: 1;
+  color: #2c829b;
 }
 .quick-actions .quick-red-packet small {
   position: relative;
@@ -204,20 +207,21 @@
   box-shadow: 0 0 0 0 #ffd14a80;
   animation: room-packet-ping 1.35s ease-out infinite;
 }
-.theme-night.game-room .quick-actions .quick-check-in {
-  border-color: #8e7444;
-  background: linear-gradient(150deg, #9f7b3d, #74552f);
-  color: #ffe4a9;
-  box-shadow: inset 0 1px #ffe8a242, 0 3px 9px #0006;
+.theme-night.game-room .quick-actions .quick-action {
+  border-color: #58cbd43d;
+  background: linear-gradient(145deg, #123c58, #0c2b47);
+  color: #a8e9ec;
+  box-shadow: inset 0 1px #b9ffff14, 0 6px 15px #0006;
+}
+.theme-night.game-room .quick-actions .quick-lottery-source {
+  border-color: #62d7dc;
+  background: linear-gradient(145deg, #207c9a, #2aa7a6);
+  color: #efffff;
 }
 .theme-night.game-room .quick-actions .quick-red-packet {
   border-color: #ffb18c;
   background: linear-gradient(150deg, #d84d4b, #a81935);
   box-shadow: inset 0 1px #ffc1ad7a, 0 6px 15px #0008;
-}
-@keyframes quick-action-shine {
-  0%, 68% { transform: translateX(0) rotate(24deg); }
-  84%, 100% { transform: translateX(76px) rotate(24deg); }
 }
 @keyframes room-packet-float {
   0%, 100% { transform: translateY(0) rotate(0); }
@@ -291,11 +295,7 @@
   .quick-actions {
     top: 220px;
   }
-  .quick-actions button {
-    width: 30px;
-    height: 30px;
-  }
-  .quick-actions .quick-check-in {
+  .quick-actions .quick-action {
     width: 30px;
     height: 30px;
   }
@@ -306,7 +306,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .quick-actions .quick-check-in::after,
   .quick-actions .quick-red-packet,
   .quick-actions .quick-red-packet > i {
     animation: none;
@@ -1220,6 +1219,7 @@
 .my-order-status { padding: 3px 6px; border-radius: 9px; background: #e9f2f3; color: #607d87; font-size: 9px; }
 .my-order-status.pending { background: #e4f7f4; color: #168c82; }
 .my-order-status.won { background: #fff2d9; color: #ba7c1c; }
+.my-order-status.push { background: #e8f5f7; color: #287f8d; }
 .my-order-status.lost, .my-order-status.cancelled { background: #f1f3f4; color: #82919a; }
 .theme-night.game-room .my-orders-list article { border-color: #43bac740; background: #103853; color: #ddf3f6; }
 .theme-night.game-room .my-orders-list p { color: #93bbc4; }
@@ -1883,6 +1883,19 @@
 .full-bet-board .full-bet-workspace > aside button { min-height: 58px; place-items: center; font-size: 11px; }
 .full-bet-board .full-bet-content { padding: 12px 10px 16px; }
 .full-bet-board .full-bet-content > header { margin-bottom: 10px; }
+.full-bet-board .detail-panel-collapse {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #c9e1e5;
+  border-radius: 8px;
+  background: #fff;
+  color: #24889a;
+}
+.full-bet-board .detail-panel-collapse svg { width: 16px; height: 16px; }
+.full-bet-board .detail-panel-collapse:active:not(:disabled) { transform: translateX(2px); }
 .full-bet-board .rank-selector { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
 .full-bet-board .rank-selector button { position: relative; min-width: 0; min-height: 40px; padding: 5px 1px; border-radius: 5px; font-size: 10px; white-space: nowrap; }
 .full-bet-board .rank-selector button.active { border-color: #248d9d; background: #248d9d; color: white; }
@@ -1912,6 +1925,7 @@
 .board-custom-amount input[aria-invalid='true'] { color: #c54b45; }
 .full-bet-board .full-bet-confirm { min-height: 38px; height: auto; padding: 8px 6px; border-radius: 6px; flex-wrap: wrap; gap: 3px 6px; }
 .theme-night.game-room .full-bet-board .rank-selector button.active { background: #238fa1; color: #fff; border-color: #6bd3d8; }
+.theme-night.game-room .full-bet-board .detail-panel-collapse { border-color: #4cc4cc52; background: #143954; color: #a8e9ec; }
 .theme-night.game-room .full-bet-board .board-choice.selected { background: #155364; border-color: #6bd3d8; box-shadow: inset 0 0 0 1px #6bd3d8; }
 .theme-night.game-room .full-bet-board .board-selected-preview { color: #b4d8df; }
 .theme-night.game-room .full-bet-board .board-selected-preview b { color: #96e9df; }
@@ -1924,6 +1938,9 @@
   .full-bet-board .full-bet-content { padding-inline: 7px; }
   .full-bet-board .rank-selector { gap: 3px; }
   .full-bet-board .rank-selector button { font-size: 9px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .full-bet-board .detail-panel-collapse { transition: none; }
 }
 
 /* DuoIcons 使用同一套圆润双色轮廓，以不同主色区分入口。 */
@@ -2600,6 +2617,28 @@
 .game-room .recent-draws article > small > b { grid-column: 1; }
 .game-room .recent-draws article > small > em { grid-column: 3; }
 
+/* 宾果六合彩：号码、生肖组成一个单元，列宽随三瓣球同步。 */
+.game-room .mark-six-draw-ui .last-draw { min-height: 55px; }
+.game-room .mark-six-draw-ui .last-draw > div,
+.game-room .mark-six-draw-ui .recent-draws header > b,
+.game-room .mark-six-draw-ui .recent-draws article > div {
+  grid-auto-columns: 29px;
+  gap: 5px;
+  overflow: visible;
+}
+.game-room .mark-six-draw-ui .recent-draws header > b > i { width: 29px; }
+.game-room .mark-six-draw-ui .recent-draws header,
+.game-room .mark-six-draw-ui .recent-draws article {
+  grid-template-columns: minmax(68px, 18%) minmax(0, 1fr) minmax(76px, 22%);
+  min-height: 47px;
+}
+.game-room .mark-six-draw-ui .recent-draws header { min-height: 31px; }
+.game-room .mark-six-draw-ui .recent-draws article > div { align-items: start; }
+.game-room .mark-six-draw-ui .last-draw > div > .mark-six-draw-cell,
+.game-room .mark-six-draw-ui .recent-draws article > div > .mark-six-draw-cell { width: 29px; }
+.game-room .mark-six-draw-ui .last-draw > div > .mark-six-draw-cell.is-special,
+.game-room .mark-six-draw-ui .recent-draws article > div > .mark-six-draw-cell.is-special { width: 29px; }
+
 /* 赛车/飞艇十球：期号、号码、冠亚/龙虎单行密排。 */
 .game-room .racing-draw-ui .last-draw {
   grid-template-columns: max-content minmax(0, 1fr) max-content;
@@ -2668,11 +2707,7 @@
   top: 414px;
   gap: 6px;
 }
-.game-room.history-expanded .quick-actions button {
-  width: 30px;
-  height: 30px;
-}
-.game-room.history-expanded .quick-actions .quick-check-in {
+.game-room.history-expanded .quick-actions .quick-action {
   width: 30px;
   height: 30px;
 }
@@ -2719,6 +2754,33 @@
     font-size: 10px !important;
   }
   .game-room .racing-draw-ui .recent-draws header > b > i { width: 16px; }
+  .game-room .mark-six-draw-ui .last-draw {
+    grid-template-columns: minmax(52px, max-content) minmax(0, 1fr) minmax(62px, max-content);
+    column-gap: 5px;
+    padding-left: 7px;
+  }
+  .game-room .mark-six-draw-ui .last-draw > div,
+  .game-room .mark-six-draw-ui .recent-draws header > b,
+  .game-room .mark-six-draw-ui .recent-draws article > div {
+    grid-auto-columns: 24px;
+    gap: 4px;
+  }
+  .game-room .mark-six-draw-ui .recent-draws header > b > i { width: 24px; font-size: 8px; }
+  .game-room .mark-six-draw-ui .mark-six-draw-cell { min-width: 24px; }
+  .game-room .mark-six-draw-ui .mark-six-draw-cell > .mark-six-ball {
+    width: 24px;
+    height: 24px;
+    min-width: 24px;
+    font-size: 11px !important;
+  }
+  .game-room .mark-six-draw-ui .mark-six-draw-cell > small { font-size: 8px; }
+  .game-room .mark-six-draw-ui .mark-six-draw-cell.is-special { width: 24px !important; margin-left: 7px; }
+  .game-room .mark-six-draw-ui .mark-six-draw-cell.is-special::before { top: 5px; left: -8px; font-size: 11px; }
+  .game-room .mark-six-draw-ui .recent-draws header,
+  .game-room .mark-six-draw-ui .recent-draws article {
+    grid-template-columns: minmax(54px, 17%) minmax(0, 1fr) minmax(64px, 20%);
+    column-gap: 4px;
+  }
 }
 
 @media (max-height: 680px) {
@@ -3175,14 +3237,10 @@
   color: #afcbd1;
 }
 
-/* 自定义投注键盘不是文本区域：禁止移动端长按选字、复制菜单和翻译浮层。
-   范围只限键盘，聊天内容与原生输入框仍可正常选择和复制。 */
+/* 键盘手势设置；长按选字保护由 control-surface.css 统一处理。 */
 .game-room .bet-keyboard,
 .game-room .bet-keyboard button,
 .game-room .bet-keyboard button * {
-  -webkit-user-select: none;
-  user-select: none;
-  -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
@@ -3401,3 +3459,97 @@
 @media (prefers-reduced-motion: reduce) {
   .winning-popup,.winning-coins i { animation: none; }
 }
+
+/* Rule-unconfigured games remain readable; long results never shrink to dots. */
+.game-room .game-rules-notice,
+.full-bet-board .board-command-error { margin: 0; padding: 9px 12px; background: #fff3df; color: #7e4b16; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.theme-night.game-room .game-rules-notice { background: #342f29; color: #f0c894; }
+/* 未配置规则时会多出一行状态提示。为它预留独立网格行，避免聊天区
+   与固定在第 5 行的输入条重叠，空会话也始终把输入条压在底部。 */
+.game-room.rules-blocked { grid-template-rows: 58px auto auto auto minmax(0, 1fr) auto auto; }
+.game-room.rules-blocked > .game-rules-notice { grid-row: 3; }
+.game-room.rules-blocked > .draw-history { grid-row: 4; }
+.game-room.rules-blocked > .bet-chat { grid-row: 5; }
+.game-room.rules-blocked > .ticket-strip { grid-row: 6; }
+.game-room.rules-blocked > :is(.input-bet-keyboard, .add-menu-inline) { grid-row: 7; }
+
+/* 两侧仅保留不可见的手势热区；聊天页右边缘左滑进入，详细页左边缘右滑返回。 */
+.room-mode-edge-gesture {
+  --room-mode-edge-drag: 0px;
+  position: absolute;
+  z-index: 8;
+  top: 142px;
+  bottom: calc(82px + env(safe-area-inset-bottom));
+  width: 22px;
+  background: transparent;
+  touch-action: pan-y;
+  transform: translateX(var(--room-mode-edge-drag));
+}
+.room-mode-edge-gesture.from-right { right: 0; }
+.room-mode-edge-gesture.from-left { left: 0; bottom: 0; }
+
+/* 详细投注从右侧滑入共享顶部下方，不再重复彩种和开奖头。 */
+.game-room > .full-bet-drawer,
+.game-room > .detail-mode-pending {
+  position: relative;
+  z-index: 2;
+  inset: auto;
+  grid-row: 4 / -1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  animation: room-bet-drawer-in .28s cubic-bezier(.2,.8,.2,1) both;
+}
+.game-room.rules-blocked > .full-bet-drawer,
+.game-room.rules-blocked > .detail-mode-pending { grid-row: 5 / -1; }
+.full-bet-board.embedded { grid-template-rows: minmax(0, 1fr) auto; }
+.detail-mode-pending {
+  display: grid;
+  place-items: start center;
+  padding: clamp(28px, 9vh, 72px) 20px 24px;
+  background: linear-gradient(180deg, #f2f8f9, #e9f4f5);
+  color: #345766;
+}
+.detail-mode-pending > div {
+  display: grid;
+  gap: 10px;
+  width: min(100%, 330px);
+  padding: 22px;
+  border: 1px solid #cfe5e8;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 12px 30px #1f66731f;
+}
+.detail-mode-pending small { color: #268b9b; font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+.detail-mode-pending b { font-size: 18px; }
+.detail-mode-pending p { margin: 0; color: #8a641d; font-size: 13px; line-height: 1.6; }
+.detail-mode-pending span { color: #6c858f; font-size: 11px; line-height: 1.7; }
+.detail-mode-pending button { justify-self: start; padding: 8px 13px; border: 1px solid #87cbd1; border-radius: 9px; background: #e9f8f8; color: #227e8a; font-size: 11px; font-weight: 700; }
+.theme-night.game-room .detail-mode-pending { background: linear-gradient(180deg, #0d2f49, #09253e); color: #e1f4f6; }
+.theme-night.game-room .detail-mode-pending > div { border-color: #46b8c345; background: #113852; box-shadow: 0 12px 30px #0005; }
+.theme-night.game-room .detail-mode-pending p { color: #f0c987; }
+.theme-night.game-room .detail-mode-pending span { color: #a8cbd2; }
+@keyframes room-bet-drawer-in { from { opacity: .35; transform: translateX(100%); } to { opacity: 1; transform: translateX(0); } }
+@keyframes room-chat-return-in { from { opacity: .35; transform: translateX(-18%); } to { opacity: 1; transform: translateX(0); } }
+.game-room:not(.detail-mode-open) > .bet-chat { animation: room-chat-return-in .24s cubic-bezier(.2,.8,.2,1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .game-room > .full-bet-drawer,
+  .game-room > .detail-mode-pending,
+  .game-room:not(.detail-mode-open) > .bet-chat { animation: none; }
+}
+.game-room .draw-announcement article > strong,
+.game-room .recent-draws article > span { overflow-wrap: anywhere; white-space: normal; }
+.game-room .game-round-issue { min-width: 0; max-width: 145px; white-space: normal; }
+.game-room .game-round-issue strong { overflow-wrap: anywhere; white-space: normal; }
+.game-room .last-draw > span { max-width: 145px; white-space: normal; overflow-wrap: anywhere; }
+.game-room .unprofiled-draw-ui .last-draw,
+.game-room .unprofiled-draw-ui .recent-draws header,
+.game-room .unprofiled-draw-ui .recent-draws article { grid-template-columns: minmax(64px, 24%) minmax(0, 1fr); }
+.game-room .unprofiled-draw-ui .recent-draws article > div { grid-column: 2; grid-row: 1; }
+.game-room .extended-draw-ui .last-draw > div,
+.game-room .extended-draw-ui .recent-draws header > b,
+.game-room .extended-draw-ui .recent-draws article > div { display: grid; grid-auto-flow: row; grid-template-columns: repeat(10, minmax(0, 1fr)); grid-auto-columns: auto; gap: 3px; width: 100%; max-width: 100%; overflow: visible; }
+.game-room .extended-draw-ui .last-draw > div > b,
+.game-room .extended-draw-ui .recent-draws article > div > b { width: 100%; min-width: 0; height: auto; aspect-ratio: 1; font-size: clamp(9px, 2.3vw, 12px) !important; }
+.game-room .extended-draw-ui .recent-draws header > b > i { width: 100%; font-size: 9px; text-align: center; }

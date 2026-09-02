@@ -5,6 +5,7 @@ import "time"
 const (
 	ClassChatMessages      = "chat_messages"
 	ClassRobotChatMessages = "robot_chat_messages"
+	ClassGameChatMessages  = "game_chat_messages"
 	ClassNotifications     = "notifications"
 	ClassAuditLogs         = "audit_logs"
 	ClassRobotTestData     = "robot_test_data"
@@ -18,16 +19,17 @@ const (
 // RetentionPolicy is intentionally separate from room feature settings. A
 // workspace-specific row overrides workspace 0, which is the platform default.
 type RetentionPolicy struct {
-	ID            uint64    `gorm:"primaryKey" json:"id"`
-	WorkspaceID   uint64    `gorm:"not null;default:0;uniqueIndex:uq_retention_policy_workspace_class,priority:1" json:"workspace_id"`
-	DataClass     string    `gorm:"size:40;not null;uniqueIndex:uq_retention_policy_workspace_class,priority:2" json:"data_class"`
-	Enabled       bool      `gorm:"not null;default:false" json:"enabled"`
-	RetentionDays int       `gorm:"not null" json:"retention_days"`
-	Action        string    `gorm:"size:32;not null" json:"action"`
-	UpdatedByID   uint64    `gorm:"not null;default:0" json:"updated_by_id"`
-	UpdatedByName string    `gorm:"size:80;not null;default:''" json:"updated_by_name"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID             uint64    `gorm:"primaryKey" json:"id"`
+	WorkspaceID    uint64    `gorm:"not null;default:0;uniqueIndex:uq_retention_policy_workspace_class,priority:1" json:"workspace_id"`
+	DataClass      string    `gorm:"size:40;not null;uniqueIndex:uq_retention_policy_workspace_class,priority:2" json:"data_class"`
+	Enabled        bool      `gorm:"not null;default:false" json:"enabled"`
+	RetentionDays  int       `gorm:"not null" json:"retention_days"`
+	PurgeAfterDays int       `gorm:"not null;default:0" json:"purge_after_days"`
+	Action         string    `gorm:"size:32;not null" json:"action"`
+	UpdatedByID    uint64    `gorm:"not null;default:0" json:"updated_by_id"`
+	UpdatedByName  string    `gorm:"size:80;not null;default:''" json:"updated_by_name"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (RetentionPolicy) TableName() string { return "data_retention_policies" }

@@ -62,10 +62,6 @@ func TestPlanStreamsPostgresVisitOnlyTargetCoalescingAndReadOnly(t *testing.T) {
 		t.Fatal("default requires visit", before, err)
 	}
 	streamPostgresIssue(t, db, 1)
-	if err := automation.RunEnabled(ctx); err != nil {
-		t.Fatal(err)
-	}
-	StartPlanAutomationLoop(ctx, db)
 	if _, err := automation.RunWorkspace(ctx, roomID); apperrors.GetErrorCode(err) != "PLAN_VISIT_REQUIRED" {
 		t.Fatal("room-wide generation remains", err)
 	}
@@ -274,9 +270,6 @@ func TestPlanStreamsPostgresNoVisitNoProgressAndMissedPeriodInterrupted(t *testi
 		t.Fatal(err)
 	}
 	streamPostgresIssue(t, db, 2)
-	if err := automation.RunEnabled(ctx); err != nil {
-		t.Fatal(err)
-	}
 	view, err := svc.StreamDetail(roomID, 1, DefaultPlanKey)
 	if err != nil || view.Stream.Active || len(view.History) != 3 || len(view.Recommendations) != 0 {
 		t.Fatal("unvisited progressed", view, err)

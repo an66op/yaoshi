@@ -92,7 +92,7 @@ func (s *TenantAdminService) List(query string, page, pageSize int) (*TenantList
 	result := &TenantListResult{Items: items, Total: total, Page: page, PageSize: pageSize}
 	_ = s.db.Model(&user.User{}).Where("role = ? AND status = ?", "tenant", 1).Count(&result.Active).Error
 	_ = s.db.Model(&user.User{}).Where("role = ? AND parent_tenant_id IS NOT NULL", "agent").Count(&result.Agents).Error
-	_ = s.db.Model(&user.User{}).Where("role = ? AND parent_agent_id IN (?)", "member", s.db.Model(&user.User{}).Select("user_id").Where("role = ? AND parent_tenant_id IS NOT NULL", "agent")).Count(&result.Members).Error
+	_ = HumanMemberQuery(s.db).Where("parent_agent_id IN (?)", s.db.Model(&user.User{}).Select("user_id").Where("role = ? AND parent_tenant_id IS NOT NULL", "agent")).Count(&result.Members).Error
 	return result, nil
 }
 
@@ -210,9 +210,11 @@ func (s *TenantAdminService) Dashboard(tenantID uint64) (map[string]any, error) 
 		return nil, err
 	}
 	_ = s.db.Model(&user.User{}).Where("role = ? AND parent_tenant_id = ? AND status = ?", "agent", tenantID, 1).Count(&activeAgents).Error
-	_ = s.db.Model(&user.User{}).Where("role = ? AND parent_tenant_id = ? AND parent_agent_id IS NULL", "member", tenantID).Count(&members).Error
 	var workspace workspacemodel.Workspace
 	_ = s.db.Where("owner_user_id = ? AND type = ?", tenantID, workspacemodel.TypeTenant).First(&workspace).Error
+	if err := WorkspaceHumanMemberQuery(s.db, workspace.ID).Count(&members).Error; err != nil {
+		return nil, err
+	}
 	return map[string]any{"tenant_id": tenant.UserID, "tenant_name": firstNonEmpty(tenant.Nickname, tenant.Username), "workspace_id": workspace.ID, "room_code": workspace.RoomCode, "room_name": workspace.Name, "room_logo": workspace.Logo, "agent_count": agents, "active_agent_count": activeAgents, "member_count": members}, nil
 }
 
@@ -221,11 +223,11 @@ func (s *TenantAdminService) toView(row user.User) (TenantView, error) {
 	if err := s.db.Model(&user.User{}).Where("role = ? AND parent_tenant_id = ?", "agent", row.UserID).Count(&agents).Error; err != nil {
 		return TenantView{}, err
 	}
-	if err := s.db.Model(&user.User{}).Where("role = ? AND parent_tenant_id = ? AND parent_agent_id IS NULL", "member", row.UserID).Count(&members).Error; err != nil {
-		return TenantView{}, err
-	}
 	var workspace workspacemodel.Workspace
 	_ = s.db.Where("owner_user_id = ? AND type = ?", row.UserID, workspacemodel.TypeTenant).First(&workspace).Error
+	if err := WorkspaceHumanMemberQuery(s.db, workspace.ID).Count(&members).Error; err != nil {
+		return TenantView{}, err
+	}
 	view := TenantView{ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone, RoomCode: workspace.RoomCode, RoomName: workspace.Name, RoomLogo: workspace.Logo, WorkspaceID: workspace.ID, Balance: centsToAmount(row.BalanceCents), Status: row.Status, AgentCount: agents, MemberCount: members, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount}
 	if row.LastLoginAt != nil {
 		view.LastLoginAt = row.LastLoginAt.Local().Format("2006-01-02 15:04:05")

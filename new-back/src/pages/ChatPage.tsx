@@ -18,6 +18,7 @@ import type { ManagementWsEvent } from '../api'
 import { gameLogo } from '../gameLogos'
 import { mergeAdminChatMessages, sameConversation, selectConversation } from '../utils/chatState'
 import { createRequestId } from '../utils/requestId'
+import { responsiveSplitPanelBorderSx } from '../theme'
 import {
   CHAT_OPEN_CONVERSATION_EVENT, chatPageForTarget, consumePendingChatConversation, reportChatUnreadChanged,
   setActiveChatConversation, type ChatConversationTarget,
@@ -456,9 +457,7 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
         overflow: { md: 'hidden' },
       }}>
         <Box sx={{
-          borderRight: { md: 1 },
-          borderBottom: { xs: 1, md: 0 },
-          borderColor: 'divider',
+          ...responsiveSplitPanelBorderSx,
           minHeight: { xs: 280, md: 0 },
           height: { md: '100%' },
           display: 'flex',
@@ -466,7 +465,10 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
           overflow: 'hidden',
         }}>
           <Box px={1.3} py={1.1} borderBottom={1} borderColor="divider">
-            <TextField fullWidth select size="small" label="房间号" value={roomScope} onChange={event => { setRedPacketOpen(false); setTransitioningMode(mode); setRoomScope(event.target.value) }}>
+            <TextField fullWidth select size="small" label="房间号" value={roomScope} onChange={event => { setRedPacketOpen(false); setTransitioningMode(mode); setRoomScope(event.target.value) }} slotProps={{ select: { renderValue: value => {
+              const room = rooms.find(item => item.scope === value)
+              return room ? `${room.room_code} · ${room.room_name || `房间 ${room.room_code}`}` : ''
+            } } }}>
               {rooms.length ? rooms.map(room => <MenuItem key={room.scope} value={room.scope}><Avatar src={room.room_logo || undefined} variant="rounded" sx={{ width: 26, height: 26, mr: .9, color: '#fff', background: room.room_logo ? undefined : identityGradient, fontSize: 10.5, fontWeight: 900 }}>{(room.room_name || '房').slice(0, 1)}</Avatar>{room.room_code} · {room.room_name || `房间 ${room.room_code}`}{room.kind === 'tenant' ? '（租户直属）' : ''}{room.status === 1 ? '' : '（停用）'}</MenuItem>) : <MenuItem value="" disabled>暂无可用房间</MenuItem>}
             </TextField>
           </Box>

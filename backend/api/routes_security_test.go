@@ -41,6 +41,7 @@ func TestPrivilegedRouteBoundaries(t *testing.T) {
 		"POST /api/session/refresh",
 		"POST /api/member/logout",
 		"POST /api/member/session/refresh",
+		"POST /api/member/games/:id/web-bets",
 		"GET /api/member/chat/redpackets/available",
 		"POST /api/admin/reconciliation/bets/:id/refund",
 		"GET /api/admin/data-lifecycle/policies",

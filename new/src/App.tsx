@@ -20,6 +20,8 @@ import './night-polish.css'
 import './appearance.css'
 import './typography.css'
 import './startup.css'
+import './control-surface.css'
+import './game-guide.css'
 import { BottomNav } from './components/BottomNav'
 import { SessionStartup } from './components/SessionStartup'
 import { GameRoom } from './pages/GameRoom'
@@ -28,12 +30,13 @@ import { Lobby } from './pages/Lobby'
 import { Wallet } from './pages/Wallet'
 import { Chats } from './pages/Chats'
 import { Profile } from './pages/Profile'
+import { GameGuidePage } from './pages/GameGuidePage'
 import { Login } from './pages/Login'
 import { Register } from './pages/Register'
 import { RoomEntry } from './pages/RoomEntry'
 import { stopNotificationSounds } from './utils/notificationAudio'
 import type { Tab, Theme } from './types'
-import { pathForChat, pathForGame, pathForLogin, pathForPlanGame, pathForRegister, pathForResults, pathForRoom, pathForTab, pathForWallet, useAppRouter } from './router'
+import { pathForChat, pathForGame, pathForGameGuide, pathForLobby, pathForLogin, pathForPlanGame, pathForRegister, pathForResults, pathForRoom, pathForTab, pathForWallet, useAppRouter } from './router'
 import { useLotteryGames } from './hooks/useLotteryGames'
 import { usePersistentState } from './hooks/usePersistentState'
 import { useMemberPreferences } from './hooks/useMemberPreferences'
@@ -112,9 +115,18 @@ function App() {
   const [bootError, setBootError] = useState('')
   const [logoutError, setLogoutError] = useState('')
   const [loggingOut, setLoggingOut] = useState(false)
+  const [lastLobbyFilter, setLastLobbyFilter] = useState('彩票')
   const websocketConnected = useWebSocketConnected()
   const { route, pathname, navigate, replace } = useAppRouter()
   const { fontScale, displayStyle } = useMemberPreferences()
+  const routedLobbyFilter = route.kind === 'tab'
+    ? (route.tab === 'lobby' ? route.lobbyFilter : route.returnLobbyFilter)
+    : route.kind === 'game' || route.kind === 'chat' || route.kind === 'results'
+      ? route.returnLobbyFilter
+      : undefined
+  useEffect(() => {
+    if (routedLobbyFilter?.trim()) setLastLobbyFilter(routedLobbyFilter.trim())
+  }, [routedLobbyFilter])
   useLayoutEffect(() => {
     document.documentElement.dataset.memberDisplay = displayStyle
     return () => { delete document.documentElement.dataset.memberDisplay }
@@ -131,11 +143,11 @@ function App() {
   const unreadRefreshIDRef = useRef(0)
 
   const displayName = activeSession?.nickname || activeSession?.account || ''
-  const historyAccount = activeSession?.account ?? ''
+  const historyAccount = pendingAccount?.account ?? activeSession?.account ?? ''
   const historyRoom = activeSession?.room ?? ''
 
   useEffect(() => {
-    if (!authenticated || !historyAccount || !historyRoom) {
+    if (!authenticated || !historyAccount) {
       setRoomHistory([])
       return
     }
@@ -299,15 +311,16 @@ function App() {
 
   const activeGameId = route.kind === 'game' ? route.gameId : null
   const activeGame = useMemo(() => liveGames.find((game) => game.id === activeGameId), [activeGameId, liveGames])
+  const gameReturnLobbyFilter = route.kind === 'game' ? route.returnLobbyFilter : undefined
 
   // Bookmarks and browser history may still point at a game disabled by the
   // administrator. Once the live list is known, return to the lobby instead
   // of leaving a stale game URL rendering an unrelated page.
   useEffect(() => {
     if (route.kind === 'game' && !gamesLoading && gamesLive && !activeGame) {
-      navigate(pathForTab('lobby'))
+      navigate(pathForLobby(gameReturnLobbyFilter))
     }
-  }, [activeGame, gamesLive, gamesLoading, navigate, route.kind])
+  }, [activeGame, gameReturnLobbyFilter, gamesLive, gamesLoading, navigate, route.kind])
   const toggleTheme = () => setDemo((current) => ({ ...current, theme: current.theme === 'day' ? 'night' : 'day' }))
   const resetDemo = () => {
     setDemo(initialDemoState)
@@ -423,6 +436,7 @@ function App() {
       <RoomEntry
         theme={demo.theme}
         fromLobby={Boolean(activeSession)}
+        roomHistory={roomHistory}
         onBack={() => {
           if (activeSession) {
             navigate(pathForTab('lobby'))
@@ -452,11 +466,15 @@ function App() {
     )
   }
 
-	if (!activeSession || !authenticated) return <Login theme={demo.theme} onContinue={continueLogin} />
+  if (!activeSession || !authenticated) return <Login theme={demo.theme} onContinue={continueLogin} />
+
+  if (route.kind === 'game-guide') {
+    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div ref={appContentRef} className="app-content"><GameGuidePage games={liveGames} initialTab={route.tab} onBack={() => replace(pathForTab('profile'))} /></div></main>
+  }
 
   if (route.kind === 'results') {
-    const returnPath = route.returnGameId ? pathForGame(route.returnGameId) : pathForTab('lobby')
-    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div ref={appContentRef} className="app-content"><DrawResults games={liveGames} initialGameId={route.gameId} onBack={() => navigate(returnPath)} onSelectGame={(gameId) => replace(pathForResults(gameId, route.returnGameId))} /></div></main>
+    const returnPath = route.returnGameId ? pathForGame(route.returnGameId, false, route.returnLobbyFilter) : pathForLobby(route.returnLobbyFilter)
+    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div ref={appContentRef} className="app-content"><DrawResults games={liveGames} initialGameId={route.gameId} onBack={() => navigate(returnPath)} onSelectGame={(gameId) => replace(pathForResults(gameId, route.returnGameId, route.returnLobbyFilter))} /></div></main>
   }
 
   if (activeGame) {
@@ -470,11 +488,11 @@ function App() {
         theme={demo.theme}
         nickname={displayName}
         balance={activeSession.balance}
-        onBack={() => navigate(pathForTab('lobby'))}
-        onOpenGame={(gameId) => navigate(pathForGame(gameId))}
-        onOpenService={() => navigate(pathForChat('service', activeGame.id))}
-        onOpenWallet={(action) => navigate(pathForWallet(action, activeGame.id))}
-        onOpenResults={() => navigate(pathForResults(activeGame.id, activeGame.id))}
+        onBack={() => replace(pathForLobby(gameReturnLobbyFilter))}
+        onOpenGame={(gameId) => navigate(pathForGame(gameId, false, gameReturnLobbyFilter))}
+        onOpenService={() => navigate(pathForChat('service', activeGame.id, gameReturnLobbyFilter))}
+        onOpenWallet={(action) => navigate(pathForWallet(action, activeGame.id, gameReturnLobbyFilter))}
+        onOpenResults={() => navigate(pathForResults(activeGame.id, activeGame.id, gameReturnLobbyFilter))}
         startWithQuickMenu={route.kind === 'game' && Boolean(route.quickMenu)}
         onRefreshBalance={refreshBalance}
       />
@@ -486,12 +504,12 @@ function App() {
   const walletReturnGameId = route.kind === 'tab' && route.tab === 'shop' ? route.returnGameId : undefined
   const showBottomNav = (route.kind !== 'chat' || route.view === 'list') && !walletAction
   const content = route.kind === 'chat'
-    ? <Chats key={`${activeSession.room}:${route.view}:${route.planGameId ?? ''}`} view={route.view} unreadCount={chatUnread} onMarkAllRead={async () => { await portalApi.markAllRead(); await refreshUnread() }} onNavigate={(view) => navigate(pathForChat(view))} onServiceBack={route.returnGameId ? () => navigate(pathForGame(route.returnGameId!)) : undefined} onRefreshUnread={refreshUnread} games={liveGames} planGameId={route.planGameId} onOpenPlanGame={(gameId) => navigate(pathForPlanGame(gameId))} />
+    ? <Chats key={`${activeSession.room}:${route.view}:${route.planGameId ?? ''}`} view={route.view} unreadCount={chatUnread} onMarkAllRead={async () => { await portalApi.markAllRead(); await refreshUnread() }} onNavigate={(view) => navigate(pathForChat(view))} onServiceBack={route.returnGameId ? () => navigate(pathForGame(route.returnGameId!, false, route.returnLobbyFilter)) : undefined} onRefreshUnread={refreshUnread} games={liveGames} planGameId={route.planGameId} onOpenPlanGame={(gameId) => navigate(pathForPlanGame(gameId))} />
     : activeTab === 'lobby'
-      ? <Lobby room={activeSession.room} roomName={activeSession.roomName} roomLogo={activeSession.roomLogo} roomHistory={roomHistory} games={liveGames} theme={demo.theme} gamesLive={gamesLive} gamesError={gamesError} onToggleTheme={toggleTheme} onOpenGame={(gameId) => navigate(pathForGame(gameId))} onSwitchRoom={switchRoom} />
+      ? <Lobby room={activeSession.room} roomName={activeSession.roomName} roomLogo={activeSession.roomLogo} roomHistory={roomHistory} games={liveGames} theme={demo.theme} gamesLive={gamesLive} gamesError={gamesError} initialFilter={route.kind === 'tab' ? route.lobbyFilter ?? lastLobbyFilter : lastLobbyFilter} onFilterChange={(filter) => { setLastLobbyFilter(filter); replace(pathForLobby(filter)) }} onToggleTheme={toggleTheme} onOpenGame={(gameId, sourceFilter) => { setLastLobbyFilter(sourceFilter); navigate(pathForGame(gameId, false, sourceFilter)) }} onSwitchRoom={switchRoom} />
       : activeTab === 'shop'
-        ? <Wallet balance={activeSession.balance} walletAction={walletAction} returnGameId={walletReturnGameId} onBackToGame={walletReturnGameId ? () => navigate(pathForGame(walletReturnGameId, true)) : undefined} onRefresh={() => void refreshBalance()} onNavigate={navigate} />
-        : <Profile account={displayName} publicId={activeSession.publicId} balance={activeSession.balance} avatarUrl={activeSession.avatar} publicTitle={activeSession.publicTitle} badge={activeSession.badge} theme={demo.theme} onLogout={logout} logoutError={logoutError} loggingOut={loggingOut} onResetDemo={resetDemo} onToggleTheme={toggleTheme} onChangeAvatar={async (avatar) => {
+        ? <Wallet balance={activeSession.balance} walletAction={walletAction} returnGameId={walletReturnGameId} onBackToGame={walletReturnGameId ? () => navigate(pathForGame(walletReturnGameId, true, route.kind === 'tab' ? route.returnLobbyFilter : undefined)) : undefined} onRefresh={() => void refreshBalance()} onNavigate={navigate} />
+        : <Profile account={displayName} publicId={activeSession.publicId} balance={activeSession.balance} avatarUrl={activeSession.avatar} publicTitle={activeSession.publicTitle} badge={activeSession.badge} theme={demo.theme} onLogout={logout} logoutError={logoutError} loggingOut={loggingOut} onResetDemo={resetDemo} onToggleTheme={toggleTheme} onOpenGuide={(tab) => navigate(pathForGameGuide(tab))} onChangeAvatar={async (avatar) => {
           const profile = await memberApi.updateAvatar(avatar)
           setSession((current) => current ? { ...current, avatar: profile.avatar || avatar, publicTitle: profile.public_title, badge: profile.badge, publicId: profile.public_id, balance: profile.balance } : current)
         }} onChangeNickname={async (nickname) => {
@@ -502,7 +520,7 @@ function App() {
   return (
     <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale} ${showBottomNav ? 'has-bottom-nav' : ''}`}>
       <div ref={appContentRef} className="app-content">{content}</div>
-      {showBottomNav && <BottomNav activeTab={activeTab} theme={demo.theme} unreadCount={chatUnread} onSelect={(tab) => navigate(tab === 'shop' ? pathForWallet() : pathForTab(tab))} />}
+      {showBottomNav && <BottomNav activeTab={activeTab} theme={demo.theme} unreadCount={chatUnread} onSelect={(tab) => navigate(tab === 'shop' ? pathForWallet() : tab === 'lobby' ? pathForLobby(lastLobbyFilter) : pathForTab(tab))} />}
     </main>
   )
 }

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"backend/data/models/lottery"
 	"reflect"
 	"testing"
 )
@@ -10,6 +11,43 @@ func TestBetAmountDisplayPreservesCents(t *testing.T) {
 		if got := FormatBetAmount(amount); got != want {
 			t.Fatalf("amount %v: got %q, want %q", amount, got, want)
 		}
+	}
+}
+
+func TestAssistantGroupedReceiptKeepsDigits5V3ShapeWindowsSeparate(t *testing.T) {
+	lines, err := parseAssistantBetForGame(&lottery.Game{ID: "speed-ssc"}, "前三/豹子/50#1/09/20#对子/30#5/单/20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := append([]AssistantBetLine(nil), lines...)
+	want := []string{"第1球[0/20 9/20]", "第5球[单/20]", "前三[豹子/50 对子/30]", "中三[对子/30]", "后三[对子/30]"}
+	if got := AssistantReceiptLines(lines); !reflect.DeepEqual(got, want) {
+		t.Fatalf("shape windows/first-ball groups mixed: got %v, want %v", got, want)
+	}
+	if !reflect.DeepEqual(lines, before) {
+		t.Fatal("receipt presentation mutated the authoritative digit bets")
+	}
+}
+
+func TestAssistantGroupedReceiptKeepsDigits5V2TotalsSeparate(t *testing.T) {
+	lines, err := parseAssistantBetForGame(&lottery.Game{ID: "sg-ssc"}, "1/09/20#总和/大/20#总和尾/7/1.25#对子/30#5/单/20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"第1球[0/20 9/20]", "第5球[单/20]", "前三[对子/30]", "总和[大/20]", "总和尾[7/1.25]"}
+	if got := AssistantReceiptLines(lines); !reflect.DeepEqual(got, want) {
+		t.Fatalf("legacy total groups mixed: got %v, want %v", got, want)
+	}
+}
+
+func TestAssistantGroupedReceiptLabelsThreeDigitGames(t *testing.T) {
+	lines, err := parseAssistantBetForGame(&lottery.Game{ID: "official-fc3d"}, "3/0/20#1/大/20#总和尾/9/20#前三顺子/20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"第1球[大/20]", "第3球[0/20]", "前三[顺子/20]", "总和尾[9/20]"}
+	if got := AssistantReceiptLines(lines); !reflect.DeepEqual(got, want) {
+		t.Fatalf("three-ball receipt: got %v, want %v", got, want)
 	}
 }
 

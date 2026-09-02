@@ -1,30 +1,18 @@
 package services
 
-import "testing"
-
-func containsBootstrapStep(steps []bootstrapStep, wanted bootstrapStep) bool {
-	for _, step := range steps {
-		if step == wanted {
-			return true
-		}
-	}
-	return false
-}
+import (
+	"reflect"
+	"testing"
+)
 
 func TestReleaseBootstrapExcludesLocalFixtures(t *testing.T) {
 	steps, err := bootstrapSteps("release")
 	if err != nil {
 		t.Fatalf("bootstrapSteps() error = %v", err)
 	}
-	for _, forbidden := range []bootstrapStep{bootstrapLotteryDebug, bootstrapExperienceAccount, bootstrapDebugPlans} {
-		if containsBootstrapStep(steps, forbidden) {
-			t.Fatalf("release bootstrap unexpectedly contains %q: %#v", forbidden, steps)
-		}
-	}
-	for _, required := range []bootstrapStep{bootstrapAdmin, bootstrapLotteryCatalog, bootstrapWorkspaces, bootstrapBaseCatalogs} {
-		if !containsBootstrapStep(steps, required) {
-			t.Fatalf("release bootstrap is missing %q: %#v", required, steps)
-		}
+	want := []bootstrapStep{bootstrapAdmin, bootstrapLotteryCatalog, bootstrapWorkspaces, bootstrapBaseCatalogs}
+	if !reflect.DeepEqual(steps, want) {
+		t.Fatalf("release bootstrap = %#v, want %#v", steps, want)
 	}
 }
 
@@ -33,13 +21,9 @@ func TestDebugBootstrapNeverSeedsPlanRecommendations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bootstrapSteps() error = %v", err)
 	}
-	for _, required := range []bootstrapStep{bootstrapLotteryDebug, bootstrapExperienceAccount, bootstrapWorkspaces, bootstrapBaseCatalogs} {
-		if !containsBootstrapStep(steps, required) {
-			t.Fatalf("debug bootstrap is missing %q: %#v", required, steps)
-		}
-	}
-	if containsBootstrapStep(steps, bootstrapDebugPlans) {
-		t.Fatalf("debug bootstrap must not publish unrequested room recommendations: %#v", steps)
+	want := []bootstrapStep{bootstrapAdmin, bootstrapLotteryDebug, bootstrapExperienceAccount, bootstrapWorkspaces, bootstrapBaseCatalogs}
+	if !reflect.DeepEqual(steps, want) {
+		t.Fatalf("debug bootstrap = %#v, want %#v", steps, want)
 	}
 }
 

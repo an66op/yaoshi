@@ -26,6 +26,27 @@ describe('member API cookie credentials', () => {
 
   afterEach(() => vi.unstubAllGlobals())
 
+  it('sends member credentials and captcha without a client-chosen role or workspace', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, data: {} }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { memberApi } = await import('./member')
+    const captcha = { captcha_id: 'member-challenge', captcha_code: '654321', role: 'admin', workspace: 'untrusted' }
+    await memberApi.login('member-account', 'test-password', captcha)
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/api\/member\/login$/)
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ username: 'member-account', password: 'test-password', captcha_id: captcha.captcha_id, captcha_code: captcha.captcha_code })
+  })
+
+  it('fetches a fresh member challenge with cookie credentials and cancellation', async () => {
+    const challenge = { id: 'member-challenge', image: 'data:image/png;base64,AAAA', expires_in: 120 }
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, data: challenge }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { memberApi } = await import('./member')
+    const controller = new AbortController()
+    await expect(memberApi.loginCaptcha(controller.signal)).resolves.toEqual(challenge)
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/api\/member\/login\/captcha$/)
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ cache: 'no-store', signal: controller.signal, credentials: 'include' })
+  })
+
   it('sends the HttpOnly session cookie without restoring a legacy bearer token', async () => {
     storage.setItem('yaotu-member-token', 'legacy-secret')
     const fetchMock = vi.fn().mockResolvedValue({

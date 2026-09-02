@@ -56,8 +56,7 @@ const emptyForm: UserPayload = { username: '', password: '', email: '', nickname
 const money = (value: number) => new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
 const dateTime = (value?: string | null) => value ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value)) : '从未登录'
 
-export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members' }) {
-  const memberView = view === 'members'
+export function UsersPage() {
   const [users, setUsers] = useState<AdminUser[]>([])
   const [stats, setStats] = useState<UserStats | null>(null)
   const [total, setTotal] = useState(0)
@@ -65,8 +64,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
   const [pageSize, setPageSize] = useState(20)
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
-  const [role, setRole] = useState('all')
-  const [applied, setApplied] = useState({ query: '', status: 'all', role: 'all' })
+  const [applied, setApplied] = useState({ query: '', status: 'all' })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -98,11 +96,11 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
     }
     try {
       const [list, nextStats] = await Promise.all([
-        adminApi.users({ ...applied, kind: memberView ? 'member' : 'account', page: page + 1, pageSize }),
-        adminApi.userStats(memberView ? 'member' : 'account'),
+        adminApi.users({ ...applied, kind: 'member', role: 'member', page: page + 1, pageSize }),
+        adminApi.userStats('member'),
       ])
       if (requestID !== loadRequestRef.current) return
-      const nextUsers = Array.isArray(list?.items) ? list.items : []
+      const nextUsers = Array.isArray(list?.items) ? list.items.filter(user => user.role === 'member') : []
       setUsers(nextUsers)
       setDetailUser(current => {
         if (!current) return current
@@ -111,28 +109,27 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
       })
       setTotal(list.total)
       setStats(nextStats)
-      if (notify) showMessage('用户数据已刷新')
+      if (notify) showMessage('会员数据已刷新')
     } catch (reason) {
-      if (requestID === loadRequestRef.current && !silent) setError(reason instanceof Error ? reason.message : '读取用户数据失败')
+      if (requestID === loadRequestRef.current && !silent) setError(reason instanceof Error ? reason.message : '读取会员数据失败')
     } finally {
       if (requestID === loadRequestRef.current) setLoading(false)
     }
-  }, [applied, memberView, page, pageSize, showMessage])
+  }, [applied, page, pageSize, showMessage])
 
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer) }, [load])
   useEffect(() => {
-    if (!memberView) return
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void load(false, true)
     }, 25_000)
     return () => window.clearInterval(timer)
-  }, [load, memberView])
+  }, [load])
 
   const openCreate = async () => {
     setEditing(null)
-    setForm({ ...emptyForm, role: memberView ? 'member' : 'admin', parent_agent_id: 0 })
+    setForm({ ...emptyForm, parent_agent_id: 0 })
     setFormOpen(true)
-    if (memberView && agents.length === 0) {
+    if (agents.length === 0) {
       try {
         const result = await adminApi.agents({ page: 1, pageSize: 100 })
         const nextAgents = Array.isArray(result?.items) ? result.items : []
@@ -146,7 +143,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
 
   const openEdit = (user: AdminUser) => {
     setEditing(user)
-    setForm({ email: user.email, nickname: user.nickname, phone: user.phone, role: user.role, remark: user.remark, risk_level: user.risk_level, status: user.status })
+    setForm({ email: user.email, nickname: user.nickname, phone: user.phone, role: 'member', remark: user.remark, risk_level: user.risk_level, status: user.status })
     setFormOpen(true)
   }
 
@@ -158,10 +155,10 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
     setSaving(true)
     setError('')
     try {
-      if (editing) await adminApi.updateUser(editing.id, form)
-      else await adminApi.createUser({ ...form, role: memberView ? 'member' : 'admin' })
+      if (editing) await adminApi.updateUser(editing.id, { ...form, role: 'member' })
+      else await adminApi.createUser({ ...form, role: 'member' })
       setFormOpen(false)
-      showMessage(editing ? '用户资料已更新' : '用户创建成功')
+      showMessage(editing ? '会员资料已更新' : '会员创建成功')
       await load()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '保存失败')
@@ -213,7 +210,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
       setBalanceAmount('')
       setBalanceRemark('')
       showMessage(`余额调整成功，当前余额 ${money(next.balance)}`)
-      const nextStats = await adminApi.userStats()
+      const nextStats = await adminApi.userStats('member')
       setStats(nextStats)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '余额调整失败')
@@ -242,7 +239,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
       setTradingDirty(false)
     }
     const failure = [historyResult, dashboardResult, tradingResult].find(result => result.status === 'rejected')
-    if (failure?.status === 'rejected') setError(failure.reason instanceof Error ? failure.reason.message : '部分用户详情暂时无法读取')
+    if (failure?.status === 'rejected') setError(failure.reason instanceof Error ? failure.reason.message : '部分会员详情暂时无法读取')
   }
 
   const closeDetail = () => {
@@ -293,45 +290,45 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
 
   const flyModeLabel = (mode?: string) => ({ inherit: '跟随房间', custom: '单独比例', off: '不飞单' }[mode ?? 'inherit'] ?? mode)
 
-  const applyFilters = () => { setPage(0); setApplied({ query: query.trim(), status, role }) }
-  const resetFilters = () => { setQuery(''); setStatus('all'); setRole('all'); setPage(0); setApplied({ query: '', status: 'all', role: 'all' }) }
+  const applyFilters = () => { setPage(0); setApplied({ query: query.trim(), status }) }
+  const resetFilters = () => { setQuery(''); setStatus('all'); setPage(0); setApplied({ query: '', status: 'all' }) }
   const exportCsv = () => {
     const rows = users.map(user => [user.public_id, user.username, user.nickname, roleLabels[user.role], user.email, user.phone, user.balance.toFixed(2), user.online === true ? '在线' : '离线', user.status === 1 ? '启用' : '停用', dateTime(user.created_at)])
     const csv = createCsv([['用户 ID', '用户名', '昵称', '角色', '邮箱', '手机', '余额', '在线状态', '账号状态', '创建时间'], ...rows])
     const link = document.createElement('a')
     link.href = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }))
-    link.download = memberView ? '会员列表.csv' : '用户账号列表.csv'
+    link.download = '会员列表.csv'
     link.click()
     URL.revokeObjectURL(link.href)
   }
 
   const statCards = useMemo(() => [
-    [memberView ? '会员总数' : '用户总数', stats?.total ?? 0, PeopleAltRounded, '#4f7edc'],
-    [memberView ? '正常会员' : '正常用户', stats?.active ?? 0, PersonAddAltRounded, '#2eaf7b'],
-    [memberView ? '停用会员' : '停用用户', stats?.disabled ?? 0, BlockRounded, '#df746a'],
+    ['会员总数', stats?.total ?? 0, PeopleAltRounded, '#4f7edc'],
+    ['正常会员', stats?.active ?? 0, PersonAddAltRounded, '#2eaf7b'],
+    ['停用会员', stats?.disabled ?? 0, BlockRounded, '#df746a'],
     ['今日新增', stats?.new_today ?? 0, AdminPanelSettingsRounded, '#8a70df'],
-  ] as const, [memberView, stats])
+  ] as const, [stats])
 
   return <Box p={{ xs: 2, lg: 2.5 }}>
-    <PageHeader eyebrow={memberView ? '组织与账号 / 会员' : '组织与账号 / 用户'} title={memberView ? '会员管理' : '用户管理'} description="" actions={<><Button variant="outlined" startIcon={<DownloadRounded />} disabled={!users.length} onClick={exportCsv}>导出当前页</Button><Button variant="contained" startIcon={<AddRounded />} onClick={() => void openCreate()}>{memberView ? '新增会员' : '新增后台用户'}</Button></>} />
+    <PageHeader eyebrow="组织与账号 / 会员" title="会员管理" description="" actions={<><Button variant="outlined" startIcon={<DownloadRounded />} disabled={!users.length} onClick={exportCsv}>导出当前页</Button><Button variant="contained" startIcon={<AddRounded />} onClick={() => void openCreate()}>新增会员</Button></>} />
     {error && <Alert severity="error" onClose={() => setError('')} sx={{ mt: 2 }}>{error}</Alert>}
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2,1fr)', lg: 'repeat(4,1fr)' }, gap: 1.25, mt: 2.5 }}>{statCards.map(([label, value, Icon, color]) => <Card key={label}><CardContent sx={{ p: '15px !important' }}><Stack direction="row" alignItems="center" justifyContent="space-between"><Box><Typography variant="caption" color="text.secondary">{label}</Typography><Typography fontSize={{ xs: 20, sm: 24 }} fontWeight={850} mt={.4}>{value}</Typography></Box><Box sx={{ width: 40, height: 40, borderRadius: 2.5, display: 'grid', placeItems: 'center', color: '#fff', bgcolor: color }}><Icon fontSize="small" /></Box></Stack></CardContent></Card>)}</Box>
-    <Paper variant="outlined" sx={{ p: 1.5, mt: 1.5 }}><Stack direction={{ xs: 'column', md: 'row' }} gap={1}><TextField placeholder={memberView ? '搜索会员账号、昵称、代理或联系方式' : '搜索登录账号、租户、代理或联系方式'} value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') applyFilters() }} sx={{ flex: 1, minWidth: { md: 280 } }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRounded fontSize="small" /></InputAdornment> } }} /><TextField select label="账号状态" value={status} onChange={event => setStatus(event.target.value)} sx={{ minWidth: 140 }}><MenuItem value="all">全部状态</MenuItem><MenuItem value="active">正常</MenuItem><MenuItem value="disabled">已停用</MenuItem></TextField>{!memberView && <TextField select label="账号角色" value={role} onChange={event => setRole(event.target.value)} sx={{ minWidth: 140 }}><MenuItem value="all">全部角色</MenuItem><MenuItem value="tenant">租户</MenuItem><MenuItem value="agent">代理</MenuItem><MenuItem value="admin">管理员</MenuItem></TextField>}<Button variant="contained" onClick={applyFilters}>查询</Button><Button variant="text" onClick={resetFilters}>重置</Button></Stack></Paper>
-    <Card sx={{ mt: 1.5 }}>{loading && <Box px={2} py={1}><CircularProgress size={18} /></Box>}<TableContainer><Table size="small" sx={{ minWidth: 1260 }}><TableHead><TableRow><TableCell>{memberView ? '会员' : '后台用户'}</TableCell><TableCell>登录标识</TableCell><TableCell>角色</TableCell><TableCell align="right">余额</TableCell><TableCell>联系方式</TableCell><TableCell>风控</TableCell><TableCell>在线状态</TableCell><TableCell>账号状态</TableCell><TableCell>最后登录</TableCell><TableCell align="right">操作</TableCell></TableRow></TableHead><TableBody>{users.map(user => <TableRow hover key={user.id}><TableCell><Stack direction="row" alignItems="center" gap={1}><Avatar sx={{ width: 34, height: 34, fontSize: 13, bgcolor: user.role === 'admin' ? 'secondary.main' : 'primary.main' }}>{(user.nickname || user.username).slice(0, 1).toUpperCase()}</Avatar><Box><Typography fontSize={12} fontWeight={800}>{user.nickname || user.username}</Typography><Typography fontSize={10} color="text.secondary">ID {user.public_id}</Typography></Box></Stack></TableCell><TableCell><Typography fontSize={11} fontWeight={750}>{user.login_identity || `平台 / ${user.username}`}</Typography><Typography fontSize={9} color="text.secondary">{[user.tenant_name, user.agent_name].filter(Boolean).join(' · ') || '平台直属'}</Typography></TableCell><TableCell><Chip size="small" variant="outlined" color={user.role === 'admin' ? 'secondary' : user.role === 'agent' ? 'info' : 'default'} label={roleLabels[user.role]} /></TableCell><TableCell align="right"><Typography fontWeight={800}>{money(user.balance)}</Typography></TableCell><TableCell><Typography fontSize={11}>{user.phone || '未填写手机'}</Typography><Typography fontSize={9} color="text.secondary">{user.email || '未填写邮箱'}</Typography></TableCell><TableCell><Chip size="small" color={user.risk_level === 'normal' ? 'success' : user.risk_level === 'watch' ? 'warning' : 'error'} variant="outlined" label={riskLabels[user.risk_level]} /></TableCell><TableCell><UserPresenceChip online={user.online === true} /></TableCell><TableCell><Stack direction="row" alignItems="center" gap={.5}><Switch size="small" checked={user.status === 1} onChange={() => void toggleStatus(user)} /><Typography fontSize={10}>{user.status === 1 ? '正常' : '停用'}</Typography></Stack></TableCell><TableCell><Typography fontSize={10}>{dateTime(user.last_login_at)}</Typography><Typography fontSize={9} color="text.secondary">登录 {user.login_count} 次</Typography></TableCell><TableCell align="right"><Stack direction="row" justifyContent="flex-end"><Tooltip title="查看详情"><IconButton size="small" onClick={() => void openDetail(user)}><VisibilityRounded fontSize="small" /></IconButton></Tooltip><Tooltip title="编辑资料"><IconButton size="small" onClick={() => openEdit(user)}><EditRounded fontSize="small" /></IconButton></Tooltip>{memberView && <Tooltip title="调整余额"><IconButton size="small" onClick={() => { setBalanceUser(user); setBalanceAmount(''); setBalanceRemark('') }}><AccountBalanceWalletRounded fontSize="small" /></IconButton></Tooltip>}<Tooltip title="重置密码"><IconButton size="small" onClick={() => { setResetUser(user); setNewPassword('') }}><KeyRounded fontSize="small" /></IconButton></Tooltip></Stack></TableCell></TableRow>)}{!loading && !users.length && <TableRow><TableCell colSpan={10} align="center" sx={{ py: 8, color: 'text.secondary' }}>没有找到符合条件的{memberView ? '会员' : '用户'}</TableCell></TableRow>}</TableBody></Table></TableContainer><TablePagination component="div" count={total} page={page} onPageChange={(_, next) => setPage(next)} rowsPerPage={pageSize} onRowsPerPageChange={event => setPageSize(Number(event.target.value))} rowsPerPageOptions={[10, 20, 50]} labelRowsPerPage="每页" /></Card>
+    <Paper variant="outlined" sx={{ p: 1.5, mt: 1.5 }}><Stack direction={{ xs: 'column', md: 'row' }} gap={1}><TextField placeholder="搜索会员账号、昵称、代理或联系方式" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') applyFilters() }} sx={{ flex: 1, minWidth: { md: 280 } }} slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchRounded fontSize="small" /></InputAdornment> } }} /><TextField select label="账号状态" value={status} onChange={event => setStatus(event.target.value)} sx={{ minWidth: 140 }}><MenuItem value="all">全部状态</MenuItem><MenuItem value="active">正常</MenuItem><MenuItem value="disabled">已停用</MenuItem></TextField><Button variant="contained" onClick={applyFilters}>查询</Button><Button variant="text" onClick={resetFilters}>重置</Button></Stack></Paper>
+    <Card sx={{ mt: 1.5 }}>{loading && <Box px={2} py={1}><CircularProgress size={18} /></Box>}<TableContainer><Table size="small" sx={{ minWidth: 1260 }}><TableHead><TableRow><TableCell>会员</TableCell><TableCell>登录标识</TableCell><TableCell>角色</TableCell><TableCell align="right">余额</TableCell><TableCell>联系方式</TableCell><TableCell>风控</TableCell><TableCell>在线状态</TableCell><TableCell>账号状态</TableCell><TableCell>最后登录</TableCell><TableCell align="right">操作</TableCell></TableRow></TableHead><TableBody>{users.map(user => <TableRow hover key={user.id}><TableCell><Stack direction="row" alignItems="center" gap={1}><Avatar sx={{ width: 34, height: 34, fontSize: 13, bgcolor: user.role === 'admin' ? 'secondary.main' : 'primary.main' }}>{(user.nickname || user.username).slice(0, 1).toUpperCase()}</Avatar><Box><Typography fontSize={12} fontWeight={800}>{user.nickname || user.username}</Typography><Typography fontSize={10} color="text.secondary">ID {user.public_id}</Typography></Box></Stack></TableCell><TableCell><Typography fontSize={11} fontWeight={750}>{user.login_identity || `平台 / ${user.username}`}</Typography><Typography fontSize={9} color="text.secondary">{[user.tenant_name, user.agent_name].filter(Boolean).join(' · ') || '平台直属'}</Typography></TableCell><TableCell><Chip size="small" variant="outlined" color={user.role === 'admin' ? 'secondary' : user.role === 'agent' ? 'info' : 'default'} label={roleLabels[user.role]} /></TableCell><TableCell align="right"><Typography fontWeight={800}>{money(user.balance)}</Typography></TableCell><TableCell><Typography fontSize={11}>{user.phone || '未填写手机'}</Typography><Typography fontSize={9} color="text.secondary">{user.email || '未填写邮箱'}</Typography></TableCell><TableCell><Chip size="small" color={user.risk_level === 'normal' ? 'success' : user.risk_level === 'watch' ? 'warning' : 'error'} variant="outlined" label={riskLabels[user.risk_level]} /></TableCell><TableCell><UserPresenceChip online={user.online === true} /></TableCell><TableCell><Stack direction="row" alignItems="center" gap={.5}><Switch size="small" checked={user.status === 1} onChange={() => void toggleStatus(user)} /><Typography fontSize={10}>{user.status === 1 ? '正常' : '停用'}</Typography></Stack></TableCell><TableCell><Typography fontSize={10}>{dateTime(user.last_login_at)}</Typography><Typography fontSize={9} color="text.secondary">登录 {user.login_count} 次</Typography></TableCell><TableCell align="right"><Stack direction="row" justifyContent="flex-end"><Tooltip title="查看详情"><IconButton size="small" onClick={() => void openDetail(user)}><VisibilityRounded fontSize="small" /></IconButton></Tooltip><Tooltip title="编辑资料"><IconButton size="small" onClick={() => openEdit(user)}><EditRounded fontSize="small" /></IconButton></Tooltip><Tooltip title="调整余额"><IconButton size="small" onClick={() => { setBalanceUser(user); setBalanceAmount(''); setBalanceRemark('') }}><AccountBalanceWalletRounded fontSize="small" /></IconButton></Tooltip><Tooltip title="重置密码"><IconButton size="small" onClick={() => { setResetUser(user); setNewPassword('') }}><KeyRounded fontSize="small" /></IconButton></Tooltip></Stack></TableCell></TableRow>)}{!loading && !users.length && <TableRow><TableCell colSpan={10} align="center" sx={{ py: 8, color: 'text.secondary' }}>没有找到符合条件的会员</TableCell></TableRow>}</TableBody></Table></TableContainer><TablePagination component="div" count={total} page={page} onPageChange={(_, next) => setPage(next)} rowsPerPage={pageSize} onRowsPerPageChange={event => setPageSize(Number(event.target.value))} rowsPerPageOptions={[10, 20, 50]} labelRowsPerPage="每页" /></Card>
 
-    <Dialog open={formOpen} onClose={() => !saving && setFormOpen(false)} fullWidth maxWidth="md"><DialogTitle>{editing ? `编辑${memberView ? '会员' : '用户'} · ${editing.username}` : `新增${memberView ? '会员' : '后台用户'}`}</DialogTitle><DialogContent><Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)' }, gap: 2, pt: 1 }}>{!editing && <><TextField required label="登录帐号" value={form.username ?? ''} onChange={event => setForm(current => ({ ...current, username: event.target.value }))} /><TextField required type="password" label="初始密码" helperText="8–72 个字符" value={form.password ?? ''} onChange={event => setForm(current => ({ ...current, password: event.target.value }))} />{memberView && <TextField select label="所属代理房间" value={form.parent_agent_id ?? 0} onChange={event => setForm(current => ({ ...current, parent_agent_id: Number(event.target.value) }))}><MenuItem value={0}>平台大厅</MenuItem>{agents.map(agent => <MenuItem key={agent.id} value={agent.id}>{agent.room_code} · {agent.nickname || agent.username}{agent.tenant_name ? ` · ${agent.tenant_name}` : ''}</MenuItem>)}</TextField>}</>}<TextField label="昵称" value={form.nickname} onChange={event => setForm(current => ({ ...current, nickname: event.target.value }))} /><TextField type="email" label="邮箱" value={form.email} onChange={event => setForm(current => ({ ...current, email: event.target.value }))} /><TextField label="手机号" value={form.phone} onChange={event => setForm(current => ({ ...current, phone: event.target.value }))} /><TextField select disabled label="账号角色" value={memberView ? 'member' : editing?.role ?? 'admin'}><MenuItem value="member">普通会员</MenuItem><MenuItem value="tenant">租户</MenuItem><MenuItem value="agent">代理</MenuItem><MenuItem value="admin">管理员</MenuItem></TextField><TextField select label="风控等级" value={form.risk_level} onChange={event => setForm(current => ({ ...current, risk_level: event.target.value as AdminUser['risk_level'] }))}><MenuItem value="normal">正常</MenuItem><MenuItem value="watch">重点关注</MenuItem><MenuItem value="restricted">限制账号</MenuItem></TextField><TextField select label="账号状态" value={form.status} onChange={event => setForm(current => ({ ...current, status: Number(event.target.value) as 0 | 1 }))}><MenuItem value={1}>正常</MenuItem><MenuItem value={0}>停用</MenuItem></TextField><TextField multiline minRows={3} label="管理备注" value={form.remark} onChange={event => setForm(current => ({ ...current, remark: event.target.value }))} sx={{ gridColumn: { sm: '1/-1' } }} /></Box></DialogContent><DialogActions><Button disabled={saving} onClick={() => setFormOpen(false)}>取消</Button><Button variant="contained" disabled={saving} onClick={() => void submitUser()}>{saving ? '保存中…' : `保存${memberView ? '会员' : '用户'}`}</Button></DialogActions></Dialog>
+    <Dialog open={formOpen} onClose={() => !saving && setFormOpen(false)} fullWidth maxWidth="md"><DialogTitle>{editing ? `编辑会员 · ${editing.username}` : '新增会员'}</DialogTitle><DialogContent><Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)' }, gap: 2, pt: 1 }}>{!editing && <><TextField required label="登录帐号" value={form.username ?? ''} onChange={event => setForm(current => ({ ...current, username: event.target.value }))} /><TextField required type="password" label="初始密码" helperText="8–72 个字符" value={form.password ?? ''} onChange={event => setForm(current => ({ ...current, password: event.target.value }))} /><TextField select label="所属代理房间" value={form.parent_agent_id ?? 0} onChange={event => setForm(current => ({ ...current, parent_agent_id: Number(event.target.value) }))}><MenuItem value={0}>平台大厅</MenuItem>{agents.map(agent => <MenuItem key={agent.id} value={agent.id}>{agent.room_code} · {agent.nickname || agent.username}{agent.tenant_name ? ` · ${agent.tenant_name}` : ''}</MenuItem>)}</TextField></>}<TextField label="昵称" value={form.nickname} onChange={event => setForm(current => ({ ...current, nickname: event.target.value }))} /><TextField type="email" label="邮箱" value={form.email} onChange={event => setForm(current => ({ ...current, email: event.target.value }))} /><TextField label="手机号" value={form.phone} onChange={event => setForm(current => ({ ...current, phone: event.target.value }))} /><TextField disabled label="账号角色" value="普通会员" /><TextField select label="风控等级" value={form.risk_level} onChange={event => setForm(current => ({ ...current, risk_level: event.target.value as AdminUser['risk_level'] }))}><MenuItem value="normal">正常</MenuItem><MenuItem value="watch">重点关注</MenuItem><MenuItem value="restricted">限制账号</MenuItem></TextField><TextField select label="账号状态" value={form.status} onChange={event => setForm(current => ({ ...current, status: Number(event.target.value) as 0 | 1 }))}><MenuItem value={1}>正常</MenuItem><MenuItem value={0}>停用</MenuItem></TextField><TextField multiline minRows={3} label="管理备注" value={form.remark} onChange={event => setForm(current => ({ ...current, remark: event.target.value }))} sx={{ gridColumn: { sm: '1/-1' } }} /></Box></DialogContent><DialogActions><Button disabled={saving} onClick={() => setFormOpen(false)}>取消</Button><Button variant="contained" disabled={saving} onClick={() => void submitUser()}>{saving ? '保存中…' : '保存会员'}</Button></DialogActions></Dialog>
 
     <Dialog open={Boolean(resetUser)} onClose={() => !saving && setResetUser(null)} fullWidth maxWidth="xs"><DialogTitle>重置密码</DialogTitle><DialogContent><Typography variant="body2" color="text.secondary" mb={2}>为 {resetUser?.username} 设置新密码。保存后旧密码立即失效。</Typography><TextField autoFocus fullWidth type="password" label="新密码" helperText="8–72 个字符" value={newPassword} onChange={event => setNewPassword(event.target.value)} /></DialogContent><DialogActions><Button onClick={() => setResetUser(null)}>取消</Button><Button variant="contained" disabled={saving} onClick={() => void submitPassword()}>确认重置</Button></DialogActions></Dialog>
 
-    <Dialog open={Boolean(balanceUser)} onClose={() => !saving && setBalanceUser(null)} fullWidth maxWidth="xs"><DialogTitle>调整用户余额</DialogTitle><DialogContent><Alert severity="info" sx={{ mb: 2 }}>当前余额：{money(balanceUser?.balance ?? 0)}。正数增加，负数扣减，操作会写入审计流水。</Alert><Stack gap={2}><TextField autoFocus type="number" label="调整金额" placeholder="例如 100 或 -50" value={balanceAmount} onChange={event => setBalanceAmount(event.target.value)} /><TextField required multiline minRows={3} label="调整原因" value={balanceRemark} onChange={event => setBalanceRemark(event.target.value)} /></Stack></DialogContent><DialogActions><Button onClick={() => setBalanceUser(null)}>取消</Button><Button variant="contained" disabled={saving} onClick={() => void submitBalance()}>确认调整</Button></DialogActions></Dialog>
+    <Dialog open={Boolean(balanceUser)} onClose={() => !saving && setBalanceUser(null)} fullWidth maxWidth="xs"><DialogTitle>调整会员余额</DialogTitle><DialogContent><Alert severity="info" sx={{ mb: 2 }}>当前余额：{money(balanceUser?.balance ?? 0)}。正数增加，负数扣减，操作会写入审计流水。</Alert><Stack gap={2}><TextField autoFocus type="number" label="调整金额" placeholder="例如 100 或 -50" value={balanceAmount} onChange={event => setBalanceAmount(event.target.value)} /><TextField required multiline minRows={3} label="调整原因" value={balanceRemark} onChange={event => setBalanceRemark(event.target.value)} /></Stack></DialogContent><DialogActions><Button onClick={() => setBalanceUser(null)}>取消</Button><Button variant="contained" disabled={saving} onClick={() => void submitBalance()}>确认调整</Button></DialogActions></Dialog>
 
     <Drawer anchor="right" open={Boolean(detailUser)} onClose={closeDetail} slotProps={{ paper: { sx: { width: { xs: '100%', sm: 720, lg: 860 }, p: { xs: 1.5, sm: 2.5 } } } }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Box>
-          <Typography variant="overline" color="primary">用户详情</Typography>
+          <Typography variant="overline" color="primary">会员详情</Typography>
           <Typography variant="h6" fontWeight={850}>{detailUser?.nickname || detailUser?.username}</Typography>
         </Box>
-        <IconButton aria-label="关闭用户详情" onClick={closeDetail}><CloseRounded /></IconButton>
+        <IconButton aria-label="关闭会员详情" onClick={closeDetail}><CloseRounded /></IconButton>
       </Stack>
       {detailUser && (
         <>
@@ -357,7 +354,7 @@ export function UsersPage({ view = 'accounts' }: { view?: 'accounts' | 'members'
             </CardContent>
           </Card>
 
-          {detailUser.role === 'member' && <><Typography fontWeight={800} mt={2.5} mb={1}>用户交易配置</Typography>
+          {detailUser.role === 'member' && <><Typography fontWeight={800} mt={2.5} mb={1}>会员交易配置</Typography>
           <Card variant="outlined">
             <CardContent>
               {!trading ? (

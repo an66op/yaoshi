@@ -1,0 +1,397 @@
+import type { Game } from '../types'
+import { isBingoRacingAReady, isDigit5V3Game, isPC28RuleVersion, pc28RuleVersionForGame } from '../utils/lotteryRules'
+
+export type GameManualSection = {
+  title: string
+  body: string
+  examples?: string[]
+}
+
+export type GameManual = {
+  id: string
+  title: string
+  gameId?: string
+  status: 'implemented' | 'partial' | 'reference'
+  statusText: string
+  betModes: { chat: boolean; web: boolean }
+  summary: string
+  sourceURL?: string
+  sections: GameManualSection[]
+  auditNotes?: string[]
+}
+
+const racingIDs = new Set(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10', 'bingo-racing-a'])
+const digitFiveIDs = new Set(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])
+const digitThreeIDs = new Set(['official-fc3d', 'official-pl3'])
+const pc28IDs = new Set(['pc-canada', 'canada-28', 'canada-20'])
+const markSixIDs = new Set(['bingo-mark-six'])
+
+const racingSections: GameManualSection[] = [
+  {
+    title: '名次、号码与两面',
+    body: '第1至第10名可投号码1–10及大、小、单、双；龙、虎仅可投第1至第5名，并与第10至第6名逐一镜像比较。号码或位置10可用0表示。未写位置时默认只投冠军。',
+    examples: ['3/大/5 → 第三名 大-5', '123大/5 → 冠军 1、2、3、大，各5', '0/1/5 → 第十名 1-5', '10大5 → 冠军与第十名 大，各5'],
+  },
+  {
+    title: '紧凑写法',
+    body: '非数字玩法可省略玩法与金额之间的斜杠；纯数字玩法仍必须保留斜杠，避免无法区分号码与金额。',
+    examples: ['1大5 = 1/大/5', '大单/5 → 冠军 大、单，各5'],
+  },
+  {
+    title: '冠亚和',
+    body: '“和”是冠亚和别名。可投准确和值3–19或大、小、单、双；和后连续写3–9时按多个单个和值展开，10–19请写完整和值。',
+    examples: ['和/大/5 → 冠亚和大-5', '和/345/5 或 和345/5 → 和值3、4、5，各5', '冠亚/14/5 → 和值14-5'],
+  },
+  {
+    title: '位置组',
+    body: '前三、后三、前五、后五按字面展开位置。每个位置与每个选号形成独立注单。',
+    examples: ['前三/2/5 → 第1、2、3名号码2，各5', '后五/大/5 → 第6至第10名大，各5'],
+  },
+  {
+    title: '梭哈',
+    body: '梭哈必须作为一条独立聊天指令提交；系统以余额可分配的最大整数金额，对展开后的每个投注项等额下注。不能整除的积分及小数余额会保留，详细网投面板不提供梭哈按钮。',
+    examples: ['余额100，1/123/梭哈 → 每项33，余额1', '余额100.5，大单梭哈 → 每项50，余额0.5'],
+  },
+]
+
+const digitFiveSections: GameManualSection[] = [
+  {
+    title: '第1至第5球',
+    body: '每球可投号码0–9及大、小、单、双。明确写球位时只投该球；非数字玩法可省略最后一个斜杠。',
+    examples: ['1/1大/20 → 第一球号码1与大，各20', '1大5 = 1/大/5'],
+  },
+  {
+    title: '不定位买法',
+    body: '不写球位时，号码或大小单双会同时应用到第1至第5球。每个球位、每个选号分别计为一注。',
+    examples: ['大/20 → 第1至第5球大，各20', '12/5 → 第1至第5球号码1、2，各5'],
+  },
+  {
+    title: '前三、中三、后三形态',
+    body: '目标手册包含豹子、顺子、对子、半顺、杂六，可写“前三/豹子/5”、 “中三顺子/5”或“豹子5”。未写位置的形态按前三、中三、后三展开。',
+    examples: ['前三豹子5', '中三/顺子/5', '豹子5 → 前三、中三、后三豹子，各5'],
+  },
+  {
+    title: '梭哈',
+    body: '梭哈必须作为一条独立聊天指令提交；按展开后的所有投注项，以最大整数金额等额下注，余数和小数余额保留。',
+    examples: ['余额100.5，大梭哈 → 第1至第5球大，各20，余额0.5'],
+  },
+]
+
+const digitFiveV3Sections: GameManualSection[] = [
+  ...digitFiveSections,
+  {
+    title: '龙虎和',
+    body: '仅比较第一球与第五球：第一球大于第五球为龙，小于为虎，相同为和。龙、虎共用龙虎赔率，和使用后台单独配置的赔率；没有有效赔率时对应选项不可投注。',
+    examples: ['1/龙/5', '1/虎/5', '1/和/5 → 第一球与第五球相同则中奖'],
+  },
+]
+
+const digitThreeSections: GameManualSection[] = [
+  {
+    title: '第1至第3球',
+    body: '每球可投号码0–9及大、小、单、双；不写球位时，号码或大小单双同时应用到三球。龙虎仅开放第一球与第三球比较，相同为和但当前只接受龙、虎投注。',
+    examples: ['1/09/20 → 第一球号码0、9，各20', '大/20 → 第1至第3球大，各20', '1/龙/20 → 第一球龙-20'],
+  },
+  {
+    title: '总和与前三形态',
+    body: '三球总和可投大、小、单、双；总和尾可投0–9。豹子、顺子、对子、半顺、杂六按全部三球判断。',
+    examples: ['总和/大/20', '总和尾/7/20', '豹子20 或 前三/豹子/20'],
+  },
+  {
+    title: '梭哈',
+    body: '梭哈必须作为一条独立聊天指令提交，按展开后的投注项以最大整数金额等额下注；不能整除的积分与小数余额保留。',
+    examples: ['余额100，1/123/梭哈 → 每项33，余额1'],
+  },
+]
+
+const pc28Sections: GameManualSection[] = [
+  {
+    title: '数字与特码包三',
+    body: '数字范围0–27，数字玩法必须带斜杠。特码包三须从0–27选择三个互不相同号码。',
+    examples: ['1/5#2/5 → 号码1、2，各5', '特码/1/2/3/5 → 包三1、2、3，金额5'],
+  },
+  {
+    title: '三球定位',
+    body: '球位范围1–3、号码范围0–9，每球可投号码与大、小、单、双；定位玩法通常使用两个斜杠，定位两面可用紧凑写法。第一球与第三球比较产生龙、虎、和，“和”使用独立赔率。',
+    examples: ['1/1/5 → 第一球号码1-5', '13/89/5 → 第一、三球号码8、9，各5', '1大5 → 第一球大-5'],
+  },
+  {
+    title: '混合、色波与梭哈',
+    body: '和值大、小、单、双及大单、大双、小单、小双按混合玩法独立计注；极小为0–5，极大为22–27。三球形态可投豹子、对子、顺子，色波可投红波、绿波、蓝波。梭哈须单独提交，按最大整数金额下注并保留零头。0、13、14、27的灰波返本以房间服务端配置为准。',
+    examples: ['极小5', '红波5', '余额100.5，大梭哈 → 大/100，余额0.5'],
+  },
+  {
+    title: '三套玩法共同规则',
+    body: '8,9,0与9,0,1均不算顺子；单点数字每期最多选择10个不同点数。三套玩法的13/14、反向下注和有效流水规则不同，必须按明确绑定的玩法版本结算。',
+  },
+]
+
+const pc28VariantSections: Record<'play1' | 'play2' | 'play3', GameManualSection> = {
+  play1: {
+    title: '玩法一 · 13/14及反向下注',
+    body: '禁止反向仅指和值大小及和值单双市场，不包含第1–3球的定位两面。总注严格大于1时，13/14两面按1.5倍、13/14组合按1倍；总注严格大于9999时，13/14两面按1倍（覆盖1.5倍）。开13或14时，本期所有下注不计入有效流水。',
+    examples: ['13/14两面：>1 为1.5倍；>9999 为1倍', '13/14组合：>1 为1倍'],
+  },
+  play2: {
+    title: '玩法二 · 13/14及反向下注',
+    body: '禁止反向仅指和值大小及和值单双市场，不包含第1–3球的定位两面。总注严格大于1时，13/14两面按1.5倍；总注严格大于9999时按1倍（覆盖1.5倍）。组合总注严格大于1且开13或14时，组合玩法庄家通吃。',
+    examples: ['13/14两面：>1 为1.5倍；>9999 为1倍', '总注>1且开13/14：组合玩法庄家通吃'],
+  },
+  play3: {
+    title: '玩法三 · 13/14特别赔率',
+    body: '手册未规定禁止和值大小/单双反向下注；第1–3球定位两面同样不属于玩法一、二的禁止反向范围。总注严格大于1时，13/14两面按1.98倍，13/14组合按3.65倍。',
+    examples: ['13/14两面：>1 为1.98倍', '13/14组合：>1 为3.65倍'],
+  },
+}
+
+const pc28VariantComparison: GameManualSection = {
+  title: '玩法一、二、三差异',
+  body: '玩法一：仅和值大小/单双禁止反向；13/14两面严格>1为1.5倍、严格>9999为1倍，组合严格>1为1倍，开13/14全期流水为0。玩法二：仅和值大小/单双禁止反向；两面阈值同玩法一，组合严格>1且开13/14时庄家通吃。玩法三：两面严格>1为1.98倍、组合严格>1为3.65倍，手册未写和值市场反向限制。三版本均不把球位定位两面纳入禁止反向范围。',
+}
+
+const animalSections: GameManualSection[] = [
+  {
+    title: '六名动物',
+    body: '号码1–6对应饿小宝、盒马、票票、虾仔、支小宝、欢猩。第1至第6名可投号码及大小单双；龙虎仅第1至第3名，分别比较1↔6、2↔5、3↔4。',
+    examples: ['1/大/5 → 第一名大-5', '123大/5 → 第一名号码1、2、3及大，各5', '1大5 = 1/大/5'],
+  },
+  {
+    title: '梭哈',
+    body: '梭哈须单独提交；按展开投注项以最大整数等额下注，无法整除的积分与小数余额保留。',
+    examples: ['余额100，1/123/梭哈 → 每项33，余额1'],
+  },
+]
+
+function racingManual(game: Game): GameManual {
+  const bingoA = game.id === 'bingo-racing-a'
+  const bingoAReady = isBingoRacingAReady(game)
+  const ready = game.rulesReady !== false && (!bingoA || bingoAReady)
+  return {
+    id: game.id,
+    gameId: game.id,
+    title: game.title,
+    status: bingoA && !bingoAReady ? 'partial' : 'implemented',
+    statusText: bingoA && !bingoAReady ? '开奖顺序来源待核验 · 暂停受理' : '聊天与网投已接入',
+    betModes: { chat: ready, web: ready },
+    summary: bingoA && !bingoAReady ? '目标玩法为10名赛车，但当前来源只返回排序结果，无法证明真实开出顺序；服务端明确返回racing-v2且规则就绪前，仅展示历史与规则。' : bingoA ? '已通过期号、20球集合与末球交叉校验恢复实际出球顺序，再将前10球按数值排名为1–10号赛车。聊天与网投共用racing-v2。' : '10名赛车规则。聊天指令支持紧凑写法、位置组与整数梭哈；网投面板支持号码、两面、龙虎和冠亚和。',
+    sourceURL: bingoA ? 'https://www.www-163kai.cc/' : undefined,
+    sections: racingSections,
+    auditNotes: bingoA ? (bingoAReady ? [
+      '168源只负责期号、20球集合、末球和下期边界；它的升序号码不被当作出球顺序。第二有序源只提供顺序，两源同期任一校验不一致就暂停投注与结算。',
+      '宾果赛车(A)冠亚和的大、小、单、双及3–19每个选项均独立读取后台确认赔率；任一选项未配置时只关闭该选项。',
+    ] : ['目标手册要求“前10个宾果原号按大小排名后保持原顺序”。168单源只返回严格升序集合，不能当作真实开出顺序；只有服务端完成双源校验并返回racing-v2且rulesReady=true时才开放。']) : undefined,
+  }
+}
+
+function digitFiveManual(game: Game): GameManual {
+  const v3 = isDigit5V3Game(game.id, game.ruleVersion)
+  const sg = game.id === 'sg-ssc'
+  const bingoOne = game.id === 'bingo-ssc-1'
+  const externalSG = sg && (game.sourceKind === 'external' || game.sourceKind === 'official')
+  const sgSource = sg ? (game.sourceName || (externalSG ? '外部开奖源' : '王者平台自开')) : ''
+  return {
+    id: game.id,
+    gameId: game.id,
+    title: game.title,
+    status: v3 ? 'implemented' : 'partial',
+    statusText: v3 ? '三段形态与龙虎和已接入' : sg ? `${externalSG ? '外部来源待核验' : '平台自开'} · 完整规则待确认` : '号码与两面已接入 · 中三/后三待版本化',
+    betModes: { chat: game.rulesReady !== false, web: game.rulesReady !== false },
+    summary: v3 ? '5球数字彩。聊天与网投已支持球位号码、大小单双、前三/中三/后三形态，以及第一球对第五球的龙、虎、和。总和、总和尾及第二球对第四球龙虎不在本次原版合同内，新投注已关闭。' : `5球数字彩。聊天与网投已支持球位号码、大小单双和本地附加玩法；手册中的中三、后三形态尚未开放。${sg ? ` 当前开奖身份为“${sgSource}”，不宣称与SG外部开奖同步。` : ''}`,
+    sourceURL: game.id.startsWith('bingo-') ? 'https://www.www-163kai.cc/' : undefined,
+    sections: [
+      ...(bingoOne ? [{
+        title: '宾果开奖转换',
+        body: '必须使用保留真实开出顺序的宾果原始20号源，取前5个原号的个位数作为第1至第5球。服务端会与宾果官方结果交叉核对；原号顺序不可证明、号码不完整或核对不一致时，当期不会生成可结算开奖。',
+        examples: ['原始前5号：12、28、35、47、59 → 第1至第5球：2、8、5、7、9'],
+      }] : []),
+      ...(v3 ? digitFiveV3Sections : digitFiveSections),
+    ],
+    auditNotes: v3
+      ? ['中三、后三与龙虎和仅在服务端明确返回 digits5-v3 时开放；旧注单继续按原规则版本结算。', '赔率全部读取当前房间后台配置；“和”使用独立玩法赔率，缺失时前端与服务端均拒绝投注。', '原版未说明890、901边界；当前明确沿用循环顺子，不套用PC/加拿大28的排除条款。', ...(bingoOne ? ['宾果时时彩(一)不接受按数值排序后的20号数组；必须由服务端完成原始顺序交叉核对。'] : [])]
+      : ['当前金融规则版本只结算“前三形态”。中三、后三不能仅改界面，需新规则版本保护历史注单后再开放。', '本地既有总和、总和尾及球位龙虎，但这些附加玩法未出现在本次提供的五位彩手册中；当前赔率页会如实展示，业务规则仍需进一步确认。', ...(sg ? [`当前开奖来源显示为“${sgSource}”；真实SG接口未核验前维持部分对齐。`] : [])],
+  }
+}
+
+function digitThreeManual(game: Game): GameManual {
+  return {
+    id: game.id,
+    gameId: game.id,
+    title: game.title,
+    status: 'implemented',
+    statusText: '本地三球规则已接入',
+    betModes: { chat: game.rulesReady !== false, web: game.rulesReady !== false },
+    summary: '本地三球数字彩规则：号码、两面、总和、总和尾、第一球龙虎及三球形态均使用同一版本化结算合同。',
+    sections: digitThreeSections,
+    auditNotes: ['这两个官方三位彩不在本次外部手册内；此处展示的是当前本地已启用规则，不把它们套用到PC28。'],
+  }
+}
+
+function pc28Manual(game: Game): GameManual {
+  const version = pc28RuleVersionForGame(game.id)
+  const variantKey = version === 'pc28-v1' ? 'play1' : version === 'pc28-v2' ? 'play2' : 'play3'
+  const variantLabel = version === 'pc28-v1' ? '玩法一' : version === 'pc28-v2' ? '玩法二' : '玩法三'
+  const versionReady = isPC28RuleVersion(game.id, game.ruleVersion)
+  const sourceName = game.sourceName || (game.sourceKind === 'external' || game.sourceKind === 'official' ? '外部开奖源' : '王者开奖')
+  return {
+    id: game.id,
+    gameId: game.id,
+    title: game.title,
+    status: 'implemented',
+    statusText: `${variantLabel} · 聊天与PC专用网投已接入`,
+    betModes: { chat: game.rulesReady !== false && versionReady, web: game.rulesReady !== false && versionReady },
+    summary: `每期开出3个0–9数字并计算和值0–27。${game.title}固定绑定${variantLabel}（${version}），开奖页展示三球与和值；当前开奖来源为“${sourceName}”。`,
+    sections: [
+      { title: '开奖来源与结果', body: `当前开奖来源显示为“${sourceName}”。开奖结果必须恰好包含3个0–9数字，系统同时展示三球、和值、和值大小单双以及第一球对第三球的龙虎和。` },
+      ...pc28Sections,
+      pc28VariantSections[variantKey],
+      pc28VariantComparison,
+    ],
+    auditNotes: [`彩种ID与版本固定映射：pc-canada→pc28-v1、canada-28→pc28-v2、canada-20→pc28-v3；服务端返回版本不匹配时暂停投注。`, '网投选项逐项读取当前房间服务端赔率；任一原子玩法缺失赔率时单独禁用，不使用默认赔率。', '890、901与019在PC28专用规则中均不算顺子，不沿用时时彩循环顺子。'],
+  }
+}
+
+function markSixManual(game: Game): GameManual {
+  return {
+    id: game.id,
+    gameId: game.id,
+    title: game.title,
+    status: 'partial',
+    statusText: '仅支持详细网投 · 组合赔率分阶段开放',
+    betModes: { chat: false, web: game.rulesReady !== false },
+    summary: '每期从宾果20个原始号码中按开出顺序筛选01–49，取最先符合的7个号码；前6个为正码，第7个为特码。本彩种只支持详细网投，不解析聊天指令。',
+    sourceURL: 'https://www.www-163kai.cc/',
+    sections: [
+      {
+        title: '开奖来源与取号',
+        body: '以宾果每5分钟开出的20个号码为原始结果，营业时段为07:05–23:55、每日203期。系统保持原始开出顺序，只采用01–49；遇到50–80直接跳过，累计取得7个后停止。若整期不足7个合格号码，本期视为异常，不开奖也不结算。',
+        examples: ['原始：52、35、71、34、23、30、22、06、20… → 开奖：35、34、23、30、22、06 + 20'],
+      },
+      {
+        title: '特码与两面',
+        body: '第7个号码为特码。特码大小：01–24小、25–48大；特码单双按号码判断；合数大小按十位与个位之和1–6为合小、7–12为合大；合数单双按位数和判断；尾数大小为0–4尾小、5–9尾大。以上玩法开49均为和局返本。',
+        examples: ['特码34 → 大、双、合大、合单、尾小', '特码49 → 上述两面全部和局返本'],
+      },
+      {
+        title: '特码分组与半特',
+        body: '天肖为牛、兔、龙、马、猴、猪，地肖为鼠、虎、蛇、羊、鸡、狗；前肖为鼠、牛、虎、兔、龙、蛇，后肖为马、羊、猴、鸡、狗、猪；家肖为牛、马、羊、鸡、狗、猪，野肖为鼠、虎、兔、龙、蛇、猴。这三类分组开49为和局返本。半特把大小与单双组合成大单、大双、小单、小双；半特开49则不中奖。',
+      },
+      {
+        title: '总和',
+        body: '7个开奖号码相加：总和大为175及以上，总和小为174及以下；总和单双按总分奇偶判断。总和玩法使用全部7个号码，不把特码单独剔除。',
+      },
+      {
+        title: '色波、半波与半半波',
+        body: '特码按固定红、蓝、绿波表判断。半波把颜色与大小或单双组合；半半波再把颜色、大小、单双三项组合。特码49属于绿波，但在半波及半半波中按和局返本处理。',
+        examples: ['红波：01、02、07、08、12、13、18、19、23、24、29、30、34、35、40、45、46', '蓝波：03、04、09、10、14、15、20、25、26、31、36、37、41、42、47、48', '绿波：05、06、11、16、17、21、22、27、28、32、33、38、39、43、44、49'],
+      },
+      {
+        title: '生肖与合肖',
+        body: '生肖按开奖日期所在的农历年动态轮换：当年生肖对应01、13、25、37、49，之后每个号码按鼠、牛、虎、兔、龙、蛇、马、羊、猴、鸡、狗、猪的循环逆序分配。特码生肖命中所选生肖即中奖；合肖选择2–11个生肖，特码49统一和局返本。历史开奖按当期开奖日计算，不能用今天的生肖表重算。',
+        examples: ['2026马年：马=01、13、25、37、49；猴=11、23、35、47；猪=08、20、32、44'],
+      },
+      {
+        title: '特码头数与尾数',
+        body: '头数按十位分为0头至4头，其中0头为01–09、4头为40–49；尾数按个位分为0尾至9尾。特码落在所选头数或尾数即中奖。',
+        examples: ['特码21 → 2头、1尾'],
+      },
+      {
+        title: '正码、正码特与正码1–6',
+        body: '前6个号码为正码。正码选号只要出现在任一正码位置即中奖；正码特按指定的正1至正6位置和号码精确命中。正码1–6还可按每个指定位置投注大小、单双、合数大小、合数单双、尾数大小及色波；该位置开49时，两面属性按和局返本。',
+      },
+      {
+        title: '五行',
+        body: '以特码所在固定号码组判断：金=06、07、20、21、28、29、36、37；木=02、03、10、11、18、19、32、33、40、41、48、49；水=08、09、16、17、24、25、38、39、46、47；火=04、05、12、13、26、27、34、35、42、43；土=01、14、15、22、23、30、31、44、45。',
+      },
+      {
+        title: '一肖、尾数与总肖',
+        body: '一肖和一尾使用全部7个开奖号码，只要出现一次或多次都只派一次；一肖中的49照常算生肖，不作和局。总肖统计本期7个号码覆盖的不同生肖数量，可投2–7肖及总肖单双，49照常参与统计。',
+      },
+      {
+        title: '正肖与七色波',
+        body: '正肖只统计前6个正码，命中同一生肖的正码有几个，盈利部分就按命中次数倍增，49照常算生肖。七色波统计7个号码的颜色：每个正码计1分、特码计1.5分，最高颜色中奖；三种“正码3比3、特码为第三色”的情形是和局，可单独投注和局。',
+      },
+      {
+        title: '自选不中',
+        body: '选择5–11个不同号码组成一注；只要当期7个开奖号码全部不在所选组合内即中奖，任一所选号码开出即不中奖。不同选择数量必须使用对应赔率。',
+      },
+      {
+        title: '连肖与连尾',
+        body: '连肖选择2–5个生肖，每个所选生肖都必须至少在本期7个号码中出现；连尾选择2–5个尾数，每个所选尾数都必须至少出现。一个生肖或尾数出现多次仍只算一次，49照常参与。组合赔率取所选项目中的最低赔率。',
+      },
+      {
+        title: '连码',
+        body: '四全中、三全中、二全中均只用前6个正码判断；三中二有“中二”与“中三”两档赔率；二中特有“中二正码”与“一正一码特码”两档赔率；特串必须一号命中特码、另一号命中任一正码。组合必须选足规定数量且号码不得重复。',
+      },
+    ],
+    auditNotes: ['赔率以当前房间后台配置为准；规则说明不等于该玩法已经开放提交。', '具有两档赔率、组合最低赔率或按命中数倍增的玩法，必须在赔率快照和结算模型都支持后才会开放，不能用一个固定赔率代替。'],
+  }
+}
+
+export function manualForGame(game: Game): GameManual {
+  if (racingIDs.has(game.id)) return racingManual(game)
+  if (digitFiveIDs.has(game.id)) return digitFiveManual(game)
+  if (digitThreeIDs.has(game.id)) return digitThreeManual(game)
+  if (pc28IDs.has(game.id)) return pc28Manual(game)
+  if (markSixIDs.has(game.id)) return markSixManual(game)
+  return {
+    id: game.id,
+    gameId: game.id,
+    title: game.title,
+    status: 'reference',
+    statusText: '完整玩法待配置 · 暂停受理',
+    betModes: { chat: false, web: false },
+    summary: '该彩种尚未形成解析、赔率、限额与结算一致的规则版本。当前仅展示彩种，不接受投注。',
+    sections: [{ title: '安全说明', body: '不能根据名称、开奖号码长度或其他彩种规则推测投注含义；待管理员完成规则与赔率配置后再开放。' }],
+  }
+}
+
+export const referenceManuals: GameManual[] = [
+  {
+    id: 'reference-pc-dandan', title: 'PC蛋蛋', status: 'reference', statusText: '参考手册 · 本地尚无独立彩种ID', betModes: { chat: false, web: false },
+    summary: '0–27、包三、三球定位、混合、色波与梭哈规则；需绑定明确开奖源及玩法版本后再开放。', sections: pc28Sections,
+  },
+  {
+    id: 'reference-pc28-play-1', title: '加拿大28 · 玩法一', status: 'reference', statusText: '版本对照 · 已绑定 pc-canada', betModes: { chat: false, web: false },
+    summary: 'pc-canada 的 pc28-v1 对照规则：含禁止两面反向下注、13/14特殊赔率与有效流水条款。', sections: [...pc28Sections, pc28VariantSections.play1],
+    auditNotes: ['开13/14时，本期所有下注不计有效流水；总注阈值与赔率须保存到注单规则快照。'],
+  },
+  {
+    id: 'reference-pc28-play-2', title: '加拿大28 · 玩法二', status: 'reference', statusText: '版本对照 · 已绑定 canada-28', betModes: { chat: false, web: false },
+    summary: 'canada-28 的 pc28-v2 对照规则：含禁止两面反向下注及13/14组合庄家通吃条款。', sections: [...pc28Sections, pc28VariantSections.play2],
+    auditNotes: ['总注严格大于1且开13/14时，组合庄家通吃；不得与玩法一或三共用未版本化结算。'],
+  },
+  {
+    id: 'reference-pc28-play-3', title: '加拿大28 · 玩法三', status: 'reference', statusText: '版本对照 · 已绑定 canada-20', betModes: { chat: false, web: false },
+    summary: 'canada-20 的 pc28-v3 对照规则：13/14两面与组合使用独立特殊赔率。', sections: [...pc28Sections, pc28VariantSections.play3],
+  },
+  {
+    id: 'reference-animal-1m', title: '动物运动会', status: 'reference', statusText: '本地尚无彩种与开奖源', betModes: { chat: false, web: false },
+    summary: '目标为6名动物、每1分钟开奖。大/小分界、赔率、期号与官方接口仍待确认。', sourceURL: 'https://www.dongwuhui.com/', sections: animalSections,
+  },
+  {
+    id: 'reference-animal-5m', title: '五分运动会', status: 'reference', statusText: '本地尚无彩种与开奖源', betModes: { chat: false, web: false },
+    summary: '目标为6名动物、约每5分40秒开奖。大/小分界、赔率、期号与官方接口仍待确认。', sourceURL: 'https://www.dongwuhui.com/', sections: animalSections,
+  },
+]
+
+export function gameManualOptions(games: Game[]) {
+  const live = games.map(manualForGame)
+  const liveIDs = new Set(games.map(game => game.id))
+  const documentedGames = [
+    ['speed-racing', '极速赛车'], ['au-lucky-10', '澳洲幸运10'], ['au-lucky-5', '澳洲幸运5'],
+    ['speed-ssc', '极速时时彩'], ['bingo-racing-a', '宾果赛车(A)'], ['bingo-ssc-1', '宾果时时彩(一)'],
+    ['speed-fly', '极速飞艇'], ['pc-canada', 'PC加拿大'], ['canada-28', '加拿大28'], ['canada-20', '加拿大2.0'],
+  ] as const
+  const inactive = documentedGames.filter(([id]) => !liveIDs.has(id)).map(([id, title]) => {
+    const manual = manualForGame({ id, title } as Game)
+    return {
+      ...manual,
+      id: `manual-${id}`,
+      gameId: undefined,
+      betModes: { chat: false, web: false },
+      status: 'reference' as const,
+      statusText: `${manual.statusText} · 当前房间未启用`,
+    }
+  })
+  return [...live, ...inactive, ...referenceManuals]
+}

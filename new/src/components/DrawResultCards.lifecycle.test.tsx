@@ -106,15 +106,15 @@ describe('draw card paint effects', () => {
     const corrected = { ...draw, numbers: [1, 6, 2, 8, 9, 10, 4, 7, 5, 3] }
     const withCorrection = { ...withHistory, draw: corrected }
     render(withCorrection)
-    expect(runtime.current).toHaveBeenCalledExactlyOnceWith(expect.anything(), { title: '极速赛车' }, corrected, expect.anything(), 2)
+    expect(runtime.current).toHaveBeenCalledExactlyOnceWith(expect.anything(), { title: '极速赛车', ruleVersion: '' }, corrected, expect.anything(), 2)
     expect(runtime.recent).not.toHaveBeenCalled()
     runtime.current.mockClear()
 
     render({ ...withCorrection, title: '新的彩种名称' })
     expect(runtime.current).toHaveBeenCalledOnce()
     expect(runtime.recent).toHaveBeenCalledOnce()
-    expect(runtime.current.mock.lastCall?.[1]).toEqual({ title: '新的彩种名称' })
-    expect(runtime.recent.mock.lastCall?.[1]).toEqual({ title: '新的彩种名称' })
+    expect(runtime.current.mock.lastCall?.[1]).toEqual({ title: '新的彩种名称', ruleVersion: '' })
+    expect(runtime.recent.mock.lastCall?.[1]).toEqual({ title: '新的彩种名称', ruleVersion: '' })
   })
 
   it('paints each image only near the viewport, releases distant bitmaps and repaints the latest props on re-entry', async () => {

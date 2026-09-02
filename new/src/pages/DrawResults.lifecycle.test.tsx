@@ -46,18 +46,18 @@ describe('draw history uses explicit per-game rule profiles', () => {
   beforeEach(() => {
     runtime.hooks = new HookHarness()
     runtime.loading = false
-    const game = makeGame('speed-ssc', [9, 8, 1, 2, 3])
+    const game = { ...makeGame('speed-ssc', [9, 8, 1, 2, 3]), ruleVersion: 'digits5-v3' }
     props = { games: [game], initialGameId: game.id, onBack: vi.fn(), onSelectGame: vi.fn() }
     runtime.draws = [makeDraw(game.id, game.balls)]
   })
 
-  it('uses all five SSC balls for totals and compares only the two actual mirror pairs', () => {
+  it('uses all five SSC balls for totals and compares only first versus fifth', () => {
     expect(modeLabels()).toEqual(['号码', '大小', '单双', '总和/龙虎'])
     clickMode('总和/龙虎')
     const html = markup()
     expect(html).toContain('<strong>23</strong>')
-    expect(words(html)).toEqual(['大', '单', '龙', '龙'])
-    expect(html).toContain('总和：23大单，1–2 龙虎：龙龙')
+    expect(words(html)).toEqual(['大', '单', '龙'])
+    expect(html).toContain('总和：23大单，第一球 vs 第五球 龙虎和：龙')
     expect(html).not.toContain('虎虎虎虎虎')
   })
 
@@ -81,7 +81,20 @@ describe('draw history uses explicit per-game rule profiles', () => {
     props.initialGameId = sg.id
     runtime.draws = [makeDraw(sg.id, sg.balls)]
     clickMode('总和/龙虎')
-    expect(words(markup())).toEqual(['大', '单', '龙', '龙'])
+    expect(words(markup())).toEqual(['大', '单', '龙'])
+  })
+
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('shows only original numbers when %s has no exact five-ball contract', id => {
+    for (const ruleVersion of [undefined, '', 'digits5-v2', 'digits5-v4']) {
+      runtime.hooks = new HookHarness()
+      const game = { ...makeGame(id, [9, 8, 1, 2, 3]), ruleVersion }
+      props.games = [game]
+      props.initialGameId = id
+      runtime.draws = [makeDraw(id, game.balls)]
+      expect(modeLabels()).toEqual(['号码'])
+      expect(words(markup())).toEqual([])
+      expect(markup()).not.toContain('trend-cells')
+    }
   })
 
   it('uses SSC thresholds despite mutable titles or a live snapshot containing a ten', () => {
@@ -152,7 +165,7 @@ describe('draw history uses explicit per-game rule profiles', () => {
     expect(markup()).toContain('特码：49 绿波 和局')
   })
 
-  it.each(['hk-marksix', 'official-qxc', 'official-tw-bingo'])('offers only original numbers for an unconfigured %s game', id => {
+  it.each(['hk-marksix', 'official-qxc', 'official-tw-bingo', 'bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('offers only original numbers for an unconfigured %s game', id => {
     const game = makeGame(id, [1, 10, 3])
     props.games = [game]
     props.initialGameId = id

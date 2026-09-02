@@ -75,7 +75,7 @@ type PlaceBetInput struct {
 	FlyAmount *float64 // nil = 按用户/房间飞单策略自动计算
 	Remark    string
 	Operator  string
-	// BetMode is server-owned. mark6-v1 is intentionally available only to
+	// BetMode is server-owned. Mark Six is intentionally available only to
 	// the typed member web ticket and never to compact/chat parsers.
 	BetMode string
 	// LedgerReference links an automatic balance deduction to its idempotent

@@ -4,13 +4,14 @@ import (
 	"backend/data/models/bet"
 	"backend/data/models/lottery"
 	apperrors "backend/errors"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestBingoMarkSixV1DrawAndModeContract(t *testing.T) {
+func TestBingoMarkSixDrawAndModeContract(t *testing.T) {
 	game := &lottery.Game{ID: "bingo-mark-six"}
 	profile, ok := rulesForGame(game)
 	if !ok || profile.Version != markSixRuleVersion || !profile.MarkSix || profile.BallCount != 7 || profile.MinNumber != 1 || profile.MaxNumber != 49 || !profile.Unique {
@@ -40,40 +41,42 @@ func TestBingoMarkSixV1DrawAndModeContract(t *testing.T) {
 	}
 }
 
-func TestBingoMarkSixV1IsImmutableAndV2CatalogMarksUnpricedAtoms(t *testing.T) {
-	v1Codes := make([]string, 0, len(markSixV1Specs))
-	for _, spec := range markSixV1Specs {
-		v1Codes = append(v1Codes, spec.Play.Code)
+func TestBingoMarkSixCatalogRequiresExplicitPricesAndCurrentContract(t *testing.T) {
+	coreCodes := make([]string, 0, len(markSixCoreSpecs))
+	for _, spec := range markSixCoreSpecs {
+		coreCodes = append(coreCodes, spec.Play.Code)
 	}
-	wantV1 := []string{
+	wantCore := []string{
 		"marksix_special_a_number", "marksix_special_b_number", "marksix_regular_number",
 		"marksix_regular_position_number", "marksix_regular_special_number",
 		"marksix_combo_4_all", "marksix_combo_3_all", "marksix_combo_2_all",
 		"marksix_combo_special_pair", "marksix_not_in",
 	}
-	if !reflect.DeepEqual(v1Codes, wantV1) {
-		t.Fatalf("v1 changed: %v", v1Codes)
+	if !reflect.DeepEqual(coreCodes, wantCore) {
+		t.Fatalf("core markets changed: %v", coreCodes)
 	}
-	if _, ok := markSixSpecByCode(markSixLegacyRuleVersion, "marksix_special_big_small"); ok {
-		t.Fatal("v2 play leaked into immutable v1")
-	}
-	catalog := PlayCatalogForGame("bingo-mark-six")
-	if len(catalog) != len(markSixV2Specs) || len(markSixDefaultPlays) <= len(markSixV1Specs) {
-		t.Fatalf("v2 catalog/defaults incomplete: catalog=%d priced=%d", len(catalog), len(markSixDefaultPlays))
-	}
-	seenUnpriced := false
-	for _, item := range catalog {
-		if item.DefaultOdds == 0 {
-			seenUnpriced = true
-			if !strings.Contains(item.Description, "赔率需后台") {
-				t.Fatalf("unpriced atom lacks explicit warning: %+v", item)
-			}
-		} else if item.DefaultOdds <= 1 {
-			t.Fatalf("invalid seeded odds: %+v", item)
+	for _, version := range []string{"", "mark6-v1", "unknown"} {
+		if specs := markSixSpecsForVersion(version); len(specs) != 0 {
+			t.Fatalf("unsupported contract %q exposed markets: %v", version, specs)
 		}
 	}
-	if !seenUnpriced {
-		t.Fatal("v2 did not expose configurable atomic markets")
+	catalog := PlayCatalogForGame("bingo-mark-six")
+	if len(catalog) != len(markSixV2Specs) || len(catalog) <= len(markSixCoreSpecs) {
+		t.Fatalf("current catalog incomplete: %d", len(catalog))
+	}
+	seen := make(map[string]bool)
+	for _, item := range catalog {
+		if seen[item.PlayCode] {
+			t.Fatalf("duplicate play code: %s", item.PlayCode)
+		}
+		seen[item.PlayCode] = true
+		if strings.Contains(item.Description, "首次后台默认赔率") {
+			t.Fatalf("catalog advertises an automatic price: %+v", item)
+		}
+	}
+	payload, err := json.Marshal(catalog)
+	if err != nil || strings.Contains(string(payload), "default_odds") {
+		t.Fatalf("catalog must not advertise code-owned prices: %s, err=%v", payload, err)
 	}
 	profile, _ := rulesForGame(&lottery.Game{ID: "bingo-mark-six"})
 	for _, code := range []string{"marksix_combo_3_2", "marksix_combo_2_special", "marksix_one_zodiac", "marksix_total_zodiac", "marksix_seven_color_wave", "marksix_link_zodiac_2"} {
@@ -132,7 +135,7 @@ func TestBingoMarkSixChoiceCanonicalizationAndValidation(t *testing.T) {
 	}
 }
 
-func TestBingoMarkSixV1SettlementTruthTable(t *testing.T) {
+func TestBingoMarkSixCoreSettlementTruthTable(t *testing.T) {
 	game := &lottery.Game{ID: "bingo-mark-six"}
 	draw := []int{1, 2, 3, 4, 5, 6, 49}
 	for _, test := range []struct {
@@ -156,23 +159,15 @@ func TestBingoMarkSixV1SettlementTruthTable(t *testing.T) {
 		{"marksix_not_in", 0, "7,8,9,10,11", true},
 		{"marksix_not_in", 0, "1,7,8,9,10", false},
 	} {
-		got, _, err := evaluateBetForRuleVersion(game, markSixLegacyRuleVersion, draw, test.code, test.position, test.selection)
+		got, _, err := evaluateBetForRuleVersion(game, markSixRuleVersion, draw, test.code, test.position, test.selection)
 		if err != nil || got != test.want {
-			t.Fatalf("v1 %+v got=%v err=%v", test, got, err)
-		}
-		gotV2, _, err := evaluateBetForRuleVersion(game, markSixRuleVersion, draw, test.code, test.position, test.selection)
-		if err != nil || gotV2 != test.want {
-			t.Fatalf("v2 compatibility %+v got=%v err=%v", test, gotV2, err)
+			t.Fatalf("%+v got=%v err=%v", test, got, err)
 		}
 	}
-	if won, _, err := evaluateBetForRuleVersion(game, markSixLegacyRuleVersion, draw, "marksix_special_a_number", 7, "49"); err != nil || !won {
-		t.Fatalf("v1 historical ticket no longer settles: won=%v err=%v", won, err)
-	}
-	if _, _, err := evaluateBetForRuleVersion(game, markSixLegacyRuleVersion, draw, "marksix_special_big_small", 7, "大"); apperrors.GetErrorCode(err) != "INVALID_REQUEST" {
-		t.Fatalf("v2 code leaked into v1: %v", err)
-	}
-	if _, _, err := evaluateBetForRuleVersion(game, "", draw, "marksix_special_a_number", 7, "49"); apperrors.GetErrorCode(err) != "RULES_NOT_READY" {
-		t.Fatalf("legacy empty-version Mark Six ticket was reinterpreted: %v", err)
+	for _, version := range []string{"", "mark6-v1"} {
+		if _, _, err := evaluateBetForRuleVersion(game, version, draw, "marksix_special_a_number", 7, "49"); apperrors.GetErrorCode(err) != "RULES_NOT_READY" {
+			t.Fatalf("unsupported contract %q was reinterpreted: %v", version, err)
+		}
 	}
 	if _, _, err := evaluateBetForRuleVersion(game, markSixRuleVersion, []int{1, 2, 3, 4, 5, 6, 6}, "marksix_special_a_number", 7, "6"); apperrors.GetErrorCode(err) != "INVALID_DRAW" {
 		t.Fatalf("invalid draw was settled: %v", err)
@@ -262,15 +257,16 @@ func TestBingoMarkSixSettlementLabelsNeverRenderZeroBall(t *testing.T) {
 		{RuleVersion: markSixRuleVersion, PlayCode: "marksix_regular_position_big_small", Position: 4},
 		{RuleVersion: markSixRuleVersion, PlayCode: "marksix_regular_color_green", Position: 6},
 	} {
+		item.GameID = "bingo-mark-six"
 		label := settlementBetLabel(item)
 		if strings.Contains(label, "第0") || label == "" {
 			t.Fatalf("bad settlement label %q for %+v", label, item)
 		}
 	}
-	if got := settlementBetLabel(bet.Bet{RuleVersion: markSixRuleVersion, PlayCode: "marksix_regular_position_big_small", Position: 4}); got != "正码1-6大小 第4位" {
+	if got := settlementBetLabel(bet.Bet{GameID: "bingo-mark-six", RuleVersion: markSixRuleVersion, PlayCode: "marksix_regular_position_big_small", Position: 4}); got != "正码1-6大小 第4位" {
 		t.Fatalf("regular side label lost its position: %q", got)
 	}
-	if got := settlementBetLabel(bet.Bet{RuleVersion: markSixRuleVersion, PlayCode: "marksix_regular_color_green", Position: 6}); got != "正码1-6绿波 第6位" {
+	if got := settlementBetLabel(bet.Bet{GameID: "bingo-mark-six", RuleVersion: markSixRuleVersion, PlayCode: "marksix_regular_color_green", Position: 6}); got != "正码1-6绿波 第6位" {
 		t.Fatalf("regular color label lost its position: %q", got)
 	}
 }

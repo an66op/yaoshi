@@ -28,7 +28,7 @@ describe('atomic bet command validation', () => {
   })
 
   it('validates digit-board commands without changing zero into ten', () => {
-    expect(parseBetInput('1/0/20#总和/大/20#总和尾/7/20#前三/豹子/20', 'speed-ssc').payloads).toEqual([
+    expect(parseBetInput('1/0/20#总和/大/20#总和尾/7/20#前三/豹子/20', 'official-fc3d', 'digits3-v2').payloads).toEqual([
       expect.objectContaining({ position: 1, selection: '0', play_code: 'ball_1_5', amount: 20 }),
       expect.objectContaining({ position: 6, selection: '大', play_code: 'sum', amount: 20 }),
       expect.objectContaining({ position: 6, selection: '7', play_code: 'sum', amount: 20 }),

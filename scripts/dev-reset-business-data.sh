@@ -70,20 +70,28 @@ case "$BACKEND_DATABASE_SSLMODE" in
   *) echo "BACKEND_DATABASE_SSLMODE 不正确" >&2; exit 1 ;;
 esac
 
+# Reset receipts are immutable audit/idempotency evidence. Session revocations
+# must survive until delivered; advancing auth_version below appends new ones.
+# Plan automation rows are operator-owned configuration, not generated history.
 preserved_tables=(
   schema_migrations development_reset_receipts workspace_migration_markers
+  workspace_robot_reset_receipts ws_session_revocation_outbox
   user workspaces workspace_memberships
   workspace_robot_profiles workspace_robot_games workspace_robot_settings
   lottery_games lottery_lobby_categories lottery_play_limits user_play_odds
   room_play_odds room_game_settings system_settings data_retention_policies
   ops_activities special_number_resources special_number_campaigns
-  entertainment_platforms wallet_payment_channels
+  entertainment_platforms wallet_payment_channels plan_automations
 )
+# Derived cursors/windows must be cleared with messages/issues because the
+# corresponding identities restart. Stream children and their parent streams
+# are listed together so no CASCADE can widen the approved reset boundary.
 cleared_tables=(
-  user_balance_transactions user_applications lottery_issues lottery_draws
+  user_balance_transactions user_applications lottery_issues lottery_draws lottery_issue_windows
   lottery_bets lottery_assistant_requests lottery_bet_requests plan_recommendations
+  plan_generation_receipts plan_streams plan_stream_cycles plan_stream_periods
   member_payment_accounts activity_participations special_number_grants
-  admin_notifications member_notifications member_chat_messages chat_red_packets
+  admin_notifications member_notifications member_chat_messages member_chat_read_cursors chat_red_packets
   chat_red_packet_claims rebate_daily_records agent_profit_share_records
   admin_audit_logs data_cleanup_runs admin_audit_log_archives lottery_bet_archives
   user_balance_transaction_archives
@@ -221,6 +229,7 @@ CREATE TEMP TABLE dev_reset_manifest (
 INSERT INTO dev_reset_manifest (table_name, disposition) VALUES
   ('schema_migrations','preserve'), ('development_reset_receipts','preserve'),
   ('workspace_migration_markers','preserve'),
+  ('workspace_robot_reset_receipts','preserve'), ('ws_session_revocation_outbox','preserve'),
   ('user','preserve'), ('workspaces','preserve'), ('workspace_memberships','preserve'),
   ('workspace_robot_profiles','preserve'), ('workspace_robot_games','preserve'),
   ('workspace_robot_settings','preserve'), ('lottery_games','preserve'),
@@ -230,13 +239,16 @@ INSERT INTO dev_reset_manifest (table_name, disposition) VALUES
   ('data_retention_policies','preserve'), ('ops_activities','preserve'),
   ('special_number_resources','preserve'), ('special_number_campaigns','preserve'),
   ('entertainment_platforms','preserve'), ('wallet_payment_channels','preserve'),
+  ('plan_automations','preserve'),
   ('user_balance_transactions','clear'), ('user_applications','clear'),
-  ('lottery_issues','clear'), ('lottery_draws','clear'), ('lottery_bets','clear'),
+  ('lottery_issues','clear'), ('lottery_draws','clear'), ('lottery_issue_windows','clear'), ('lottery_bets','clear'),
   ('lottery_assistant_requests','clear'), ('lottery_bet_requests','clear'),
-  ('plan_recommendations','clear'), ('member_payment_accounts','clear'),
+  ('plan_recommendations','clear'), ('plan_generation_receipts','clear'),
+  ('plan_streams','clear'), ('plan_stream_cycles','clear'), ('plan_stream_periods','clear'),
+  ('member_payment_accounts','clear'),
   ('activity_participations','clear'), ('special_number_grants','clear'),
   ('admin_notifications','clear'), ('member_notifications','clear'),
-  ('member_chat_messages','clear'), ('chat_red_packets','clear'),
+  ('member_chat_messages','clear'), ('member_chat_read_cursors','clear'), ('chat_red_packets','clear'),
   ('chat_red_packet_claims','clear'), ('rebate_daily_records','clear'),
   ('agent_profit_share_records','clear'), ('admin_audit_logs','clear'),
   ('data_cleanup_runs','clear'), ('admin_audit_log_archives','clear'),
@@ -270,12 +282,14 @@ SELECT set_config('wangzhe.lifecycle_delete', 'on', true);
 
 TRUNCATE TABLE
     public.user_balance_transactions, public.user_applications,
-    public.lottery_issues, public.lottery_draws, public.lottery_bets,
+    public.lottery_issues, public.lottery_draws, public.lottery_issue_windows, public.lottery_bets,
     public.lottery_assistant_requests, public.lottery_bet_requests,
-    public.plan_recommendations, public.member_payment_accounts,
+    public.plan_recommendations, public.plan_generation_receipts,
+    public.plan_streams, public.plan_stream_cycles, public.plan_stream_periods,
+    public.member_payment_accounts,
     public.activity_participations, public.special_number_grants,
     public.admin_notifications, public.member_notifications,
-    public.member_chat_messages, public.chat_red_packets,
+    public.member_chat_messages, public.member_chat_read_cursors, public.chat_red_packets,
     public.chat_red_packet_claims, public.rebate_daily_records,
     public.agent_profit_share_records, public.admin_audit_logs,
     public.data_cleanup_runs, public.admin_audit_log_archives,

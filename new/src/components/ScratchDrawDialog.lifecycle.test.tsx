@@ -155,13 +155,13 @@ describe('scratch surface pointer lifecycle', () => {
   })
 
   it.each([
-    { id: 'speed-ssc', balls: [9, 8, 1, 2, 3], label: '总和', total: 23 },
+    { id: 'speed-ssc', balls: [9, 8, 1, 2, 3], ruleVersion: 'digits5-v3', label: '总和', total: 23 },
     { id: 'speed-racing', balls: [5, 6, 1, 2, 3, 4, 7, 8, 9, 10], label: '冠亚和', total: 11 },
     { id: 'pc-canada', balls: [9, 1, 9], label: '和值', total: 19 },
     { id: 'canada-28', balls: [3, 7, 8], label: '和值', total: 18 },
     { id: 'canada-20', balls: [0, 0, 0], label: '和值', total: 0 },
-  ])('uses the shared $label definition for $id', ({ id, balls, label, total }) => {
-    const known = { ...game, id, balls }
+  ])('uses the shared $label definition for $id', ({ id, balls, ruleVersion, label, total }) => {
+    const known = { ...game, id, balls, ruleVersion }
     render(known)
     let tree = render(known)
     elements(tree).find(node => node.type === 'button' && node.props.children === '全部揭晓')!.props.onClick!()

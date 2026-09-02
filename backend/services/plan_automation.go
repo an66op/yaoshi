@@ -190,6 +190,8 @@ func (s *PlanAutomationService) Save(workspaceID uint64, input PlanAutomationInp
 				break // A removed/reclassified game must never prevent stopping the worker.
 			}
 			var game lottery.Game
+			// Catalogue validation stays non-locking: Save already owns the
+			// automation lock, while visits acquire game SHARE before automation.
 			if err := tx.First(&game, "id = ?", gameID).Error; err != nil {
 				return apperrors.NewBusinessError("INVALID_REQUEST", "所选彩种不存在")
 			}
@@ -276,17 +278,17 @@ func (s *PlanAutomationService) RunWorkspace(ctx context.Context, workspaceID ui
 	return PlanAutomationRun{}, apperrors.NewBusinessError("PLAN_VISIT_REQUIRED", "计划仅在会员打开对应页面时按需生成")
 }
 
-func generatePlanDemoGame(tx *gorm.DB, workspaceID uint64, gameID, rawSettings string, stream plan.Stream) (int64, bool, error) {
+// The visit must hold this game's SHARE lock before acquiring any room or
+// configuration locks. Reuse that snapshot; never acquire a game lock here
+// after room/stream locks, even if it would normally be compatible.
+func generatePlanDemoGame(tx *gorm.DB, workspaceID uint64, game lottery.Game, rawSettings string, stream plan.Stream) (int64, bool, error) {
+	gameID := game.ID
 	var roomGame chat.RoomGameSetting
 	err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&roomGame, "workspace_id = ? AND game_id = ?", workspaceID, gameID).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) || (err == nil && !roomGame.Enabled) {
 		return 0, false, nil
 	}
 	if err != nil {
-		return 0, false, err
-	}
-	var game lottery.Game
-	if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&game, "id = ?", gameID).Error; err != nil {
 		return 0, false, err
 	}
 	if _, _, supported := planDemoNumberRange(game); !supported || !game.Enabled || strings.TrimSpace(game.LobbyCategory) == "" || game.NextIssue == "" {

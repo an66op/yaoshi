@@ -35,7 +35,7 @@ func configureDigits5V3RiskFixture(t *testing.T, db *gorm.DB) {
 	for index := range view.Items {
 		view.Items[index].Odds = prices[view.Items[index].PlayCode]
 	}
-	if _, err := NewOddsAdminService(db).Update("speed-ssc", UpdateOddsLimitsInput{Items: view.Items}); err != nil {
+	if _, err := NewOddsAdminService(db).Update("speed-ssc", oddsUpdateInput(view)); err != nil {
 		t.Fatal("configure explicit risk fixture:", err)
 	}
 }
@@ -134,7 +134,7 @@ func TestOddsRiskPostgresPlacementGuardAndSnapshots(t *testing.T) {
 	legacy := bet.Bet{
 		WorkspaceID: room.ID, RoomScope: betRoomScope(member), UserID: member.UserID, Username: member.Username,
 		GameID: game.ID, Issue: "981104", PlayCode: "leopard", Position: 1, Selection: "yes",
-		AmountCents: 200, Odds: 50, Status: "pending", RuleVersion: "digits5-v2", RequestReference: "risk-existing-ticket",
+		AmountCents: 200, Odds: 50, Status: "pending", RuleVersion: "digits5-v3", RequestReference: "risk-existing-ticket",
 	}
 	if err := db.Create(&legacy).Error; err != nil {
 		t.Fatal(err)

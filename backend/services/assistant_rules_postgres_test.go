@@ -3,7 +3,6 @@ package services
 import (
 	"backend/data/models/bet"
 	"backend/data/models/lottery"
-	"backend/data/models/odds"
 	"backend/data/models/user"
 	apperrors "backend/errors"
 	"encoding/json"
@@ -23,9 +22,18 @@ func TestDigits5V3AssistantPostgresMissingTieOddsRejectsWholeTicket(t *testing.T
 	timingPostgresSettings(t, db, room.ID, `{"seal_seconds":30}`)
 	// v3 has no code-authored fallback prices. Configure only dragon/tiger so
 	// this test proves that the missing independent tie quote closes the batch.
-	dragonOdds := odds.PlayLimit{GameID: "speed-ssc", PlayCode: "dragon_tiger", PlayName: "龙虎", Odds: 1.993, MinBet: 1, MaxBet: 50000, MaxUserPeriod: 50000, MaxPeriodTotal: 100000, ExplicitlyConfigured: true, ConfigurationSource: oddsSourceAdminSave}
-	if err := db.Where("game_id = ? AND play_code = ?", dragonOdds.GameID, dragonOdds.PlayCode).Assign(dragonOdds).FirstOrCreate(&dragonOdds).Error; err != nil {
-		t.Fatal(err)
+	view := configureTestGameOdds(t, db, "speed-ssc", map[string]float64{"dragon_tiger": 1.993})
+	var dragonConfigured bool
+	for _, item := range view.Items {
+		if item.PlayCode == "dragon_tiger" {
+			dragonConfigured = item.Configured && item.Odds == 1.993
+		}
+		if item.PlayCode == "dragon_tiger_tie" && item.Configured {
+			t.Fatal("the missing-tie fixture unexpectedly configured tie odds")
+		}
+	}
+	if !dragonConfigured {
+		t.Fatal("the missing-tie fixture must have valid dragon/tiger odds")
 	}
 	issue := "942102"
 	if err := db.Model(&lottery.Game{}).Where("id = ?", "speed-ssc").Updates(map[string]any{
@@ -54,12 +62,8 @@ func TestDigits5V3AssistantPostgresPersistsReceiptVersionAndTieOdds(t *testing.T
 		t.Fatal(err)
 	}
 	timingPostgresSettings(t, db, room.ID, `{"seal_seconds":30}`)
-	// An administrator-provided quote, rather than ensureDefaults, activates
-	// the independent tie market.
-	tieOdds := odds.PlayLimit{GameID: "speed-ssc", PlayCode: "dragon_tiger_tie", PlayName: "龙虎和", Odds: 8.7, MinBet: 1, MaxBet: 50000, MaxUserPeriod: 50000, MaxPeriodTotal: 100000, ExplicitlyConfigured: true, ConfigurationSource: oddsSourceAdminSave}
-	if err := db.Where("game_id = ? AND play_code = ?", tieOdds.GameID, tieOdds.PlayCode).Assign(tieOdds).FirstOrCreate(&tieOdds).Error; err != nil {
-		t.Fatal(err)
-	}
+	// An explicit administrator quote activates the independent tie market.
+	configureTestGameOdds(t, db, "speed-ssc", map[string]float64{"dragon_tiger_tie": 8.7})
 	issue := "942101"
 	if err := db.Model(&lottery.Game{}).Where("id = ?", "speed-ssc").Updates(map[string]any{
 		"enabled": true, "source_kind": "external", "timing_source": "upstream",
@@ -112,6 +116,7 @@ func TestAssistantRulesPostgresDocumentedAmountsAndAtomicity(t *testing.T) {
 		t.Fatal(err)
 	}
 	timingPostgresSettings(t, db, room.ID, `{"seal_seconds":30}`)
+	configureTestGameOdds(t, db, "speed-racing", map[string]float64{"ball_1_5": 9.9, "two_sided": 1.993})
 	if err := db.Model(&lottery.Game{}).Where("id = ?", "speed-racing").Updates(map[string]any{"enabled": true, "source_kind": "external", "timing_source": "upstream", "sync_status": "ok", "last_sync_error": "", "next_issue": "942001", "next_draw_at": time.Now().UTC().Add(10 * time.Minute), "draw_interval": 3600}).Error; err != nil {
 		t.Fatal(err)
 	}

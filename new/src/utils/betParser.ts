@@ -184,7 +184,10 @@ export function parseBetInput(content: string, gameId?: string, ruleVersion = ''
   // PC/28 chat commands are parsed and version-checked by the server. The
   // browser only builds its typed detailed-web rows and must not reinterpret
   // PC syntax through the generic three-digit parser.
-  if (rules.family === 'unknown' || rules.family === 'pc28') return invalid()
+  if (rules.family !== 'racing' && rules.family !== 'ssc' && rules.family !== 'digit3') return invalid()
+  // Five-ball products have one current contract. A missing/stale version
+  // must not silently revive a different parser or produce financial rows.
+  if (rules.family === 'ssc' && !isDigit5V3Game(gameId ?? '', ruleVersion)) return invalid()
 
   for (const segment of text.split('#').map((item) => item.trim()).filter(Boolean)) {
     const parts = segmentParts(segment)

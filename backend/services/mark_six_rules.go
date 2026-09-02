@@ -9,10 +9,7 @@ import (
 	"time"
 )
 
-const (
-	markSixLegacyRuleVersion = "mark6-v1"
-	markSixRuleVersion       = "mark6-v2"
-)
+const markSixRuleVersion = "mark6-v2"
 
 type markSixPlaySpec struct {
 	Play         defaultPlay
@@ -24,51 +21,49 @@ type markSixPlaySpec struct {
 	Value        string
 }
 
-func markSixSpec(code, name, category, description, example string, odds float64, positionMode, selection, kind string, choices ...string) markSixPlaySpec {
-	return markSixPlaySpec{Play: defaultPlay{Code: code, Name: name, Category: category, Description: description, Example: example, Odds: odds}, PositionMode: positionMode, Selection: selection, Choices: choices, Kind: kind}
+func markSixSpec(code, name, category, description, example string, positionMode, selection, kind string, choices ...string) markSixPlaySpec {
+	return markSixPlaySpec{Play: defaultPlay{Code: code, Name: name, Category: category, Description: description, Example: example}, PositionMode: positionMode, Selection: selection, Choices: choices, Kind: kind}
 }
 
-var markSixV1Specs = []markSixPlaySpec{
-	markSixSpec("marksix_special_a_number", "特码A", "特码", "第7球开出所选号码；48为首次后台默认赔率，可由后台调整", "49", 48, "special", "number", "special-number"),
-	markSixSpec("marksix_special_b_number", "特码B", "特码", "第7球开出所选号码；48为首次后台默认赔率，可由后台调整", "49", 48, "special", "number", "special-number"),
-	markSixSpec("marksix_regular_number", "正码", "正码", "所选号码出现在前6个正码中的任一位置；7为首次后台默认赔率，可由后台调整", "18", 7, "none", "number", "regular-number"),
-	markSixSpec("marksix_regular_position_number", "正码1-6", "正码", "指定正码位置开出所选号码；48为首次后台默认赔率，可由后台调整", "第3位/18", 48, "regular", "number", "regular-position-number"),
-	markSixSpec("marksix_regular_special_number", "正码特", "正码", "指定正码位置开出所选号码；48为首次后台默认赔率，可由后台调整", "正三特/18", 48, "regular", "number", "regular-position-number"),
-	{Play: defaultPlay{Code: "marksix_combo_4_all", Name: "四全中", Category: "连码", Description: "所选4个号码全部出现在前6个正码中；700为首次后台默认赔率，可由后台调整", Example: "1,2,3,4", Odds: 700}, PositionMode: "none", Selection: "list", ListCount: 4, Kind: "regular-all"},
-	{Play: defaultPlay{Code: "marksix_combo_3_all", Name: "三全中", Category: "连码", Description: "所选3个号码全部出现在前6个正码中；580为首次后台默认赔率，可由后台调整", Example: "1,2,3", Odds: 580}, PositionMode: "none", Selection: "list", ListCount: 3, Kind: "regular-all"},
-	{Play: defaultPlay{Code: "marksix_combo_2_all", Name: "二全中", Category: "连码", Description: "所选2个号码全部出现在前6个正码中；60为首次后台默认赔率，可由后台调整", Example: "1,2", Odds: 60}, PositionMode: "none", Selection: "list", ListCount: 2, Kind: "regular-all"},
-	{Play: defaultPlay{Code: "marksix_combo_special_pair", Name: "特串", Category: "连码", Description: "所选2个号码分别命中特码和任一正码；150为首次后台默认赔率，可由后台调整", Example: "1,49", Odds: 150}, PositionMode: "none", Selection: "list", ListCount: 2, Kind: "special-pair"},
-	{Play: defaultPlay{Code: "marksix_not_in", Name: "五不中", Category: "自选不中", Description: "所选5个号码均未出现在7个开奖号码中；2为首次后台默认赔率，可由后台调整", Example: "1,2,3,4,5", Odds: 2}, PositionMode: "none", Selection: "list", ListCount: 5, Kind: "not-in"},
+var markSixCoreSpecs = []markSixPlaySpec{
+	markSixSpec("marksix_special_a_number", "特码A", "特码", "第7球开出所选号码；赔率需后台配置", "49", "special", "number", "special-number"),
+	markSixSpec("marksix_special_b_number", "特码B", "特码", "第7球开出所选号码；赔率需后台配置", "49", "special", "number", "special-number"),
+	markSixSpec("marksix_regular_number", "正码", "正码", "所选号码出现在前6个正码中的任一位置；赔率需后台配置", "18", "none", "number", "regular-number"),
+	markSixSpec("marksix_regular_position_number", "正码1-6", "正码", "指定正码位置开出所选号码；赔率需后台配置", "第3位/18", "regular", "number", "regular-position-number"),
+	markSixSpec("marksix_regular_special_number", "正码特", "正码", "指定正码位置开出所选号码；赔率需后台配置", "正三特/18", "regular", "number", "regular-position-number"),
+	{Play: defaultPlay{Code: "marksix_combo_4_all", Name: "四全中", Category: "连码", Description: "所选4个号码全部出现在前6个正码中；赔率需后台配置", Example: "1,2,3,4"}, PositionMode: "none", Selection: "list", ListCount: 4, Kind: "regular-all"},
+	{Play: defaultPlay{Code: "marksix_combo_3_all", Name: "三全中", Category: "连码", Description: "所选3个号码全部出现在前6个正码中；赔率需后台配置", Example: "1,2,3"}, PositionMode: "none", Selection: "list", ListCount: 3, Kind: "regular-all"},
+	{Play: defaultPlay{Code: "marksix_combo_2_all", Name: "二全中", Category: "连码", Description: "所选2个号码全部出现在前6个正码中；赔率需后台配置", Example: "1,2"}, PositionMode: "none", Selection: "list", ListCount: 2, Kind: "regular-all"},
+	{Play: defaultPlay{Code: "marksix_combo_special_pair", Name: "特串", Category: "连码", Description: "所选2个号码分别命中特码和任一正码；赔率需后台配置", Example: "1,49"}, PositionMode: "none", Selection: "list", ListCount: 2, Kind: "special-pair"},
+	{Play: defaultPlay{Code: "marksix_not_in", Name: "五不中", Category: "自选不中", Description: "所选5个号码均未出现在7个开奖号码中；赔率需后台配置", Example: "1,2,3,4,5"}, PositionMode: "none", Selection: "list", ListCount: 5, Kind: "not-in"},
 }
 
 var markSixV2Specs = buildMarkSixV2Specs()
-var markSixLegacyDefaultPlays = markSixPricedPlays(markSixV1Specs)
-var markSixDefaultPlays = markSixPricedPlays(markSixV2Specs)
 
 func buildMarkSixV2Specs() []markSixPlaySpec {
-	specs := append([]markSixPlaySpec{}, markSixV1Specs...)
-	priced := []markSixPlaySpec{
-		markSixSpec("marksix_special_big_small", "特大/特小", "两面", "特码1-24为小、25-48为大，49和局返本", "大", 1.98, "special", "choice", "special-big-small", "大", "小"),
-		markSixSpec("marksix_special_odd_even", "特单/特双", "两面", "特码按单双结算，49和局返本", "单", 1.98, "special", "choice", "special-odd-even", "单", "双"),
-		markSixSpec("marksix_special_sum_big_small", "特合大/特合小", "两面", "特码十位与个位之和1-6为合小、7-12为合大，49和局返本", "合大", 1.98, "special", "choice", "special-sum-big-small", "合大", "合小"),
-		markSixSpec("marksix_special_sum_odd_even", "特合单/特合双", "两面", "特码十位与个位之和按单双结算，49和局返本", "合单", 1.98, "special", "choice", "special-sum-odd-even", "合单", "合双"),
-		markSixSpec("marksix_special_heaven_earth", "特天肖/特地肖", "两面", "牛兔龙马猴猪为天肖，鼠虎蛇羊鸡狗为地肖；49和局返本", "天肖", 1.98, "special", "choice", "special-heaven-earth", "天肖", "地肖"),
-		markSixSpec("marksix_special_front_back", "特前肖/特后肖", "两面", "鼠牛虎兔龙蛇为前肖，马羊猴鸡狗猪为后肖；49和局返本", "前肖", 1.98, "special", "choice", "special-front-back", "前肖", "后肖"),
-		markSixSpec("marksix_special_domestic_wild", "特家肖/特野肖", "两面", "牛马羊鸡狗猪为家肖，鼠虎兔龙蛇猴为野肖；49和局返本", "家肖", 1.98, "special", "choice", "special-domestic-wild", "家肖", "野肖"),
-		markSixSpec("marksix_special_tail_big_small", "特尾大/特尾小", "两面", "特码尾数0-4为尾小、5-9为尾大，49和局返本", "尾大", 1.98, "special", "choice", "special-tail-big-small", "尾大", "尾小"),
-		markSixSpec("marksix_total_odd_even", "总和单双", "两面", "7个开奖号码之和按单双结算", "总和单", 1.98, "none", "choice", "total-odd-even", "总和单", "总和双"),
-		markSixSpec("marksix_total_big_small", "总和大小", "两面", "7个开奖号码之和175及以上为大、174及以下为小", "总和大", 1.98, "none", "choice", "total-big-small", "总和大", "总和小"),
-		markSixSpec("marksix_special_half", "特码半特", "两面", "特码大小与单双组合；49不中奖", "大单", 3.72, "special", "choice", "special-half", "大单", "大双", "小单", "小双"),
-		markSixSpec("marksix_regular_position_big_small", "正码1-6大小", "正码1-6", "指定正码位1-24为小、25-48为大，49和局返本", "第1位/大", 1.98, "regular", "choice", "regular-big-small", "大", "小"),
-		markSixSpec("marksix_regular_position_odd_even", "正码1-6单双", "正码1-6", "指定正码位按单双结算，49和局返本", "第1位/单", 1.98, "regular", "choice", "regular-odd-even", "单", "双"),
-		markSixSpec("marksix_regular_position_sum_big_small", "正码1-6合数大小", "正码1-6", "指定正码位十位与个位之和1-6为小、7-12为大，49和局返本", "第1位/合大", 1.98, "regular", "choice", "regular-sum-big-small", "合大", "合小"),
-		markSixSpec("marksix_regular_position_sum_odd_even", "正码1-6合数单双", "正码1-6", "指定正码位十位与个位之和按单双结算，49和局返本", "第1位/合单", 1.98, "regular", "choice", "regular-sum-odd-even", "合单", "合双"),
-		markSixSpec("marksix_regular_position_tail_big_small", "正码1-6尾数大小", "正码1-6", "指定正码位尾数0-4为小、5-9为大，49和局返本", "第1位/尾大", 1.98, "regular", "choice", "regular-tail-big-small", "尾大", "尾小"),
+	specs := append([]markSixPlaySpec{}, markSixCoreSpecs...)
+	sideMarkets := []markSixPlaySpec{
+		markSixSpec("marksix_special_big_small", "特大/特小", "两面", "特码1-24为小、25-48为大，49和局返本", "大", "special", "choice", "special-big-small", "大", "小"),
+		markSixSpec("marksix_special_odd_even", "特单/特双", "两面", "特码按单双结算，49和局返本", "单", "special", "choice", "special-odd-even", "单", "双"),
+		markSixSpec("marksix_special_sum_big_small", "特合大/特合小", "两面", "特码十位与个位之和1-6为合小、7-12为合大，49和局返本", "合大", "special", "choice", "special-sum-big-small", "合大", "合小"),
+		markSixSpec("marksix_special_sum_odd_even", "特合单/特合双", "两面", "特码十位与个位之和按单双结算，49和局返本", "合单", "special", "choice", "special-sum-odd-even", "合单", "合双"),
+		markSixSpec("marksix_special_heaven_earth", "特天肖/特地肖", "两面", "牛兔龙马猴猪为天肖，鼠虎蛇羊鸡狗为地肖；49和局返本", "天肖", "special", "choice", "special-heaven-earth", "天肖", "地肖"),
+		markSixSpec("marksix_special_front_back", "特前肖/特后肖", "两面", "鼠牛虎兔龙蛇为前肖，马羊猴鸡狗猪为后肖；49和局返本", "前肖", "special", "choice", "special-front-back", "前肖", "后肖"),
+		markSixSpec("marksix_special_domestic_wild", "特家肖/特野肖", "两面", "牛马羊鸡狗猪为家肖，鼠虎兔龙蛇猴为野肖；49和局返本", "家肖", "special", "choice", "special-domestic-wild", "家肖", "野肖"),
+		markSixSpec("marksix_special_tail_big_small", "特尾大/特尾小", "两面", "特码尾数0-4为尾小、5-9为尾大，49和局返本", "尾大", "special", "choice", "special-tail-big-small", "尾大", "尾小"),
+		markSixSpec("marksix_total_odd_even", "总和单双", "两面", "7个开奖号码之和按单双结算", "总和单", "none", "choice", "total-odd-even", "总和单", "总和双"),
+		markSixSpec("marksix_total_big_small", "总和大小", "两面", "7个开奖号码之和175及以上为大、174及以下为小", "总和大", "none", "choice", "total-big-small", "总和大", "总和小"),
+		markSixSpec("marksix_special_half", "特码半特", "两面", "特码大小与单双组合；49不中奖", "大单", "special", "choice", "special-half", "大单", "大双", "小单", "小双"),
+		markSixSpec("marksix_regular_position_big_small", "正码1-6大小", "正码1-6", "指定正码位1-24为小、25-48为大，49和局返本", "第1位/大", "regular", "choice", "regular-big-small", "大", "小"),
+		markSixSpec("marksix_regular_position_odd_even", "正码1-6单双", "正码1-6", "指定正码位按单双结算，49和局返本", "第1位/单", "regular", "choice", "regular-odd-even", "单", "双"),
+		markSixSpec("marksix_regular_position_sum_big_small", "正码1-6合数大小", "正码1-6", "指定正码位十位与个位之和1-6为小、7-12为大，49和局返本", "第1位/合大", "regular", "choice", "regular-sum-big-small", "合大", "合小"),
+		markSixSpec("marksix_regular_position_sum_odd_even", "正码1-6合数单双", "正码1-6", "指定正码位十位与个位之和按单双结算，49和局返本", "第1位/合单", "regular", "choice", "regular-sum-odd-even", "合单", "合双"),
+		markSixSpec("marksix_regular_position_tail_big_small", "正码1-6尾数大小", "正码1-6", "指定正码位尾数0-4为小、5-9为大，49和局返本", "第1位/尾大", "regular", "choice", "regular-tail-big-small", "尾大", "尾小"),
 	}
-	specs = append(specs, priced...)
+	specs = append(specs, sideMarkets...)
 	// Zodiac is symmetric, but no reference price was supplied. It is exposed
 	// to the odds editor with zero until an administrator explicitly prices it.
-	specs = append(specs, markSixSpec("marksix_special_zodiac", "特码生肖", "特肖头尾数", "按该期开奖日所属农历生肖年映射特码；49按当年生肖正常参与。赔率需后台配置", "猴", 0, "special", "choice", "special-zodiac", markSixZodiacNames...))
+	specs = append(specs, markSixSpec("marksix_special_zodiac", "特码生肖", "特肖头尾数", "按该期开奖日所属农历生肖年映射特码；49按当年生肖正常参与。赔率需后台配置", "猴", "special", "choice", "special-zodiac", markSixZodiacNames...))
 	colors := []struct{ code, label string }{{"red", "红"}, {"blue", "蓝"}, {"green", "绿"}}
 	for _, color := range colors {
 		specs = append(specs, atomicMarkSixSpec("marksix_color_wave_"+color.code, color.label+"波", "色波", "special", "color", color.code, color.label+"波"))
@@ -101,19 +96,9 @@ func atomicMarkSixSpec(code, name, category, positionMode, kind, value, choice s
 	return markSixPlaySpec{Play: defaultPlay{Code: code, Name: name, Category: category, Description: name + "原子选项；赔率需后台明确配置", Example: choice}, PositionMode: positionMode, Selection: "choice", Choices: []string{choice}, Kind: kind, Value: value}
 }
 
-func markSixPricedPlays(specs []markSixPlaySpec) []defaultPlay {
-	plays := make([]defaultPlay, 0, len(specs))
-	for _, spec := range specs {
-		if spec.Play.Odds > 1 {
-			plays = append(plays, spec.Play)
-		}
-	}
-	return plays
-}
-
 func markSixSpecsForVersion(version string) []markSixPlaySpec {
-	if version == markSixLegacyRuleVersion {
-		return markSixV1Specs
+	if version != markSixRuleVersion {
+		return nil
 	}
 	return markSixV2Specs
 }
@@ -141,7 +126,7 @@ func markSixPlayCatalog() []PlayCatalogItem {
 	items := make([]PlayCatalogItem, 0, len(markSixV2Specs))
 	for index, spec := range markSixV2Specs {
 		play := spec.Play
-		items = append(items, PlayCatalogItem{PlayCode: play.Code, PlayName: play.Name, Category: play.Category, Description: play.Description, Example: play.Example, DefaultOdds: play.Odds, SortOrder: index})
+		items = append(items, PlayCatalogItem{PlayCode: play.Code, PlayName: play.Name, Category: play.Category, Description: play.Description, Example: play.Example, SortOrder: index})
 	}
 	return items
 }

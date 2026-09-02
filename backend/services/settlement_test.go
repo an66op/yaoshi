@@ -2,84 +2,78 @@ package services
 
 import (
 	"backend/data/models/bet"
+	"backend/data/models/lottery"
 	"testing"
 )
 
-func TestEvaluateBetBallAndSumTail(t *testing.T) {
-	numbers := []int{3, 5, 8, 2, 1}
-	if won, _ := evaluateBet(numbers, "ball_1_5", 1, "3"); !won {
-		t.Fatal("expected ball1=3 win")
+func TestEvaluateCurrentDigitMarkets(t *testing.T) {
+	for _, test := range []struct {
+		name, gameID, version, play, selection string
+		position                               int
+		numbers                                []int
+		want                                   bool
+	}{
+		{"ball win", "speed-ssc", "digits5-v3", "ball_1_5", "3", 1, []int{3, 5, 8, 2, 1}, true},
+		{"ball lose", "speed-ssc", "digits5-v3", "ball_1_5", "4", 1, []int{3, 5, 8, 2, 1}, false},
+		{"three-ball sum tail", "official-fc3d", "digits3-v2", "sum", "6", 6, []int{3, 5, 8}, true},
+		{"big", "speed-ssc", "digits5-v3", "two_sided", "大", 1, []int{7, 1, 2, 3, 4}, true},
+		{"dragon", "speed-ssc", "digits5-v3", "dragon_tiger", "龙", 1, []int{7, 1, 2, 3, 4}, true},
+		{"tiger lose", "speed-ssc", "digits5-v3", "dragon_tiger", "虎", 1, []int{7, 1, 2, 3, 4}, false},
+		{"leopard", "speed-ssc", "digits5-v3", "leopard", "leopard", 1, []int{5, 5, 5, 1, 2}, true},
+		{"straight", "speed-ssc", "digits5-v3", "straight", "straight", 1, []int{1, 2, 3, 8, 9}, true},
+		{"pair", "speed-ssc", "digits5-v3", "pair", "pair", 1, []int{1, 1, 4, 8, 9}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			won, reason, err := evaluateBetForRuleVersion(&lottery.Game{ID: test.gameID}, test.version, test.numbers, test.play, test.position, test.selection)
+			if err != nil || won != test.want {
+				t.Fatalf("won=%v, want=%v: %s, err=%v", won, test.want, reason, err)
+			}
+		})
 	}
-	if won, _ := evaluateBet(numbers, "ball_1_5", 1, "4"); won {
-		t.Fatal("expected ball1=4 lose")
-	}
-	// sum=19, tail=9
-	if won, _ := evaluateBet(numbers, "ball_1_5", 6, "9"); !won {
-		t.Fatal("expected sum tail 9 win")
-	}
-}
-
-func TestEvaluateBetTwoSidedAndDragon(t *testing.T) {
-	numbers := []int{7, 1, 2, 3, 4}
-	if won, _ := evaluateBet(numbers, "two_sided", 1, "大"); !won {
-		t.Fatal("expected big win")
-	}
-	if won, _ := evaluateBet(numbers, "dragon_tiger", 1, "龙"); !won {
-		t.Fatal("expected dragon win")
-	}
-	if won, _ := evaluateBet(numbers, "dragon_tiger", 1, "虎"); won {
-		t.Fatal("expected tiger lose")
-	}
-}
-
-func TestEvaluateBetPatterns(t *testing.T) {
-	if won, _ := evaluateBet([]int{5, 5, 5, 1, 2}, "leopard", 1, ""); !won {
-		t.Fatal("expected leopard")
-	}
-	if won, _ := evaluateBet([]int{1, 2, 3, 8, 9}, "straight", 1, ""); !won {
-		t.Fatal("expected straight")
-	}
-	if won, _ := evaluateBet([]int{1, 1, 4, 8, 9}, "pair", 1, ""); !won {
-		t.Fatal("expected pair")
+	if _, _, err := evaluateBetForRuleVersion(&lottery.Game{ID: "speed-ssc"}, "digits5-v3", []int{3, 5, 8, 2, 1}, "ball_1_5", 6, "9"); err == nil {
+		t.Fatal("nonexistent sixth ball must not become a sum-tail bet")
 	}
 }
 
 func TestEvaluateRacingCrownSumBoundariesAreExclusive(t *testing.T) {
+	game := &lottery.Game{ID: "speed-racing"}
 	// 4 + 7 = 11: small and odd only.
 	eleven := []int{4, 7, 1, 2, 3, 5, 6, 8, 9, 10}
 	for _, selection := range []string{"小", "单", "11"} {
-		if won, reason := evaluateBet(eleven, "sum", 6, selection); !won {
-			t.Fatalf("11 should win %s: %s", selection, reason)
+		if won, reason, err := evaluateBetForRuleVersion(game, "racing-v2", eleven, "sum", 6, selection); err != nil || !won {
+			t.Fatalf("11 should win %s: %s, err=%v", selection, reason, err)
 		}
 	}
 	for _, selection := range []string{"大", "双", "12"} {
-		if won, reason := evaluateBet(eleven, "sum", 6, selection); won {
-			t.Fatalf("11 must lose %s: %s", selection, reason)
+		if won, reason, err := evaluateBetForRuleVersion(game, "racing-v2", eleven, "sum", 6, selection); err != nil || won {
+			t.Fatalf("11 must lose %s: %s, err=%v", selection, reason, err)
 		}
 	}
 
 	// 5 + 7 = 12: big and even only.
 	twelve := []int{5, 7, 1, 2, 3, 4, 6, 8, 9, 10}
 	for _, selection := range []string{"大", "双", "12"} {
-		if won, reason := evaluateBet(twelve, "sum", 6, selection); !won {
-			t.Fatalf("12 should win %s: %s", selection, reason)
+		if won, reason, err := evaluateBetForRuleVersion(game, "racing-v2", twelve, "sum", 6, selection); err != nil || !won {
+			t.Fatalf("12 should win %s: %s, err=%v", selection, reason, err)
 		}
 	}
 	for _, selection := range []string{"小", "单", "11"} {
-		if won, reason := evaluateBet(twelve, "sum", 6, selection); won {
-			t.Fatalf("12 must lose %s: %s", selection, reason)
+		if won, reason, err := evaluateBetForRuleVersion(game, "racing-v2", twelve, "sum", 6, selection); err != nil || won {
+			t.Fatalf("12 must lose %s: %s, err=%v", selection, reason, err)
 		}
 	}
 }
 
 func TestEvaluateRacingZeroAliasOnlyMeansTenForTenBallGames(t *testing.T) {
 	racing := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	if won, reason := evaluateBet(racing, "ball_1_5", 10, "0"); !won {
-		t.Fatalf("racing 0 alias should match number 10: %s", reason)
+	game := &lottery.Game{ID: "speed-racing"}
+	selection := normalizeBetSelection(game, "ball_1_5", "0")
+	if won, reason, err := evaluateBetForRuleVersion(game, "racing-v2", racing, "ball_1_5", 10, selection); err != nil || !won {
+		t.Fatalf("normalized racing 0 alias should match number 10: %s, err=%v", reason, err)
 	}
 	ssc := []int{0, 2, 3, 4, 5}
-	if won, reason := evaluateBet(ssc, "ball_1_5", 1, "0"); !won {
-		t.Fatalf("five-ball game must keep literal zero: %s", reason)
+	if won, reason, err := evaluateBetForRuleVersion(&lottery.Game{ID: "speed-ssc"}, "digits5-v3", ssc, "ball_1_5", 1, "0"); err != nil || !won {
+		t.Fatalf("five-ball game must keep literal zero: %s, err=%v", reason, err)
 	}
 }
 

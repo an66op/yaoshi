@@ -51,7 +51,7 @@ func rolloverPostgresPendingBet(t *testing.T, db *gorm.DB, room workspacemodel.W
 	ticket := bet.Bet{
 		WorkspaceID: room.ID, GameID: game.ID, Issue: game.NextIssue, RoomScope: room.Scope,
 		UserID: member.UserID, Username: member.Username, PlayCode: "ball_1_5", PlayName: "指定名次号码",
-		Position: 1, Selection: "1", AmountCents: 200, Odds: 9.9, Status: "pending",
+		RuleVersion: "racing-v2", Position: 1, Selection: "1", AmountCents: 200, Odds: 9.9, Status: "pending",
 	}
 	if err := db.Create(&ticket).Error; err != nil {
 		t.Fatal(err)

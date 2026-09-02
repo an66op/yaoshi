@@ -2,28 +2,21 @@ import { describe, expect, it } from 'vitest'
 import { exactRuleResponsesReady, gameRulesReady, isBingoRacingAReady, isBingoSSC1Ready, lotteryResultSummary, lotteryRuleProfile, markSixBallClass, markSixDrawBallClass, markSixWave, markSixZodiac, markSixZodiacLabel, pc28RuleVersionForGame, pc28TripleShape, requiredRuleVersionForGame } from './lotteryRules'
 
 describe('explicit lottery result profiles', () => {
-  it.each(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10', 'bingo-racing-a', 'bingo-racing-b'])('uses only the first two numbers and five mirrored pairs for %s', id => {
+  it.each(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10', 'bingo-racing-a'])('uses only the first two numbers and five mirrored pairs for %s', id => {
     expect(lotteryRuleProfile(id).family).toBe('racing')
     expect(lotteryResultSummary(id, [4, 7, 1, 2, 3, 5, 6, 8, 9, 10])).toMatchObject({ label: '冠亚和', total: 11, size: '小', parity: '单', dragons: ['虎', '虎', '虎', '虎', '虎'] })
   })
 
-  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('uses all five digits and two mirrored pairs for %s', id => {
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('uses all five digits and one verified first-versus-fifth comparison for %s', id => {
     expect(lotteryRuleProfile(id).family).toBe('ssc')
-    expect(lotteryResultSummary(id, [9, 8, 1, 2, 3])).toMatchObject({ label: '总和', total: 23, size: '大', parity: '单', dragons: ['龙', '龙'] })
-    expect(lotteryResultSummary(id, [7, 1, 2, 3, 7])).toMatchObject({ total: 20, size: '小', dragons: ['和', '虎'] })
-  })
-
-  it.each(['speed-ssc', 'au-lucky-5', 'bingo-ssc-1'])('uses only first versus fifth for exact digits5-v3 game %s', id => {
+    expect(lotteryResultSummary(id, [9, 8, 1, 2, 3], 'digits5-v3')).toMatchObject({ label: '总和', total: 23, size: '大', parity: '单', dragons: ['龙'] })
     expect(lotteryResultSummary(id, [7, 1, 2, 3, 7], 'digits5-v3')).toMatchObject({ dragons: ['和'], dragonLabel: '第一球 vs 第五球 龙虎和' })
-    expect(lotteryResultSummary(id, [9, 8, 1, 2, 3], 'digits5-v3')).toMatchObject({ dragons: ['龙'] })
   })
 
-  it('does not grant the v3 result shape to SG or to a matching game without the exact server version', () => {
-    expect(lotteryResultSummary('sg-ssc', [9, 8, 1, 2, 3], 'digits5-v3')?.dragons).toEqual(['龙', '龙'])
-    expect(lotteryResultSummary('speed-ssc', [9, 8, 1, 2, 3])?.dragons).toEqual(['龙', '龙'])
-    expect(lotteryResultSummary('speed-ssc', [9, 8, 1, 2, 3], 'digits5-v2')?.dragons).toEqual(['龙', '龙'])
-    for (const id of ['bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4']) {
-      expect(lotteryResultSummary(id, [9, 8, 1, 2, 3], 'digits5-v3')?.dragons).toEqual(['龙', '龙'])
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('does not infer five-ball outcomes or enable %s without the exact server version', id => {
+    for (const ruleVersion of [undefined, '', 'digits5-v2', 'digits5-v4']) {
+      expect(lotteryResultSummary(id, [9, 8, 1, 2, 3], ruleVersion)).toBeNull()
+      expect(gameRulesReady({ id, rulesReady: true, ruleVersion })).toBe(false)
     }
   })
 
@@ -47,6 +40,7 @@ describe('explicit lottery result profiles', () => {
   it.each([
     ['bingo-racing-a', 'racing-v2'],
     ['speed-ssc', 'digits5-v3'],
+    ['sg-ssc', 'digits5-v3'],
     ['au-lucky-5', 'digits5-v3'],
     ['bingo-ssc-1', 'digits5-v3'],
     ['pc-canada', 'pc28-v1'],
@@ -68,11 +62,22 @@ describe('explicit lottery result profiles', () => {
     expect(exactRuleResponsesReady({ ...game, ruleVersion: `${version}-stale` }, matching, matching)).toBe(false)
   })
 
-  it('does not impose the upgrade gate on unrelated legacy products', () => {
-    const legacy = { id: 'bingo-ssc-2', rulesReady: true }
-    expect(requiredRuleVersionForGame(legacy.id)).toBeNull()
-    expect(exactRuleResponsesReady(legacy, null, null)).toBe(true)
-    expect(exactRuleResponsesReady(legacy, { rules_ready: true, rule_version: 'digits5-v3' }, { rules_ready: true, rule_version: 'racing-v2' })).toBe(true)
+  it('keeps unchanged racing products outside the five-ball version gate', () => {
+    const racing = { id: 'speed-racing', rulesReady: true }
+    expect(requiredRuleVersionForGame(racing.id)).toBeNull()
+    expect(exactRuleResponsesReady(racing, null, null)).toBe(true)
+  })
+
+  it.each(['bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('does not borrow another product contract for unverified %s', id => {
+    expect(lotteryRuleProfile(id).family).toBe('unknown')
+    expect(requiredRuleVersionForGame(id)).toBeNull()
+    for (const ruleVersion of [undefined, '', 'racing-v2', 'digits5-v2', 'digits5-v3']) {
+      const game = { id, rulesReady: true, ruleVersion }
+      const response = { game_id: id, rules_ready: true, rule_version: ruleVersion }
+      expect(lotteryResultSummary(id, [9, 8, 1, 2, 3], ruleVersion)).toBeNull()
+      expect(gameRulesReady(game)).toBe(false)
+      expect(exactRuleResponsesReady(game, response, response)).toBe(false)
+    }
   })
 
   it.each(['official-fc3d', 'official-pl3'])('uses three-digit sum boundaries for %s', id => {
@@ -141,7 +146,7 @@ describe('explicit lottery result profiles', () => {
   it('does not derive an outcome from malformed known-game numbers or override explicit server denial', () => {
     expect(lotteryResultSummary('speed-racing', [1, 2, 3])).toBeNull()
     expect(lotteryResultSummary('speed-racing', [1, 2, 3, 4, 5, 6, 7, 8, 9, 9])).toBeNull()
-    expect(lotteryResultSummary('speed-ssc', [1, 2, 3, 4, 10])).toBeNull()
+    expect(lotteryResultSummary('speed-ssc', [1, 2, 3, 4, 10], 'digits5-v3')).toBeNull()
     expect(lotteryResultSummary('bingo-mark-six', [1, 2, 3, 4, 5, 6, 6])).toBeNull()
     expect(lotteryResultSummary('bingo-mark-six', [1, 2, 3, 4, 5, 6, 50])).toBeNull()
     expect(gameRulesReady({ id: 'speed-racing', rulesReady: false })).toBe(false)

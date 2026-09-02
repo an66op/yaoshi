@@ -37,6 +37,46 @@ grep -Fq 'schema_migrations' <<<"$dry_run_output"
 grep -Fq 'development_reset_receipts' <<<"$dry_run_output"
 grep -Fq 'workspace_migration_markers' <<<"$dry_run_output"
 
+# Purely static: prove the human preview, audited SQL manifest and explicit
+# truncate statement describe the same exact tables, then compare that union
+# against the canonical migration inventory. New tables require an explicit
+# preserve/clear decision instead of silently widening a destructive command.
+preview_preserved="$(sed -n 's/^保留表（[0-9]*）：//p' <<<"$dry_run_output" | tr ' ' '\n' | LC_ALL=C sort)"
+preview_cleared="$(sed -n 's/^清理表（[0-9]*）：//p' <<<"$dry_run_output" | tr ' ' '\n' | LC_ALL=C sort)"
+manifest_preserved="$(grep -Eo "\('[a-z_][a-z0-9_]*','preserve'\)" "$reset_script" | cut -d "'" -f2 | LC_ALL=C sort)"
+manifest_cleared="$(grep -Eo "\('[a-z_][a-z0-9_]*','clear'\)" "$reset_script" | cut -d "'" -f2 | LC_ALL=C sort)"
+truncate_statement="$(sed -n '/^TRUNCATE TABLE$/,/^RESTART IDENTITY;$/p' "$reset_script")"
+truncate_tables="$(grep -Eo 'public\.[a-z_][a-z0-9_]*' <<<"$truncate_statement" | cut -d. -f2 | LC_ALL=C sort)"
+[[ -n "$preview_preserved" && "$preview_preserved" == "$manifest_preserved" ]] || { echo "保留表预览与 SQL manifest 不一致" >&2; exit 1; }
+[[ -n "$preview_cleared" && "$preview_cleared" == "$manifest_cleared" && "$manifest_cleared" == "$truncate_tables" ]] || {
+  echo "清理表预览、SQL manifest 与明确 TRUNCATE 范围不一致" >&2
+  exit 1
+}
+if grep -Eiq '(^|[[:space:]])CASCADE([[:space:];]|$)' <<<"$truncate_statement"; then
+  echo "业务重置不得通过 CASCADE 隐式清除保留表" >&2
+  exit 1
+fi
+manifest_tables="$(printf '%s\n' "$manifest_preserved" "$manifest_cleared" | LC_ALL=C sort)"
+[[ -z "$(uniq -d <<<"$manifest_tables")" ]] || { echo "重置清单重复分类同一张表" >&2; exit 1; }
+schema_declarations="$(grep -Eih '^[[:space:]]*CREATE[[:space:]]+TABLE([[:space:]]|$)' "$script_dir/../backend/migrations"/*.sql)"
+schema_tables="$(sed -nE 's/^[[:space:]]*CREATE TABLE( IF NOT EXISTS)? ("?public"?\.)?"?([a-z_][a-z0-9_]*)"?[[:space:]]*\(.*/\3/p' <<<"$schema_declarations")"
+[[ "$(wc -l <<<"$schema_declarations" | tr -d ' ')" == "$(wc -l <<<"$schema_tables" | tr -d ' ')" ]] || {
+  echo "存在未识别的 SQL 建表语法，不能据此扩大重置范围" >&2
+  exit 1
+}
+schema_tables="$(printf '%s\n' schema_migrations "$schema_tables" | LC_ALL=C sort -u)"
+[[ "$manifest_tables" == "$schema_tables" ]] || {
+  echo "开发重置清单没有精确覆盖当前 SQL 迁移表；必须审定新增表的保留/清理范围" >&2
+  diff <(printf '%s\n' "$schema_tables") <(printf '%s\n' "$manifest_tables") >&2 || true
+  exit 1
+}
+for preserved in schema_migrations development_reset_receipts workspace_migration_markers workspace_robot_reset_receipts ws_session_revocation_outbox plan_automations; do
+  grep -Fxq "$preserved" <<<"$manifest_preserved" || { echo "不可变凭证、安全撤销意图或配置表未保留：$preserved" >&2; exit 1; }
+done
+for cleared in member_chat_read_cursors lottery_issue_windows plan_generation_receipts plan_streams plan_stream_cycles plan_stream_periods; do
+  grep -Fxq "$cleared" <<<"$truncate_tables" || { echo "运行记录未随关联业务一起清理：$cleared" >&2; exit 1; }
+done
+
 full_dry_run_output="$(bash "$full_reset_script" --dry-run "$test_root/debug.env")"
 grep -Fq '仅预览：没有连接数据库、没有备份、没有修改任何 schema 或数据。' <<<"$full_dry_run_output"
 sentinel_dry_run_output="$(bash "$sentinel_script" --dry-run "$test_root/debug.env")"
@@ -165,6 +205,25 @@ grep -Fq 'scratch_restore_verified=true' "$full_reset_script"
 grep -Fq 'status=complete' "$complete_receipt_script"
 grep -Fq '/ready' "$complete_receipt_script"
 grep -Fq 'dev-reset-verify-bootstrap.sh' "$complete_receipt_script"
+grep -Fq 'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;' "$verify_script"
+grep -Fq 'for migration_file in "$migration_dir"/*.sql' "$verify_script"
+grep -Fq 'jsonb_to_recordset' "$verify_script"
+grep -Fq 'sha256sum "$migration_file"' "$verify_script"
+grep -Fq 'trg_reject_unapproved_application_truncate' "$verify_script"
+if grep -Eq 'COUNT\(\*\) FROM schema_migrations\) <> 12|30 个彩种应各有 9 组默认赔率' "$verify_script"; then
+  echo "只读重建验收不得保留旧迁移清单或自动默认赔率基线" >&2
+  exit 1
+fi
+if bash "$verify_script" "$test_root/release.env" >"$test_root/verify-release.out" 2>&1; then
+  echo "release 环境错误地通过了只读重建验收保护" >&2
+  exit 1
+fi
+grep -Fq '只读重建验收仅允许 debug 环境' "$test_root/verify-release.out"
+if bash "$verify_script" "$test_root/remote.env" >"$test_root/verify-remote.out" 2>&1; then
+  echo "远程数据库错误地通过了只读重建验收保护" >&2
+  exit 1
+fi
+grep -Fq '只读重建验收只允许连接本机 PostgreSQL' "$test_root/verify-remote.out"
 grep -Fq 'BACKEND_DATABASE_SSLMODE' "$script_dir/postgres-backup.sh"
 grep -Fq 'export PGSSLMODE' "$script_dir/postgres-backup.sh"
 if grep -Eiq 'DROP[[:space:]]+(DATABASE|SCHEMA)|TRUNCATE[[:space:]]+TABLE[[:space:]]+schema_migrations' "$reset_script"; then

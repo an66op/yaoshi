@@ -60,6 +60,14 @@ func (s *PlanContentService) ActivateGame(ctx context.Context, workspaceID uint6
 func (s *PlanContentService) touchPlan(ctx context.Context, workspaceID uint64, gameID string, position int, key string) (PlanAutomationRun, error) {
 	result := PlanAutomationRun{WorkspaceID: workspaceID, RanAt: time.Now().UTC(), SkippedGameIDs: []string{}, Notice: PlanDemoNotice}
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Match betting and room trading: game before automation, room, owner,
+		// settings or stream locks. Taking SHARE later can deadlock behind a
+		// queued platform UPDATE while room trading waits for our room lock.
+		var game lottery.Game
+		gameErr := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&game, "id = ?", gameID).Error
+		if gameErr != nil && !errors.Is(gameErr, gorm.ErrRecordNotFound) {
+			return gameErr
+		}
 		var row plan.Automation
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, "workspace_id = ?", workspaceID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -102,9 +110,10 @@ func (s *PlanContentService) touchPlan(ctx context.Context, workspaceID uint64, 
 		if !available {
 			return apperrors.NewBusinessError("ROOM_CLOSED", "房间、推荐展示或彩种已关闭")
 		}
-		var game lottery.Game
-		if err := tx.First(&game, "id = ?", gameID).Error; err != nil {
-			return err
+		// Keep permission/availability failures ahead of a missing catalogue
+		// row, as before; no later query may acquire a different game lock.
+		if gameErr != nil {
+			return gameErr
 		}
 		if _, _, supported := planDemoNumberRange(game); !supported {
 			return apperrors.NewBusinessError("INVALID_REQUEST", "该彩种暂不支持按访问推荐")
@@ -142,7 +151,7 @@ func (s *PlanContentService) touchPlan(ctx context.Context, workspaceID uint64, 
 			}
 			selected.ActiveUntil, selected.Revoked, selected.UpdatedAt = &until, false, now
 		}
-		created, eligible, err := generatePlanDemoGame(tx, workspaceID, gameID, roomSettings.GameSettingsJSON, selected)
+		created, eligible, err := generatePlanDemoGame(tx, workspaceID, game, roomSettings.GameSettingsJSON, selected)
 		if err != nil {
 			return err
 		}

@@ -8,11 +8,11 @@ type PlayLimit struct {
 	GameID         string  `gorm:"size:40;not null;uniqueIndex:idx_odds_game_play" json:"game_id"`
 	PlayCode       string  `gorm:"size:40;not null;uniqueIndex:idx_odds_game_play" json:"play_code"`
 	PlayName       string  `gorm:"size:40;not null" json:"play_name"`
-	Odds           float64 `gorm:"not null;default:1.993" json:"odds"`
-	MinBet         float64 `gorm:"not null;default:1" json:"min_bet"`
-	MaxBet         float64 `gorm:"not null;default:50000" json:"max_bet"`
-	MaxUserPeriod  float64 `gorm:"not null;default:50000" json:"max_user_period"`
-	MaxPeriodTotal float64 `gorm:"not null;default:100000" json:"max_period_total"`
+	Odds           float64 `gorm:"not null;default:0" json:"odds"`
+	MinBet         float64 `gorm:"not null" json:"min_bet"`
+	MaxBet         float64 `gorm:"not null" json:"max_bet"`
+	MaxUserPeriod  float64 `gorm:"not null" json:"max_user_period"`
+	MaxPeriodTotal float64 `gorm:"not null" json:"max_period_total"`
 	SortOrder      int     `gorm:"not null;default:0" json:"sort_order"`
 	// ExplicitlyConfigured and RuleVersion form the activation boundary for
 	// every market. A number in the table is never a live quote until an

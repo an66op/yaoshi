@@ -70,6 +70,7 @@ func TestLotteryTimingPostgresNextBettingWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	timingPostgresSettings(t, db, room.ID, `{"seal_seconds":30}`)
+	configureTestGameOdds(t, db, "speed-racing", map[string]float64{"ball_1_5": 9.9})
 	service := NewBetAdminService(db)
 	service.suppressNotifications = true
 	assistant := NewBetAssistantService(db)

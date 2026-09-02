@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestExplicitOddsGamesRemainUnconfiguredAcrossBootstrapSync(t *testing.T) {
+func TestOddsRemainUnconfiguredAcrossBootstrapAndReads(t *testing.T) {
 	db := timingPostgresDatabase(t)
 	gameIDs := []string{"speed-ssc", "au-lucky-5", "bingo-ssc-1", "bingo-racing-a", "pc-canada", "canada-28", "canada-20"}
 	assertMissing := func(stage string) {
@@ -22,18 +22,17 @@ func TestExplicitOddsGamesRemainUnconfiguredAcrossBootstrapSync(t *testing.T) {
 	}
 
 	assertMissing("bootstrap")
-	if _, err := NewOddsAdminService(db).SyncAllGames(); err != nil {
-		t.Fatal(err)
+	for _, gameID := range gameIDs {
+		if _, err := NewOddsAdminService(db).Get(gameID); err != nil {
+			t.Fatal(err)
+		}
 	}
-	assertMissing("catalog sync")
+	assertMissing("catalog reads")
 
 	// A numeric legacy row remains stored for audit/migration compatibility but
 	// must not become an active quote without the administrator save boundary.
 	row := odds.PlayLimit{GameID: "bingo-ssc-1", PlayCode: "dragon_tiger_tie", PlayName: "龙虎和", Odds: 8.7, MinBet: 1, MaxBet: 50000, MaxUserPeriod: 50000, MaxPeriodTotal: 100000}
 	if err := db.Create(&row).Error; err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewOddsAdminService(db).SyncAllGames(); err != nil {
 		t.Fatal(err)
 	}
 	var stored odds.PlayLimit
@@ -52,12 +51,12 @@ func TestExplicitOddsGamesRemainUnconfiguredAcrossBootstrapSync(t *testing.T) {
 		if view.Items[index].PlayCode != row.PlayCode {
 			continue
 		}
-		if view.Items[index].Configured || view.Items[index].Odds != 0 || view.Items[index].ConfigurationSource != oddsSourceLegacyUnconfirmed {
+		if view.Items[index].Configured || view.Items[index].Odds != 0 || view.Items[index].ConfigurationSource != oddsSourceUnconfigured {
 			t.Fatalf("legacy target row became a live quote: %+v", view.Items[index])
 		}
 		view.Items[index].Odds = 8.7
 	}
-	configured, err := NewOddsAdminService(db).Update(row.GameID, UpdateOddsLimitsInput{Items: view.Items})
+	configured, err := NewOddsAdminService(db).Update(row.GameID, oddsUpdateInput(view))
 	if err != nil {
 		t.Fatal(err)
 	}

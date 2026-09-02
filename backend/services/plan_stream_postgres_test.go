@@ -259,7 +259,7 @@ func TestPlanStreamsPostgresQuotaRevocationAndSixtySecondTTL(t *testing.T) {
 
 func TestPlanStreamsPostgresNoVisitNoProgressAndMissedPeriodInterrupted(t *testing.T) {
 	db, roomID := streamPostgresSetup(t)
-	svc, automation := NewPlanContentService(db), NewPlanAutomationService(db)
+	svc := NewPlanContentService(db)
 	ctx := context.Background()
 	streamPostgresIssue(t, db, 1)
 	initial, err := svc.ActivateStream(ctx, roomID, 1, DefaultPlanKey)

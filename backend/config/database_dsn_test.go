@@ -22,6 +22,9 @@ func TestBuildPostgresDSNPreservesSpecialCharacters(t *testing.T) {
 	if parsed.Host != input.Host || parsed.Port != uint16(input.Port) || parsed.User != input.User || parsed.Password != input.Password || parsed.Database != input.DBName {
 		t.Fatalf("parsed connection fields changed: host=%q port=%d user=%q database=%q", parsed.Host, parsed.Port, parsed.User, parsed.Database)
 	}
+	if parsed.RuntimeParams["search_path"] != "public" {
+		t.Fatal("application queries must use the versioned public schema")
+	}
 }
 
 func TestBuildPostgresDSNSupportsUnixSocket(t *testing.T) {
@@ -36,5 +39,8 @@ func TestBuildPostgresDSNSupportsUnixSocket(t *testing.T) {
 	}
 	if parsed.Host != input.Host || parsed.Port != uint16(input.Port) || parsed.Password != input.Password {
 		t.Fatalf("unexpected unix socket config: host=%q port=%d", parsed.Host, parsed.Port)
+	}
+	if parsed.RuntimeParams["search_path"] != "public" {
+		t.Fatal("Unix-socket connections must use the versioned public schema")
 	}
 }

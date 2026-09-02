@@ -59,23 +59,45 @@ describe('current rule documentation profiles', () => {
       summary: expect.stringContaining('原始20号的前5个号码尾数'),
     })
     expect(currentRuleProfileForGame(game({ id: 'bingo-ssc-1', name: '宾果时时彩(一)', rules_ready: true, rule_version: 'digits5-v3' })).rules.join('')).toContain('交叉核对')
-    for (const id of ['bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4']) {
-      expect(currentRuleProfileForGame(game({ id, name: id, rules_ready: true, rule_version: 'digits5-v2' })).expectedVersion).toBe('digits5-v2')
-      expect(currentRuleProfileForGame(game({ id, name: id, rules_ready: true, rule_version: 'digits5-v2' })).summary).not.toContain('中三')
-    }
-    const sg = currentRuleProfileForGame({ ...game({ id: 'sg-ssc', name: '任意名称', rules_ready: true, rule_version: 'digits5-v2' }), source_kind: 'platform', source_name: '王者开奖' })
-    expect(sg.expectedVersion).toBe('digits5-v2')
-    expect(sg.summary).toContain('王者开奖')
-    expect(sg.summary).toContain('不能标记为完全对齐')
     expect(currentRuleProfileForGame(game({ id: 'official-fc3d', name: '任意名称', rules_ready: true, rule_version: 'digits3-v2' })).expectedVersion).toBe('digits3-v2')
     expect(currentRuleProfileForGame(game({ id: 'bingo-mark-six', name: '任意名称', rules_ready: true, rule_version: 'mark6-v2' }))).toMatchObject({ expectedVersion: 'mark6-v2', modes: '仅详细网投' })
   })
 
-  it('documents the strict v3 boundary instead of advertising legacy local extensions', () => {
-    const profile = currentRuleProfileForGame(game({ id: 'speed-ssc', name: '极速时时彩', rules_ready: true, rule_version: 'digits5-v3' }))
-    expect(profile.rules.join('')).toContain('新投注不再开放')
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('documents only the current v3 contract for %s', id => {
+    const profile = currentRuleProfileForGame(game({ id, name: id, rules_ready: true, rule_version: 'digits5-v3' }))
+    expect(profile.rules.join('')).toContain('不开放投注')
     expect(profile.rules.join('')).toContain('循环顺子')
     expect(profile.differences.find(item => item.topic === '本地附加玩法')).toMatchObject({ status: 'same' })
+    expect(JSON.stringify(profile)).not.toContain('digits5-v2')
+    expect(JSON.stringify(profile)).not.toContain('历史')
+    expect(currentRuleBindingReady(game({ id, name: id, rules_ready: true, rule_version: 'digits5-v3' }))).toBe(true)
+    for (const rule_version of [undefined, '', 'digits5-v2', 'digits5-v4']) {
+      const snapshot = game({ id, name: id, rules_ready: true, rule_version })
+      expect(currentRuleProfileForGame(snapshot).expectedVersion).toBe('digits5-v3')
+      expect(currentRuleBindingReady(snapshot)).toBe(false)
+    }
+    expect(currentRuleBindingReady(game({ id, name: id, rules_ready: false, rule_version: 'digits5-v3' }))).toBe(false)
+  })
+
+  it.each(['platform', 'external', 'official'])('keeps SG complete gameplay separate from its platform draw identity with %s metadata', source_kind => {
+    const sg = currentRuleProfileForGame({ ...game({ id: 'sg-ssc', name: '任意名称', rules_ready: true, rule_version: 'digits5-v3' }), source_kind, source_name: '未经核验的来源标签' })
+    expect(sg).toMatchObject({ expectedVersion: 'digits5-v3', modes: '聊天投注 + 详细网投' })
+    expect(sg.summary).toContain('完整支持前三、中三、后三')
+    expect(sg.summary).toContain('王者平台自开（王者开奖）')
+    expect(sg.summary).toContain('不宣称与SG外部开奖同步')
+    expect(sg.summary).not.toContain('未经核验的来源标签')
+    expect(sg.differences.find(item => item.topic === '开奖身份')).toMatchObject({ status: 'different' })
+  })
+
+  it.each(['bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('keeps unverified %s display-only even when a server snapshot borrows another version', id => {
+    for (const rule_version of [undefined, '', 'racing-v2', 'digits5-v2', 'digits5-v3']) {
+      const snapshot = game({ id, name: id, rules_ready: true, rule_version })
+      const profile = currentRuleProfileForGame(snapshot)
+      expect(profile).toMatchObject({ expectedVersion: '未绑定', modes: '仅展示 · 不受理投注' })
+      expect(profile.summary).toContain('待核验')
+      expect(profile.differences[0].status).toBe('pending')
+      expect(currentRuleBindingReady(snapshot)).toBe(false)
+    }
   })
 
   it('binds the three PC games to distinct versioned rule contracts', () => {

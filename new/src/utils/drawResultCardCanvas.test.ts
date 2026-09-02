@@ -75,12 +75,12 @@ describe('shared draw-result racing artwork', () => {
     const result = { ...draw, game_id: 'speed-ssc', numbers: [7, 1, 2, 3, 7] }
     const current = recordingCanvas()
     const recent = recordingCanvas()
-    paintCurrentDrawCard(current.canvas, { title: '极速时时彩' }, result, artwork)
-    paintRecentDrawCard(recent.canvas, { title: '极速时时彩' }, [result], artwork)
+    paintCurrentDrawCard(current.canvas, { title: '极速时时彩', ruleVersion: 'digits5-v3' }, result, artwork)
+    paintRecentDrawCard(recent.canvas, { title: '极速时时彩', ruleVersion: 'digits5-v3' }, [result], artwork)
     expect(current.ctx.fillText).toHaveBeenCalledWith('20 小 双', 40, 423)
-    expect(current.ctx.fillText).toHaveBeenCalledWith('和 虎', 275, 423)
+    expect(current.ctx.fillText).toHaveBeenCalledWith('和', 275, 423)
     expect(recent.ctx.fillText).toHaveBeenCalledWith('20 小 双', 520, 128)
-    expect(recent.ctx.fillText).toHaveBeenCalledWith('和 虎', 625, 128, 80)
+    expect(recent.ctx.fillText).toHaveBeenCalledWith('和', 625, 128, 80)
   })
 
   it('paints one first-versus-fifth outcome only for an exact v3 product', () => {
@@ -92,7 +92,19 @@ describe('shared draw-result racing artwork', () => {
 
     const sg = recordingCanvas()
     paintCurrentDrawCard(sg.canvas, { title: 'SG时时彩', ruleVersion: 'digits5-v3' }, { ...result, game_id: 'sg-ssc' }, artwork)
-    expect(sg.ctx.fillText).toHaveBeenCalledWith('和 虎', 275, 423)
+    expect(sg.ctx.fillText).toHaveBeenCalledWith('和', 275, 423)
+    expect(sg.ctx.fillText).not.toHaveBeenCalledWith('和 虎', 275, 423)
+  })
+
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('does not infer outcomes for unversioned or unverified %s images', gameId => {
+    const result = { ...draw, game_id: gameId, numbers: [7, 1, 2, 3, 7] }
+    const current = recordingCanvas()
+    const recent = recordingCanvas()
+    paintCurrentDrawCard(current.canvas, { title: gameId }, result, artwork)
+    paintRecentDrawCard(recent.canvas, { title: gameId }, [result], artwork)
+    const labels = [...current.ctx.fillText.mock.calls, ...recent.ctx.fillText.mock.calls].map(call => call[0]).join(' ')
+    expect(labels).not.toMatch(/冠亚和|总和|龙虎| 大 | 小 /)
+    for (const value of ['7', '1', '2', '3']) expect(current.ctx.fillText.mock.calls.map(call => call[0])).toContain(value)
   })
 
   it('keeps all twenty numbers and a long issue without inventing unknown-game derivatives', () => {

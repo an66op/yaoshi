@@ -496,15 +496,8 @@ func formatRoomSettlement(gameName, issue string, players []roomSettlementPlayer
 
 func settlementBetLabel(item bet.Bet) string {
 	profile, versioned := rulesForVersion(item.RuleVersion)
-	if !versioned {
-		// The rule-version migration deliberately leaves pre-migration rows
-		// empty. Only games upgraded from digits5-v2 to digits5-v3 need
-		// this display bridge: retain their stored legacy play/position meaning
-		// without writing a version or inferring any new v3 market.
-		if strings.TrimSpace(item.RuleVersion) == "" && isUpgradedDigits5Game(item.GameID) {
-			return legacyUnversionedDigits5BetLabel(item)
-		}
-		return settlementPositionLabel(item.Position, item.PlayCode, item.PlayName)
+	if !versioned || !gameSupportsRuleVersion(item.GameID, item.RuleVersion) {
+		return defaultString(strings.TrimSpace(item.PlayName), "未识别玩法")
 	}
 	if profile.Racing {
 		return settlementPositionLabel(item.Position, item.PlayCode, item.PlayName)
@@ -546,44 +539,6 @@ func settlementBetLabel(item bet.Bet) string {
 	default:
 		return fmt.Sprintf("第%d球", item.Position)
 	}
-}
-
-func isUpgradedDigits5Game(gameID string) bool {
-	switch strings.TrimSpace(gameID) {
-	case "speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1":
-		return true
-	default:
-		return false
-	}
-}
-
-func legacyUnversionedDigits5BetLabel(item bet.Bet) string {
-	code := strings.ToLower(strings.TrimSpace(item.PlayCode))
-	switch code {
-	case "sum":
-		if isSideSelection(item.Selection) {
-			return "总和"
-		}
-		return "总和尾"
-	case "leopard", "straight", "pair", "half_straight", "mixed":
-		// The empty snapshot predates middle/back-three support. A historical
-		// shape is always the old front-three contract, even if malformed stored
-		// data carries another position.
-		return "前三" + playNameOf(code)
-	case "ball_1_5", "two_sided", "dragon_tiger":
-		if item.Position >= 1 && item.Position <= 5 {
-			return fmt.Sprintf("第%d球", item.Position)
-		}
-	}
-	// New/unknown codes on an empty snapshot must never be guessed as v3.
-	// Prefer the immutable stored label, then a neutral digit-ball fallback.
-	if stored := strings.TrimSpace(item.PlayName); stored != "" {
-		return stored
-	}
-	if item.Position > 0 {
-		return fmt.Sprintf("第%d球", item.Position)
-	}
-	return "历史玩法"
 }
 
 // BetDisplayLabel exposes the same immutable rule-version label used by
@@ -921,12 +876,9 @@ func creditSettlement(tx *gorm.DB, workspaceID, betID, userID uint64, payoutCent
 func evaluateBetOutcomeForRuleVersionAt(game *lottery.Game, version string, numbers []int, playCode string, position int, selection string, drawAt time.Time) (markSixBetOutcome, string, error) {
 	gameProfile, supported := rulesForGame(game)
 	if supported && gameProfile.MarkSix {
-		if version == "" {
-			return "", "", apperrors.NewBusinessError("RULES_NOT_READY", "旧宾果六合彩注单没有已确认规则版本，暂不能自动结算")
-		}
-		profile, found := rulesForVersion(version)
-		if !found || !profile.MarkSix || (version != markSixLegacyRuleVersion && version != markSixRuleVersion) {
-			return "", "", apperrors.NewBusinessError("RULES_NOT_READY", "注单规则版本未确认或与彩种不一致，暂不能结算")
+		profile, err := settlementRuleProfile(game, version)
+		if err != nil {
+			return "", "", err
 		}
 		if err := profile.validateDraw(numbers); err != nil {
 			return "", "", apperrors.NewBusinessError("INVALID_DRAW", "开奖号码不符合注单规则："+err.Error())
@@ -940,63 +892,41 @@ func evaluateBetOutcomeForRuleVersionAt(game *lottery.Game, version string, numb
 	return markSixWonLost(won), reason, nil
 }
 
-// evaluateBetForRuleVersion remains the bool compatibility boundary used by
-// rule-unit tests and non-Mark-Six callers. Push is intentionally not flattened
-// in financial settlement, which uses evaluateBetOutcomeForRuleVersionAt.
-// A rule
-// snapshot must belong to the immutable game ID; neither a renamed category nor
-// the length of an arbitrary source result can change its lottery family.
-func evaluateBetForRuleVersion(game *lottery.Game, version string, numbers []int, playCode string, position int, selection string) (bool, string, error) {
-	gameProfile, supported := rulesForGame(game)
-	if !supported {
-		return false, "", apperrors.NewBusinessError("RULES_NOT_READY", "该彩种规则尚待核对，暂不能结算")
+// settlementRuleProfile is the single rule identity gate for settlement.
+// Missing snapshots never fall back to an unversioned payout algorithm.
+func settlementRuleProfile(game *lottery.Game, version string) (gameRuleProfile, error) {
+	if _, supported := rulesForGame(game); !supported {
+		return gameRuleProfile{}, apperrors.NewBusinessError("RULES_NOT_READY", "该彩种规则尚待核对，暂不能结算")
 	}
-	profile := gameProfile
-	if version != "" {
-		var found bool
-		profile, found = rulesForVersion(version)
-		if !found || !gameSupportsRuleVersion(game.ID, version) {
-			return false, "", apperrors.NewBusinessError("RULES_NOT_READY", "注单规则版本未确认或与彩种不一致，暂不能结算")
-		}
+	profile, found := rulesForVersion(version)
+	if !found || !gameSupportsRuleVersion(game.ID, version) {
+		return gameRuleProfile{}, apperrors.NewBusinessError("RULES_NOT_READY", "注单规则版本未确认或与彩种不一致，暂不能结算")
+	}
+	return profile, nil
+}
+
+// Push outcomes use evaluateBetOutcomeForRuleVersionAt. This bool evaluator
+// serves the other rule families without inferring a family from draw shape.
+func evaluateBetForRuleVersion(game *lottery.Game, version string, numbers []int, playCode string, position int, selection string) (bool, string, error) {
+	profile, err := settlementRuleProfile(game, version)
+	if err != nil {
+		return false, "", err
 	}
 	if err := profile.validateDraw(numbers); err != nil {
 		return false, "", apperrors.NewBusinessError("INVALID_DRAW", "开奖号码不符合注单规则："+err.Error())
 	}
 	if profile.MarkSix {
-		if version == "" {
-			return false, "", apperrors.NewBusinessError("RULES_NOT_READY", "旧宾果六合彩注单没有已确认规则版本，暂不能自动结算")
-		}
 		outcome, reason, err := evaluateMarkSixBetForVersion(version, numbers, strings.ToLower(strings.TrimSpace(playCode)), position, strings.TrimSpace(selection), time.Time{})
 		return outcome == markSixOutcomeWon, reason, err
 	}
 	if profile.PC28 > 0 {
-		if version == "" {
-			return false, "", apperrors.NewBusinessError("RULES_NOT_READY", "旧PC28注单没有已确认规则版本，暂不能自动结算")
-		}
 		outcome, reason, err := evaluatePC28Bet(profile, numbers, strings.ToLower(strings.TrimSpace(playCode)), position, strings.TrimSpace(selection), false)
 		return outcome == markSixOutcomeWon, reason, err
 	}
-	if version == "" {
-		// Empty snapshots predate versioned rules. Keep their original sum-tail,
-		// shape and other payout semantics after the known game's draw shape has
-		// been verified; never reinterpret a legacy 20-ball or unmodelled game as
-		// racing. Already-settled rows are not passed here or recalculated.
-		won, reason := evaluateBet(numbers, playCode, position, selection)
-		return won, reason, nil
-	}
 	playCode = strings.ToLower(strings.TrimSpace(playCode))
-	settlementProfile := profile
-	if profile.Version == "digits5-v3" && playCode == "sum" {
-		// Early digits5-v3 builds briefly accepted the local v2 total/total-tail
-		// extension. New v3 placement and catalog paths now reject it, but an
-		// already persisted ticket must not become un-settleable. Use the frozen
-		// v2 meaning only at this historical settlement boundary.
-		settlementProfile, _ = rulesForVersion("digits5-v2")
-	}
-	if err := settlementProfile.validateChoice(playCode, position, selection); err != nil {
+	if err := profile.validateChoice(playCode, position, selection); err != nil {
 		return false, "", err
 	}
-	profile = settlementProfile
 	selection = normalizeSelection(selection)
 	switch playCode {
 	case "ball_1_5":
@@ -1057,190 +987,6 @@ func matchRuleSide(value, bigFrom int, selection string) bool {
 	default:
 		return false
 	}
-}
-
-// evaluateBet retains the pre-versioning payout contract for valid legacy
-// tickets. New tickets must go through evaluateBetForRuleVersion instead.
-func evaluateBet(numbers []int, playCode string, position int, selection string) (bool, string) {
-	playCode = strings.ToLower(strings.TrimSpace(playCode))
-	selection = normalizeSelection(selection)
-	balls := usableBalls(numbers)
-
-	switch playCode {
-	case "ball_1_5":
-		digit, ok := parseDigit(selection)
-		if !ok {
-			return false, "号码无效"
-		}
-		// PK10 room syntax uses 0 as number 10. Keep zero unchanged for
-		// five-ball games where it is an actual draw number.
-		if len(balls) >= 10 && digit == 0 {
-			digit = 10
-		}
-		if position >= 1 && position <= len(balls) {
-			if balls[position-1] == digit {
-				return true, fmt.Sprintf("第%d球开出 %d", position, digit)
-			}
-			return false, fmt.Sprintf("第%d球开出 %d", position, balls[position-1])
-		}
-		if position == 6 {
-			tail := sumInts(balls) % 10
-			if tail == digit {
-				return true, fmt.Sprintf("总和尾数 %d", digit)
-			}
-			return false, fmt.Sprintf("总和尾数 %d", tail)
-		}
-		return false, "球位无效"
-
-	case "two_sided":
-		value, label := sideValue(balls, position)
-		if position < 1 || position > len(balls) {
-			if matchSumSize(value, len(balls), selection) {
-				return true, label + "命中" + selectionLabel(selection)
-			}
-			return false, fmt.Sprintf("%s为%d", label, value)
-		}
-		if matchPositionSide(value, balls, selection) {
-			return true, label + "命中" + selectionLabel(selection)
-		}
-		threshold := 5
-		if len(balls) >= 10 {
-			threshold = 6
-		}
-		return false, label + "为" + describeSideAtThreshold(value, threshold)
-
-	case "dragon_tiger":
-		if len(balls) < 2 {
-			return false, "号码不足"
-		}
-		// 赛车龙虎按对应名次比较：冠军对第十、亚军对第九，依次到
-		// 第五对第六，不能把所有龙虎都误算成冠军对末位。
-		if position < 1 || position > len(balls)/2 {
-			return false, "龙虎名次无效"
-		}
-		left, right := balls[position-1], balls[len(balls)-position]
-		outcome := "tie"
-		if left > right {
-			outcome = "dragon"
-		} else if left < right {
-			outcome = "tiger"
-		}
-		if selection == outcome || selection == "和" && outcome == "tie" || selection == "龙" && outcome == "dragon" || selection == "虎" && outcome == "tiger" {
-			return true, fmt.Sprintf("龙虎 %d:%d", left, right)
-		}
-		return false, fmt.Sprintf("龙虎 %d:%d", left, right)
-
-	case "sum":
-		// 赛车“冠亚和”只取冠军与亚军，不是十个号码总和。
-		total := sumInts(balls)
-		if len(balls) >= 2 {
-			total = balls[0] + balls[1]
-		}
-		if selectedTotal, err := strconv.Atoi(selection); err == nil {
-			// Ten-position racing games bet the exact 冠亚和值 (3-19).
-			// Other legacy number games retain their historic sum-tail rule.
-			if len(balls) >= 10 {
-				if total == selectedTotal {
-					return true, fmt.Sprintf("冠亚和 %d", total)
-				}
-				return false, fmt.Sprintf("冠亚和 %d", total)
-			}
-			if total%10 == selectedTotal {
-				return true, fmt.Sprintf("总和尾 %d", selectedTotal)
-			}
-			return false, fmt.Sprintf("总和尾 %d", total%10)
-		}
-		if matchSumSize(total, len(balls), selection) {
-			return true, fmt.Sprintf("总和 %d 命中", total)
-		}
-		return false, fmt.Sprintf("总和 %d", total)
-
-	case "leopard", "straight", "pair", "half_straight", "mixed":
-		pattern := frontPattern(balls)
-		want := playCode
-		if selection != "" && selection != "yes" && selection != "中" {
-			want = normalizePlaySelection(selection)
-		}
-		if pattern == want {
-			return true, "形态命中" + playNameOf(pattern)
-		}
-		return false, "形态为" + playNameOf(pattern)
-
-	default:
-		// Unknown play: treat like ball number on given position.
-		digit, ok := parseDigit(selection)
-		if ok && position >= 1 && position <= len(balls) {
-			if balls[position-1] == digit {
-				return true, "号码命中"
-			}
-			return false, "号码未中"
-		}
-		return false, "未知玩法按未中处理"
-	}
-}
-
-func usableBalls(numbers []int) []int {
-	return numbers
-}
-
-func sideValue(balls []int, position int) (int, string) {
-	if position >= 1 && position <= len(balls) {
-		return balls[position-1], fmt.Sprintf("第%d球", position)
-	}
-	return sumInts(balls), "总和"
-}
-
-func matchSide(value int, selection string) bool {
-	switch selection {
-	case "big", "大":
-		return value >= 5
-	case "small", "小":
-		return value <= 4
-	case "odd", "单":
-		return value%2 == 1
-	case "even", "双":
-		return value%2 == 0
-	}
-	return false
-}
-
-func matchPositionSide(value int, balls []int, selection string) bool {
-	racing := len(balls) >= 10
-	if racing {
-		switch selection {
-		case "big", "大":
-			return value >= 6
-		case "small", "小":
-			return value <= 5
-		case "odd", "单":
-			return value%2 == 1
-		case "even", "双":
-			return value%2 == 0
-		}
-	}
-	return matchSide(value, selection)
-}
-
-func matchSumSize(total, ballCount int, selection string) bool {
-	// PK10 冠亚和 is 3-19: 3-11 small and 12-19 big. Other games retain
-	// their established midpoint rules.
-	threshold := 23
-	if ballCount >= 10 {
-		threshold = 12
-	} else if ballCount <= 3 {
-		threshold = 14
-	}
-	switch selection {
-	case "big", "大":
-		return total >= threshold
-	case "small", "小":
-		return total < threshold
-	case "odd", "单":
-		return total%2 == 1
-	case "even", "双":
-		return total%2 == 0
-	}
-	return false
 }
 
 func frontPattern(balls []int) string {
@@ -1408,8 +1154,8 @@ func generateDrawNumbers(game *lottery.Game, entropy io.Reader) ([]int, error) {
 		return nil, apperrors.NewBusinessError("DRAW_NOT_FOUND", "宾果六合彩必须提供实际来源开奖号码，不能自动生成")
 	}
 	switch strings.ToLower(strings.TrimSpace(game.SourceKind)) {
-	case "", "platform", "simulated":
-		// The empty legacy mode has always represented a platform game.
+	case "platform", "simulated":
+		// Only an explicit platform source may generate a result.
 	default:
 		return nil, apperrors.NewBusinessError("DRAW_NOT_FOUND", "外部或官方彩种必须提供实际开奖号码，不能自动生成")
 	}

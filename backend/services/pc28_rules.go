@@ -151,7 +151,7 @@ func pc28PlayCatalog() []PlayCatalogItem {
 		// Zero is deliberate: PC28 is unusable until an administrator explicitly
 		// supplies this room/game's price. Never manufacture an original-site rate.
 		items = append(items, PlayCatalogItem{PlayCode: spec.Code, PlayName: spec.Name, Category: spec.Category,
-			Description: spec.Description, Example: spec.Example, DefaultOdds: 0, SortOrder: spec.SortOrder})
+			Description: spec.Description, Example: spec.Example, SortOrder: spec.SortOrder})
 	}
 	return items
 }

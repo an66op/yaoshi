@@ -4,7 +4,7 @@ import { ballTone } from '../data/games'
 import { Icon } from '../components/Icon'
 import { MarkSixDrawBall } from '../components/MarkSixBall'
 import { useGameDraws } from '../hooks/useGameDraws'
-import { lotteryResultSummary, lotteryRuleProfile, markSixBallClass, markSixWaveLabel } from '../utils/lotteryRules'
+import { isDigit5V3Game, lotteryResultSummary, lotteryRuleProfile, markSixBallClass, markSixWaveLabel } from '../utils/lotteryRules'
 import './draw-results-rules.css'
 
 type ResultMode = 'numbers' | 'size' | 'parity' | 'trend'
@@ -91,7 +91,8 @@ export function DrawResults({ games, initialGameId, onBack, onSelectGame }: { ga
     return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(date)
   }
   const visibleDraws = draws.filter(draw => draw.game_id === selectedGame?.id && (!selectedDate || drawDate(draw.draw_at) === selectedDate))
-  const availableModes = profile.family === 'unknown' ? resultModes.filter(item => item.id === 'numbers')
+  const rulesKnown = profile.family !== 'unknown' && (profile.family !== 'ssc' || isDigit5V3Game(selectedGame?.id ?? '', selectedGame?.ruleVersion))
+  const availableModes = !rulesKnown ? resultModes.filter(item => item.id === 'numbers')
     : resultModes.map(item => item.id === 'trend' ? { ...item, label: profile.family === 'mark-six' ? '特码属性' : `${profile.sumLabel}/龙虎` } : item)
   const activeMode = availableModes.some(item => item.id === resultMode) ? resultMode : 'numbers'
 

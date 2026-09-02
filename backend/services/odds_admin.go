@@ -65,10 +65,22 @@ func NewOddsAdminService(db *gorm.DB) *OddsAdminService {
 }
 
 func (s *OddsAdminService) Get(gameID string) (*GameOddsLimits, error) {
-	game, err := s.loadGame(gameID)
-	if err != nil {
-		return nil, err
-	}
+	var result *GameOddsLimits
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Share the same per-game lock used by writes. Both catalogue rows and
+		// their revision now come from one configuration, and callers already
+		// inside an override transaction retain this lock until their commit.
+		game, err := NewOddsAdminService(tx.Clauses(clause.Locking{Strength: "SHARE"})).loadGame(gameID)
+		if err != nil {
+			return err
+		}
+		result, err = NewOddsAdminService(tx).readGameLimits(game)
+		return err
+	})
+	return result, err
+}
+
+func (s *OddsAdminService) readGameLimits(game *lottery.Game) (*GameOddsLimits, error) {
 	profile, ready := rulesForGame(game)
 	if !ready {
 		return &GameOddsLimits{GameID: game.ID, GameName: game.Name, Items: []PlayLimitItem{}, RulesMessage: gameRulesUnavailableMessage}, nil
@@ -83,7 +95,7 @@ func (s *OddsAdminService) Get(gameID string) (*GameOddsLimits, error) {
 	items := playLimitItemsForProfile(game.ID, profile, PlayCatalogForGame(game.ID), rows)
 	return &GameOddsLimits{
 		GameID: game.ID, GameName: game.Name, Items: items, RulesReady: true,
-		RuleVersion: profile.Version, ConfigRevision: oddsConfigRevision(profile.Version, items),
+		RuleVersion: profile.Version, ConfigRevision: oddsConfigRevision(profile.Version, game.OddsConfigRevision, items),
 		RiskWarnings: playLimitOddsRisks(game.ID, items),
 	}, nil
 }
@@ -103,7 +115,7 @@ func playLimitItemsForProfile(gameID string, profile gameRuleProfile, catalog []
 	for _, item := range catalog {
 		row, ok := configured[item.PlayCode]
 		if ok {
-			rowConfigured := row.Odds > 1 && row.ExplicitlyConfigured && strings.TrimSpace(row.RuleVersion) == profile.Version
+			rowConfigured := isActivePlatformOdds(row, profile.Version)
 			source := strings.TrimSpace(row.ConfigurationSource)
 			if strings.TrimSpace(row.RuleVersion) != "" && strings.TrimSpace(row.RuleVersion) != profile.Version {
 				source = oddsSourceRuleVersionMismatch
@@ -132,9 +144,15 @@ func playLimitItemsForProfile(gameID string, profile gameRuleProfile, catalog []
 	return items
 }
 
-func oddsConfigRevision(ruleVersion string, items []PlayLimitItem) string {
+func isActivePlatformOdds(row odds.PlayLimit, ruleVersion string) bool {
+	return isValidOddsOverride(row.Odds) && row.ExplicitlyConfigured &&
+		strings.TrimSpace(row.RuleVersion) == ruleVersion &&
+		strings.TrimSpace(row.ConfigurationSource) == oddsSourceAdminSave
+}
+
+func oddsConfigRevision(ruleVersion string, revision uint64, items []PlayLimitItem) string {
 	hash := sha256.New()
-	_, _ = fmt.Fprintf(hash, "rule=%s\n", strings.TrimSpace(ruleVersion))
+	_, _ = fmt.Fprintf(hash, "rule=%s\nrevision=%d\n", strings.TrimSpace(ruleVersion), revision)
 	for _, item := range items {
 		configuredAt := ""
 		if item.ConfiguredAt != nil {
@@ -165,12 +183,13 @@ func (s *OddsAdminService) Update(gameID string, input UpdateOddsLimitsInput) (*
 		return nil, err
 	}
 
+	var result *GameOddsLimits
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		var locked lottery.Game
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, "id = ?", game.ID).Error; err != nil {
 			return err
 		}
-		current, err := NewOddsAdminService(tx).Get(game.ID)
+		current, err := NewOddsAdminService(tx).readGameLimits(&locked)
 		if err != nil {
 			return err
 		}
@@ -181,12 +200,18 @@ func (s *OddsAdminService) Update(gameID string, input UpdateOddsLimitsInput) (*
 			return err
 		}
 		rows := make([]odds.PlayLimit, 0, len(normalized))
-		closedCodes := make([]string, 0, len(normalized))
+		previouslyActive := make(map[string]bool, len(current.Items))
+		for _, item := range current.Items {
+			previouslyActive[item.PlayCode] = item.Configured
+		}
+		preservedOverrideCodes := make([]string, 0, len(normalized))
 		configuredAt := time.Now().UTC()
 		for _, item := range normalized {
 			if item.Odds == 0 {
-				closedCodes = append(closedCodes, item.PlayCode)
 				continue
+			}
+			if previouslyActive[item.PlayCode] {
+				preservedOverrideCodes = append(preservedOverrideCodes, item.PlayCode)
 			}
 			rows = append(rows, odds.PlayLimit{
 				GameID:               game.ID,
@@ -209,7 +234,19 @@ func (s *OddsAdminService) Update(gameID string, input UpdateOddsLimitsInput) (*
 				return err
 			}
 		}
-		return deleteLowerLevelOddsOverrides(tx, game.ID, closedCodes)
+		// Preserve overrides only across an uninterrupted current-rule market.
+		// Retired, unconfirmed, and newly reopened plays cannot inherit stale
+		// room/member prices from a previous activation or rules contract.
+		if err := deleteLowerLevelOddsOverridesExcept(tx, game.ID, preservedOverrideCodes); err != nil {
+			return err
+		}
+		if err := tx.Model(&lottery.Game{}).Where("id = ?", game.ID).
+			UpdateColumn("odds_config_revision", gorm.Expr("odds_config_revision + 1")).Error; err != nil {
+			return err
+		}
+		locked.OddsConfigRevision++
+		result, err = NewOddsAdminService(tx).readGameLimits(&locked)
+		return err
 	})
 	if err != nil {
 		if apperrors.IsBusinessError(err) {
@@ -217,7 +254,7 @@ func (s *OddsAdminService) Update(gameID string, input UpdateOddsLimitsInput) (*
 		}
 		return nil, apperrors.NewSystemError("ODDS_SAVE_FAILED", "保存赔率限额失败", err)
 	}
-	return s.Get(game.ID)
+	return result, nil
 }
 
 func validateOddsMutationGuard(currentRuleVersion, expectedRuleVersion, expectedRevision string) error {
@@ -252,16 +289,16 @@ func normalizeOddsLimitItems(catalog []PlayCatalogItem, input []PlayLimitItem) (
 			return nil, apperrors.NewBusinessError("INVALID_REQUEST", "缺少玩法配置: "+spec.PlayCode)
 		}
 		item.PlayCode, item.PlayName, item.SortOrder = spec.PlayCode, spec.PlayName, index
-		item.Odds = roundOdds(item.Odds)
 		values := []float64{item.Odds, item.MinBet, item.MaxBet, item.MaxUserPeriod, item.MaxPeriodTotal}
 		for _, value := range values {
 			if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
 				return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 赔率与限额必须是非负有限数值", item.PlayName))
 			}
 		}
-		if item.Odds != 0 && item.Odds <= 1 {
+		if item.Odds != 0 && !isValidOddsOverride(item.Odds) {
 			return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 赔率必须大于 1，填 0 表示关闭", item.PlayName))
 		}
+		item.Odds = roundOdds(item.Odds)
 		for _, limit := range []float64{item.MinBet, item.MaxBet, item.MaxUserPeriod, item.MaxPeriodTotal} {
 			if math.Abs(roundMoney(limit)-limit) > 0.0000001 {
 				return nil, apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("%s 限额最多保留两位小数", item.PlayName))
@@ -284,14 +321,15 @@ func normalizeOddsLimitItems(catalog []PlayCatalogItem, input []PlayLimitItem) (
 	return normalized, nil
 }
 
-func deleteLowerLevelOddsOverrides(tx *gorm.DB, gameID string, playCodes []string) error {
-	if len(playCodes) == 0 {
-		return nil
+func deleteLowerLevelOddsOverridesExcept(tx *gorm.DB, gameID string, playCodes []string) error {
+	query := tx.Where("game_id = ?", gameID)
+	if len(playCodes) > 0 {
+		query = query.Where("play_code NOT IN ?", playCodes)
 	}
-	if err := tx.Where("game_id = ? AND play_code IN ?", gameID, playCodes).Delete(&odds.RoomPlayOdds{}).Error; err != nil {
+	if err := query.Session(&gorm.Session{}).Delete(&odds.RoomPlayOdds{}).Error; err != nil {
 		return err
 	}
-	return tx.Where("game_id = ? AND play_code IN ?", gameID, playCodes).Delete(&odds.UserPlayOdds{}).Error
+	return query.Session(&gorm.Session{}).Delete(&odds.UserPlayOdds{}).Error
 }
 
 func (s *OddsAdminService) Reset(gameID string, guard OddsMutationGuard) (*GameOddsLimits, error) {
@@ -306,12 +344,13 @@ func (s *OddsAdminService) Reset(gameID string, guard OddsMutationGuard) (*GameO
 	if err := validateOddsMutationGuard(profile.Version, guard.ExpectedRuleVersion, guard.ExpectedRevision); err != nil {
 		return nil, err
 	}
+	var result *GameOddsLimits
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		var locked lottery.Game
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, "id = ?", game.ID).Error; err != nil {
 			return err
 		}
-		current, err := NewOddsAdminService(tx).Get(game.ID)
+		current, err := NewOddsAdminService(tx).readGameLimits(&locked)
 		if err != nil {
 			return err
 		}
@@ -324,7 +363,16 @@ func (s *OddsAdminService) Reset(gameID string, guard OddsMutationGuard) (*GameO
 		if err := tx.Where("game_id = ?", game.ID).Delete(&odds.RoomPlayOdds{}).Error; err != nil {
 			return err
 		}
-		return tx.Where("game_id = ?", game.ID).Delete(&odds.UserPlayOdds{}).Error
+		if err := tx.Where("game_id = ?", game.ID).Delete(&odds.UserPlayOdds{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&lottery.Game{}).Where("id = ?", game.ID).
+			UpdateColumn("odds_config_revision", gorm.Expr("odds_config_revision + 1")).Error; err != nil {
+			return err
+		}
+		locked.OddsConfigRevision++
+		result, err = NewOddsAdminService(tx).readGameLimits(&locked)
+		return err
 	})
 	if err != nil {
 		if apperrors.IsBusinessError(err) {
@@ -332,7 +380,7 @@ func (s *OddsAdminService) Reset(gameID string, guard OddsMutationGuard) (*GameO
 		}
 		return nil, apperrors.NewSystemError("ODDS_RESET_FAILED", "清空赔率限额失败", err)
 	}
-	return s.Get(game.ID)
+	return result, nil
 }
 
 func (s *OddsAdminService) loadGame(gameID string) (*lottery.Game, error) {

@@ -18,8 +18,8 @@ type Bet struct {
 	PlayName  string `gorm:"size:40;not null" json:"play_name"`
 	Position  int    `gorm:"not null;default:0;uniqueIndex:idx_bet_dedupe" json:"position"`
 	Selection string `gorm:"size:40;not null;uniqueIndex:idx_bet_dedupe" json:"selection"`
-	// Empty versions preserve the legacy contract. New stakes freeze their
-	// version so a rules fix cannot reinterpret or merge into an older ticket.
+	// Stakes freeze their exact rule contract. Empty or unknown versions are
+	// invalid for settlement and are never inferred from the draw shape.
 	RuleVersion string `gorm:"size:32;not null;default:'';uniqueIndex:idx_bet_dedupe" json:"rule_version,omitempty"`
 	// RequestReference links an idempotent debit ledger to the exact bet rows
 	// committed by that request. Empty references retain legacy aggregation.

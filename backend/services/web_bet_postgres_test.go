@@ -4,6 +4,7 @@ import (
 	"backend/data/models/bet"
 	"backend/data/models/lottery"
 	"backend/data/models/odds"
+	"backend/data/models/settings"
 	"backend/data/models/user"
 	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
@@ -27,7 +28,7 @@ func markSixPostgresFixture(t *testing.T, db *gorm.DB, issue string) (*lottery.G
 	updates := map[string]any{
 		"enabled": true, "source_kind": "external", "timing_source": "upstream", "sync_status": "ok",
 		"last_sync_error": "", "last_sync_at": now, "next_issue": issue,
-		"next_draw_at": now.Add(10 * time.Minute), "draw_interval": 300,
+		"next_draw_at": now.Add(3 * time.Minute), "draw_interval": 300,
 	}
 	if err := db.Model(&lottery.Game{}).Where("id = ?", "bingo-mark-six").Updates(updates).Error; err != nil {
 		t.Fatal(err)
@@ -36,9 +37,12 @@ func markSixPostgresFixture(t *testing.T, db *gorm.DB, issue string) (*lottery.G
 	if err := db.First(&game, "id = ?", "bingo-mark-six").Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := NewOddsAdminService(db).EnsureGameDefaults(game.ID); err != nil {
-		t.Fatal(err)
-	}
+	configureTestGameOdds(t, db, game.ID, map[string]float64{
+		"marksix_special_a_number": 48, "marksix_special_b_number": 48,
+		"marksix_regular_number": 7, "marksix_regular_position_number": 48, "marksix_regular_special_number": 48,
+		"marksix_combo_4_all": 700, "marksix_combo_3_all": 580, "marksix_combo_2_all": 60,
+		"marksix_combo_special_pair": 150, "marksix_not_in": 2,
+	})
 	return &game, member
 }
 
@@ -54,6 +58,9 @@ func markSixWorkspace(t *testing.T, db *gorm.DB, id uint64) workspacemodel.Works
 func TestBingoMarkSixMemberOddsOnlyExposeConfiguredAtomicMarkets(t *testing.T) {
 	db := timingPostgresDatabase(t)
 	game, member := markSixPostgresFixture(t, db, "985901")
+	if err := db.Model(&settings.SystemConfig{}).Where("workspace_id = ?", member.WorkspaceID).Update("show_odds", false).Error; err != nil {
+		t.Fatal(err)
+	}
 	portal := NewMemberPortalService(db)
 	view, err := portal.GameOdds(member.UserID, game.ID)
 	if err != nil {
@@ -75,7 +82,7 @@ func TestBingoMarkSixMemberOddsOnlyExposeConfiguredAtomicMarkets(t *testing.T) {
 			limits.Items[index].Odds = 2.8
 		}
 	}
-	if _, err := oddsService.Update(game.ID, UpdateOddsLimitsInput{Items: limits.Items}); err != nil {
+	if _, err := oddsService.Update(game.ID, oddsUpdateInput(limits)); err != nil {
 		t.Fatal(err)
 	}
 	view, err = portal.GameOdds(member.UserID, game.ID)
@@ -167,9 +174,6 @@ func TestBingoMarkSixWebBatchPostgresIsAtomicIdempotentAndServerPriced(t *testin
 	if timingPostgresMoney(t, db, member.UserID) != after {
 		t.Fatal("missing odds changed money")
 	}
-	if err := NewOddsAdminService(db).EnsureGameDefaults(game.ID); err != nil {
-		t.Fatal(err)
-	}
 
 	if _, err := NewChatAdminService(db).SetLotteryRoomEnabledForWorkspace(markSixWorkspace(t, db, member.WorkspaceID), game.ID, false); err != nil {
 		t.Fatal(err)
@@ -238,7 +242,7 @@ func TestBingoMarkSixWebBatchPostgresRollsBackRoomTransferRace(t *testing.T) {
 			return
 		}
 		inject = false
-		if err := tx.Exec(`UPDATE "user" SET workspace_id = ? WHERE user_id = ?`, other.ID, member.UserID).Error; err != nil {
+		if err := tx.Session(&gorm.Session{NewDB: true}).Exec(`UPDATE "user" SET workspace_id = ? WHERE user_id = ?`, other.ID, member.UserID).Error; err != nil {
 			tx.AddError(err)
 		}
 	}); err != nil {

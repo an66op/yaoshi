@@ -81,12 +81,38 @@ export function UsersPage() {
   const [games, setGames] = useState<AdminGame[]>([])
   const [agents, setAgents] = useState<AgentItem[]>([])
   const [trading, setTrading] = useState<UserTradingConfig | null>(null)
-  const [tradingGameId, setTradingGameId] = useState('')
+  const [tradingLoading, setTradingLoading] = useState(false)
+  const [tradingError, setTradingError] = useState('')
   const [tradingSaving, setTradingSaving] = useState(false)
   const [tradingDirty, setTradingDirty] = useState(false)
   const { showMessage } = useFeedback()
   const loadRequestRef = useRef(0)
   const detailRequestRef = useRef(0)
+  const detailUserIdRef = useRef<number | null>(null)
+  const tradingRequestRef = useRef(0)
+  const tradingRef = useRef<UserTradingConfig | null>(null)
+  const tradingLoadingRef = useRef(false)
+  const tradingDirtyRef = useRef(false)
+  const tradingWriteRef = useRef<number | null>(null)
+  const mountedRef = useRef(true)
+  const renderedDetailRequest = detailRequestRef.current
+  const renderedTradingRequest = tradingRequestRef.current
+  const tradingUnavailable = tradingLoading || tradingSaving || !trading || trading.user_id !== detailUser?.id
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      loadRequestRef.current += 1
+      detailRequestRef.current += 1
+      tradingRequestRef.current += 1
+      detailUserIdRef.current = null
+      tradingRef.current = null
+      tradingLoadingRef.current = false
+      tradingDirtyRef.current = false
+      tradingWriteRef.current = null
+    }
+  }, [])
 
   const load = useCallback(async (notify = false, silent = false) => {
     const requestID = ++loadRequestRef.current
@@ -219,72 +245,126 @@ export function UsersPage() {
     }
   }
 
-  const openDetail = async (user: AdminUser) => {
-    const requestID = ++detailRequestRef.current
-    setDetailUser(user)
-    setHistory([])
+  const resetTradingContext = () => {
+    tradingRequestRef.current += 1
+    tradingRef.current = null
+    tradingDirtyRef.current = false
+    tradingLoadingRef.current = false
+    tradingWriteRef.current = null
     setTrading(null)
     setTradingDirty(false)
-    const [historyResult, dashboardResult, tradingResult] = await Promise.allSettled([
-        adminApi.userBalanceHistory(user.id),
-        adminApi.dashboard(),
-        user.role === 'member' ? adminApi.userTrading(user.id) : Promise.resolve(null),
-      ])
-    if (requestID !== detailRequestRef.current) return
+    setTradingLoading(false)
+    setTradingSaving(false)
+    setTradingError('')
+  }
+
+  const acceptTrading = (next: UserTradingConfig) => {
+    tradingRef.current = next
+    tradingDirtyRef.current = false
+    setTrading(next)
+    setTradingDirty(false)
+  }
+
+  const loadTrading = async (userId: number, gameId?: string) => {
+    if (!mountedRef.current || detailUserIdRef.current !== userId || tradingWriteRef.current !== null) return
+    const detailRequest = detailRequestRef.current
+    const requestID = ++tradingRequestRef.current
+    const isCurrent = () => mountedRef.current && detailRequest === detailRequestRef.current && userId === detailUserIdRef.current && requestID === tradingRequestRef.current
+    tradingLoadingRef.current = true
+    setTradingLoading(true)
+    setTradingError('')
+    try {
+      const next = await adminApi.userTrading(userId, gameId)
+      if (!isCurrent()) return
+      if (next.user_id !== userId || (gameId !== undefined && next.game_id !== gameId)) throw new Error('返回的会员或彩种不一致，请重新读取交易配置')
+      acceptTrading(next)
+    } catch (reason) {
+      if (isCurrent()) setTradingError(reason instanceof Error ? reason.message : '读取飞单与赔率失败')
+    } finally {
+      if (isCurrent()) {
+        tradingLoadingRef.current = false
+        setTradingLoading(false)
+      }
+    }
+  }
+
+  const openDetail = async (user: AdminUser) => {
+    if (!mountedRef.current || tradingWriteRef.current !== null) return
+    const requestID = ++detailRequestRef.current
+    detailUserIdRef.current = user.id
+    resetTradingContext()
+    setDetailUser(user)
+    setHistory([])
+    setGames([])
+    if (user.role === 'member') void loadTrading(user.id)
+    const [historyResult, dashboardResult] = await Promise.allSettled([
+      adminApi.userBalanceHistory(user.id),
+      adminApi.dashboard(),
+    ])
+    if (!mountedRef.current || requestID !== detailRequestRef.current || detailUserIdRef.current !== user.id) return
     if (historyResult.status === 'fulfilled') setHistory(historyResult.value)
     if (dashboardResult.status === 'fulfilled') setGames(dashboardResult.value.games ?? [])
-    if (tradingResult.status === 'fulfilled' && tradingResult.value) {
-      setTrading(tradingResult.value)
-      setTradingGameId(tradingResult.value.game_id)
-      setTradingDirty(false)
-    }
-    const failure = [historyResult, dashboardResult, tradingResult].find(result => result.status === 'rejected')
+    const failure = [historyResult, dashboardResult].find(result => result.status === 'rejected')
     if (failure?.status === 'rejected') setError(failure.reason instanceof Error ? failure.reason.message : '部分会员详情暂时无法读取')
   }
 
   const closeDetail = () => {
+    if (!mountedRef.current || renderedDetailRequest !== detailRequestRef.current) return
     detailRequestRef.current += 1
+    detailUserIdRef.current = null
+    resetTradingContext()
     setDetailUser(null)
   }
 
-  const loadTrading = async (userId: number, gameId: string) => {
-    try {
-      const next = await adminApi.userTrading(userId, gameId)
-      setTrading(next)
-      setTradingGameId(next.game_id)
-      setTradingDirty(false)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '读取飞单与赔率失败')
-    }
+  const isCurrentTradingEditor = () => mountedRef.current && renderedDetailRequest === detailRequestRef.current && renderedTradingRequest === tradingRequestRef.current && detailUser?.id === detailUserIdRef.current && tradingRef.current?.user_id === detailUser?.id && tradingRef.current?.game_id === trading?.game_id
+
+  const editTrading = (update: (current: UserTradingConfig) => UserTradingConfig) => {
+    if (!isCurrentTradingEditor() || !tradingRef.current || tradingLoadingRef.current || tradingWriteRef.current !== null) return
+    const next = update(tradingRef.current)
+    tradingRef.current = next
+    tradingDirtyRef.current = true
+    setTrading(next)
+    setTradingDirty(true)
   }
 
   const saveTrading = async () => {
-    if (!detailUser || !trading) return
-    const oddsMultiplier = Number(trading.odds_multiplier ?? 1)
+    if (!isCurrentTradingEditor() || !tradingRef.current || !tradingDirtyRef.current || tradingLoadingRef.current || tradingWriteRef.current !== null) return
+    const draft = tradingRef.current
+    const userId = draft.user_id
+    const oddsMultiplier = Number(draft.odds_multiplier ?? 1)
     if (!Number.isFinite(oddsMultiplier) || oddsMultiplier < 0.5 || oddsMultiplier > 1.5) {
-      setError('会员赔率倍率必须在 0.50–1.50 之间')
+      setTradingError('会员赔率倍率必须在 0.50–1.50 之间')
       return
     }
+    const detailRequest = detailRequestRef.current
+    const requestID = ++tradingRequestRef.current
+    tradingWriteRef.current = requestID
+    const isCurrent = () => mountedRef.current && detailRequest === detailRequestRef.current && userId === detailUserIdRef.current && requestID === tradingRequestRef.current && tradingWriteRef.current === requestID
     setTradingSaving(true)
+    setTradingError('')
     try {
-      const next = await adminApi.updateUserTrading(detailUser.id, {
+      const next = await adminApi.updateUserTrading(userId, {
         odds_multiplier: oddsMultiplier,
-        fly_mode: trading.fly.mode,
-        fly_rate: trading.fly.rate,
-        rebate_mode: trading.rebate.mode,
-        rebate_rate: trading.rebate.rate,
-        game_id: trading.game_id,
-        odds: trading.odds.map(item => ({ play_code: item.play_code, override: item.has_override ? item.override : null })),
+        fly_mode: draft.fly.mode,
+        fly_rate: draft.fly.rate,
+        rebate_mode: draft.rebate.mode,
+        rebate_rate: draft.rebate.rate,
+        game_id: draft.game_id,
+        odds: draft.odds.map(item => ({ play_code: item.play_code, override: item.has_override ? item.override : null })),
       })
-      setTrading(next)
-      setTradingDirty(false)
-      setDetailUser(current => current ? { ...current, fly_mode: next.fly.mode, fly_rate: next.fly.rate } : current)
-      setUsers(current => current.map(item => item.id === detailUser.id ? { ...item, fly_mode: next.fly.mode, fly_rate: next.fly.rate } : item))
+      if (!isCurrent()) return
+      if (next.user_id !== userId || next.game_id !== draft.game_id) throw new Error('返回的会员或彩种不一致，请重新读取交易配置')
+      acceptTrading(next)
+      setDetailUser(current => current?.id === userId ? { ...current, fly_mode: next.fly.mode, fly_rate: next.fly.rate } : current)
+      setUsers(current => current.map(item => item.id === userId ? { ...item, fly_mode: next.fly.mode, fly_rate: next.fly.rate } : item))
       showMessage('飞单、返水与单独赔率已保存')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '保存失败')
+      if (isCurrent()) setTradingError(reason instanceof Error ? reason.message : '保存失败')
     } finally {
-      setTradingSaving(false)
+      if (isCurrent()) {
+        tradingWriteRef.current = null
+        setTradingSaving(false)
+      }
     }
   }
 
@@ -357,12 +437,16 @@ export function UsersPage() {
           {detailUser.role === 'member' && <><Typography fontWeight={800} mt={2.5} mb={1}>会员交易配置</Typography>
           <Card variant="outlined">
             <CardContent>
+              {tradingError && <Alert severity="error" sx={{ mb: 1 }}>{tradingError}</Alert>}
+              {tradingLoading && <Typography variant="caption" color="text.secondary">加载交易配置中…</Typography>}
               {!trading ? (
-                <Typography variant="caption" color="text.secondary">加载交易配置中…</Typography>
+                !tradingLoading && <Button onClick={() => {
+                  if (renderedDetailRequest === detailRequestRef.current && renderedTradingRequest === tradingRequestRef.current && !tradingRef.current) void loadTrading(detailUser.id)
+                }}>重新读取交易配置</Button>
               ) : (
                 <Stack gap={1.5}>
                   <Alert severity="info" sx={{ py: 0.5 }}>
-                    赔率优先级：会员单独赔率 → 当前房间赔率 × 会员倍率 → 平台默认赔率 × 会员倍率。会员进入其他房间后，只使用新房间内的会员配置。
+                    仅平台后台已配置且启用的玩法可设置覆盖。赔率优先级：会员单独赔率 → 当前房间赔率 × 会员倍率 → 平台已配置赔率 × 会员倍率。会员进入其他房间后，只使用新房间内的会员配置。
                   </Alert>
 
                   <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2.2 }}>
@@ -375,11 +459,11 @@ export function UsersPage() {
                         size="small"
                         type="number"
                         label="倍率"
+                        disabled={tradingUnavailable}
                         value={trading.odds_multiplier ?? 1}
                         onChange={event => {
                           const raw = event.target.value
-                          setTrading(current => current ? { ...current, odds_multiplier: raw === '' ? undefined : Number(raw) } : current)
-                          setTradingDirty(true)
+                          editTrading(current => ({ ...current, odds_multiplier: raw === '' ? undefined : Number(raw) }))
                         }}
                         inputProps={{ min: 0.5, max: 1.5, step: 0.01 }}
                         sx={{ width: { xs: '100%', md: 130 } }}
@@ -389,11 +473,9 @@ export function UsersPage() {
                       {[0.8, 0.9, 1, 1.1, 1.2].map(value => <Button
                         key={value}
                         size="small"
+                        disabled={tradingUnavailable}
                         variant={Math.abs((trading.odds_multiplier ?? 1) - value) < 0.0001 ? 'contained' : 'outlined'}
-                        onClick={() => {
-                          setTrading(current => current ? { ...current, odds_multiplier: value } : current)
-                          setTradingDirty(true)
-                        }}
+                        onClick={() => editTrading(current => ({ ...current, odds_multiplier: value }))}
                         sx={{ minWidth: 66, flex: '0 0 auto' }}
                       >{value.toFixed(2)} 倍</Button>)}
                     </Stack>
@@ -407,11 +489,9 @@ export function UsersPage() {
                           select
                           size="small"
                           label="飞单模式"
+                          disabled={tradingUnavailable}
                           value={trading.fly.mode}
-                          onChange={event => {
-                            setTrading(current => current ? { ...current, fly: { ...current.fly, mode: event.target.value } } : current)
-                            setTradingDirty(true)
-                          }}
+                          onChange={event => editTrading(current => ({ ...current, fly: { ...current.fly, mode: event.target.value } }))}
                         >
                           <MenuItem value="inherit">跟随房间（当前 {trading.room_fly_rate}%）</MenuItem>
                           <MenuItem value="custom">单独比例</MenuItem>
@@ -421,12 +501,9 @@ export function UsersPage() {
                           size="small"
                           type="number"
                           label="单独飞单比例 %"
-                          disabled={trading.fly.mode !== 'custom'}
+                          disabled={tradingUnavailable || trading.fly.mode !== 'custom'}
                           value={trading.fly.rate}
-                          onChange={event => {
-                            setTrading(current => current ? { ...current, fly: { ...current.fly, rate: Number(event.target.value) } } : current)
-                            setTradingDirty(true)
-                          }}
+                          onChange={event => editTrading(current => ({ ...current, fly: { ...current.fly, rate: Number(event.target.value) } }))}
                           inputProps={{ min: 0, max: 100, step: 0.01 }}
                         />
                       </Stack>
@@ -434,47 +511,39 @@ export function UsersPage() {
                     <Paper variant="outlined" sx={{ p: 1.15, borderRadius: 2.2 }}>
                       <Typography fontSize={12} fontWeight={900} mb={1}>返水设置</Typography>
                       <Stack gap={1}>
-                        <TextField select size="small" label="返水模式" value={trading.rebate.mode} onChange={event => {
-                          setTrading(current => current ? { ...current, rebate: { ...current.rebate, mode: event.target.value } } : current)
-                          setTradingDirty(true)
-                        }}>
+                        <TextField select size="small" label="返水模式" disabled={tradingUnavailable} value={trading.rebate.mode} onChange={event => editTrading(current => ({ ...current, rebate: { ...current.rebate, mode: event.target.value } }))}>
                           <MenuItem value="inherit">跟随房间（当前 {trading.room_rebate_rate}%）</MenuItem>
                           <MenuItem value="custom">用户单独返水</MenuItem>
                           <MenuItem value="off">关闭返水</MenuItem>
                         </TextField>
-                        <TextField size="small" type="number" label="用户返水比例 %" disabled={trading.rebate.mode !== 'custom'} value={trading.rebate.rate} onChange={event => {
-                          setTrading(current => current ? { ...current, rebate: { ...current.rebate, rate: Number(event.target.value) } } : current)
-                          setTradingDirty(true)
-                        }} inputProps={{ min: 0, max: 100, step: 0.01 }} />
+                        <TextField size="small" type="number" label="用户返水比例 %" disabled={tradingUnavailable || trading.rebate.mode !== 'custom'} value={trading.rebate.rate} onChange={event => editTrading(current => ({ ...current, rebate: { ...current.rebate, rate: Number(event.target.value) } }))} inputProps={{ min: 0, max: 100, step: 0.01 }} />
                       </Stack>
                     </Paper>
                   </Box>
 
                   <GameOddsNavigation
                     games={games.map(game => ({ ...game, enabled: true }))}
-                    gameId={tradingGameId}
+                    gameId={trading.game_id}
                     onSelect={next => {
-                      if (tradingDirty) {
+                      if (!isCurrentTradingEditor() || tradingWriteRef.current !== null) return
+                      if (tradingDirtyRef.current) {
                         showMessage('当前游戏有未保存修改，请先保存再切换', 'warning')
                         return
                       }
-                      setTradingGameId(next)
+                      if (next === tradingRef.current?.game_id && !tradingLoadingRef.current) return
                       void loadTrading(detailUser.id, next)
                     }}
                   />
-                  <OddsOverrideGrid
+                  <Box component="fieldset" disabled={tradingUnavailable} sx={{ border: 0, m: 0, p: 0, minWidth: 0 }}><OddsOverrideGrid
                     items={trading.odds}
                     level="member"
-                    onChange={odds => {
-                      setTrading(current => current ? {
+                    onChange={odds => editTrading(current => ({
                         ...current,
                         odds: odds.map(item => ({ ...item, room_odds: item.room_odds ?? item.base_odds })),
-                      } : current)
-                      setTradingDirty(true)
-                    }}
-                  />
+                      }))}
+                  /></Box>
                   <Stack direction="row" justifyContent="flex-end">
-                    <Button variant="contained" disabled={tradingSaving || !tradingDirty} onClick={() => void saveTrading()}>{tradingSaving ? '保存中…' : tradingDirty ? '保存会员交易配置' : '已保存'}</Button>
+                    <Button variant="contained" disabled={tradingUnavailable || !tradingDirty} onClick={() => void saveTrading()}>{tradingSaving ? '保存中…' : tradingDirty ? '保存会员交易配置' : '已保存'}</Button>
                   </Stack>
                 </Stack>
               )}

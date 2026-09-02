@@ -131,7 +131,8 @@ func TestGameRulesPostgresEffectiveOddsPreserveSavedConfiguration(t *testing.T) 
 	if err := db.First(&staleAfter, stale.ID).Error; err != nil || !reflect.DeepEqual(staleAfter, stale) {
 		t.Fatalf("default repair overwrote stale configuration: %+v / %v", staleAfter, err)
 	}
-	configuredInput := UpdateOddsLimitsInput{Items: append([]PlayLimitItem(nil), markSix.Items...)}
+	configuredInput := oddsUpdateInput(markSix)
+	configuredInput.Items = append([]PlayLimitItem(nil), markSix.Items...)
 	configuredCode := "marksix_special_zodiac"
 	for index := range configuredInput.Items {
 		if configuredInput.Items[index].PlayCode == configuredCode {
@@ -151,7 +152,8 @@ func TestGameRulesPostgresEffectiveOddsPreserveSavedConfiguration(t *testing.T) 
 	if !foundConfigured {
 		t.Fatalf("newly priced atomic play was not exposed as configured: %+v", configuredView.Items)
 	}
-	if err := service.EnsureGameDefaults("pc-canada"); err != nil {
+	pcBeforeReset, err := service.Get("pc-canada")
+	if err != nil {
 		t.Fatal(err)
 	}
 	for _, original := range legacy {
@@ -160,7 +162,7 @@ func TestGameRulesPostgresEffectiveOddsPreserveSavedConfiguration(t *testing.T) 
 			t.Fatalf("read/filter rewrote configured odds: %+v / %v", actual, err)
 		}
 	}
-	resetPC, err := service.Reset("pc-canada")
+	resetPC, err := service.Reset("pc-canada", oddsMutationGuard(pcBeforeReset))
 	if err != nil || !resetPC.RulesReady || resetPC.RuleVersion != pc28RuleV1 || len(resetPC.Items) != len(pc28PlaySpecs()) {
 		t.Fatalf("PC28 reset did not preserve the read-only atomic catalog: %+v / %v", resetPC, err)
 	}
@@ -169,7 +171,7 @@ func TestGameRulesPostgresEffectiveOddsPreserveSavedConfiguration(t *testing.T) 
 			t.Fatalf("PC28 reset manufactured odds: %+v", item)
 		}
 	}
-	for _, id := range []string{"speed-ssc", "bingo-ssc-4", "official-fc3d"} {
+	for _, id := range []string{"speed-ssc", "sg-ssc", "bingo-ssc-1", "official-fc3d"} {
 		view, err := service.Get(id)
 		wantItems := 9
 		if err != nil || !view.RulesReady || len(view.Items) != wantItems {
@@ -179,6 +181,16 @@ func TestGameRulesPostgresEffectiveOddsPreserveSavedConfiguration(t *testing.T) 
 			if item.PlayCode == "sum" && item.PlayName != "总和 / 总和尾" {
 				t.Fatalf("sum still has a racing label for %s: %+v", id, item)
 			}
+		}
+	}
+	for _, id := range []string{"bingo-racing-b", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
+		view, err := service.Get(id)
+		if err != nil || view.RulesReady || view.RuleVersion != "" || len(view.Items) != 0 {
+			t.Fatalf("unverified game exposed a modeled odds catalog for %s: %+v / %v", id, view, err)
+		}
+		var rows int64
+		if err := db.Model(&odds.PlayLimit{}).Where("game_id = ?", id).Count(&rows).Error; err != nil || rows != 0 {
+			t.Fatalf("reading unverified game manufactured odds for %s: %d / %v", id, rows, err)
 		}
 	}
 	var official lottery.Game

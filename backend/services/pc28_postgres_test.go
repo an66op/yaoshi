@@ -49,7 +49,7 @@ func pc28PostgresFixture(t *testing.T, db *gorm.DB, gameID, issue string, grayPu
 		limits.Items[index].MaxUserPeriod = 50000
 		limits.Items[index].MaxPeriodTotal = 100000
 	}
-	if _, err := NewOddsAdminService(db).Update(gameID, UpdateOddsLimitsInput{Items: limits.Items}); err != nil {
+	if _, err := NewOddsAdminService(db).Update(gameID, oddsUpdateInput(limits)); err != nil {
 		t.Fatal("configure explicit PC28 test odds:", err)
 	}
 	return &game, member, room

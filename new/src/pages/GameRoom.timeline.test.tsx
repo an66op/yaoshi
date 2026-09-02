@@ -86,10 +86,13 @@ describe('clock-independent game timeline', () => {
   it('adds the chat tie key only to exact contracts that support a tie selection', () => {
     const noop = () => undefined
     const keyboard = (gameId: string, ruleVersion?: string) => renderToStaticMarkup(<BetKeyboard gameId={gameId} ruleVersion={ruleVersion} mode="quick" odds={{}} oddsHidden oddsResponseReady selectedCount={0} showModes={false} onShortcut={noop} onBackspace={noop} onClear={noop} onConfirm={noop} onModeChange={noop} onSelectNumber={noop} onSelectOption={noop} />)
-    for (const gameId of ['speed-ssc', 'au-lucky-5', 'bingo-ssc-1']) expect(keyboard(gameId, 'digits5-v3')).toMatch(/<button[^>]*>和<\/button>/)
+    for (const gameId of ['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1']) {
+      expect(keyboard(gameId, 'digits5-v3')).toMatch(/<button[^>]*>和<\/button>/)
+      expect(keyboard(gameId, 'digits5-v3')).not.toMatch(/<button[^>]*>总和<\/button>/)
+    }
     expect(keyboard('speed-ssc')).not.toMatch(/<button[^>]*>和<\/button>/)
     expect(keyboard('speed-ssc', 'digits5-v2')).not.toMatch(/<button[^>]*>和<\/button>/)
-    expect(keyboard('sg-ssc', 'digits5-v3')).not.toMatch(/<button[^>]*>和<\/button>/)
+    expect(keyboard('sg-ssc')).not.toMatch(/<button[^>]*>和<\/button>/)
     for (const gameId of ['bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4']) expect(keyboard(gameId, 'digits5-v3')).not.toMatch(/<button[^>]*>和<\/button>/)
     expect(keyboard('pc-canada', 'pc28-v1')).toMatch(/<button[^>]*>和<\/button>/)
     expect(keyboard('canada-28', 'pc28-v2')).toMatch(/<button[^>]*>和<\/button>/)

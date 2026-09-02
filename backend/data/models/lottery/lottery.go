@@ -30,8 +30,12 @@ type Game struct {
 	SyncStatus     string     `gorm:"size:20;not null;default:idle" json:"sync_status"`
 	LastSyncAt     *time.Time `json:"last_sync_at"`
 	LastSyncError  string     `gorm:"size:500" json:"last_sync_error"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	// OddsConfigRevision is independent of draw/source updates. Every explicit
+	// odds save or clear increments it, including a clear of an already empty
+	// configuration, so stale editors cannot pass an ABA-style version check.
+	OddsConfigRevision uint64    `gorm:"not null;default:0" json:"-"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 func (Game) TableName() string { return "lottery_games" }

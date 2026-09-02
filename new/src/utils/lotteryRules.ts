@@ -5,7 +5,7 @@ const racingIDs = new Set(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 
 const sscIDs = new Set(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])
 // Only these products have the versioned middle/back-three and 1↔5
 // dragon/tiger/tie settlement contract. Do not infer this capability from the
-// generic five-ball family: SG and Bingo variants 2–4 intentionally stay on v2.
+// generic five-ball family. Bingo variants 2–4 have no verified bet contract.
 const digit5V3IDs = new Set(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])
 const digit3IDs = new Set(['official-fc3d', 'official-pl3'])
 const pc28RuleVersions = {
@@ -220,6 +220,7 @@ export function rulesBlockedTiming(timing: LotteryTiming): LotteryTiming {
 
 export function lotteryResultSummary(gameId: string, numbers: number[], ruleVersion = '') {
   const profile = lotteryRuleProfile(gameId)
+  if (profile.family === 'ssc' && !isDigit5V3Game(gameId, ruleVersion)) return null
   const minimum = profile.family === 'racing' || profile.family === 'mark-six' ? 1 : 0
   const maximum = profile.family === 'racing' ? 10 : profile.family === 'mark-six' ? 49 : 9
   const valid = profile.ballCount !== null && numbers.length === profile.ballCount

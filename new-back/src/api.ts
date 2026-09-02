@@ -1244,7 +1244,8 @@ export type PlayLimitItem = {
   max_period_total: number
   sort_order: number
   configured?: boolean
-  configuration_source?: 'admin_save' | 'legacy_compatible' | 'system_default' | 'legacy_unconfirmed' | 'unconfigured' | 'pending_admin_save' | string
+  rule_version?: string
+  configuration_source?: 'admin_save' | 'rule_version_mismatch' | 'unconfigured' | 'pending_admin_save' | string
   configured_at?: string | null
 }
 
@@ -1254,13 +1255,16 @@ export type PlayCatalogItem = {
   category: string
   description: string
   example: string
-  default_odds: number
   sort_order: number
 }
 
-export type SyncOddsLimitsResult = {
-  game_count: number
-  seeded_games: string[]
+export type OddsMutationGuard = {
+  expected_rule_version: string
+  expected_revision: string
+}
+
+export type UpdateOddsLimitsInput = OddsMutationGuard & {
+  items: PlayLimitItem[]
 }
 
 export type GameOddsLimits = {
@@ -1269,6 +1273,7 @@ export type GameOddsLimits = {
   items: PlayLimitItem[]
   rules_ready?: boolean
   rule_version?: string
+  config_revision?: string
   rules_message?: string
   risk_warnings?: OddsRiskWarning[]
 }
@@ -1381,7 +1386,7 @@ export type BoardReport = {
   page_size: number
 }
 
-type ApiResponse<T> = { code: number; message: string; data: T }
+type ApiResponse<T> = { code: number; message: string; error_code?: string; data: T }
 const apiBase = (() => {
   const configured = String(import.meta.env.VITE_API_BASE_URL ?? '').trim()
   if (configured) return configured.replace(/\/$/, '')
@@ -1424,6 +1429,18 @@ export class AuthError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'AuthError'
+  }
+}
+
+export class ApiError extends Error {
+  readonly status: number
+  readonly code: string
+
+  constructor(message: string, status: number, code = '') {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
   }
 }
 
@@ -1475,7 +1492,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     window.dispatchEvent(new CustomEvent('yaotu-auth-expired'))
     throw new AuthError(responseErrorMessage(response, body.message, '请先登录'))
   }
-  if (!response.ok) throw new Error(responseErrorMessage(response, body.message, '服务暂时不可用'))
+  if (!response.ok) throw new ApiError(responseErrorMessage(response, body.message, '服务暂时不可用'), response.status, typeof body.error_code === 'string' ? body.error_code : '')
   return body.data
 }
 
@@ -1676,10 +1693,9 @@ export const adminApi = {
   roomActivityStatus: () => request<RoomActivityStatus>('/admin/room-activity/status'),
   runRoomActivityOnce: () => request<RoomActivityStatus>('/admin/room-activity/run-once', { method: 'POST' }),
   oddsLimits: (gameId: string) => request<GameOddsLimits>(`/admin/games/${gameId}/odds-limits`),
-  updateOddsLimits: (gameId: string, items: PlayLimitItem[]) => request<GameOddsLimits>(`/admin/games/${gameId}/odds-limits`, { method: 'PUT', body: JSON.stringify({ items }) }),
+  updateOddsLimits: (gameId: string, payload: UpdateOddsLimitsInput) => request<GameOddsLimits>(`/admin/games/${encodeURIComponent(gameId)}/odds-limits`, { method: 'PUT', body: JSON.stringify(payload) }),
   playCatalog: (gameId?: string) => request<PlayCatalogItem[]>(`/admin/plays/catalog${gameId ? `?game_id=${encodeURIComponent(gameId)}` : ''}`),
-  resetOddsLimits: (gameId: string) => request<GameOddsLimits>(`/admin/games/${gameId}/odds-limits/reset`, { method: 'POST' }),
-  syncOddsLimits: () => request<SyncOddsLimitsResult>('/admin/games/sync-odds-limits', { method: 'POST' }),
+  resetOddsLimits: (gameId: string, guard: OddsMutationGuard) => request<GameOddsLimits>(`/admin/games/${encodeURIComponent(gameId)}/odds-limits/reset`, { method: 'POST', body: JSON.stringify(guard) }),
   walletChannels: (params?: { query?: string; status?: string }) => {
     const query = new URLSearchParams({
       query: params?.query ?? '',

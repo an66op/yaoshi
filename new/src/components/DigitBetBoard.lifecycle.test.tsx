@@ -16,10 +16,7 @@ vi.mock('react', async importOriginal => ({
 type Props = ComponentProps<typeof DigitBetBoard>
 type NodeProps = { children?: ReactNode; className?: string; role?: string; 'aria-label'?: string; 'aria-pressed'?: boolean; 'aria-invalid'?: boolean; 'data-choice'?: string; disabled?: boolean; onClick?: () => void; onChange?: (event: { target: { value: string } }) => void }
 const timing = resolveLotteryTiming({ issue_status: 'accepting', source_healthy: true, next_draw_at: '2026-08-31T06:46:00Z', seal_seconds: 30 }, Date.parse('2026-08-31T06:45:00Z'))
-// SG retains the legacy digits5-v2 board and is a stable base for the tests
-// that exercise totals/tails.  Upgraded v3 products are opted in explicitly
-// below with their exact catalog version.
-const game: Game = { id: 'sg-ssc', title: '新加坡时时彩', tag: '', category: 'ssc', lobbyCategory: 'lottery', online: '', period: '10001', latestIssue: '10000', due: timing.due, timing, balls: [0, 9, 2, 7, 4], color: '', issueStatus: 'accepting', sourceKind: '', sourceName: '', sourceHealthy: true, syncStatus: '', sourceError: '', rulesReady: true }
+const game: Game = { id: 'sg-ssc', title: 'SG时时彩', tag: '', category: 'ssc', lobbyCategory: 'lottery', online: '', period: '10001', latestIssue: '10000', due: timing.due, timing, balls: [0, 9, 2, 7, 4], color: '', issueStatus: 'accepting', sourceKind: 'platform', sourceName: '王者开奖', sourceHealthy: true, syncStatus: '', sourceError: '', rulesReady: true, ruleVersion: 'digits5-v3' }
 function find(node: ReactNode, predicate: (node: ReactElement<NodeProps>) => boolean): ReactElement<NodeProps> | undefined {
   if (Array.isArray(node)) return node.map(child => find(child, predicate)).find(Boolean)
   if (!isValidElement<NodeProps>(node)) return
@@ -58,10 +55,9 @@ describe('digit lottery board lifecycle and submission gates', () => {
     expect(props.onClose).toHaveBeenCalledOnce()
   })
 
-  it.each(['speed-ssc', 'sg-ssc', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4', 'au-lucky-5'])('offers five independent balls numbered 0–9 for %s', id => {
-    const upgraded = ['speed-ssc', 'au-lucky-5', 'bingo-ssc-1'].includes(id)
-    props.game = { ...game, id, ...(upgraded ? { ruleVersion: 'digits5-v3' } : {}) }
-    props.ruleVersion = upgraded ? 'digits5-v3' : undefined
+  it.each(['speed-ssc', 'sg-ssc', 'bingo-ssc-1', 'au-lucky-5'])('offers five independent balls numbered 0–9 for %s', id => {
+    props.game = { ...game, id, ruleVersion: 'digits5-v3' }
+    props.ruleVersion = 'digits5-v3'
     expect(label('数字彩投注面板').props).toMatchObject(controlSurfaceProps)
     expect(label('编辑第五球')).toBeDefined()
     expect(label('编辑第六球')).toBeUndefined()
@@ -75,7 +71,7 @@ describe('digit lottery board lifecycle and submission gates', () => {
   })
 
   it.each(['official-fc3d', 'official-pl3'])('limits %s to three balls while retaining first-three shapes', id => {
-    props.game = { ...game, id, balls: [0, 4, 9] }
+    props.game = { ...game, id, balls: [0, 4, 9], ruleVersion: 'digits3-v2' }
     props.ballCount = 3
     expect(label('编辑第三球')).toBeDefined()
     expect(label('编辑第四球')).toBeUndefined()
@@ -111,31 +107,29 @@ describe('digit lottery board lifecycle and submission gates', () => {
     expect(text(confirm())).toBe('立即投注 ¥ 40')
   })
 
-  it('offers two independent five-ball mirror pairs using their actual configured odds', () => {
+  it('keeps the sole five-ball comparison separate from individual ball choices', () => {
     label('编辑第五球').props.onClick!()
     clickChoice('2')
     tab('龙虎')
     expect(label('编辑第一球 vs 第五球').props['aria-pressed']).toBe(true)
-    expect(label('编辑第二球 vs 第四球')).toBeDefined()
+    expect(label('编辑第二球 vs 第四球')).toBeUndefined()
     expect(text(choice('龙'))).toBe('龙1.85')
-    expect(choice('和')).toBeUndefined()
+    expect(choice('和').props.disabled).toBe(true)
     expect(choice('大')).toBeUndefined()
     clickChoice('龙')
-    label('编辑第二球 vs 第四球').props.onClick!()
-    expect(choice('龙').props['aria-pressed']).toBe(false)
     clickChoice('虎')
     label('编辑第一球 vs 第五球').props.onClick!()
     expect(choice('龙').props['aria-pressed']).toBe(true)
-    expect(choice('虎').props['aria-pressed']).toBe(false)
-    expect(text(label('已选投注'))).toBe('第五球 2第一球 vs 第五球 龙第二球 vs 第四球 虎')
+    expect(choice('虎').props['aria-pressed']).toBe(true)
+    expect(text(label('已选投注'))).toBe('第五球 2第一球 vs 第五球 龙、虎')
     confirm().props.onClick!()
-    expect(props.onConfirm).toHaveBeenCalledWith('5/2/20#1/龙/20#2/虎/20')
+    expect(props.onConfirm).toHaveBeenCalledWith('5/2/20#1/龙/20#1/虎/20')
     tab('单球')
     expect(label('编辑第五球').props['aria-pressed']).toBe(true)
     expect(choice('2').props['aria-pressed']).toBe(true)
   })
 
-  it.each(['speed-ssc', 'au-lucky-5', 'bingo-ssc-1'])('offers three independent shape segments and one independently-priced tie group for exact v3 %s', id => {
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('offers three independent shape segments and one independently-priced tie group for exact v3 %s', id => {
     props.game = { ...game, id, ruleVersion: 'digits5-v3' }
     props.ruleVersion = 'digits5-v3'
     props.odds = { ...props.odds, dragon_tiger_tie: 8.75 }
@@ -169,31 +163,57 @@ describe('digit lottery board lifecycle and submission gates', () => {
     expect(confirm().props.disabled).toBe(false)
   })
 
-  it('keeps SG on the legacy two-pair board even if an unrelated version string says digits5-v3', () => {
-    props.game = { ...game, id: 'sg-ssc', ruleVersion: 'digits5-v3' }
-    props.ruleVersion = 'digits5-v3'
-    tab('前三形态')
-    expect(label('编辑中三形态')).toBeUndefined()
-    tab('龙虎')
-    expect(label('编辑第二球 vs 第四球')).toBeDefined()
-    expect(choice('和')).toBeUndefined()
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('requires the exact current version before %s offers choices', id => {
+    for (const ruleVersion of [undefined, '', 'digits5-v2', 'digits5-v4']) {
+      props.game = { ...game, id, ruleVersion }
+      props.ruleVersion = ruleVersion
+      expect(choice('0')).toBeUndefined()
+      expect(confirm().props.disabled).toBe(true)
+      expect(text(render())).toContain('该彩种规则尚未就绪')
+      confirm().props.onClick!()
+      expect(props.onConfirm).not.toHaveBeenCalled()
+    }
   })
 
-  it.each(['bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('keeps %s on the legacy board even if an unrelated version string says digits5-v3', id => {
+  it.each(['bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('never opens a borrowed five-ball board for unverified %s', id => {
     props.game = { ...game, id, ruleVersion: 'digits5-v3' }
     props.ruleVersion = 'digits5-v3'
-    tab('前三形态')
-    expect(label('编辑中三形态')).toBeUndefined()
+    expect(choice('0')).toBeUndefined()
     tab('龙虎')
-    expect(label('编辑第二球 vs 第四球')).toBeDefined()
+    expect(label('编辑第一球 vs 第五球')).toBeUndefined()
     expect(choice('和')).toBeUndefined()
+    expect(confirm().props.disabled).toBe(true)
+    confirm().props.onClick!()
+    expect(props.onConfirm).not.toHaveBeenCalled()
   })
 
-  it('limits three-ball games to first vs third and clears a prior five-ball pair on game switch', () => {
+  it('rejects a five-ball model or response version that does not match the current game', () => {
+    props.ballCount = 3
+    expect(choice('0').props.disabled).toBe(true)
+    props.ballCount = 5
+    props.ruleVersion = 'digits5-v2'
+    expect(choice('0')).toBeUndefined()
+    expect(confirm().props.disabled).toBe(true)
+    props.ruleVersion = 'digits5-v3'
+    props.game = { ...game, ruleVersion: undefined }
+    expect(choice('0').props.disabled).toBe(true)
+    props.game = game
+    props.oddsInfo = {
+      game_id: game.id, game_name: game.title, show_odds: true, rules_ready: true, rule_version: 'digits5-v2',
+      items: [{ play_code: 'ball_1_5', play_name: '号码', odds: 9.9, min_bet: 1, max_bet: 1000, max_user_period: 5000 }],
+    }
+    expect(choice('0').props.disabled).toBe(true)
+    props.oddsInfo = { ...props.oddsInfo, game_id: 'au-lucky-5', rule_version: 'digits5-v3' }
+    expect(choice('0').props.disabled).toBe(true)
+    props.oddsInfo = { ...props.oddsInfo, game_id: game.id }
+    clickChoice('0')
+    expect(confirm().props.disabled).toBe(false)
+  })
+
+  it('limits three-ball games to first vs third and clears a prior five-ball choice on game switch', () => {
     tab('龙虎')
-    label('编辑第二球 vs 第四球').props.onClick!()
     clickChoice('虎')
-    props.game = { ...game, id: 'official-fc3d', balls: [0, 4, 9] }
+    props.game = { ...game, id: 'official-fc3d', balls: [0, 4, 9], ruleVersion: 'digits3-v2' }
     props.ballCount = 3
     render()
     tab('龙虎')
@@ -222,12 +242,14 @@ describe('digit lottery board lifecycle and submission gates', () => {
     expect(confirm().props.disabled).toBe(false)
     expect(text(choice('龙'))).toContain('已隐藏')
     props.submitting = true
-    expect(label('编辑第二球 vs 第四球').props.disabled).toBe(true)
+    expect(label('编辑第一球 vs 第五球').props.disabled).toBe(true)
     expect(choice('虎').props.disabled).toBe(true)
     expect(confirm().props.disabled).toBe(true)
   })
 
   it('keeps ball, total, tail and shape selections separate with uniform per-option stakes', () => {
+    props.game = { ...game, id: 'official-fc3d', balls: [0, 4, 9], ruleVersion: 'digits3-v2' }
+    props.ballCount = 3
     clickChoice('大')
     tab('总和')
     expect(choice('大').props['aria-pressed']).toBe(false)
@@ -281,7 +303,7 @@ describe('digit lottery board lifecycle and submission gates', () => {
     clickChoice('0')
     props.odds = {}
     expect(confirm().props.disabled).toBe(true)
-    tab('前三形态')
+    tab('三段形态')
     expect(choice('豹子').props.disabled).toBe(true)
     props.oddsHidden = true
     expect(confirm().props.disabled).toBe(false)
@@ -295,11 +317,11 @@ describe('digit lottery board lifecycle and submission gates', () => {
     props.odds = {}
     props.oddsHidden = true
     props.oddsInfo = {
-      game_id: game.id, game_name: game.title, show_odds: false,
+      game_id: game.id, game_name: game.title, show_odds: false, rules_ready: true, rule_version: 'digits5-v3',
       items: [{ play_code: 'ball_1_5', play_name: '号码', odds: 0, min_bet: 1, max_bet: 1000, max_user_period: 5000 }],
     }
     expect(choice('0').props.disabled).toBe(false)
-    tab('前三形态')
+    tab('三段形态')
     expect(choice('豹子').props.disabled).toBe(true)
   })
 
@@ -329,13 +351,29 @@ describe('digit lottery board lifecycle and submission gates', () => {
   it('does not carry a cart into a different game or ball-count model', () => {
     label('编辑第五球').props.onClick!()
     clickChoice('9')
-    props.game = { ...game, id: 'official-fc3d' }
+    props.game = { ...game, id: 'official-fc3d', ruleVersion: 'digits3-v2' }
     props.ballCount = 3
     // The new context is blocked synchronously, before a state-reset effect can run.
     const pendingTree = runtime.hooks!.render(() => DigitBetBoard(props))
     expect(find(pendingTree, node => node.props.className === 'full-bet-confirm')!.props.disabled).toBe(true)
     expect(text(render())).toContain('已选 0 组 · 0 注')
     expect(label('编辑第一球').props['aria-pressed']).toBe(true)
+    clickChoice('0')
+    confirm().props.onClick!()
+    expect(props.onConfirm).toHaveBeenCalledWith('1/0/20')
+  })
+
+  it('drops a three-ball total tab and cart synchronously when switching to five-ball rules', () => {
+    props.game = { ...game, id: 'official-fc3d', balls: [0, 4, 9], ruleVersion: 'digits3-v2' }
+    props.ballCount = 3
+    tab('总和')
+    clickChoice('大')
+    props.game = game
+    props.ballCount = 5
+    const pending = runtime.hooks!.render(() => DigitBetBoard(props))
+    expect(find(pending, node => node.props.className === 'full-bet-confirm')!.props.disabled).toBe(true)
+    expect(find(pending, node => node.type === 'button' && text(node) === '总和')).toBeUndefined()
+    expect(text(render())).toContain('已选 0 组 · 0 注')
     clickChoice('0')
     confirm().props.onClick!()
     expect(props.onConfirm).toHaveBeenCalledWith('1/0/20')

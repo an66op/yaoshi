@@ -77,6 +77,27 @@ describe('management API cookie credentials', () => {
     await expect(adminApi.me()).rejects.not.toThrow('internal-host')
   })
 
+  it('sends optimistic-lock guards for odds saves and clears without exposing a default-price sync endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, data: {} }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { adminApi } = await import('./api')
+    const guard = { expected_rule_version: 'digits5-v3', expected_revision: 'revision-12' }
+    const payload = { ...guard, items: [] }
+    await adminApi.updateOddsLimits('sg-ssc', payload)
+    await adminApi.resetOddsLimits('sg-ssc', guard)
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'PUT', body: JSON.stringify(payload) })
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST', body: JSON.stringify(guard) })
+    expect(adminApi).not.toHaveProperty('syncOddsLimits')
+  })
+
+  it('preserves actionable odds conflict codes for the draft editor', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 409, text: async () => JSON.stringify({ code: 409, error_code: 'ODDS_CONFIGURATION_CONFLICT', message: '配置已更新，请刷新' }) }))
+    const { adminApi } = await import('./api')
+    await expect(adminApi.updateOddsLimits('speed-racing', { expected_rule_version: 'racing-v2', expected_revision: 'old', items: [] })).rejects.toMatchObject({
+      name: 'ApiError', status: 409, code: 'ODDS_CONFIGURATION_CONFLICT', message: '配置已更新，请刷新',
+    })
+  })
+
   it('rejects executable, credentialed and protocol-relative asset URLs', async () => {
     const { resolveApiAsset } = await import('./api')
 

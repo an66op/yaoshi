@@ -54,15 +54,8 @@ func EnsureWorkspaceHierarchy(db *gorm.DB) error {
 		if err := lockPublicRoomCodeRegistry(tx); err != nil {
 			return err
 		}
-		if err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_username_global_ci ON "user" (LOWER(username)) WHERE deleted_at IS NULL`).Error; err != nil {
-			return fmt.Errorf("登录帐号存在重复，无法建立全局登录索引: %w", err)
-		}
-		if err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_public_room_code ON workspaces (room_code) WHERE room_code <> ''`).Error; err != nil {
-			return fmt.Errorf("公开房间号存在重复，无法建立唯一索引: %w", err)
-		}
-		if err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_application_user_request ON user_applications (user_id, request_id) WHERE request_id <> ''`).Error; err != nil {
-			return fmt.Errorf("申请请求编号存在重复，无法建立幂等索引: %w", err)
-		}
+		// Tables and concurrency indexes are installed by the versioned SQL
+		// migrations before bootstrap. Startup only materializes business data.
 		platform, err := ensurePlatformWorkspace(tx)
 		if err != nil {
 			return err
@@ -91,10 +84,7 @@ func EnsureWorkspaceHierarchy(db *gorm.DB) error {
 		if err := ensureWorkspaceRobotAccounts(tx); err != nil {
 			return err
 		}
-		if err := backfillWorkspaceBusinessRows(tx, platform.ID); err != nil {
-			return err
-		}
-		return ensureWorkspaceBusinessIndexes(tx)
+		return backfillWorkspaceBusinessRows(tx, platform.ID)
 	})
 }
 
@@ -110,12 +100,6 @@ func lockPublicRoomCodeRegistry(db *gorm.DB) error {
 // must not be re-applied on every boot. Repeatedly forcing join review on would
 // otherwise make the room owner's setting impossible to turn off.
 func applyWorkspaceDataMigrations(tx *gorm.DB) error {
-	if err := tx.Exec(`CREATE TABLE IF NOT EXISTS workspace_migration_markers (
-		key varchar(120) PRIMARY KEY,
-		applied_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
-	)`).Error; err != nil {
-		return err
-	}
 	const migrationKey = "20260827_enable_join_review_for_formal_rooms"
 	var applied int64
 	if err := tx.Raw(`SELECT COUNT(*) FROM workspace_migration_markers WHERE key = ?`, migrationKey).Scan(&applied).Error; err != nil {
@@ -697,54 +681,6 @@ func backfillWorkspaceBusinessRows(tx *gorm.DB, platformID uint64) error {
 		}
 	}
 	return nil
-}
-
-func ensureWorkspaceBusinessIndexes(tx *gorm.DB) error {
-	// Odds belong to the immutable workspace boundary. The former indexes used
-	// only agent/user IDs, which made tenant-direct rooms impossible and allowed
-	// a member's previous-room overrides to leak after changing rooms.
-	if err := tx.Exec(`DROP INDEX IF EXISTS idx_room_odds_game_play`).Error; err != nil {
-		return err
-	}
-	if err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_room_odds_game_play
-		ON room_play_odds (workspace_id, game_id, play_code)`).Error; err != nil {
-		return err
-	}
-	if err := tx.Exec(`DROP INDEX IF EXISTS idx_user_odds_game_play`).Error; err != nil {
-		return err
-	}
-	if err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_odds_game_play
-		ON user_play_odds (workspace_id, user_id, game_id, play_code)`).Error; err != nil {
-		return err
-	}
-	// Legacy versions could create duplicate pending room requests. Keep the
-	// earliest request visible to the reviewer and close later duplicates before
-	// installing the concurrency guard used by all new requests.
-	if err := tx.Exec(`WITH ranked AS (
-		SELECT id, ROW_NUMBER() OVER (PARTITION BY user_id, workspace_id ORDER BY created_at ASC, id ASC) AS position
-		FROM user_applications
-		WHERE request_type = 'join' AND status = 'pending' AND workspace_id > 0
-	)
-	UPDATE user_applications AS request
-	SET status = 'rejected', review_remark = '重复入房申请已自动合并', reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-	FROM ranked WHERE request.id = ranked.id AND ranked.position > 1`).Error; err != nil {
-		return err
-	}
-	if err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_application_one_pending_join
-		ON user_applications (user_id, workspace_id)
-		WHERE request_type = 'join' AND status = 'pending' AND workspace_id > 0`).Error; err != nil {
-		return err
-	}
-	if err := tx.Exec(`WITH ranked AS (
-		SELECT id, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY updated_at DESC, id DESC) AS position
-		FROM workspace_memberships WHERE status = 1
-	)
-	UPDATE workspace_memberships AS membership SET status = 0, updated_at = CURRENT_TIMESTAMP
-	FROM ranked WHERE membership.id = ranked.id AND ranked.position > 1`).Error; err != nil {
-		return err
-	}
-	return tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_one_active_membership
-		ON workspace_memberships (user_id) WHERE status = 1`).Error
 }
 
 func WorkspaceForAccount(db *gorm.DB, account user.User) (workspacemodel.Workspace, error) {

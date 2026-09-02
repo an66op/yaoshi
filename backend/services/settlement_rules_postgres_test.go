@@ -2,13 +2,11 @@ package services
 
 import (
 	"backend/data/models/bet"
-	"backend/data/models/chat"
 	"backend/data/models/lottery"
 	apperrors "backend/errors"
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -32,10 +30,14 @@ func TestSettlementRulesPostgresAtomicity(t *testing.T) {
 		}
 		rows := make([]bet.Bet, 0, len(versions))
 		for index, version := range versions {
+			selection := "大"
+			if index%2 == 1 {
+				selection = "小"
+			}
 			row := bet.Bet{
 				WorkspaceID: room.ID, GameID: gameID, Issue: issue, RoomScope: room.Scope,
 				UserID: member.UserID, Username: member.Username, RuleVersion: version,
-				PlayCode: "sum", PlayName: "总和", Position: 6, Selection: "大",
+				PlayCode: "two_sided", PlayName: "两面", Position: 1, Selection: selection,
 				AmountCents: 200, Odds: 2, Status: "pending", Remark: "accepted fixture",
 				RequestReference: fmt.Sprintf("rule-atomic:%s:%d", issue, index),
 			}
@@ -63,11 +65,13 @@ func TestSettlementRulesPostgresAtomicity(t *testing.T) {
 		numbers            []int
 		versions           []string
 	}{
-		{"later unknown version rolls back prior winner", "speed-ssc", "RULES_NOT_READY", []int{9, 9, 9, 9, 9}, []string{"digits5-v2", "unknown-v99"}},
-		{"later wrong family rolls back prior winner", "speed-ssc", "RULES_NOT_READY", []int{9, 9, 9, 9, 9}, []string{"digits5-v2", "racing-v2"}},
-		{"invalid digit shape preserves both versions", "speed-ssc", "INVALID_DRAW", []int{9, 9, 9, 9}, []string{"digits5-v2", ""}},
+		{"later unknown version rolls back prior winner", "speed-ssc", "RULES_NOT_READY", []int{9, 9, 9, 9, 9}, []string{"digits5-v3", "unknown-v99"}},
+		{"later wrong family rolls back prior winner", "speed-ssc", "RULES_NOT_READY", []int{9, 9, 9, 9, 9}, []string{"digits5-v3", "racing-v2"}},
+		{"later empty version rolls back prior winner", "speed-ssc", "RULES_NOT_READY", []int{9, 9, 9, 9, 9}, []string{"digits5-v3", ""}},
+		{"retired engine is rejected", "speed-ssc", "RULES_NOT_READY", []int{9, 9, 9, 9, 9}, []string{"digits5-v3", "digits5-v2"}},
+		{"invalid digit shape preserves all tickets", "speed-ssc", "INVALID_DRAW", []int{9, 9, 9, 9}, []string{"digits5-v3", "digits5-v3"}},
 		{"twenty balls are not racing", "speed-racing", "INVALID_DRAW", twenty, []string{"racing-v2", ""}},
-		{"unmodelled legacy history stays pending", "official-tw-bingo", "RULES_NOT_READY", twenty, []string{""}},
+		{"unmodelled game stays pending", "official-tw-bingo", "RULES_NOT_READY", twenty, []string{""}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			issue := fmt.Sprintf("961%02d", index)
@@ -94,17 +98,17 @@ func TestSettlementRulesPostgresAtomicity(t *testing.T) {
 			}
 		})
 	}
-	t.Run("mixed versions settle under separate snapshots and retry once", func(t *testing.T) {
+	t.Run("current snapshots settle and retry only once", func(t *testing.T) {
 		const issue = "96199"
-		seed(t, "speed-ssc", issue, []int{9, 9, 9, 9, 9}, []string{"", "digits5-v2"})
+		seed(t, "speed-ssc", issue, []int{9, 9, 9, 9, 9}, []string{"digits5-v3", "digits5-v3"})
 		before := timingPostgresMoney(t, db, member.UserID)
 		result, err := service.SettleIssue("speed-ssc", issue, "rule-version-test")
 		if err != nil || result.Won != 1 || result.Lost != 1 || result.PayoutAmount != 4 {
-			t.Fatalf("mixed versions did not retain separate meanings: result=%+v err=%v", result, err)
+			t.Fatalf("current tickets did not retain their selections: result=%+v err=%v", result, err)
 		}
 		rows := readTickets(t, "speed-ssc", issue)
-		if len(rows) != 2 || rows[0].RuleVersion != "" || rows[0].Status != "lost" || rows[0].PayoutCents != 0 ||
-			rows[1].RuleVersion != "digits5-v2" || rows[1].Status != "won" || rows[1].PayoutCents != 400 {
+		if len(rows) != 2 || rows[0].RuleVersion != "digits5-v3" || rows[0].Status != "won" || rows[0].PayoutCents != 400 ||
+			rows[1].RuleVersion != "digits5-v3" || rows[1].Status != "lost" || rows[1].PayoutCents != 0 {
 			t.Fatalf("rule snapshots were changed or ignored: %+v", rows)
 		}
 		after := timingPostgresMoney(t, db, member.UserID)
@@ -121,48 +125,7 @@ func TestSettlementRulesPostgresAtomicity(t *testing.T) {
 			t.Fatalf("retry paid twice: before=%+v after=%+v", after, retryMoney)
 		}
 	})
-	t.Run("empty-version upgraded digits retain legacy labels without backfill", func(t *testing.T) {
-		const issue = "96198"
-		draw := lottery.Draw{GameID: "speed-ssc", Issue: issue, Numbers: "1,1,2,3,4", DrawAt: time.Now().UTC().Add(-time.Minute)}
-		if err := db.Create(&draw).Error; err != nil {
-			t.Fatal(err)
-		}
-		rows := []bet.Bet{
-			{
-				WorkspaceID: room.ID, GameID: "speed-ssc", Issue: issue, RoomScope: room.Scope,
-				UserID: member.UserID, Username: member.Username, RuleVersion: "",
-				PlayCode: "pair", PlayName: "对子", Position: 1, Selection: "pair",
-				AmountCents: 200, Odds: 2, Status: "pending", RequestReference: "legacy-label:pair",
-			},
-			{
-				WorkspaceID: room.ID, GameID: "speed-ssc", Issue: issue, RoomScope: room.Scope,
-				UserID: member.UserID, Username: member.Username, RuleVersion: "",
-				PlayCode: "dragon_tiger", PlayName: "龙虎", Position: 2, Selection: "虎",
-				AmountCents: 200, Odds: 2, Status: "pending", RequestReference: "legacy-label:dragon-tiger",
-			},
-		}
-		if err := db.Create(&rows).Error; err != nil {
-			t.Fatal(err)
-		}
-		result, err := service.SettleIssue("speed-ssc", issue, "legacy-label-test")
-		if err != nil || result.Won != 2 || result.PayoutAmount != 8 {
-			t.Fatalf("empty-version tickets did not retain legacy payout: %+v %v", result, err)
-		}
-		var settled []bet.Bet
-		if err := db.Where("game_id = ? AND issue = ?", "speed-ssc", issue).Order("id ASC").Find(&settled).Error; err != nil {
-			t.Fatal(err)
-		}
-		if len(settled) != 2 || settled[0].RuleVersion != "" || settled[1].RuleVersion != "" || settled[0].Status != "won" || settled[1].Status != "won" {
-			t.Fatalf("settlement backfilled or changed legacy rows: %+v", settled)
-		}
-		var messages []chat.Message
-		if err := db.Where("game_id = ? AND reference_id = ? AND message_type = ?", "speed-ssc", draw.ID, "settlement").Find(&messages).Error; err != nil {
-			t.Fatal(err)
-		}
-		if len(messages) != 1 || !strings.Contains(messages[0].Content, "前三对子 [pair/2.00") || !strings.Contains(messages[0].Content, "第2球 [虎/2.00") || strings.Contains(messages[0].Content, "冠军 [") || strings.Contains(messages[0].Content, "亚军 [") {
-			t.Fatalf("cross-version settlement displayed racing/v3 labels: %+v", messages)
-		}
-	})
+
 }
 
 func rulesPostgresTableCounts(t *testing.T, db *gorm.DB, tables []string) map[string]int64 {
@@ -189,7 +152,7 @@ func TestDrawGenerationPostgresFailureIsReadOnly(t *testing.T) {
 	}{
 		{"platform entropy failure", "sg-ssc", "platform", "DRAW_RANDOM_FAILED", nil},
 		{"simulated entropy failure", "sg-ssc", "simulated", "DRAW_RANDOM_FAILED", nil},
-		{"legacy platform entropy failure", "sg-ssc", "", "DRAW_RANDOM_FAILED", nil},
+		{"missing source must not generate", "sg-ssc", "", "DRAW_NOT_FOUND", nil},
 		{"external missing result", "speed-racing", "external", "DRAW_NOT_FOUND", nil},
 		{"official missing result", "official-fc3d", "official", "DRAW_NOT_FOUND", nil},
 		{"unmodelled generator", "happy8-mark-six", "platform", "RULES_NOT_READY", nil},

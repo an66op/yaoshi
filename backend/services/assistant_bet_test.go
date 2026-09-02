@@ -60,7 +60,7 @@ func TestAssistantRulesStatusDoesNotConflateRulesAndSourceHealth(t *testing.T) {
 	}
 }
 
-func TestCompletedAssistantRequestKeepsLegacyReceiptWithoutReparsing(t *testing.T) {
+func TestCompletedAssistantRequestKeepsReceiptWithoutReparsing(t *testing.T) {
 	for _, receipt := range []AssistantBetResult{
 		{GameID: "pc-canada", Content: "1/2/20", Total: 20},
 		{GameID: "speed-racing", Content: "冠亚/99/20", Total: 40},
@@ -79,15 +79,15 @@ func TestCompletedAssistantRequestKeepsLegacyReceiptWithoutReparsing(t *testing.
 	}
 }
 
-func TestAssistantRepeatContentFreezesHistoricalDigitSemantics(t *testing.T) {
-	legacy := []AssistantBetLine{{Position: 1, Selection: "leopard", PlayCode: "leopard", PlayName: "前三豹子", Amount: 20}}
-	content, err := AssistantRepeatContent("speed-ssc", legacy)
+func TestAssistantRepeatContentPreservesExplicitDigitScopes(t *testing.T) {
+	front := []AssistantBetLine{{Position: 1, Selection: "leopard", PlayCode: "leopard", PlayName: "前三豹子", Amount: 20}}
+	content, err := AssistantRepeatContent("speed-ssc", front)
 	if err != nil || content != "前三/豹子/20" {
-		t.Fatalf("legacy v2 shape was not made explicit: %q %v", content, err)
+		t.Fatalf("front shape was not made explicit: %q %v", content, err)
 	}
 	lines, err := parseAssistantBetForGame(&lottery.Game{ID: "speed-ssc"}, content)
 	if err != nil || len(lines) != 1 || lines[0].Position != 1 || lines[0].PlayCode != "leopard" {
-		t.Fatalf("legacy v2 shape expanded under v3: %+v %v", lines, err)
+		t.Fatalf("front shape expanded into unrelated windows: %+v %v", lines, err)
 	}
 
 	v3 := []AssistantBetLine{
@@ -107,7 +107,7 @@ func TestAssistantRepeatContentFreezesHistoricalDigitSemantics(t *testing.T) {
 	retired := []AssistantBetLine{{Position: 2, Selection: "龙", PlayCode: "dragon_tiger", PlayName: "龙虎", Amount: 20}}
 	content, err = AssistantRepeatContent("speed-ssc", retired)
 	if err != nil || content != "2/龙/20" {
-		t.Fatalf("retired v2 dragon semantics were moved before validation: %q %v", content, err)
+		t.Fatalf("unsupported dragon position was moved before validation: %q %v", content, err)
 	}
 	if lines, err = parseAssistantBetForGame(&lottery.Game{ID: "speed-ssc"}, content); err == nil || lines != nil {
 		t.Fatalf("retired second-vs-fourth dragon was silently accepted: %+v %v", lines, err)
@@ -166,15 +166,16 @@ func TestParseAssistantBetMultipleRacingPositions(t *testing.T) {
 }
 
 func TestEvaluateRacingPositionsSixToTen(t *testing.T) {
+	game := &lottery.Game{ID: "speed-racing"}
 	numbers := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	if won, reason := evaluateBet(numbers, "two_sided", 6, "大"); !won {
-		t.Fatalf("expected sixth position big to win, got %s", reason)
+	if won, reason, err := evaluateBetForRuleVersion(game, "racing-v2", numbers, "two_sided", 6, "大"); err != nil || !won {
+		t.Fatalf("expected sixth position big to win, got %s, err=%v", reason, err)
 	}
-	if won, reason := evaluateBet(numbers, "ball_1_5", 7, "7"); !won {
-		t.Fatalf("expected seventh position number to win, got %s", reason)
+	if won, reason, err := evaluateBetForRuleVersion(game, "racing-v2", numbers, "ball_1_5", 7, "7"); err != nil || !won {
+		t.Fatalf("expected seventh position number to win, got %s, err=%v", reason, err)
 	}
-	if won, reason := evaluateBet(numbers, "ball_1_5", 10, "10"); !won {
-		t.Fatalf("expected tenth position number to win, got %s", reason)
+	if won, reason, err := evaluateBetForRuleVersion(game, "racing-v2", numbers, "ball_1_5", 10, "10"); err != nil || !won {
+		t.Fatalf("expected tenth position number to win, got %s, err=%v", reason, err)
 	}
 }
 
@@ -414,18 +415,19 @@ func TestParseAssistantBetFiveDigitUnpositionedSelectionsUseAllBalls(t *testing.
 }
 
 func TestEvaluateRacingDragonTigerAndCrownSum(t *testing.T) {
+	game := &lottery.Game{ID: "speed-racing"}
 	numbers := []int{4, 10, 1, 6, 7, 8, 2, 3, 9, 5}
-	if won, reason := evaluateBet(numbers, "dragon_tiger", 1, "虎"); !won {
-		t.Fatalf("expected champion tiger (4 < 5), got %s", reason)
+	if won, reason, err := evaluateBetForRuleVersion(game, "racing-v2", numbers, "dragon_tiger", 1, "虎"); err != nil || !won {
+		t.Fatalf("expected champion tiger (4 < 5), got %s, err=%v", reason, err)
 	}
-	if won, reason := evaluateBet(numbers, "dragon_tiger", 2, "龙"); !won {
-		t.Fatalf("expected runner-up dragon (10 > 9), got %s", reason)
+	if won, reason, err := evaluateBetForRuleVersion(game, "racing-v2", numbers, "dragon_tiger", 2, "龙"); err != nil || !won {
+		t.Fatalf("expected runner-up dragon (10 > 9), got %s, err=%v", reason, err)
 	}
-	if won, reason := evaluateBet(numbers, "sum", 6, "14"); !won {
-		t.Fatalf("expected exact crown sum 14, got %s", reason)
+	if won, reason, err := evaluateBetForRuleVersion(game, "racing-v2", numbers, "sum", 6, "14"); err != nil || !won {
+		t.Fatalf("expected exact crown sum 14, got %s, err=%v", reason, err)
 	}
-	if won, reason := evaluateBet(numbers, "sum", 6, "4"); won {
-		t.Fatalf("racing crown sum must not settle by tail: %s", reason)
+	if won, reason, err := evaluateBetForRuleVersion(game, "racing-v2", numbers, "sum", 6, "4"); err != nil || won {
+		t.Fatalf("racing crown sum must not settle by tail: %s, err=%v", reason, err)
 	}
 }
 
@@ -510,7 +512,7 @@ func TestAssistantMoneyCentsRejectsExtraPrecisionAndNonDecimalForms(t *testing.T
 }
 
 func TestParseAssistantBetForEveryRacingGame(t *testing.T) {
-	for _, gameID := range []string{"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-b"} {
+	for _, gameID := range []string{"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a"} {
 		t.Run(gameID, func(t *testing.T) {
 			game := &lottery.Game{ID: gameID}
 			lines, err := parseAssistantBetForGame(game, "0/0/1.25#6/大/20#冠亚/14/9#2/大小单双12/20")
@@ -530,7 +532,7 @@ func TestParseAssistantBetForEveryRacingGame(t *testing.T) {
 }
 
 func TestParseAssistantBetForEveryFiveDigitGame(t *testing.T) {
-	for _, gameID := range []string{"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
+	for _, gameID := range []string{"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1"} {
 		t.Run(gameID, func(t *testing.T) {
 			game := &lottery.Game{ID: gameID}
 			lines, err := parseAssistantBetForGame(game, "1/0/20#5/大小单双12/1.25#前三/豹子/20")
@@ -541,15 +543,7 @@ func TestParseAssistantBetForEveryFiveDigitGame(t *testing.T) {
 				t.Fatalf("five-ball meaning/labels incorrect: %+v", lines)
 			}
 			unsupported := []string{"冠亚/14/20", "冠亚和大/20", "冠亚/大/20", "0/1/20", "6/大/20", "10/1/20", "冠军/1/20", "总和尾/大/20", "总和/14/20", "总和尾/99/20", "总和/7大/20"}
-			if isUpgradedDigits5Game(gameID) {
-				unsupported = append(unsupported, "总和/大/20", "总和尾/7/20", "总和大20", "总和尾7/20")
-			} else {
-				unsupported = append(unsupported, "中三/豹子/20", "后三/顺子/20", "中三豹子/20", "后三顺子/20", "1/和/20")
-				legacyTotals, totalsErr := parseAssistantBetForGame(game, "总和/大/20#总和尾/7/20")
-				if totalsErr != nil || len(legacyTotals) != 2 || legacyTotals[0].PlayName != "总和" || legacyTotals[1].PlayName != "总和尾" {
-					t.Fatalf("%s lost frozen v2 totals: %+v %v", gameID, legacyTotals, totalsErr)
-				}
-			}
+			unsupported = append(unsupported, "总和/大/20", "总和尾/7/20", "总和大20", "总和尾7/20")
 			for _, input := range unsupported {
 				if _, err := parseAssistantBetForGame(game, input); err == nil {
 					t.Fatalf("five-ball accepted unsupported input %q", input)
@@ -559,9 +553,9 @@ func TestParseAssistantBetForEveryFiveDigitGame(t *testing.T) {
 	}
 }
 
-func TestParseAssistantBetLegacyDigitTotalsAndFrontShapes(t *testing.T) {
-	game := &lottery.Game{ID: "sg-ssc"}
-	for _, input := range []string{"总和/0/20", "总和尾0/20", "总和大/20", "总和/大小单双/20", "第1球/09/20", "第5球9/20"} {
+func TestParseAssistantBetThreeDigitTotalsAndFrontShapes(t *testing.T) {
+	game := &lottery.Game{ID: "official-fc3d"}
+	for _, input := range []string{"总和/0/20", "总和尾0/20", "总和大/20", "总和/大小单双/20", "第1球/09/20", "第3球9/20"} {
 		if lines, err := parseAssistantBetForGame(game, input); err != nil || len(lines) == 0 {
 			t.Fatalf("valid digit input %q: %+v %v", input, lines, err)
 		}
@@ -578,7 +572,7 @@ func TestParseAssistantBetLegacyDigitTotalsAndFrontShapes(t *testing.T) {
 			t.Fatalf("unscoped shape %q: %+v %v", name, lines, err)
 		}
 		if lines[0].Position != 1 || lines[0].PlayCode != code || lines[0].Label != "前三["+name+"/20]" {
-			t.Fatalf("legacy unscoped shape %q: %+v", name, lines[0])
+			t.Fatalf("three-digit unscoped shape %q: %+v", name, lines[0])
 		}
 		compact, compactErr := parseAssistantBetForGame(game, name+"5")
 		if compactErr != nil || len(compact) != 1 {
@@ -588,7 +582,7 @@ func TestParseAssistantBetLegacyDigitTotalsAndFrontShapes(t *testing.T) {
 }
 
 func TestParseAssistantBetV3MiddleBackAndFirstLastTie(t *testing.T) {
-	for _, gameID := range []string{"speed-ssc", "au-lucky-5", "bingo-ssc-1"} {
+	for _, gameID := range []string{"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1"} {
 		game := &lottery.Game{ID: gameID}
 		lines, err := parseAssistantBetForGame(game, "中三顺子/5#后三/对子/5#1/龙虎和/5")
 		if err != nil || len(lines) != 5 {
@@ -610,15 +604,9 @@ func TestParseAssistantBetV3MiddleBackAndFirstLastTie(t *testing.T) {
 			t.Fatalf("%s compact tie: %+v %v", gameID, compact, compactErr)
 		}
 	}
-	for _, gameID := range []string{"sg-ssc", "bingo-ssc-2"} {
+	for _, gameID := range []string{"bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
 		for _, input := range []string{"中三顺子/5", "后三/对子/5", "豹子/5", "1/和/5"} {
 			lines, err := parseAssistantBetForGame(&lottery.Game{ID: gameID}, input)
-			if input == "豹子/5" {
-				if err != nil || len(lines) != 1 || lines[0].Position != 1 {
-					t.Fatalf("%s legacy front shape changed: %+v %v", gameID, lines, err)
-				}
-				continue
-			}
 			if err == nil {
 				t.Fatalf("%s accepted v3 syntax %q: %+v", gameID, input, lines)
 			}

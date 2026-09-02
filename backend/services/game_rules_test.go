@@ -8,15 +8,14 @@ import (
 
 func TestGameRulesCoverExplicitCatalogWithoutNameInference(t *testing.T) {
 	families := map[string][]string{
-		"racing-v2":  {"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a", "bingo-racing-b"},
-		"digits5-v3": {"speed-ssc", "au-lucky-5", "bingo-ssc-1"},
-		"digits5-v2": {"sg-ssc", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"},
+		"racing-v2":  {"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a"},
+		"digits5-v3": {"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1"},
 		"digits3-v2": {"official-fc3d", "official-pl3"},
 		"mark6-v2":   {"bingo-mark-six"},
 		pc28RuleV1:   {"pc-canada"},
 		pc28RuleV2:   {"canada-28"},
 		pc28RuleV3:   {"canada-20"},
-		"":           {"hong-kong-mark-six", "new-macau-mark-six", "old-macau-mark-six", "happy8-mark-six", "official-qxc", "official-kl8", "official-tw-bingo", "official-tw-super-lotto", "official-tw-daily539", "official-tw-lotto649"},
+		"":           {"bingo-racing-b", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4", "hong-kong-mark-six", "new-macau-mark-six", "old-macau-mark-six", "happy8-mark-six", "official-qxc", "official-kl8", "official-tw-bingo", "official-tw-super-lotto", "official-tw-daily539", "official-tw-lotto649"},
 	}
 	count := 0
 	for version, ids := range families {
@@ -61,8 +60,8 @@ func TestGameRulesKeepShapeWindowsVersioned(t *testing.T) {
 		{gameID: "speed-ssc", valid: []int{1, 2, 3}, invalid: []int{0, 4, 5, 6}},
 		{gameID: "au-lucky-5", valid: []int{1, 2, 3}, invalid: []int{0, 4, 5, 6}},
 		{gameID: "bingo-ssc-1", valid: []int{1, 2, 3}, invalid: []int{0, 4, 5, 6}},
-		{gameID: "sg-ssc", valid: []int{1}, invalid: []int{0, 2, 3, 5, 6}},
-		{gameID: "bingo-ssc-2", valid: []int{1}, invalid: []int{0, 2, 3, 5, 6}},
+		{gameID: "sg-ssc", valid: []int{1, 2, 3}, invalid: []int{0, 4, 5, 6}},
+		{gameID: "bingo-ssc-2", invalid: []int{0, 1, 2, 3, 4, 5, 6}},
 	} {
 		game := &lottery.Game{ID: test.gameID}
 		for _, code := range []string{"leopard", "straight", "pair", "half_straight", "mixed"} {
@@ -90,28 +89,26 @@ func TestGameRulesCatalogIsGameSpecificAndParseable(t *testing.T) {
 		{"speed-ssc", 9, ""},
 		{"au-lucky-5", 9, ""},
 		{"bingo-ssc-1", 9, ""},
-		{"sg-ssc", 9, "总和 / 总和尾"},
+		{"sg-ssc", 9, ""},
 		{"official-fc3d", 9, "总和 / 总和尾"},
 		{"pc-canada", len(pc28PlaySpecs()), ""},
 		{"bingo-mark-six", len(markSixV2Specs), ""},
 	} {
 		catalog := PlayCatalogForGame(test.gameID)
+		profile, _ := rulesForGame(&lottery.Game{ID: test.gameID})
 		if len(catalog) != test.count {
 			t.Fatalf("%s: %d catalog entries, want %d", test.gameID, len(catalog), test.count)
 		}
 		for _, item := range catalog {
-			if isUpgradedDigits5Game(test.gameID) && item.PlayCode == "sum" {
+			if profile.ThreeShapeWindows && item.PlayCode == "sum" {
 				t.Fatalf("%s v3 catalog still exposes local totals: %+v", test.gameID, item)
 			}
 			if item.PlayCode == "sum" && item.PlayName != test.name {
 				t.Fatalf("%s mislabeled sum: %q", test.gameID, item.PlayName)
 			}
 			if item.PlayCode == "leopard" {
-				if isUpgradedDigits5Game(test.gameID) && (item.PlayName != "三段豹子" || item.Example != "中三/豹子/20") {
+				if profile.ThreeShapeWindows && (item.PlayName != "三段豹子" || item.Example != "中三/豹子/20") {
 					t.Fatalf("v3 shape catalog obscures its three windows: %+v", item)
-				}
-				if test.gameID == "sg-ssc" && item.PlayName != "前三豹子" {
-					t.Fatalf("v2 shape catalog changed: %+v", item)
 				}
 			}
 		}

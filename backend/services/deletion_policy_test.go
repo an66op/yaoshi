@@ -47,6 +47,8 @@ func TestGORMDeleteCallsMatchAuditedAllowList(t *testing.T) {
 		"services/plan_retention.go:&plan.StreamPeriod{}":    {1, "explicit stream-scoped derived period retention: keep newest 20; current-cycle high-water is retained"},
 		"services/plan_retention.go:&plan.StreamCycle{}":     {1, "explicit stream-scoped derived cycle payload cleanup, only unreferenced noncurrent cycles"},
 		"services/odds_admin.go:&odds.PlayLimit{}":           {2, "transactional replace/reset of reconstructable limits"},
+		"services/odds_admin.go:&odds.RoomPlayOdds{}":        {2, "transactional invalidation of room overrides when platform odds are disabled or reset"},
+		"services/odds_admin.go:&odds.UserPlayOdds{}":        {2, "transactional invalidation of member overrides when platform odds are disabled or reset"},
 		"services/trading_admin.go:&odds.RoomPlayOdds{}":     {1, "remove an inherited room override"},
 		"services/trading_admin.go:&odds.UserPlayOdds{}":     {1, "remove an inherited member override"},
 		"services/user_admin.go:&workspacemodel.RobotGame{}": {1, "transactional replacement of robot-game assignments"},

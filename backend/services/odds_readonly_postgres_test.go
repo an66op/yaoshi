@@ -9,7 +9,7 @@ import (
 
 // This opt-in contract test uses timingPostgresDatabase's empty loopback-only
 // database. It proves that all ordinary read/placement paths leave a deliberately
-// missing racing price missing; only the explicit Reset operation may seed it.
+// missing racing price missing; even an explicit reset only clears prices.
 func TestRacingOddsReadsAndPlacementNeverSeedMissingPrice(t *testing.T) {
 	db := timingPostgresDatabase(t)
 	room := timingPostgresRoom(t, db, "readonly_racing_odds_room", "788201")
@@ -120,22 +120,22 @@ func TestRacingOddsReadsAndPlacementNeverSeedMissingPrice(t *testing.T) {
 			limits.Items[index].Odds = 1.8765
 		}
 	}
-	updated, err := oddsService.Update(game.ID, UpdateOddsLimitsInput{Items: limits.Items})
+	updated, err := oddsService.Update(game.ID, oddsUpdateInput(limits))
 	if err != nil {
 		t.Fatal("save with explicit unconfigured item:", err)
 	}
 	assertMissingSum(updated.Items)
 	assertStoredCount(3)
 
-	reset, err := oddsService.Reset(game.ID)
+	reset, err := oddsService.Reset(game.ID, oddsMutationGuard(updated))
 	if err != nil {
 		t.Fatal("explicit reset:", err)
 	}
-	assertStoredCount(4)
+	assertStoredCount(0)
 	for _, item := range reset.Items {
 		if item.PlayCode == "sum" {
-			if !item.Configured || item.Odds <= 1 {
-				t.Fatalf("explicit reset did not restore the sum price: %+v", item)
+			if item.Configured || item.Odds != 0 {
+				t.Fatalf("explicit reset manufactured the sum price: %+v", item)
 			}
 			return
 		}

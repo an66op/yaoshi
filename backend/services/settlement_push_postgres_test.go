@@ -17,6 +17,7 @@ import (
 func TestBingoMarkSixPushPostgresRefundsOnceAndIsNotTurnover(t *testing.T) {
 	db := timingPostgresDatabase(t)
 	game, member := markSixPostgresFixture(t, db, "986201")
+	configureTestGameOdds(t, db, game.ID, map[string]float64{"marksix_special_big_small": 1.98})
 	service := NewBetAssistantService(db)
 	service.bets.suppressNotifications = true
 
@@ -35,6 +36,9 @@ func TestBingoMarkSixPushPostgresRefundsOnceAndIsNotTurnover(t *testing.T) {
 	var ticket bet.Bet
 	if err := db.Where("user_id = ? AND game_id = ? AND issue = ?", member.UserID, game.ID, game.NextIssue).First(&ticket).Error; err != nil {
 		t.Fatal(err)
+	}
+	if ticket.RuleVersion != markSixRuleVersion {
+		t.Fatalf("push fixture did not freeze the current rule contract: %+v", ticket)
 	}
 	drawAt := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	draw := lottery.Draw{

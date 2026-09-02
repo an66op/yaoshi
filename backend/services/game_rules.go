@@ -22,8 +22,8 @@ type gameRuleProfile struct {
 	PositionBigFrom int
 	Racing          bool
 	Patterns        bool
-	// SumMarket is explicit because digits5-v3 intentionally retires the
-	// local total/total-tail extension while older versioned tickets retain it.
+	// SumMarket is explicit: five-ball games do not include the local
+	// total/total-tail extension used by three-ball games.
 	SumMarket            bool
 	ThreeShapeWindows    bool
 	FirstLastDragonTiger bool
@@ -41,9 +41,6 @@ func rulesForVersion(version string) (gameRuleProfile, bool) {
 	case "racing-v2":
 		return gameRuleProfile{Version: version, BallCount: 10, MinNumber: 1, MaxNumber: 10,
 			SumBigFrom: 12, PositionBigFrom: 6, Racing: true, SumMarket: true, Unique: true}, true
-	case "digits5-v2":
-		return gameRuleProfile{Version: version, BallCount: 5, MinNumber: 0, MaxNumber: 9,
-			SumBigFrom: 23, PositionBigFrom: 5, Patterns: true, SumMarket: true}, true
 	case "digits5-v3":
 		return gameRuleProfile{Version: version, BallCount: 5, MinNumber: 0, MaxNumber: 9,
 			SumBigFrom: 23, PositionBigFrom: 5, Patterns: true, ThreeShapeWindows: true,
@@ -54,7 +51,7 @@ func rulesForVersion(version string) (gameRuleProfile, bool) {
 	case pc28RuleV1, pc28RuleV2, pc28RuleV3:
 		return gameRuleProfile{Version: version, BallCount: 3, MinNumber: 0, MaxNumber: 9,
 			SumBigFrom: 14, PositionBigFrom: 5, Patterns: true, PC28: pc28RuleVariant(version)}, true
-	case markSixLegacyRuleVersion, markSixRuleVersion:
+	case markSixRuleVersion:
 		return gameRuleProfile{Version: version, BallCount: 7, MinNumber: 1, MaxNumber: 49,
 			Unique: true, MarkSix: true}, true
 	default:
@@ -90,33 +87,12 @@ func rulesForGame(game *lottery.Game) (gameRuleProfile, bool) {
 	}
 }
 
-// gameSupportsRuleVersion is the immutable compatibility matrix used by
-// settlement. New speed-ssc, au-lucky-5 and bingo-ssc-1 tickets use
-// digits5-v3, while their already accepted digits5-v2 tickets must keep
-// settling under the old terms.
-// No other five-digit game may claim the new contract by merely submitting its
-// version string.
+// A ticket must use the exact contract bound to its game. This prelaunch
+// project has no historical rule engines; unknown or retired versions fail
+// closed instead of inferring terms from the number of drawn balls.
 func gameSupportsRuleVersion(gameID, version string) bool {
-	gameID = strings.TrimSpace(gameID)
-	version = strings.TrimSpace(version)
-	switch gameID {
-	case "speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1":
-		return version == "digits5-v3"
-	case "speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a":
-		return version == "racing-v2"
-	case "official-fc3d", "official-pl3":
-		return version == "digits3-v2"
-	case "bingo-mark-six":
-		return version == markSixLegacyRuleVersion || version == markSixRuleVersion
-	case "pc-canada":
-		return version == pc28RuleV1
-	case "canada-28":
-		return version == pc28RuleV2
-	case "canada-20":
-		return version == pc28RuleV3
-	default:
-		return false
-	}
+	profile, ready := rulesForGame(&lottery.Game{ID: strings.TrimSpace(gameID)})
+	return ready && profile.Version == strings.TrimSpace(version)
 }
 
 func ensureGameRulesSupported(game *lottery.Game) error {
@@ -364,15 +340,15 @@ func bingoRacingASumOddsCatalog(baseOrder int) []PlayCatalogItem {
 		items = append(items, PlayCatalogItem{
 			PlayCode: "sum_" + selection.key, PlayName: selection.name, Category: "冠亚和",
 			Description: "宾果赛车(A)冠亚和按具体选项独立定价；未单独配置时该选项不可投注",
-			Example:     selection.example, DefaultOdds: 0, SortOrder: baseOrder*100 + index,
+			Example:     selection.example, SortOrder: baseOrder*100 + index,
 		})
 	}
 	for value := 3; value <= 19; value++ {
 		items = append(items, PlayCatalogItem{
 			PlayCode: fmt.Sprintf("sum_%d", value), PlayName: fmt.Sprintf("冠亚和%d", value), Category: "冠亚和",
 			Description: "宾果赛车(A)冠亚和值号码独立定价；未单独配置时该号码不可投注",
-			Example:     fmt.Sprintf("冠亚/%d/20", value), DefaultOdds: 0,
-			SortOrder: baseOrder*100 + len(selections) + value - 3,
+			Example:     fmt.Sprintf("冠亚/%d/20", value),
+			SortOrder:   baseOrder*100 + len(selections) + value - 3,
 		})
 	}
 	return items

@@ -48,7 +48,7 @@ func TestExplicitOddsConfirmationPostgresLegacySaveResetLifecycle(t *testing.T) 
 				t.Fatal(err)
 			}
 			closed := findPlayLimitItem(t, view.Items, test.playCode)
-			if closed.Configured || closed.Odds != 0 || closed.ConfigurationSource != oddsSourceLegacyUnconfirmed {
+			if closed.Configured || closed.Odds != 0 || closed.ConfigurationSource != oddsSourceUnconfigured {
 				t.Fatalf("legacy row opened upgraded market: %+v", closed)
 			}
 			if _, err := trade.Resolve(member.UserID, test.gameID, test.playCode, 20, 999, 0); apperrors.GetErrorCode(err) != "ODDS_NOT_CONFIGURED" {
@@ -60,7 +60,7 @@ func TestExplicitOddsConfirmationPostgresLegacySaveResetLifecycle(t *testing.T) 
 					view.Items[index].Odds = test.price
 				}
 			}
-			opened, err := service.Update(test.gameID, UpdateOddsLimitsInput{Items: view.Items})
+			opened, err := service.Update(test.gameID, oddsUpdateInput(view))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -80,7 +80,7 @@ func TestExplicitOddsConfirmationPostgresLegacySaveResetLifecycle(t *testing.T) 
 				t.Fatalf("activation audit missing: %+v", persisted)
 			}
 
-			reset, err := service.Reset(test.gameID)
+			reset, err := service.Reset(test.gameID, oddsMutationGuard(opened))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -123,7 +123,7 @@ func TestBingoRacingASelectionOddsPostgresFreezeExactTicketPrices(t *testing.T) 
 			view.Items[index].Odds = price
 		}
 	}
-	if _, err := admin.Update(bingoRacingAGameID, UpdateOddsLimitsInput{Items: view.Items}); err != nil {
+	if _, err := admin.Update(bingoRacingAGameID, oddsUpdateInput(view)); err != nil {
 		t.Fatal(err)
 	}
 

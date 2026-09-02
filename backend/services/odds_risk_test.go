@@ -6,13 +6,13 @@ import (
 )
 
 func TestFrontThreeRiskOnlyUsesProvenVersionContracts(t *testing.T) {
-	for _, version := range []string{"digits3-v2", "digits5-v2", "digits5-v3"} {
+	for _, version := range []string{"digits3-v2", "digits5-v3"} {
 		profile, ok := rulesForVersion(version)
 		if !ok || !hasExclusiveFrontThreeShapes(profile) {
 			t.Fatalf("missing proven contract %s", version)
 		}
 	}
-	for _, profile := range []gameRuleProfile{{}, {Version: "digits5-v99", Patterns: true}, {Version: "racing-v2"}, {Version: "digits3-v2"}} {
+	for _, profile := range []gameRuleProfile{{}, {Version: "digits5-v2", Patterns: true}, {Version: "digits5-v99", Patterns: true}, {Version: "racing-v2"}, {Version: "digits3-v2"}} {
 		if hasExclusiveFrontThreeShapes(profile) {
 			t.Fatalf("unproven shape partition inherited coverage guard: %+v", profile)
 		}

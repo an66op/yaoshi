@@ -25,14 +25,16 @@ function digitReceiptLines(lines: AssistantBetLine[], ballCount: number, gameId:
   const fallback: string[] = []
   for (const line of lines) {
     let group = 0
-    if (line.play_code === 'sum') {
+    if (line.play_code === 'sum' && !v3) {
       group = /^[大小单双]$/.test(line.selection) ? 6 : /^\d$/.test(line.selection) ? 7 : 0
     } else if (shapeCodes.has(line.play_code)) {
       group = Number.isInteger(line.position) && line.position >= 1 && line.position <= (v3 ? 3 : 1) ? 7 + line.position : 0
     } else if (v3 && ['dragon_tiger', 'dragon_tiger_tie'].includes(line.play_code) && line.position === 1) {
       group = 12
-    } else if (['ball_1_5', 'two_sided', 'dragon_tiger'].includes(line.play_code) && Number.isInteger(line.position) && line.position >= 1 && line.position <= ballCount) {
+    } else if (['ball_1_5', 'two_sided'].includes(line.play_code) && Number.isInteger(line.position) && line.position >= 1 && line.position <= ballCount) {
       group = line.position
+    } else if (!v3 && line.play_code === 'dragon_tiger' && line.position === 1) {
+      group = 1
     }
     if (!group || !line.selection) { fallback.push(originalReceiptLine(line)); continue }
     groups.set(group, [...(groups.get(group) ?? []), line])
@@ -53,6 +55,7 @@ export function assistantReceiptLines(lines: AssistantBetLine[], gameId?: string
     const profile = lotteryRuleProfile(gameId)
     if (profile.family === 'unknown') return lines.map(originalReceiptLine)
     if (profile.family === 'mark-six' || profile.family === 'pc28') return lines.map(originalReceiptLine)
+    if (profile.family === 'ssc' && !isDigit5V3Game(gameId, ruleVersion)) return lines.map(originalReceiptLine)
     if (profile.family === 'ssc' || profile.family === 'digit3') return digitReceiptLines(lines, profile.ballCount!, gameId, ruleVersion)
   }
   const groups = new Map<number, AssistantBetLine[]>()

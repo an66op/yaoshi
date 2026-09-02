@@ -516,7 +516,7 @@ var defaultGames = []seedGame{
 	{"happy8-mark-six", "HAPPY8_MARK_SIX", "快乐8六合彩", "六合彩", "六合彩", "green", 600, 9},
 	{"new-macau-mark-six", "NEW_MACAU_MARK_SIX", "新澳门六合彩", "六合彩", "六合彩", "gold", 600, 10},
 	{"old-macau-mark-six", "OLD_MACAU_MARK_SIX", "老澳门六合彩", "六合彩", "六合彩", "brown", 600, 11},
-	// 平台自开彩
+	// 彩票分类；各彩种的实际来源由独立来源绑定配置。
 	{"speed-racing", "SPEED_RACING", "极速赛车", "赛车", "赛车", "red", 180, 21},
 	{"au-lucky-10", "AU_LUCKY_10", "澳洲幸运10", "幸运10", "幸运10", "purple", 300, 22},
 	{"au-lucky-5", "AU_LUCKY_5", "澳洲幸运5", "幸运5", "幸运5", "purple", 300, 23},

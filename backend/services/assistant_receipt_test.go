@@ -29,14 +29,14 @@ func TestAssistantGroupedReceiptKeepsDigits5V3ShapeWindowsSeparate(t *testing.T)
 	}
 }
 
-func TestAssistantGroupedReceiptKeepsDigits5V2TotalsSeparate(t *testing.T) {
-	lines, err := parseAssistantBetForGame(&lottery.Game{ID: "sg-ssc"}, "1/09/20#总和/大/20#总和尾/7/1.25#对子/30#5/单/20")
+func TestAssistantGroupedReceiptKeepsThreeDigitTotalsSeparate(t *testing.T) {
+	lines, err := parseAssistantBetForGame(&lottery.Game{ID: "official-fc3d"}, "1/09/20#总和/大/20#总和尾/7/1.25#对子/30#3/单/20")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"第1球[0/20 9/20]", "第5球[单/20]", "前三[对子/30]", "总和[大/20]", "总和尾[7/1.25]"}
+	want := []string{"第1球[0/20 9/20]", "第3球[单/20]", "前三[对子/30]", "总和[大/20]", "总和尾[7/1.25]"}
 	if got := AssistantReceiptLines(lines); !reflect.DeepEqual(got, want) {
-		t.Fatalf("legacy total groups mixed: got %v, want %v", got, want)
+		t.Fatalf("three-digit total groups mixed: got %v, want %v", got, want)
 	}
 }
 

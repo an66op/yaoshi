@@ -47,30 +47,23 @@ type Requirement struct {
 // transaction-scoped advisory lock prevents concurrent application instances
 // from applying the same migration twice.
 func Run(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database is nil")
+	}
 	items, err := loadMigrations(migrationFiles)
 	if err != nil {
 		return err
 	}
-	var baselineSQL string
+	if len(items) == 0 || items[0].Version != coreSchemaBaselineVersion {
+		return fmt.Errorf("required first core schema baseline %s is missing", coreSchemaBaselineVersion)
+	}
 	for _, item := range items {
-		if item.Version == coreSchemaBaselineVersion {
-			baselineSQL = item.SQL
-		}
 		if err := apply(db, item); err != nil {
 			return fmt.Errorf("migration %s: %w", item.Version, err)
 		}
 	}
-	if baselineSQL == "" {
-		return fmt.Errorf("required core schema baseline %s is missing", coreSchemaBaselineVersion)
-	}
-	if err := verifyCoreSchema(db, baselineSQL); err != nil {
+	if err := verifyCoreSchema(db, items[0].SQL); err != nil {
 		return fmt.Errorf("verify core schema: %w", err)
-	}
-	// Migration 010 installs this idempotent function. Re-running it after the
-	// complete inventory means a table introduced by a later migration cannot
-	// silently miss the database-level destructive-operation guard.
-	if err := db.Exec(`SELECT public.install_application_truncate_guards()`).Error; err != nil {
-		return fmt.Errorf("refresh destructive-operation guards: %w", err)
 	}
 	return nil
 }
@@ -155,11 +148,44 @@ func apply(db *gorm.DB, item migration) error {
 			}
 			return nil
 		}
+		if item.Version == coreSchemaBaselineVersion {
+			if err := requireEmptyBaseline(tx); err != nil {
+				return err
+			}
+		}
 		if err := tx.Exec(item.SQL).Error; err != nil {
 			return err
 		}
 		return tx.Exec(`INSERT INTO schema_migrations (version, checksum) VALUES (?, ?)`, item.Version, item.Checksum).Error
 	})
+}
+
+// requireEmptyBaseline runs under the migration lock, in the baseline's own
+// transaction. Unknown public objects or a partial old migration ledger cannot
+// be adopted just because they happen not to collide with a core table name.
+func requireEmptyBaseline(db *gorm.DB) error {
+	var existing string
+	if err := db.Raw(`
+		SELECT COALESCE(MIN(relation.relname), '')
+		FROM pg_catalog.pg_class AS relation
+		JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+		WHERE namespace.nspname = 'public'
+		  AND relation.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+		  AND relation.relname <> 'schema_migrations'
+	`).Scan(&existing).Error; err != nil {
+		return err
+	}
+	if existing != "" {
+		return fmt.Errorf("unversioned database contains public.%s; recreate the unpublished local database from the checked-in migration inventory", existing)
+	}
+	var applied int64
+	if err := db.Table("schema_migrations").Count(&applied).Error; err != nil {
+		return err
+	}
+	if applied != 0 {
+		return fmt.Errorf("database has migration records without the core schema baseline; recreate the unpublished local database from the checked-in migration inventory")
+	}
+	return nil
 }
 
 type baselineColumn struct {

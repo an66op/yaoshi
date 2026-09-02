@@ -60,29 +60,51 @@ describe('member game manuals stay honest about implementation status', () => {
     expect(racing.sections.flatMap(item => item.examples ?? [])).toEqual(expect.arrayContaining(['1大5 = 1/大/5', '余额100，1/123/梭哈 → 每项33，余额1']))
     const digits = manualForGame(game('speed-ssc'))
     expect(digits.sections.flatMap(item => item.examples ?? [])).toEqual(expect.arrayContaining(['大/20 → 第1至第5球大，各20', '中三/顺子/5']))
-    expect(digits.auditNotes?.join('')).toContain('中三、后三不能仅改界面')
+    expect(digits.auditNotes?.join('')).toContain('明确绑定 digits5-v3 且规则就绪')
+    expect(digits.betModes).toEqual({ chat: false, web: false })
   })
 
-  it.each(['speed-ssc', 'au-lucky-5', 'bingo-ssc-1'])('publishes the v3 manual only for an exact server-versioned game %s', id => {
-    const manual = manualForGame({ ...game(id), ruleVersion: 'digits5-v3' })
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('publishes the v3 manual only for an exact server-versioned game %s', id => {
+    const manual = manualForGame({ ...game(id), rulesReady: true, ruleVersion: 'digits5-v3' })
     expect(manual).toMatchObject({ status: 'implemented', statusText: '三段形态与龙虎和已接入' })
+    expect(manual.betModes).toEqual({ chat: true, web: true })
     expect(manual.summary).toContain('前三/中三/后三')
     expect(manual.summary).toContain('总和、总和尾')
     expect(manual.sections.flatMap(item => item.examples ?? [])).toEqual(expect.arrayContaining(['中三/顺子/5']))
     expect(manual.sections.flatMap(item => item.examples ?? []).join('')).toContain('1/和/5')
+    expect(JSON.stringify(manual)).not.toContain('digits5-v2')
+    expect(JSON.stringify(manual)).not.toContain('旧注单')
     if (id === 'bingo-ssc-1') {
       expect(manual.sections.map(item => item.body).join('')).toContain('前5个原号的个位数')
       expect(manual.auditNotes?.join('')).toContain('原始顺序交叉核对')
     }
   })
 
-  it('does not publish the v3 manual for SG or for an unversioned matching game', () => {
-    const sg = manualForGame({ ...game('sg-ssc'), ruleVersion: 'digits5-v3', sourceKind: 'platform', sourceName: '王者开奖' })
-    expect(sg.status).toBe('partial')
+  it.each(['platform', 'external', 'official'])('documents SG as complete v3 gameplay and platform-owned draws with %s metadata', sourceKind => {
+    const sg = manualForGame({ ...game('sg-ssc'), rulesReady: true, ruleVersion: 'digits5-v3', sourceKind, sourceName: '未经核验的来源标签' })
+    expect(sg.status).toBe('implemented')
+    expect(sg.summary).toContain('王者平台自开（王者开奖）')
     expect(sg.summary).toContain('不宣称与SG外部开奖同步')
-    expect(manualForGame(game('speed-ssc')).status).toBe('partial')
-    for (const id of ['bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4']) {
-      expect(manualForGame({ ...game(id), ruleVersion: 'digits5-v3' }).status).toBe('partial')
+    expect(sg.summary).not.toContain('未经核验的来源标签')
+  })
+
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('keeps %s closed without its exact version and explicit readiness', id => {
+    for (const ruleVersion of [undefined, '', 'digits5-v2', 'digits5-v4']) {
+      const manual = manualForGame({ ...game(id), rulesReady: true, ruleVersion })
+      expect(manual).toMatchObject({ status: 'partial', betModes: { chat: false, web: false } })
+      expect(manual.statusText).toContain('规则版本待核验')
+      expect(manual.summary).not.toContain('本地附加玩法')
+    }
+    expect(manualForGame({ ...game(id), ruleVersion: 'digits5-v3' }).betModes).toEqual({ chat: false, web: false })
+    expect(manualForGame({ ...game(id), ruleVersion: 'digits5-v3', rulesReady: false }).betModes).toEqual({ chat: false, web: false })
+  })
+
+  it.each(['bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('keeps unverified %s display-only even with borrowed rule metadata', id => {
+    for (const ruleVersion of [undefined, '', 'racing-v2', 'digits5-v2', 'digits5-v3']) {
+      const manual = manualForGame({ ...game(id), rulesReady: true, ruleVersion })
+      expect(manual).toMatchObject({ status: 'reference', betModes: { chat: false, web: false } })
+      expect(manual.statusText).toBe('玩法待核验 · 仅展示')
+      expect(manual.summary).toContain('不接受投注')
     }
   })
 

@@ -105,20 +105,20 @@ describe('parseBetInput racing shorthand', () => {
   })
 
   it('applies unpositioned five-digit selections to all five balls', () => {
-    const side = parseBetInput('大/20', 'speed-ssc')
+    const side = parseBetInput('大/20', 'speed-ssc', 'digits5-v3')
     expect(side.payloads.map(item => item.position)).toEqual([1, 2, 3, 4, 5])
     expect(side.total).toBe(100)
-    const numbers = parseBetInput('12/5', 'au-lucky-5')
+    const numbers = parseBetInput('12/5', 'au-lucky-5', 'digits5-v3')
     expect(numbers.payloads).toHaveLength(10)
     expect(numbers.total).toBe(50)
-    expect(parseBetInput('1大5', 'speed-ssc').payloads).toEqual([
+    expect(parseBetInput('1大5', 'speed-ssc', 'digits5-v3').payloads).toEqual([
       expect.objectContaining({ position: 1, selection: '大', amount: 5 }),
     ])
   })
 })
 
 describe('per-game parsed receipt descriptions', () => {
-  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4', 'official-fc3d', 'official-pl3'])('keeps zero and names the correct digit groups for %s', gameId => {
+  it.each(['official-fc3d', 'official-pl3'])('keeps zero and names the current three-digit groups for %s', gameId => {
     const parsed = parseBetInput('1/0/20#总和/大/20#总和尾/7/20#前三/豹子/20', gameId)
     expect(parsed.lines).toEqual(['第1球[0/20]', '总和[大/20]', '总和尾[7/20]', '前三形态[豹子/20]'])
     expect(parsed.payloads.map(item => item.selection)).toEqual(['0', '大', '7', '豹子'])
@@ -137,10 +137,12 @@ describe('per-game parsed receipt descriptions', () => {
     expect(parsed).toMatchObject({ lines: [], payloads: [], total: 0 })
   })
 
-  it('never invents wager rules for an unknown game', () => {
-    const gameId = 'official-tw-bingo'
-    const parsed = parseBetInput('1/0/20#总和/大/20#前三/豹子/20', gameId)
-    expect(parsed).toMatchObject({ lines: [], payloads: [], total: 0 })
+  it.each(['official-tw-bingo', 'bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('never invents wager rules for an unverified %s game', gameId => {
+    for (const ruleVersion of ['', 'racing-v2', 'digits5-v2', 'digits5-v3']) {
+      for (const content of ['1/0/20#总和/大/20#前三/豹子/20', '1/1/20', '豹子5', '1/和/5']) {
+        expect(parseBetInput(content, gameId, ruleVersion)).toMatchObject({ lines: [], payloads: [], total: 0 })
+      }
+    }
   })
 
   it('retains the legacy default and explicit racing descriptions', () => {
@@ -149,8 +151,9 @@ describe('per-game parsed receipt descriptions', () => {
     expect(parseBetInput(command, 'speed-racing').lines).toEqual(parseBetInput(command).lines)
   })
 
-  it.each(['speed-ssc', 'au-lucky-5', 'bingo-ssc-1'])('expands exact digits5-v3 shapes and tie for %s', gameId => {
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('expands exact digits5-v3 shapes and tie for %s', gameId => {
     const ruleVersion = 'digits5-v3'
+    expect(parseBetInput('1/0/20', gameId, ruleVersion)).toMatchObject({ lines: ['第1球[0/20]'], total: 20 })
     expect(parseBetInput('中三顺子/5', gameId, ruleVersion)).toMatchObject({
       lines: ['中三形态[顺子/5]'],
       payloads: [expect.objectContaining({ position: 2, selection: '顺子', play_code: 'straight' })],
@@ -178,17 +181,17 @@ describe('per-game parsed receipt descriptions', () => {
     expect(parseBetInput('总和尾7/5', gameId, ruleVersion).payloads).toEqual([])
   })
 
-  it('keeps SG and unversioned matching games on the legacy five-ball parser', () => {
-    for (const [gameId, version] of [['speed-ssc', ''], ['speed-ssc', 'digits5-v2'], ['sg-ssc', 'digits5-v3'], ['bingo-ssc-2', 'digits5-v3'], ['bingo-ssc-3', 'digits5-v3'], ['bingo-ssc-4', 'digits5-v3']] as const) {
-      expect(parseBetInput('中三顺子/5', gameId, version).payloads).toEqual([])
-      expect(parseBetInput('1/和/5', gameId, version).payloads).toEqual([])
-      expect(parseBetInput('豹子5', gameId, version).payloads).toHaveLength(1)
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('does not parse %s bets without the exact current five-ball version', gameId => {
+    for (const version of [undefined, '', 'digits5-v2', 'digits5-v4']) {
+      for (const content of ['1/0/5', '中三顺子/5', '1/和/5', '豹子5', '总和/大/5']) {
+        expect(parseBetInput(content, gameId, version)).toEqual({ content, lines: [], payloads: [], total: 0 })
+      }
     }
   })
 })
 
 describe('server-aligned game syntax and atomic rejection', () => {
-  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4', 'official-fc3d', 'official-pl3'])('recognizes compact totals, tails, shapes and explicit ball labels for %s', gameId => {
+  it.each(['official-fc3d', 'official-pl3'])('recognizes compact totals, tails, shapes and explicit ball labels for %s', gameId => {
     const parsed = parseBetInput('总和单/100#总和尾7/100#总和/大小单双/20#前三豹子/50#第1球/09/20', gameId)
     expect(parsed.total).toBe(370)
     expect(parsed.payloads.map(({ position, selection, amount, play_code }) => ({ position, selection, amount, play_code }))).toEqual([
@@ -213,11 +216,11 @@ describe('server-aligned game syntax and atomic rejection', () => {
 
   it('charges every repeated item and preserves the zero semantics of each family', () => {
     expect(parseBetInput(' 买 11/00/0.10#1/0/0.10 ', 'speed-racing')).toMatchObject({ total: 0.5 })
-    expect(parseBetInput('11/00/0.10', 'speed-ssc').payloads).toEqual(Array.from({ length: 4 }, () => expect.objectContaining({ position: 1, selection: '0', amount: 0.1 })))
-    expect(parseBetInput('总和7/20', 'speed-ssc').lines).toEqual(['总和尾[7/20]'])
+    expect(parseBetInput('11/00/0.10', 'speed-ssc', 'digits5-v3').payloads).toEqual(Array.from({ length: 4 }, () => expect.objectContaining({ position: 1, selection: '0', amount: 0.1 })))
+    expect(parseBetInput('总和7/20', 'official-fc3d', 'digits3-v2').lines).toEqual(['总和尾[7/20]'])
     expect(parseBetInput('冠亚和/014/20').lines).toEqual(['冠亚和[14/20]'])
-    expect(parseBetInput('第2球09/20', 'speed-ssc').lines).toEqual(['第2球[0/20]', '第2球[9/20]'])
-    expect(parseBetInput('总和 单/20#前三 LEOPARD/20', 'speed-ssc').lines).toEqual(['总和[单/20]', '前三形态[豹子/20]'])
+    expect(parseBetInput('第2球09/20', 'speed-ssc', 'digits5-v3').lines).toEqual(['第2球[0/20]', '第2球[9/20]'])
+    expect(parseBetInput('总和 单/20#前三 LEOPARD/20', 'official-fc3d', 'digits3-v2').lines).toEqual(['总和[单/20]', '前三形态[豹子/20]'])
   })
 
   it.each([
@@ -226,18 +229,21 @@ describe('server-aligned game syntax and atomic rejection', () => {
     ['speed-racing', '冠亚/34/20'], ['speed-racing', '冠亚/大3/20'], ['speed-racing', '第1球/2/20'],
     ['speed-ssc', '冠军/2/20'], ['speed-ssc', '0/2/20'], ['speed-ssc', '6/2/20'],
     ['speed-ssc', '3/龙/20'], ['speed-ssc', '总和/27/20'], ['speed-ssc', '总和尾/大/20'],
-    ['speed-ssc', '中三豹子/20'], ['speed-ssc', '冠亚/大/20'], ['official-fc3d', '4/9/20'],
+    ['speed-ssc', '第四段豹子/20'], ['speed-ssc', '冠亚/大/20'], ['official-fc3d', '4/9/20'],
     ['official-fc3d', '第4球9/20'], ['official-fc3d', '2/虎/20'], ['speed-racing', '1//20'],
     ['speed-racing', '1/2//20'], ['speed-racing', '/2/20'], ['speed-racing', '1/2/3/20'],
     ['speed-racing', '不存在的玩法/20'], ['speed-racing', '1/和/20'],
   ])('rejects the entire command for unsupported %s syntax %s', (gameId, invalid) => {
     const content = `1/1/20#${invalid}`
-    expect(parseBetInput(content, gameId)).toEqual({ content, lines: [], total: 0, payloads: [] })
+    const ruleVersion = gameId === 'speed-ssc' ? 'digits5-v3' : ''
+    expect(parseBetInput('1/1/20', gameId, ruleVersion).payloads).toHaveLength(1)
+    expect(parseBetInput(content, gameId, ruleVersion)).toEqual({ content, lines: [], total: 0, payloads: [] })
   })
 
-  it('allows only the backend-supported mirror pairs and never adds a draw bet', () => {
-    expect(parseBetInput('1/龙虎/20#2/虎/20', 'speed-ssc')).toMatchObject({ total: 60 })
+  it('allows only the current first-versus-last comparison and prices the five-ball tie independently', () => {
+    expect(parseBetInput('1/龙虎和/20', 'speed-ssc', 'digits5-v3')).toMatchObject({ total: 60 })
+    expect(parseBetInput('1/龙虎/20#2/虎/20', 'speed-ssc', 'digits5-v3').payloads).toEqual([])
     expect(parseBetInput('1/龙虎/20', 'official-fc3d').payloads.map(item => item.play_code)).toEqual(['dragon_tiger', 'dragon_tiger'])
-    expect(parseBetInput('1/和/20', 'speed-ssc').payloads).toEqual([])
+    expect(parseBetInput('1/和/20', 'official-fc3d').payloads).toEqual([])
   })
 })

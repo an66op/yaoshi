@@ -555,9 +555,8 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
       const restored = history.map<AcceptedTicket>((item) => ({
         gameId: item.game_id,
         content: item.content,
-        // Older stored assistant results have no rule_version. Keep those on
-        // the legacy receipt contract instead of reinterpreting them through
-        // whichever version the room happens to run today.
+        // Only the receipt's exact saved contract can format its groups;
+        // a missing version preserves server labels without guessing rules.
         lines: assistantReceiptLines(item.lines, requestGameID, item.rule_version || ''),
         total: item.total,
         balance: item.balance,
@@ -669,9 +668,8 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
   const clearSelection = () => setBetInput('')
   const removeNumber = () => setBetInput((current) => current.slice(0, -1))
   const handleKeyboardShortcut = (action: KeyboardShortcut) => {
-    // Legacy history did not persist a rule version. In v3, repeating an old
-    // unpositioned shape such as “豹子/20” could turn one legacy bet into
-    // three bets, so only commands sent in this live versioned session qualify.
+    // Five-ball repeats use commands from this exact-version session only;
+    // ordinary chat history does not carry a verifiable rule snapshot.
     const historical = isDigit5V3Game(game.id, effectiveRuleVersion) ? '' : latestBetInput(gameMessages, submittedBets, game.id)
     const previous = lastSentContentRef.current || historical
     setBetInput(current => keyboardShortcutInput(action, current, previous))
@@ -1170,9 +1168,9 @@ function WinningPopup({ game, data, onClose }: { game: Game; data: WinningPopupD
 
 export function BetKeyboard({ gameId, ruleVersion = '', mode, odds, oddsHidden, oddsResponseReady, selectedCount, submitting, onShortcut, onModeChange, onBackspace, onClear, onSelectNumber, onSelectOption, onConfirm, showModes }: { gameId?: string; ruleVersion?: string; mode: BetMode; odds: PlayOdds; oddsHidden: boolean; oddsResponseReady: boolean; selectedCount: number; submitting?: boolean; onShortcut: (action: KeyboardShortcut) => void; onModeChange: (mode: BetMode) => void; onBackspace: () => void; onClear: () => void; onSelectNumber: (number: number) => void; onSelectOption: (option: string) => void; onConfirm: () => void; showModes: boolean }) {
   const pc28 = Boolean(gameId && isPC28RuleVersion(gameId, ruleVersion))
+  const digit5 = Boolean(gameId && isDigit5V3Game(gameId, ruleVersion))
   const quickKeys = defaultQuickKeys
-    .map(key => key === '冠亚' && pc28 ? '和' : key === '冠亚' && gameId && lotteryRuleProfile(gameId).family !== 'racing' ? '总和' : key)
-    .concat(gameId && isDigit5V3Game(gameId, ruleVersion) ? ['和'] : [])
+    .map(key => key === '冠亚' && (pc28 || digit5) ? '和' : key === '冠亚' && gameId && lotteryRuleProfile(gameId).family !== 'racing' ? '总和' : key)
   const deleteTimerRef = useRef<number | null>(null)
   const didClearRef = useRef(false)
   const selectQuick = (key: string) => {

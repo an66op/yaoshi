@@ -6,6 +6,15 @@ import (
 	"testing/fstest"
 )
 
+func TestMigrationEntryPointsRejectNilDatabase(t *testing.T) {
+	if err := Run(nil); err == nil {
+		t.Fatal("Run(nil) must return an error")
+	}
+	if err := VerifyApplied(nil); err == nil {
+		t.Fatal("VerifyApplied(nil) must return an error")
+	}
+}
+
 func TestLoadMigrationsOrdersAndChecksumsFiles(t *testing.T) {
 	source := fstest.MapFS{
 		"002_second.sql": &fstest.MapFile{Data: []byte("SELECT 2;")},
@@ -61,7 +70,10 @@ func TestCoreSchemaBaselineIsFirstAndSelfContained(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadMigrations() error = %v", err)
 	}
-	if len(items) == 0 || items[0].Version != coreSchemaBaselineVersion {
+	if len(items) == 0 {
+		t.Fatal("embedded migration inventory is empty")
+	}
+	if items[0].Version != coreSchemaBaselineVersion {
 		t.Fatalf("first migration = %q, want %q", items[0].Version, coreSchemaBaselineVersion)
 	}
 	baseline := items[0].SQL
@@ -83,6 +95,30 @@ func TestCoreSchemaBaselineIsFirstAndSelfContained(t *testing.T) {
 	} {
 		if strings.Contains(strings.ToLower(baseline), strings.ToLower(forbidden)) {
 			t.Fatalf("core baseline contains runner-owned/session SQL %q", forbidden)
+		}
+	}
+}
+
+func TestWorkspaceSchemaGuardsAreVersionedAndDoNotRewriteBusinessData(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("202609030001_workspace_schema_guards.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(contents)
+	for _, fragment := range []string{
+		"idx_user_username_global_ci",
+		"idx_workspace_public_room_code",
+		"idx_application_one_pending_join",
+		"idx_workspace_one_active_membership",
+		"SELECT public.install_application_truncate_guards()",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("workspace schema migration is missing %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{"UPDATE ", "DELETE FROM ", "TRUNCATE ", "DROP TABLE ", "DROP INDEX IF EXISTS idx_room_odds_game_play", "DROP INDEX IF EXISTS idx_user_odds_game_play"} {
+		if strings.Contains(strings.ToUpper(sql), strings.ToUpper(forbidden)) {
+			t.Errorf("workspace schema migration must not rewrite existing business state: %q", forbidden)
 		}
 	}
 }

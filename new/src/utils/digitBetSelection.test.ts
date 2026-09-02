@@ -1,27 +1,30 @@
 import { describe, expect, it } from 'vitest'
-import { digitChoice, digitCommandLengthError, digitDragonPositions, digitDragonSelections, digitNumbers, digitPatterns, digitSelectionCommand, digitSelectionGroups, digitSelectionKey, digitSides, toggleDigitChoice, type DigitSelection } from './digitBetSelection'
+import { digitChoice, digitCommandLengthError, digitDragonPositions, digitDragonSelections, digitNumbers, digitPatterns, digitSelectionCommand, digitSelectionGroups, digitSelectionKey, digitSides, toggleDigitChoice, type DigitBetKind, type DigitSelection } from './digitBetSelection'
 import { parseBetInput } from './betParser'
 
+const fiveIDs = ['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1']
+const fiveChoice = (kind: DigitBetKind, selection: string, position = 1) => digitChoice(kind, selection, position, 'speed-ssc', 'digits5-v3')
+const threeChoice = (kind: DigitBetKind, selection: string, position = 1) => digitChoice(kind, selection, position, 'official-fc3d', 'digits3-v2')
+const fiveCommand = (items: DigitSelection[], amount: string) => digitSelectionCommand(items, amount, 5, 'speed-ssc', 'digits5-v3')
+const threeCommand = (items: DigitSelection[], amount: string) => digitSelectionCommand(items, amount, 3, 'official-fc3d', 'digits3-v2')
+
 describe('digit lottery selection contract', () => {
-  it('keeps mirror-pair selections independent and serializes them to supported ball positions', () => {
-    const firstDragon = digitChoice('dragon_tiger', '龙', 1)!
-    const secondTiger = digitChoice('dragon_tiger', '虎', 2)!
-    let items = toggleDigitChoice([], firstDragon)
-    items = toggleDigitChoice(items, secondTiger)
-    expect(digitDragonPositions(5)).toEqual([1, 2])
-    expect(digitDragonPositions(3)).toEqual([1])
-    expect(digitSelectionGroups(items, 5).map(group => group.label)).toEqual(['第一球 vs 第五球', '第二球 vs 第四球'])
-    expect(digitSelectionCommand(items, '20', 5)).toBe('1/龙/20#2/虎/20')
-    expect(parseBetInput(digitSelectionCommand(items, '20', 5), 'speed-ssc')).toMatchObject({ total: 40, payloads: [expect.objectContaining({ position: 1, play_code: 'dragon_tiger' }), expect.objectContaining({ position: 2, play_code: 'dragon_tiger' })] })
-    expect(toggleDigitChoice(items, secondTiger)).toEqual([firstDragon])
-    expect(digitSelectionCommand(items, '20', 3)).toBe('')
-    expect(digitSelectionCommand([firstDragon], '20', 3)).toBe('1/龙/20')
-    expect(digitSelectionGroups([firstDragon], 3)[0].label).toBe('第一球 vs 第三球')
-    for (const selection of ['和', '大', '1', '龙虎']) expect(digitChoice('dragon_tiger', selection)).toBeNull()
-    for (const position of [0, 3, 1.5]) expect(digitChoice('dragon_tiger', '龙', position)).toBeNull()
+  it('keeps the three-ball first-versus-third comparison on its own current contract', () => {
+    const dragon = threeChoice('dragon_tiger', '龙')!
+    const tiger = threeChoice('dragon_tiger', '虎')!
+    let items = toggleDigitChoice([], dragon)
+    items = toggleDigitChoice(items, tiger)
+    expect(digitDragonPositions(3, 'official-fc3d', 'digits3-v2')).toEqual([1])
+    expect(digitDragonSelections('official-fc3d', 'digits3-v2')).toEqual(['龙', '虎'])
+    expect(digitSelectionGroups(items, 3).map(group => group.label)).toEqual(['第一球 vs 第三球'])
+    expect(threeCommand(items, '20')).toBe('1/龙/20#1/虎/20')
+    expect(parseBetInput(threeCommand(items, '20'), 'official-fc3d', 'digits3-v2')).toMatchObject({ total: 40 })
+    expect(toggleDigitChoice(items, tiger)).toEqual([dragon])
+    for (const selection of ['和', '大', '1', '龙虎']) expect(threeChoice('dragon_tiger', selection)).toBeNull()
+    for (const position of [0, 2, 3, 1.5]) expect(threeChoice('dragon_tiger', '龙', position)).toBeNull()
   })
 
-  it.each(['speed-ssc', 'au-lucky-5', 'bingo-ssc-1'])('enables the exact v3 three-segment and first-versus-fifth tie contract for %s', gameId => {
+  it.each(fiveIDs)('enables the exact v3 three-segment and first-versus-fifth tie contract for %s', gameId => {
     const ruleVersion = 'digits5-v3'
     const items = [
       digitChoice('pattern', '豹子', 1, gameId, ruleVersion)!,
@@ -43,65 +46,81 @@ describe('digit lottery selection contract', () => {
     ])
     expect(digitChoice('sum', '大', 1, gameId, ruleVersion)).toBeNull()
     expect(digitChoice('sum_tail', '7', 1, gameId, ruleVersion)).toBeNull()
+    expect(digitChoice('dragon_tiger', '龙', 2, gameId, ruleVersion)).toBeNull()
+    expect(digitSelectionCommand([items[0]], '5', 3, gameId, ruleVersion)).toBe('')
   })
 
-  it('does not infer v3 from a game id or from the generic five-ball family', () => {
-    expect(digitChoice('pattern', '豹子', 2, 'speed-ssc')).toBeNull()
-    expect(digitChoice('dragon_tiger', '和', 1, 'speed-ssc')).toBeNull()
-    expect(digitChoice('pattern', '豹子', 2, 'sg-ssc', 'digits5-v3')).toBeNull()
-    expect(digitChoice('dragon_tiger', '和', 1, 'sg-ssc', 'digits5-v3')).toBeNull()
-    expect(digitDragonPositions(5, 'sg-ssc', 'digits5-v3')).toEqual([1, 2])
-    for (const id of ['bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4']) {
-      expect(digitChoice('pattern', '顺子', 2, id, 'digits5-v3')).toBeNull()
-      expect(digitChoice('dragon_tiger', '和', 1, id, 'digits5-v3')).toBeNull()
-      expect(digitDragonPositions(5, id, 'digits5-v3')).toEqual([1, 2])
+  it.each(fiveIDs)('never generates choices or commands for %s without the exact current version', gameId => {
+    const item = fiveChoice('ball', '0')!
+    for (const ruleVersion of [undefined, '', 'digits5-v2', 'digits5-v4']) {
+      expect(digitChoice('ball', '0', 1, gameId, ruleVersion)).toBeNull()
+      expect(digitChoice('pattern', '豹子', 1, gameId, ruleVersion)).toBeNull()
+      expect(digitChoice('pattern', '豹子', 2, gameId, ruleVersion)).toBeNull()
+      expect(digitChoice('dragon_tiger', '和', 1, gameId, ruleVersion)).toBeNull()
+      expect(digitDragonPositions(5, gameId, ruleVersion)).toEqual([])
+      expect(digitDragonSelections(gameId, ruleVersion)).toEqual([])
+      expect(digitSelectionCommand([item], '20', 5, gameId, ruleVersion)).toBe('')
     }
   })
+
+  it.each(['', 'bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('never borrows a five-ball selection contract for unverified %j', gameId => {
+    for (const ruleVersion of ['', 'digits5-v2', 'digits5-v3']) {
+      expect(digitChoice('ball', '0', 1, gameId, ruleVersion)).toBeNull()
+      expect(digitChoice('pattern', '顺子', 1, gameId, ruleVersion)).toBeNull()
+      expect(digitChoice('dragon_tiger', '龙', 1, gameId, ruleVersion)).toBeNull()
+      expect(digitDragonPositions(5, gameId, ruleVersion)).toEqual([])
+      expect(digitDragonSelections(gameId, ruleVersion)).toEqual([])
+      expect(digitSelectionCommand([fiveChoice('ball', '0')!], '20', 5, gameId, ruleVersion)).toBe('')
+    }
+  })
+
   it('keeps each ball independent, including zero, without racer rank/number aliases', () => {
-    const first = digitChoice('ball', '0', 1)!
-    const third = digitChoice('ball', '0', 3)!
+    const first = fiveChoice('ball', '0', 1)!
+    const third = fiveChoice('ball', '0', 3)!
     let items = toggleDigitChoice([], first)
     items = toggleDigitChoice(items, third)
     expect(items).toHaveLength(2)
-    expect(digitSelectionCommand(items, '20', 5)).toBe('1/0/20#3/0/20')
+    expect(fiveCommand(items, '20')).toBe('1/0/20#3/0/20')
     expect(toggleDigitChoice(items, third)).toEqual([first])
-    expect(digitChoice('ball', '10', 1)).toBeNull()
-    expect(digitChoice('ball', '龙', 1)).toBeNull()
-    expect(digitChoice('ball', '大单', 1)).toBeNull()
+    expect(fiveChoice('ball', '10', 1)).toBeNull()
+    expect(fiveChoice('ball', '龙', 1)).toBeNull()
+    expect(fiveChoice('ball', '大单', 1)).toBeNull()
   })
 
-  it('serializes every option explicitly, preserving totals, tails and first-three patterns', () => {
-    const items = [digitChoice('pattern', '豹子')!, digitChoice('sum_tail', '7')!, digitChoice('sum', '大')!, digitChoice('ball', '单', 2)!, digitChoice('ball', '0', 2)!]
-    expect(digitSelectionCommand(items, '1.25', 5)).toBe('2/0/1.25#2/单/1.25#总和/大/1.25#总和尾/7/1.25#前三/豹子/1.25')
-    expect(digitSelectionGroups(items).map(group => group.label)).toEqual(['第二球', '总和', '总和尾', '前三形态'])
+  it('serializes the three-ball totals, tails and first-three patterns explicitly', () => {
+    const items = [threeChoice('pattern', '豹子')!, threeChoice('sum_tail', '7')!, threeChoice('sum', '大')!, threeChoice('ball', '单', 2)!, threeChoice('ball', '0', 2)!]
+    expect(threeCommand(items, '1.25')).toBe('2/0/1.25#2/单/1.25#总和/大/1.25#总和尾/7/1.25#前三/豹子/1.25')
+    expect(digitSelectionGroups(items, 3).map(group => group.label)).toEqual(['第二球', '总和', '总和尾', '前三形态'])
     expect(new Set(items.map(digitSelectionKey)).size).toBe(5)
-    expect(digitSelectionCommand(digitPatterns.map(item => digitChoice('pattern', item.selection)!), '50.00', 3))
+    expect(threeCommand(digitPatterns.map(item => threeChoice('pattern', item.selection)!), '50.00'))
       .toBe('前三/豹子/50#前三/顺子/50#前三/对子/50#前三/半顺/50#前三/杂六/50')
+    expect(fiveCommand(items, '1.25')).toBe('')
   })
 
   it('rejects unimplemented shapes, precise sums, invalid positions and forged play codes', () => {
-    expect(digitChoice('pattern', '中三豹子')).toBeNull()
-    expect(digitChoice('sum', '27')).toBeNull()
-    expect(digitChoice('sum_tail', '10')).toBeNull()
-    expect(digitChoice('ball', '1', 0)).toBeNull()
-    expect(digitChoice('ball', '1', 6)).toBeNull()
-    const fourth = digitChoice('ball', '0', 4)!
-    expect(digitSelectionCommand([fourth], '20', 3)).toBe('')
-    expect(digitSelectionCommand([fourth], '20', 5)).toBe('4/0/20')
-    expect(digitSelectionCommand([{ ...fourth, playCode: 'sum' }], '20', 5)).toBe('')
-    expect(digitSelectionCommand([{ ...digitChoice('sum', '大')!, position: 2 }], '20', 5)).toBe('')
-    expect(digitSelectionCommand([fourth, fourth], '20', 5)).toBe('')
+    expect(fiveChoice('pattern', '中三豹子')).toBeNull()
+    expect(threeChoice('sum', '27')).toBeNull()
+    expect(threeChoice('sum_tail', '10')).toBeNull()
+    expect(fiveChoice('ball', '1', 0)).toBeNull()
+    expect(fiveChoice('ball', '1', 6)).toBeNull()
+    expect(threeChoice('ball', '0', 4)).toBeNull()
+    const fourth = fiveChoice('ball', '0', 4)!
+    expect(threeCommand([fourth], '20')).toBe('')
+    expect(fiveCommand([fourth], '20')).toBe('4/0/20')
+    expect(fiveCommand([{ ...fourth, playCode: 'sum' }], '20')).toBe('')
+    expect(threeCommand([{ ...threeChoice('sum', '大')!, position: 2 }], '20')).toBe('')
+    expect(fiveCommand([fourth, fourth], '20')).toBe('')
   })
 
   it.each(['', '0', '-1', '0.001', '1.000', '1.', '.5', '1e2', '1,000', 'Infinity', 'NaN', '90071992547409.92'])('rejects unsafe or non-canonical money %j', amount => {
-    expect(digitSelectionCommand([digitChoice('ball', '1')!], amount, 5)).toBe('')
+    expect(fiveCommand([fiveChoice('ball', '1')!], amount)).toBe('')
   })
 
   it('retains real cents, canonicalizes harmless whitespace and rejects unsafe totals', () => {
-    const items = [digitChoice('ball', '0')!, digitChoice('ball', '9')!]
-    expect(digitSelectionCommand(items, ' 01.20 ', 5)).toBe('1/0/1.20#1/9/1.20')
-    expect(digitSelectionCommand(items, '0.01', 5)).toBe('1/0/0.01#1/9/0.01')
-    expect(digitSelectionCommand(items, '90071992547409.90', 5)).toBe('')
+    const items = [fiveChoice('ball', '0')!, fiveChoice('ball', '9')!]
+    expect(fiveCommand(items, ' 01.20 ')).toBe('1/0/1.20#1/9/1.20')
+    expect(fiveCommand(items, '0.01')).toBe('1/0/0.01#1/9/0.01')
+    expect(fiveCommand(items, '90071992547409.90')).toBe('')
   })
 
   it('measures the 400 limit as Unicode code points, not UTF-16 units', () => {
@@ -112,8 +131,8 @@ describe('digit lottery selection contract', () => {
   })
 
   it('never truncates or splits an over-limit cart into additional submissions', () => {
-    const items: DigitSelection[] = Array.from({ length: 5 }, (_, index) => [...digitNumbers, ...digitSides].map(selection => digitChoice('ball', selection, index + 1)!)).flat()
-    const command = digitSelectionCommand(items, '200', 5)
+    const items: DigitSelection[] = Array.from({ length: 5 }, (_, index) => [...digitNumbers, ...digitSides].map(selection => fiveChoice('ball', selection, index + 1)!)).flat()
+    const command = fiveCommand(items, '200')
     expect(command.split('#')).toHaveLength(70)
     expect(digitCommandLengthError(command)).not.toBeNull()
     expect(command).toContain('5/双/200')

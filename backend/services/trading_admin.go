@@ -137,7 +137,7 @@ type ResolvedTradeParams struct {
 	PricingCode string // audited platform/room/member price row used for this quote
 	FlyAmount   float64
 	FlyRateUsed float64
-	OddsSource  string // user / room / request / fallback
+	OddsSource  string // user / room / platform / member_multiplier_*
 	FlySource   string // explicit / user / room / off
 }
 
@@ -151,6 +151,10 @@ func NewTradingAdminService(db *gorm.DB) *TradingAdminService {
 func (s *TradingAdminService) GetForWorkspace(workspaceID, userID uint64, gameID string) (*UserTradingConfig, error) {
 	var result *UserTradingConfig
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		game, err := lockTradingGame(tx, gameID)
+		if err != nil {
+			return err
+		}
 		var account user.User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("user_id = ? AND workspace_id = ? AND role = ?", userID, workspaceID, "member").
@@ -160,7 +164,7 @@ func (s *TradingAdminService) GetForWorkspace(workspaceID, userID uint64, gameID
 			}
 			return err
 		}
-		value, err := NewTradingAdminService(tx).Get(userID, gameID)
+		value, err := NewTradingAdminService(tx).Get(userID, game.ID)
 		if err != nil {
 			return err
 		}
@@ -174,8 +178,18 @@ func (s *TradingAdminService) GetForWorkspace(workspaceID, userID uint64, gameID
 // A member who is being transferred cannot accidentally receive settings from
 // the previous room.
 func (s *TradingAdminService) UpdateForWorkspace(workspaceID, userID uint64, input UpdateUserTradingInput) (*UserTradingConfig, error) {
+	if strings.TrimSpace(input.GameID) == "" && len(input.Odds) > 0 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "设置会员玩法赔率必须指定彩种")
+	}
 	var result *UserTradingConfig
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		game, err := lockTradingGame(tx, input.GameID)
+		if err != nil {
+			return err
+		}
+		// Keep a default-game selection fixed before taking the user lock;
+		// the nested service must never choose another game after that lock.
+		input.GameID = game.ID
 		var account user.User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("user_id = ? AND workspace_id = ? AND role = ?", userID, workspaceID, "member").
@@ -248,12 +262,15 @@ func (s *TradingAdminService) Get(userID uint64, gameID string) (*UserTradingCon
 	}
 	items := make([]UserOddsOverrideItem, 0, len(limits.Items))
 	for _, item := range limits.Items {
+		if !item.Configured || item.Odds <= 1 {
+			continue
+		}
 		roomOdds := item.Odds
-		if value, ok := roomOverrides[item.PlayCode]; ok {
+		if value, ok := roomOverrides[item.PlayCode]; ok && isValidOddsOverride(value) {
 			roomOdds = value
 		}
 		entry := UserOddsOverrideItem{PlayCode: item.PlayCode, PlayName: item.PlayName, BaseOdds: item.Odds, RoomOdds: roomOdds, Effective: applyOddsMultiplier(roomOdds, oddsMultiplier)}
-		if value, ok := overrides[item.PlayCode]; ok {
+		if value, ok := overrides[item.PlayCode]; ok && isValidOddsOverride(value) {
 			v := value
 			entry.Override = &v
 			entry.Effective = value
@@ -331,6 +348,9 @@ func normalizedFlyText(value, label string, limit int) (string, error) {
 }
 
 func (s *TradingAdminService) Update(userID uint64, input UpdateUserTradingInput) (*UserTradingConfig, error) {
+	if strings.TrimSpace(input.GameID) == "" && len(input.Odds) > 0 {
+		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "设置会员玩法赔率必须指定彩种")
+	}
 	if input.OddsMultiplier != nil {
 		if err := validateOddsMultiplier(*input.OddsMultiplier); err != nil {
 			return nil, err
@@ -362,27 +382,26 @@ func (s *TradingAdminService) Update(userID uint64, input UpdateUserTradingInput
 		external = &normalized
 	}
 	gameID := strings.TrimSpace(input.GameID)
+	var resolvedGameID string
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Match betting's global lock order. Acquiring SHARE after a user lock
+		// can deadlock behind a queued platform odds UPDATE, even while another
+		// betting transaction already holds a compatible game SHARE lock.
+		game, err := lockTradingGame(tx, gameID)
+		if err != nil {
+			return err
+		}
+		resolvedGameID = game.ID
 		var account user.User
-		if err := memberTradingAccountQuery(tx, userID).First(&account).Error; err != nil {
+		if err := memberTradingAccountQuery(tx, userID).Clauses(clause.Locking{Strength: "UPDATE"}).First(&account).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return apperrors.NewBusinessError("USER_NOT_FOUND", "用户不存在")
 			}
 			return err
 		}
-		account.FlyMode = mode
-		account.FlyRate = input.FlyRate
-		if external != nil {
-			account.FlyTargetPlatform = external.targetPlatform
-			account.FlyTargetAccount = external.targetAccount
-			account.FlyEndpointLabel = external.endpointLabel
-			account.FlySingleLimitCents = external.singleLimitCents
-			account.FlyDailyLimitCents = external.dailyLimitCents
-			account.FlyConnectionRemark = external.remark
-		}
-		account.RebateMode = rebateMode
-		account.RebateRate = input.RebateRate
-		if err := tx.Save(&account).Error; err != nil {
+		// Never save the loaded account wholesale: its balance, password,
+		// auth generation, status and membership are owned by other services.
+		if err := tx.Model(&account).Updates(tradingUserUpdateFields(input, mode, rebateMode, external)).Error; err != nil {
 			return err
 		}
 		if input.OddsMultiplier != nil {
@@ -399,20 +418,21 @@ func (s *TradingAdminService) Update(userID uint64, input UpdateUserTradingInput
 		if gameID == "" {
 			return nil
 		}
-		oddsSvc := NewOddsAdminService(tx)
-		limits, err := oddsSvc.Get(gameID)
+		limits, err := NewOddsAdminService(tx).readGameLimits(game)
 		if err != nil {
 			return err
 		}
 		valid := map[string]bool{}
 		for _, item := range limits.Items {
-			valid[item.PlayCode] = true
+			valid[item.PlayCode] = item.Configured && item.Odds > 1
 		}
+		seen := make(map[string]struct{}, len(input.Odds))
 		for _, item := range input.Odds {
 			code := strings.TrimSpace(item.PlayCode)
-			if !valid[code] {
-				return apperrors.NewBusinessError("INVALID_REQUEST", "包含当前游戏不存在的玩法赔率")
+			if _, exists := seen[code]; exists {
+				return apperrors.NewBusinessError("INVALID_REQUEST", "包含重复的会员玩法赔率: "+code)
 			}
+			seen[code] = struct{}{}
 			if item.Override == nil {
 				if err := tx.Where("workspace_id = ? AND user_id = ? AND game_id = ? AND play_code = ?", account.WorkspaceID, userID, gameID, code).
 					Delete(&odds.UserPlayOdds{}).Error; err != nil {
@@ -420,10 +440,13 @@ func (s *TradingAdminService) Update(userID uint64, input UpdateUserTradingInput
 				}
 				continue
 			}
+			if !valid[code] {
+				return apperrors.NewBusinessError("ODDS_NOT_CONFIGURED", "平台玩法未配置，不能设置会员覆盖赔率")
+			}
 			if !isValidOddsOverride(*item.Override) {
 				return apperrors.NewBusinessError("INVALID_REQUEST", "单独赔率必须大于 1")
 			}
-			row := odds.UserPlayOdds{WorkspaceID: account.WorkspaceID, UserID: userID, GameID: gameID, PlayCode: code, Odds: *item.Override}
+			row := odds.UserPlayOdds{WorkspaceID: account.WorkspaceID, UserID: userID, GameID: gameID, PlayCode: code, Odds: roundOdds(*item.Override)}
 			if err := tx.Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "user_id"}, {Name: "game_id"}, {Name: "play_code"}},
 				DoUpdates: clause.AssignmentColumns([]string{"odds", "updated_at"}),
@@ -436,7 +459,37 @@ func (s *TradingAdminService) Update(userID uint64, input UpdateUserTradingInput
 	if err != nil {
 		return nil, err
 	}
-	return s.Get(userID, gameID)
+	return s.Get(userID, resolvedGameID)
+}
+
+func tradingUserUpdateFields(input UpdateUserTradingInput, flyMode, rebateMode string, external *normalizedUserExternalFollow) map[string]any {
+	fields := map[string]any{
+		"fly_mode": flyMode, "fly_rate": input.FlyRate,
+		"rebate_mode": rebateMode, "rebate_rate": input.RebateRate,
+	}
+	if external != nil {
+		fields["fly_target_platform"] = external.targetPlatform
+		fields["fly_target_account"] = external.targetAccount
+		fields["fly_endpoint_label"] = external.endpointLabel
+		fields["fly_single_limit_cents"] = external.singleLimitCents
+		fields["fly_daily_limit_cents"] = external.dailyLimitCents
+		fields["fly_connection_remark"] = external.remark
+	}
+	return fields
+}
+
+// All callers are already inside a transaction. Taking the game lock before
+// workspace/user locks keeps every trading entry point in betting lock order.
+func lockTradingGame(tx *gorm.DB, gameID string) (*lottery.Game, error) {
+	id := strings.TrimSpace(gameID)
+	if id == "" {
+		var err error
+		id, err = NewOddsAdminService(tx).firstEnabledGameID()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return NewOddsAdminService(tx.Clauses(clause.Locking{Strength: "SHARE"})).loadGame(id)
 }
 
 func memberTradingAccountQuery(db *gorm.DB, userID uint64) *gorm.DB {
@@ -498,10 +551,10 @@ func (s *TradingAdminService) resolveForAccount(account user.User, gameID, playC
 	if platformErr != nil && platformErr != gorm.ErrRecordNotFound {
 		return nil, platformErr
 	}
-	if platformErr == gorm.ErrRecordNotFound || platform.Odds <= 1 || !rulesReady || !platform.ExplicitlyConfigured || strings.TrimSpace(platform.RuleVersion) != profile.Version {
+	if platformErr == gorm.ErrRecordNotFound || !rulesReady || !profile.supportsPlay(playCode) || !isActivePlatformOdds(platform, profile.Version) {
 		return nil, apperrors.NewBusinessError("ODDS_NOT_CONFIGURED", "当前玩法赔率尚未配置，请联系房间管理员")
 	}
-	if overrideErr == nil && override.Odds > 1 {
+	if overrideErr == nil && isValidOddsOverride(override.Odds) {
 		result.Odds, result.OddsSource = resolveEffectiveOdds(override.Odds, 0, 0, multiplier)
 	} else {
 		var room odds.RoomPlayOdds
@@ -511,7 +564,7 @@ func (s *TradingAdminService) resolveForAccount(account user.User, gameID, playC
 				return nil, roomErr
 			}
 		}
-		if room.Odds > 1 {
+		if isValidOddsOverride(room.Odds) {
 			result.Odds, result.OddsSource = resolveEffectiveOdds(0, room.Odds, 0, multiplier)
 		} else {
 			result.Odds, result.OddsSource = resolveEffectiveOdds(0, 0, platform.Odds, multiplier)
@@ -588,17 +641,17 @@ func roundOdds(value float64) float64 { return math.Round(value*10000) / 10000 }
 // membership multiplier. Exact per-play overrides are already authoritative
 // and are never multiplied again.
 func resolveEffectiveOdds(userOdds, roomOdds, platformOdds, multiplier float64) (float64, string) {
-	if userOdds > 1 {
+	if isValidOddsOverride(userOdds) {
 		return roundOdds(userOdds), "user"
 	}
 	multiplier = normalizeOddsMultiplier(multiplier)
-	if roomOdds > 1 {
+	if isValidOddsOverride(roomOdds) {
 		if multiplier == 1 {
 			return roundOdds(roomOdds), "room"
 		}
 		return applyOddsMultiplier(roomOdds, multiplier), "member_multiplier_room"
 	}
-	if platformOdds > 1 {
+	if isValidOddsOverride(platformOdds) {
 		if multiplier == 1 {
 			return roundOdds(platformOdds), "platform"
 		}
@@ -648,8 +701,11 @@ func (s *TradingAdminService) GetRoomForWorkspace(workspaceID uint64, gameID str
 	}
 	items := make([]RoomOddsOverrideItem, 0, len(limits.Items))
 	for _, item := range limits.Items {
+		if !item.Configured || item.Odds <= 1 {
+			continue
+		}
 		entry := RoomOddsOverrideItem{PlayCode: item.PlayCode, PlayName: item.PlayName, BaseOdds: item.Odds, Effective: item.Odds}
-		if value, ok := rows[item.PlayCode]; ok {
+		if value, ok := rows[item.PlayCode]; ok && isValidOddsOverride(value) {
 			v := value
 			entry.Override = &v
 			entry.Effective = value
@@ -673,7 +729,13 @@ func (s *TradingAdminService) UpdateRoomForWorkspace(workspaceID uint64, input U
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "房间返水比例需在 0-100 之间")
 	}
 	gameID := strings.TrimSpace(input.GameID)
+	var resolvedGameID string
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		game, err := lockTradingGame(tx, gameID)
+		if err != nil {
+			return err
+		}
+		resolvedGameID = game.ID
 		var workspace workspacemodel.Workspace
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND type IN ?", workspaceID, []string{workspacemodel.TypeTenant, workspacemodel.TypeAgent}).First(&workspace).Error; err != nil {
 			return apperrors.NewBusinessError("WORKSPACE_NOT_FOUND", "房间不存在")
@@ -688,29 +750,34 @@ func (s *TradingAdminService) UpdateRoomForWorkspace(workspaceID uint64, input U
 		if gameID == "" {
 			return nil
 		}
-		limits, err := NewOddsAdminService(tx).Get(gameID)
+		limits, err := NewOddsAdminService(tx).readGameLimits(game)
 		if err != nil {
 			return err
 		}
 		valid := map[string]bool{}
 		for _, item := range limits.Items {
-			valid[item.PlayCode] = true
+			valid[item.PlayCode] = item.Configured && item.Odds > 1
 		}
+		seen := make(map[string]struct{}, len(input.Odds))
 		for _, item := range input.Odds {
 			code := strings.TrimSpace(item.PlayCode)
-			if !valid[code] {
-				return apperrors.NewBusinessError("INVALID_REQUEST", "包含当前游戏不存在的玩法赔率")
+			if _, exists := seen[code]; exists {
+				return apperrors.NewBusinessError("INVALID_REQUEST", "包含重复的房间玩法赔率: "+code)
 			}
+			seen[code] = struct{}{}
 			if item.Override == nil {
 				if err := tx.Where("workspace_id = ? AND game_id = ? AND play_code = ?", workspace.ID, gameID, code).Delete(&odds.RoomPlayOdds{}).Error; err != nil {
 					return err
 				}
 				continue
 			}
+			if !valid[code] {
+				return apperrors.NewBusinessError("ODDS_NOT_CONFIGURED", "平台玩法未配置，不能设置房间覆盖赔率")
+			}
 			if !isValidOddsOverride(*item.Override) {
 				return apperrors.NewBusinessError("INVALID_REQUEST", "房间赔率必须大于 1")
 			}
-			row := odds.RoomPlayOdds{WorkspaceID: workspace.ID, AgentID: workspace.OwnerUserID, GameID: gameID, PlayCode: code, Odds: *item.Override}
+			row := odds.RoomPlayOdds{WorkspaceID: workspace.ID, AgentID: workspace.OwnerUserID, GameID: gameID, PlayCode: code, Odds: roundOdds(*item.Override)}
 			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "workspace_id"}, {Name: "game_id"}, {Name: "play_code"}}, DoUpdates: clause.AssignmentColumns([]string{"agent_id", "odds", "updated_at"})}).Create(&row).Error; err != nil {
 				return err
 			}
@@ -720,7 +787,7 @@ func (s *TradingAdminService) UpdateRoomForWorkspace(workspaceID uint64, input U
 	if err != nil {
 		return nil, err
 	}
-	return s.GetRoomForWorkspace(workspaceID, gameID)
+	return s.GetRoomForWorkspace(workspaceID, resolvedGameID)
 }
 
 func isFinitePercent(value float64) bool {
@@ -728,6 +795,7 @@ func isFinitePercent(value float64) bool {
 }
 
 func isValidOddsOverride(value float64) bool {
+	value = roundOdds(value)
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && value > 1
 }
 

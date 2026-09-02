@@ -36,7 +36,7 @@ class PageHarness {
 
 const runtime = vi.hoisted(() => ({
   hooks: null as PageHarness | null,
-  me: vi.fn(), refreshSession: vi.fn(), users: vi.fn(), userStats: vi.fn(), agents: vi.fn(),
+  me: vi.fn(), refreshSession: vi.fn(), logout: vi.fn(), users: vi.fn(), userStats: vi.fn(), agents: vi.fn(),
   createUser: vi.fn(), updateUser: vi.fn(), setUserStatus: vi.fn(), resetUserPassword: vi.fn(), adjustUserBalance: vi.fn(),
   showMessage: vi.fn(),
 }))
@@ -68,6 +68,7 @@ type Props = {
   open?: boolean; disabled?: boolean; select?: boolean; view?: string; section?: string; tenantDirect?: boolean; path?: string
   onClick?: () => void; onChange?: (event: { target: { value: string } }) => void
   onNavigate?: (path: string) => void
+  onLogout?: () => Promise<void>
 }
 type Element = ReactElement<Props>
 function elements(node: ReactNode): Element[] {
@@ -97,13 +98,14 @@ const render = (factory: () => ReactNode) => {
 const settle = async () => { for (let index = 0; index < 12; index++) await Promise.resolve() }
 let location: { pathname: string }
 let history: { replaceState: ReturnType<typeof vi.fn>; pushState: ReturnType<typeof vi.fn> }
-let listeners: Map<string, () => void>
+let listeners: Map<string, (event?: Event) => void>
 
 beforeEach(() => {
   runtime.hooks = new PageHarness()
   for (const value of Object.values(runtime)) if (vi.isMockFunction(value)) value.mockReset()
   runtime.me.mockResolvedValue(profile('admin'))
   runtime.refreshSession.mockResolvedValue({})
+  runtime.logout.mockResolvedValue({})
   runtime.users.mockResolvedValue({ items: [member], total: 1 })
   runtime.userStats.mockResolvedValue({ total: 1, active: 1, disabled: 0, new_today: 1 })
   runtime.agents.mockResolvedValue({ items: [] })
@@ -119,8 +121,9 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.stubGlobal('window', {
     location, history, localStorage: { getItem: () => null }, setTimeout, clearTimeout, setInterval, clearInterval,
-    addEventListener: (name: string, listener: () => void) => listeners.set(name, listener),
+    addEventListener: (name: string, listener: (event?: Event) => void) => listeners.set(name, listener),
     removeEventListener: (name: string) => listeners.delete(name),
+    dispatchEvent: (event: Event) => { listeners.get(event.type)?.(event); return !event.defaultPrevented },
   })
   vi.stubGlobal('document', { visibilityState: 'visible' })
 })
@@ -167,6 +170,26 @@ describe('retired account route lifecycle', () => {
     const root = render(App)
     expect(elements(root).some(element => element.type === 'login-page')).toBe(true)
     expect(shell(root)).toBeUndefined()
+  })
+
+  it('honors unsaved-page protection for sidebar navigation, browser history and logout', async () => {
+    location.pathname = '/limits'
+    render(App)
+    await settle()
+    let root = render(App)
+    listeners.set('yaotu-before-navigate', event => event?.preventDefault())
+    shell(root).props.onNavigate!('/members')
+    expect(history.pushState).not.toHaveBeenCalled()
+    await shell(root).props.onLogout!()
+    expect(runtime.logout).not.toHaveBeenCalled()
+    location.pathname = '/members'
+    listeners.get('popstate')!()
+    root = render(App)
+    expect(location.pathname).toBe('/limits')
+    expect(shell(root).props.path).toBe('/limits')
+    listeners.delete('yaotu-before-navigate')
+    shell(root).props.onNavigate!('/members')
+    expect(shell(render(App)).props.path).toBe('/members')
   })
 })
 

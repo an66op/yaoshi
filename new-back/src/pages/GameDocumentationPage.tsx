@@ -104,7 +104,7 @@ function OriginalDocument({ source, sections, loading, error }: { source: string
   </Stack>
 }
 
-function CurrentRules({ game, catalog, limits, loading, error }: { game?: AdminGame; catalog: PlayCatalogItem[]; limits: GameOddsLimits | null; loading: boolean; error: string }) {
+export function CurrentRules({ game, catalog, limits, loading, error }: { game?: AdminGame; catalog: PlayCatalogItem[]; limits: GameOddsLimits | null; loading: boolean; error: string }) {
   if (!game) return <Alert severity="info">后台暂时没有彩种资料。</Alert>
   const profile = currentRuleProfileForGame(game)
   const bindingReady = currentRuleBindingReady(game)
@@ -126,7 +126,7 @@ function CurrentRules({ game, catalog, limits, loading, error }: { game?: AdminG
       <Stack direction="row" justifyContent="space-between" alignItems="center" px={2} py={1.35} bgcolor="action.hover"><Box><Typography fontWeight={850}>服务端当前玩法目录</Typography><Typography variant="caption" color="text.secondary">仅列出下注与结算同时实现的玩法；赔率读取当前后台配置</Typography></Box><Chip size="small" label={`${catalog.length} 项`} /></Stack>
       {loading ? <Box minHeight={160} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26} /></Box>
         : error ? <Alert severity="error" sx={{ m: 1.5 }}>{error}</Alert>
-        : catalog.length ? <TableContainer sx={{ maxHeight: 480 }}><Table stickyHeader size="small"><TableHead><TableRow><TableCell>玩法</TableCell><TableCell>分类</TableCell><TableCell>说明 / 示例</TableCell><TableCell align="right">默认赔率</TableCell><TableCell align="right">当前赔率</TableCell></TableRow></TableHead><TableBody>{catalog.map(item => <TableRow key={item.play_code} hover><TableCell><Typography fontWeight={750} fontSize={12.5}>{item.play_name}</Typography><Typography fontFamily="ui-monospace,monospace" fontSize={10} color="text.secondary">{item.play_code}</Typography></TableCell><TableCell>{item.category}</TableCell><TableCell><Typography fontSize={12}>{item.description}</Typography>{item.example && <Typography fontSize={10.5} color="text.secondary">例：{item.example}</Typography>}</TableCell><TableCell align="right">{formatOdds(item.default_odds)}</TableCell><TableCell align="right"><Typography fontWeight={800} color={(configured.get(item.play_code) ?? 0) > 1 ? 'success.main' : 'warning.main'}>{formatOdds(configured.get(item.play_code))}</Typography></TableCell></TableRow>)}</TableBody></Table></TableContainer>
+        : catalog.length ? <TableContainer sx={{ maxHeight: 480 }}><Table stickyHeader size="small"><TableHead><TableRow><TableCell>玩法</TableCell><TableCell>分类</TableCell><TableCell>说明 / 示例</TableCell><TableCell align="right">当前赔率</TableCell></TableRow></TableHead><TableBody>{catalog.map(item => <TableRow key={item.play_code} hover><TableCell><Typography fontWeight={750} fontSize={12.5}>{item.play_name}</Typography><Typography fontFamily="ui-monospace,monospace" fontSize={10} color="text.secondary">{item.play_code}</Typography></TableCell><TableCell>{item.category}</TableCell><TableCell><Typography fontSize={12}>{item.description}</Typography>{item.example && <Typography fontSize={10.5} color="text.secondary">例：{item.example}</Typography>}</TableCell><TableCell align="right"><Typography fontWeight={800} color={(configured.get(item.play_code) ?? 0) > 1 ? 'success.main' : 'warning.main'}>{formatOdds(configured.get(item.play_code))}</Typography></TableCell></TableRow>)}</TableBody></Table></TableContainer>
         : <Alert severity="info" sx={{ m: 1.5 }}>当前没有可提交的玩法目录；这不代表原版没有玩法，只表示本系统尚未绑定安全的下注与结算规则。</Alert>}
     </Paper>
   </Stack>

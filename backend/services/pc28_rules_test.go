@@ -4,6 +4,7 @@ import (
 	"backend/data/models/bet"
 	"backend/data/models/lottery"
 	apperrors "backend/errors"
+	"encoding/json"
 	"reflect"
 	"strconv"
 	"strings"
@@ -15,9 +16,13 @@ func TestPC28CatalogUsesOnlyAtomicUnpricedMarkets(t *testing.T) {
 	if len(items) != 32 {
 		t.Fatalf("PC28 catalog has %d items, want 32", len(items))
 	}
+	encoded, err := json.Marshal(items)
+	if err != nil || strings.Contains(string(encoded), "default_odds") {
+		t.Fatalf("catalogue leaked default-price metadata: %s / %v", encoded, err)
+	}
 	seen := make(map[string]struct{}, len(items))
 	for _, item := range items {
-		if item.PlayCode == "" || item.PlayName == "" || item.DefaultOdds != 0 {
+		if item.PlayCode == "" || item.PlayName == "" {
 			t.Fatalf("non-atomic or fabricated catalog item: %+v", item)
 		}
 		if _, exists := seen[item.PlayCode]; exists {

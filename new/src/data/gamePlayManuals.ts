@@ -1,5 +1,5 @@
 import type { Game } from '../types'
-import { isBingoRacingAReady, isDigit5V3Game, isPC28RuleVersion, pc28RuleVersionForGame } from '../utils/lotteryRules'
+import { gameRulesReady, isBingoRacingAReady, isDigit5V3Game, isPC28RuleVersion, pc28RuleVersionForGame } from '../utils/lotteryRules'
 
 export type GameManualSection = {
   title: string
@@ -22,6 +22,7 @@ export type GameManual = {
 
 const racingIDs = new Set(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10', 'bingo-racing-a'])
 const digitFiveIDs = new Set(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])
+const unverifiedBingoIDs = new Set(['bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])
 const digitThreeIDs = new Set(['official-fc3d', 'official-pl3'])
 const pc28IDs = new Set(['pc-canada', 'canada-28', 'canada-20'])
 const markSixIDs = new Set(['bingo-mark-six'])
@@ -67,7 +68,7 @@ const digitFiveSections: GameManualSection[] = [
   },
   {
     title: '前三、中三、后三形态',
-    body: '目标手册包含豹子、顺子、对子、半顺、杂六，可写“前三/豹子/5”、 “中三顺子/5”或“豹子5”。未写位置的形态按前三、中三、后三展开。',
+    body: '支持豹子、顺子、对子、半顺、杂六，可写“前三/豹子/5”、 “中三顺子/5”或“豹子5”。未写位置的形态按前三、中三、后三展开。',
     examples: ['前三豹子5', '中三/顺子/5', '豹子5 → 前三、中三、后三豹子，各5'],
   },
   {
@@ -185,18 +186,17 @@ function racingManual(game: Game): GameManual {
 
 function digitFiveManual(game: Game): GameManual {
   const v3 = isDigit5V3Game(game.id, game.ruleVersion)
+  const ready = gameRulesReady(game)
   const sg = game.id === 'sg-ssc'
   const bingoOne = game.id === 'bingo-ssc-1'
-  const externalSG = sg && (game.sourceKind === 'external' || game.sourceKind === 'official')
-  const sgSource = sg ? (game.sourceName || (externalSG ? '外部开奖源' : '王者平台自开')) : ''
   return {
     id: game.id,
     gameId: game.id,
     title: game.title,
     status: v3 ? 'implemented' : 'partial',
-    statusText: v3 ? '三段形态与龙虎和已接入' : sg ? `${externalSG ? '外部来源待核验' : '平台自开'} · 完整规则待确认` : '号码与两面已接入 · 中三/后三待版本化',
-    betModes: { chat: game.rulesReady !== false, web: game.rulesReady !== false },
-    summary: v3 ? '5球数字彩。聊天与网投已支持球位号码、大小单双、前三/中三/后三形态，以及第一球对第五球的龙、虎、和。总和、总和尾及第二球对第四球龙虎不在本次原版合同内，新投注已关闭。' : `5球数字彩。聊天与网投已支持球位号码、大小单双和本地附加玩法；手册中的中三、后三形态尚未开放。${sg ? ` 当前开奖身份为“${sgSource}”，不宣称与SG外部开奖同步。` : ''}`,
+    statusText: v3 ? '三段形态与龙虎和已接入' : '规则版本待核验 · 暂停受理',
+    betModes: { chat: ready, web: ready },
+    summary: `5球数字彩，固定使用 digits5-v3。聊天与网投支持球位号码、大小单双、前三/中三/后三形态，以及第一球对第五球的龙、虎、和。总和、总和尾及第二球对第四球龙虎不在当前规则合同内，不开放投注。${sg ? ' 当前开奖为王者平台自开（王者开奖），不宣称与SG外部开奖同步。' : ''}${!ready ? ' 当前规则版本或就绪状态待核验，暂停受理。' : ''}`,
     sourceURL: game.id.startsWith('bingo-') ? 'https://www.www-163kai.cc/' : undefined,
     sections: [
       ...(bingoOne ? [{
@@ -204,11 +204,9 @@ function digitFiveManual(game: Game): GameManual {
         body: '必须使用保留真实开出顺序的宾果原始20号源，取前5个原号的个位数作为第1至第5球。服务端会与宾果官方结果交叉核对；原号顺序不可证明、号码不完整或核对不一致时，当期不会生成可结算开奖。',
         examples: ['原始前5号：12、28、35、47、59 → 第1至第5球：2、8、5、7、9'],
       }] : []),
-      ...(v3 ? digitFiveV3Sections : digitFiveSections),
+      ...digitFiveV3Sections,
     ],
-    auditNotes: v3
-      ? ['中三、后三与龙虎和仅在服务端明确返回 digits5-v3 时开放；旧注单继续按原规则版本结算。', '赔率全部读取当前房间后台配置；“和”使用独立玩法赔率，缺失时前端与服务端均拒绝投注。', '原版未说明890、901边界；当前明确沿用循环顺子，不套用PC/加拿大28的排除条款。', ...(bingoOne ? ['宾果时时彩(一)不接受按数值排序后的20号数组；必须由服务端完成原始顺序交叉核对。'] : [])]
-      : ['当前金融规则版本只结算“前三形态”。中三、后三不能仅改界面，需新规则版本保护历史注单后再开放。', '本地既有总和、总和尾及球位龙虎，但这些附加玩法未出现在本次提供的五位彩手册中；当前赔率页会如实展示，业务规则仍需进一步确认。', ...(sg ? [`当前开奖来源显示为“${sgSource}”；真实SG接口未核验前维持部分对齐。`] : [])],
+    auditNotes: ['投注仅在当前彩种明确绑定 digits5-v3 且规则就绪时开放；目录、赔率与助手响应必须使用同一版本。', '赔率全部读取当前房间后台配置；“和”使用独立玩法赔率，缺失时前端与服务端均拒绝投注。', '原版未说明890、901边界；当前明确沿用循环顺子，不套用PC/加拿大28的排除条款。', ...(sg ? ['SG时时彩的玩法合同已完整接入；开奖身份为王者平台自开，不将彩种名称或来源标签当作外部同步凭据。'] : []), ...(bingoOne ? ['宾果时时彩(一)不接受按数值排序后的20号数组；必须由服务端完成原始顺序交叉核对。'] : [])],
   }
 }
 
@@ -333,6 +331,16 @@ export function manualForGame(game: Game): GameManual {
   if (digitThreeIDs.has(game.id)) return digitThreeManual(game)
   if (pc28IDs.has(game.id)) return pc28Manual(game)
   if (markSixIDs.has(game.id)) return markSixManual(game)
+  if (unverifiedBingoIDs.has(game.id)) return {
+    id: game.id,
+    gameId: game.id,
+    title: game.title,
+    status: 'reference',
+    statusText: '玩法待核验 · 仅展示',
+    betModes: { chat: false, web: false },
+    summary: '该宾果变体的开奖映射与玩法合同尚待核验。当前仅展示彩种与开奖结果，不接受投注，也不套用宾果赛车(A)或宾果时时彩(一)的规则。',
+    sections: [{ title: '开放边界', body: '即使服务端返回同类彩种的规则版本，也不能据此开放投注；需逐彩种完成来源、玩法、赔率与结算核验。' }],
+  }
   return {
     id: game.id,
     gameId: game.id,

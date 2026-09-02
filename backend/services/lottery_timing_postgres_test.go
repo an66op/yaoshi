@@ -374,6 +374,14 @@ func timingPostgresSchedule(t *testing.T, db *gorm.DB, issue string) *lottery.Ga
 	if err := db.First(&game, "id = ?", "speed-fly").Error; err != nil {
 		t.Fatal(err)
 	}
+	// Financial scenarios opt in to an explicit administrator quote once.
+	// Repeated schedules must not reopen a market deliberately cleared later.
+	if game.OddsConfigRevision == 0 {
+		configureTestGameOdds(t, db, game.ID, map[string]float64{
+			"ball_1_5": 9.9, "two_sided": 1.993, "dragon_tiger": 1.993, "sum": 1.993,
+		})
+		game.OddsConfigRevision = 1
+	}
 	// Give these financial tests ample real-clock headroom; 75-second exact
 	// cadence and instant boundary behavior are covered by the window tests.
 	game.NextIssue = issue

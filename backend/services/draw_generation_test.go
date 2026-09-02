@@ -26,7 +26,7 @@ func TestGenerateDrawNumbersUsesIndependentDigitsAndRejectionSampling(t *testing
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			// A misleading display name must not change the ID-bound contract.
-			got, err := generateDrawNumbers(&lottery.Game{ID: test.gameID, Name: "六合彩", Category: "六合彩"}, bytes.NewReader(test.entropy))
+			got, err := generateDrawNumbers(&lottery.Game{ID: test.gameID, SourceKind: "platform", Name: "六合彩", Category: "六合彩"}, bytes.NewReader(test.entropy))
 			if err != nil || !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("got=%v err=%v want=%v", got, err, test.want)
 			}
@@ -51,7 +51,7 @@ func TestGenerateDrawNumbersFailsClosedOnEntropyFailure(t *testing.T) {
 			{"missing entropy", nil, nil},
 		} {
 			t.Run(gameID+"/"+test.name, func(t *testing.T) {
-				got, err := generateDrawNumbers(&lottery.Game{ID: gameID}, test.reader)
+				got, err := generateDrawNumbers(&lottery.Game{ID: gameID, SourceKind: "platform"}, test.reader)
 				if got != nil || err == nil || apperrors.GetErrorCode(err) != "DRAW_RANDOM_FAILED" {
 					t.Fatalf("partial/fallback numbers=%v err=%v", got, err)
 				}
@@ -64,7 +64,7 @@ func TestGenerateDrawNumbersFailsClosedOnEntropyFailure(t *testing.T) {
 }
 
 func TestGenerateDrawNumbersRefusesUnmodelledGames(t *testing.T) {
-	for _, gameID := range []string{"happy8-mark-six", "hong-kong-mark-six", "official-kl8", "official-tw-bingo", "unknown"} {
+	for _, gameID := range []string{"happy8-mark-six", "hong-kong-mark-six", "official-kl8", "official-tw-bingo", "bingo-racing-b", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4", "unknown"} {
 		got, err := generateDrawNumbers(&lottery.Game{ID: gameID, Name: "极速赛车", Category: "赛车"}, failingDrawEntropy{errors.New("must not read entropy")})
 		if got != nil || apperrors.GetErrorCode(err) != "RULES_NOT_READY" {
 			t.Fatalf("game=%s got=%v err=%v", gameID, got, err)
@@ -80,13 +80,13 @@ func TestGenerateDrawNumbersNeverInventsBingoMarkSix(t *testing.T) {
 }
 
 func TestGenerateDrawNumbersNeverInventsExternalResults(t *testing.T) {
-	for _, sourceKind := range []string{"official", "external", "unrecognized"} {
+	for _, sourceKind := range []string{"", "official", "external", "unrecognized"} {
 		got, err := generateDrawNumbers(&lottery.Game{ID: "official-fc3d", SourceKind: sourceKind}, failingDrawEntropy{errors.New("must not read entropy")})
 		if got != nil || apperrors.GetErrorCode(err) != "DRAW_NOT_FOUND" {
 			t.Fatalf("source=%s got=%v err=%v", sourceKind, got, err)
 		}
 	}
-	for _, sourceKind := range []string{"", "platform", "simulated"} {
+	for _, sourceKind := range []string{"platform", "simulated"} {
 		got, err := generateDrawNumbers(&lottery.Game{ID: "sg-ssc", SourceKind: sourceKind}, bytes.NewReader([]byte{1, 2, 3, 4, 5}))
 		if err != nil || !reflect.DeepEqual(got, []int{1, 2, 3, 4, 5}) {
 			t.Fatalf("source=%q got=%v err=%v", sourceKind, got, err)
@@ -95,8 +95,8 @@ func TestGenerateDrawNumbersNeverInventsExternalResults(t *testing.T) {
 }
 
 func TestGenerateDrawNumbersCryptoReaderProducesValidProfiles(t *testing.T) {
-	for _, gameID := range []string{"speed-racing", "bingo-racing-b", "sg-ssc", "official-fc3d"} {
-		game := &lottery.Game{ID: gameID}
+	for _, gameID := range []string{"speed-racing", "bingo-racing-a", "sg-ssc", "official-fc3d"} {
+		game := &lottery.Game{ID: gameID, SourceKind: "platform"}
 		profile, _ := rulesForGame(game)
 		for i := 0; i < 16; i++ {
 			got, err := generateDrawNumbers(game, cryptorand.Reader)

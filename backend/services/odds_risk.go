@@ -31,7 +31,7 @@ func isFrontThreeShape(code string) bool {
 }
 
 func hasExclusiveFrontThreeShapes(profile gameRuleProfile) bool {
-	return profile.Patterns && (profile.Version == "digits3-v2" || profile.Version == "digits5-v2" || profile.Version == "digits5-v3")
+	return profile.Patterns && (profile.Version == "digits3-v2" || profile.Version == "digits5-v3")
 }
 
 // A complete set of decimal (principal-inclusive) odds offers a strictly
@@ -106,6 +106,7 @@ func (s *TradingAdminService) checkFrontThreeOddsRisk(account user.User, gameID,
 		PlatformOdds                 float64
 		PlatformExplicitlyConfigured bool
 		PlatformRuleVersion          string
+		PlatformConfigurationSource  string
 		RoomOdds                     float64
 		MemberOdds                   float64
 		OddsMultiplier               float64
@@ -115,6 +116,7 @@ SELECT codes.play_code,
        COALESCE(platform_prices.odds, 0) AS platform_odds,
        COALESCE(platform_prices.explicitly_configured, false) AS platform_explicitly_configured,
        COALESCE(platform_prices.rule_version, '') AS platform_rule_version,
+       COALESCE(platform_prices.configuration_source, '') AS platform_configuration_source,
        COALESCE(room_prices.odds, 0) AS room_odds,
        COALESCE(member_prices.odds, 0) AS member_odds,
        COALESCE(room_member.odds_multiplier, 1) AS odds_multiplier
@@ -142,7 +144,7 @@ LEFT JOIN workspace_memberships AS room_member
 	offers := map[string]float64{}
 	for _, quote := range quotes {
 		platformOdds, roomOdds, memberOdds := quote.PlatformOdds, quote.RoomOdds, quote.MemberOdds
-		if !quote.PlatformExplicitlyConfigured || quote.PlatformRuleVersion != profile.Version {
+		if !isValidOddsOverride(platformOdds) || !quote.PlatformExplicitlyConfigured || quote.PlatformRuleVersion != profile.Version || quote.PlatformConfigurationSource != oddsSourceAdminSave {
 			// Orphaned room/member overrides cannot resurrect a legacy platform
 			// row that has never been confirmed under the upgraded contract.
 			platformOdds, roomOdds, memberOdds = 0, 0, 0

@@ -73,7 +73,7 @@ const originalGameSectionSpecs: OriginalGameSectionSpec[] = [
 
 const racingIDs = new Set(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10'])
 const digitFiveV3IDs = new Set(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])
-const digitFiveIDs = new Set(['bingo-ssc-1'])
+const unverifiedBingoIDs = new Set(['bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])
 const digitThreeIDs = new Set(['official-fc3d', 'official-pl3'])
 const pcIDs = new Set(['pc-canada', 'canada-28', 'canada-20'])
 const markSixReferenceIDs = new Set(['hong-kong-mark-six', 'happy8-mark-six', 'new-macau-mark-six', 'old-macau-mark-six'])
@@ -114,30 +114,11 @@ const racingProfile: CurrentRuleProfile = {
   ],
 }
 
-const digitFiveProfile: CurrentRuleProfile = {
-  family: '5球时时彩 / 幸运5',
-  expectedVersion: 'digits5-v2',
-  modes: '聊天投注 + 详细网投',
-  summary: '5球、每球0–9，支持球位号码、大小单双、总和、总和尾、球位龙虎及前三形态。',
-  rules: [
-    '第1–5球可投0–9及大、小、单、双；0–4为小，5–9为大。',
-    '总和以5球之和判断，23及以上为大；总和尾为和值个位0–9。',
-    '龙虎按当前已确认球位规则比较，相同为和；当前下注选项只开放龙、虎。',
-    '豹子、顺子、对子、半顺、杂六目前只按前三球结算。',
-  ],
-  differences: [
-    { topic: '球位号码与两面', original: '原版支持1–5球号码、大小单双以及不写球位的展开写法。', current: '当前核心球位玩法一致，并增加服务端位置和号码校验。', status: 'same' },
-    { topic: '形态位置', original: '原版写有前三、中三、后三形态。', current: '当前只开放前三；中三、后三没有套用前三规则。', status: 'different' },
-    { topic: '本地附加玩法', original: '所给5球说明未统一写明总和、总和尾及球位龙虎。', current: '当前规则目录含总和、总和尾及已确认的球位龙虎。', status: 'current-only' },
-    { topic: '赔率来源', original: '原版文档可能附固定赔率。', current: '当前以后台彩种赔率配置及注单快照为准。', status: 'different' },
-  ],
-}
-
 const digitFiveV3Profile: CurrentRuleProfile = {
   family: '5球时时彩 / 幸运5（完整三段形态）',
   expectedVersion: 'digits5-v3',
   modes: '聊天投注 + 详细网投',
-  summary: '5球、每球0–9；在 digits5-v2 基础上补齐前三、中三、后三形态，并开放第一球对第五球的龙、虎、和。',
+  summary: '5球、每球0–9，固定使用 digits5-v3；完整支持前三、中三、后三形态，以及第一球对第五球的龙、虎、和。',
   rules: [
     '第1–5球可投0–9及大、小、单、双；0–4为小，5–9为大。',
     '不写球位时，号码或大小单双会展开到第1–5球，每个球位与选号独立计注。',
@@ -145,16 +126,27 @@ const digitFiveV3Profile: CurrentRuleProfile = {
     '聊天指令写明前三、中三或后三时只投对应窗口；未写窗口的形态指令会展开为三个独立注单。',
     '龙虎和比较第一球与第五球：大于为龙、小于为虎、相同为和；“和”使用独立后台赔率。',
     '原版未定义890、901边界；当前规则固定沿用循环顺子判定，未套用PC/加拿大28的排除条款。',
-    '总和、总和尾及第二球对第四球龙虎不属于本次原版合同，digits5-v3 新投注不再开放。',
-    '旧 digits5-v2 注单继续按下注时保存的规则版本结算，不会被新窗口或“和”改变。',
+    '总和、总和尾及第二球对第四球龙虎不属于当前规则合同，不开放投注。',
+    '彩种必须精确绑定 digits5-v3 且规则就绪；缺失或不匹配的版本不受理投注。',
   ],
   differences: [
     { topic: '球位号码与两面', original: '原版支持1–5球号码、大小单双以及不写球位的展开写法。', current: '当前核心球位玩法一致，并增加服务端位置和号码校验。', status: 'same' },
     { topic: '形态位置', original: '原版写有前三、中三、后三形态；未写位置的形态同时展开三段。', current: 'digits5-v3 已按三个滑动窗口独立下注和结算，聊天与详细网投使用同一合同。', status: 'same' },
     { topic: '龙虎和', original: '原版以第一球和第五球比较，可投龙、虎、和。', current: 'digits5-v3 使用同一比较关系，并为“和”设置独立玩法编号和后台赔率。', status: 'same' },
-    { topic: '本地附加玩法', original: '所给5球说明没有总和、总和尾或第二球对第四球龙虎。', current: 'digits5-v3 已从新投注目录、聊天解析和详细网投关闭这些旧扩展；历史 digits5-v2 注单仍按旧版本结算。', status: 'same' },
+    { topic: '本地附加玩法', original: '所给5球说明没有总和、总和尾或第二球对第四球龙虎。', current: 'digits5-v3 投注目录、聊天解析和详细网投均不开放这些附加玩法。', status: 'same' },
     { topic: '顺子边界', original: '极速时时彩与澳洲幸运5章节未说明890、901是否为顺子。', current: '当前明确固定为循环顺子；这是本地边界，不引用PC/加拿大28章节的排除规则。', status: 'current-only' },
     { topic: '赔率来源', original: '原版文档附固定参考赔率。', current: '当前以后台彩种赔率配置及注单赔率快照为准。', status: 'different' },
+  ],
+}
+
+const sgSSCV3Profile: CurrentRuleProfile = {
+  ...digitFiveV3Profile,
+  family: 'SG时时彩 / 王者平台自开',
+  summary: `${digitFiveV3Profile.summary} 当前开奖为王者平台自开（王者开奖），不宣称与SG外部开奖同步。`,
+  rules: [...digitFiveV3Profile.rules, 'SG时时彩的玩法合同已完整接入；开奖身份为王者平台自开，不将彩种名称或来源标签当作外部同步凭据。'],
+  differences: [
+    ...digitFiveV3Profile.differences,
+    { topic: '开奖身份', original: '只有绑定并核验真实SG开奖源，才可宣称与SG外部开奖同步。', current: '当前产品使用王者平台自开（王者开奖）；完整玩法接入不代表外部开奖同步。', status: 'different' },
   ],
 }
 
@@ -288,20 +280,11 @@ const pcProfileForGame = (gameID: string): CurrentRuleProfile => {
 
 export function currentRuleProfileForGame(game: Pick<AdminGame, 'id' | 'name' | 'rules_ready' | 'rule_version' | 'rules_message'> & Partial<Pick<AdminGame, 'source_kind' | 'source_name'>>): CurrentRuleProfile {
   if (racingIDs.has(game.id)) return racingProfile
-  if (digitFiveV3IDs.has(game.id) && game.rule_version === 'digits5-v3') return game.id === 'bingo-ssc-1' ? bingoSSC1V3Profile : digitFiveV3Profile
-  if (digitFiveIDs.has(game.id)) {
-    if (game.id !== 'sg-ssc') return digitFiveProfile
-    const external = game.source_kind === 'external' || game.source_kind === 'official'
-    const source = external ? (game.source_name || '外部开奖源') : (game.source_name || '王者平台自开')
-    return {
-      ...digitFiveProfile,
-      summary: `${digitFiveProfile.summary} 当前开奖身份为“${source}”，尚未绑定并核验真实SG 时时彩外部源，因此不能标记为完全对齐。`,
-      rules: [...digitFiveProfile.rules, `开奖来源：${source}（${external ? '外部来源尚待核验' : '平台自开'}）。`],
-      differences: [
-        ...digitFiveProfile.differences,
-        { topic: '开奖身份', original: 'SG 时时彩需要使用经确认的SG开奖源才可宣称外部同步。', current: `当前系统标记为${source}；在真实SG接口确认前保持部分对齐。`, status: 'pending' },
-      ],
-    }
+  if (digitFiveV3IDs.has(game.id)) return game.id === 'bingo-ssc-1' ? bingoSSC1V3Profile : game.id === 'sg-ssc' ? sgSSCV3Profile : digitFiveV3Profile
+  if (unverifiedBingoIDs.has(game.id)) return {
+    ...pendingProfile(game.name || '宾果待核验彩种', '宾果变体必须各自核验开奖映射与玩法合同，不能套用宾果赛车(A)或宾果时时彩(一)。'),
+    modes: '仅展示 · 不受理投注',
+    summary: '该宾果变体的开奖映射与玩法合同尚待核验。当前仅展示彩种与开奖结果，不绑定可下注规则。',
   }
   if (digitThreeIDs.has(game.id)) return digitThreeProfile
   if (game.id === 'bingo-mark-six') return bingoMarkSixProfile

@@ -1,6 +1,6 @@
 import { Box, CircularProgress, CssBaseline, ThemeProvider } from '@mui/material'
 import type { PaletteMode } from '@mui/material'
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { adminApi, AuthError } from './api'
 import { ADMIN_AUTH_EVENT_KEY, broadcastAdminLogout, clearLegacyAdminSession, setCurrentUser, type AuthUser } from './auth'
 import { AdminShell } from './components/AdminShell'
@@ -40,12 +40,14 @@ const FlyOrderPage = lazy(() => import('./pages/FlyOrderPage').then(module => ({
 const GameDocumentationPage = lazy(() => import('./pages/GameDocumentationPage').then(module => ({ default: module.GameDocumentationPage })))
 
 const currentPath = () => resolveAdminPath(window.location.pathname)
+const allowPageNavigation = () => window.dispatchEvent(new Event('yaotu-before-navigate', { cancelable: true }))
 const storedPaletteMode = (): PaletteMode => {
   try { return window.localStorage.getItem('yaotu-back-theme') === 'dark' ? 'dark' : 'light' } catch { return 'light' }
 }
 
 function App() {
   const [path, setPath] = useState(currentPath)
+  const displayedPath = useRef(path)
   const [mode, setMode] = useState<PaletteMode>(storedPaletteMode)
 	const [user, setUser] = useState<AuthUser | null>(null)
 	const [authChecking, setAuthChecking] = useState(true)
@@ -55,6 +57,11 @@ function App() {
   useEffect(() => {
     const listener = () => {
       const next = currentPath()
+      if (next !== displayedPath.current && !allowPageNavigation()) {
+        window.history.pushState({}, '', displayedPath.current)
+        return
+      }
+      displayedPath.current = next
       if (isRetiredAccountPath(window.location.pathname)) window.history.replaceState({}, '', next)
       setPath(next)
     }
@@ -108,7 +115,9 @@ function App() {
   const navigate = (next: string) => {
     const destination = resolveAdminPath(next)
     if (destination === path) return
+    if (!allowPageNavigation()) return
     window.history.pushState({}, '', destination)
+    displayedPath.current = destination
     setPath(destination)
   }
   const toggleMode = () => setMode(current => {
@@ -117,6 +126,7 @@ function App() {
     return next
   })
   const logout = async () => {
+	if (!allowPageNavigation()) return
 	try {
 	  await adminApi.logout()
 	} catch (reason) {

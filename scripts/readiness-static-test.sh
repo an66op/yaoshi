@@ -430,10 +430,47 @@ rg -q 'validate_secure_source_path "\$SOURCE_DIR"' "$deploy_script"
 rg -q 'staging_manifest_digest=.*SHA256SUMS' "$deploy_script"
 rg -q 'validate_member_betting_contract "\$SOURCE_DIR"' "$deploy_script"
 rg -q 'validate_member_betting_contract "\$staging"' "$deploy_script"
-rg -Fq "mark6-v1" "$deploy_script"
 rg -Fq "mark6-v2" "$deploy_script"
 rg -Fq "mark-six-bet-board" "$deploy_script"
 rg -Fq "web-bets" "$deploy_script"
+! rg -Fq "mark6-v1" "$deploy_script" "$ROOT_DIR/Makefile"
+
+# Exercise only the pure package-content predicate, never the deploy flow.
+# A current-only backend must pass both package creation and deployment checks;
+# requiring a retired engine would make every new build undeployable.
+contract_helper="$fixture_dir/betting-contract-function.sh"
+sed -n '/^validate_member_betting_contract() {$/,/^}$/p' "$deploy_script" >"$contract_helper"
+# shellcheck disable=SC1090
+source "$contract_helper"
+declare -F validate_member_betting_contract >/dev/null
+current_mark_six_rule="$(sed -nE 's/^const markSixRuleVersion = "([^"]+)"$/\1/p' "$ROOT_DIR/backend/services/mark_six_rules.go")"
+[[ -n "$current_mark_six_rule" ]] || { echo "无法读取当前六合彩规则版本" >&2; exit 1; }
+rg -Fq "'$current_mark_six_rule'" "$deploy_script" "$ROOT_DIR/Makefile"
+contract_workspace="$fixture_dir/betting-contract"
+contract_candidate="$contract_workspace/release"
+mkdir -p "$contract_candidate/bin" "$contract_candidate/member/assets"
+printf '%s\n' "$current_mark_six_rule" >"$contract_candidate/bin/wangzhe-backend"
+chmod 700 "$contract_candidate/bin/wangzhe-backend"
+printf '%s\n' 'mark-six-bet-board web-bets' >"$contract_candidate/member/assets/member.js"
+validate_member_betting_contract "$contract_candidate"
+make --no-print-directory -C "$contract_workspace" -f "$ROOT_DIR/Makefile" release-contract-check
+printf '%s\n' 'mark6-v1' >"$contract_candidate/bin/wangzhe-backend"
+if validate_member_betting_contract "$contract_candidate" >/dev/null 2>&1; then
+  echo "仅包含旧规则的后端通过了发布契约检查" >&2
+  exit 1
+fi
+if make --no-print-directory -C "$contract_workspace" -f "$ROOT_DIR/Makefile" release-contract-check >/dev/null 2>&1; then
+  echo "仅包含旧规则的后端通过了构建契约检查" >&2
+  exit 1
+fi
+printf '%s\n' "$current_mark_six_rule" >"$contract_candidate/bin/wangzhe-backend"
+for incomplete_member in mark-six-bet-board web-bets; do
+  printf '%s\n' "$incomplete_member" >"$contract_candidate/member/assets/member.js"
+  if validate_member_betting_contract "$contract_candidate" >/dev/null 2>&1; then
+    echo "缺少面板或批量接口的会员端通过了发布契约检查" >&2
+    exit 1
+  fi
+done
 edge_check_line="$(rg -n 'verify_maintenance_edge "\$PUBLIC_URL" "\$ADMIN_URL"' "$deploy_script" | head -n1 | cut -d: -f1)"
 [[ -n "$edge_check_line" && "$edge_check_line" -lt "$switch_line" ]] || {
   echo "发布脚本没有在切换版本前实测公网维护模式" >&2

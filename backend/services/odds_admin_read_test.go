@@ -15,6 +15,7 @@ func TestPlayLimitItemsForProfileExposeMissingRacingOddsAsUnconfigured(t *testin
 		{
 			GameID: "speed-racing", PlayCode: "ball_1_5", PlayName: "自定义号码", Odds: 8.7654,
 			MinBet: 2, MaxBet: 300, MaxUserPeriod: 400, MaxPeriodTotal: 500, SortOrder: 99,
+			ExplicitlyConfigured: true, RuleVersion: profile.Version, ConfigurationSource: oddsSourceAdminSave,
 		},
 		{GameID: "speed-racing", PlayCode: "pair", PlayName: "旧的不支持玩法", Odds: 8.8},
 	}
@@ -51,7 +52,7 @@ func TestBingoSSC1UpgradeDoesNotReuseRetiredSumOddsForTie(t *testing.T) {
 		t.Fatalf("bingo-ssc-1 profile = %+v/%v", profile, ready)
 	}
 	rows := []odds.PlayLimit{
-		{GameID: "bingo-ssc-1", PlayCode: "dragon_tiger", PlayName: "龙虎", Odds: 1.98, ExplicitlyConfigured: true, ConfigurationSource: oddsSourceAdminSave},
+		{GameID: "bingo-ssc-1", PlayCode: "dragon_tiger", PlayName: "龙虎", Odds: 1.98, ExplicitlyConfigured: true, RuleVersion: profile.Version, ConfigurationSource: oddsSourceAdminSave},
 		// This row may exist from the former v2 contract. It must not price or
 		// resurrect the new independent 和 outcome.
 		{GameID: "bingo-ssc-1", PlayCode: "sum", PlayName: "旧总和", Odds: 1.99},
@@ -72,8 +73,8 @@ func TestBingoSSC1UpgradeDoesNotReuseRetiredSumOddsForTie(t *testing.T) {
 	}
 }
 
-func TestUpgradedLegacyOddsRowsRemainVisibleButUnconfigured(t *testing.T) {
-	for _, gameID := range []string{"pc-canada", "speed-ssc", "bingo-racing-a"} {
+func TestEveryUnconfirmedOddsRowRemainsUnavailable(t *testing.T) {
+	for _, gameID := range []string{"pc-canada", "speed-ssc", "bingo-racing-a", "speed-racing"} {
 		profile, ready := rulesForGame(&lottery.Game{ID: gameID})
 		if !ready {
 			t.Fatalf("missing rules for %s", gameID)
@@ -85,24 +86,24 @@ func TestUpgradedLegacyOddsRowsRemainVisibleButUnconfigured(t *testing.T) {
 		code := catalog[0].PlayCode
 		rows := []odds.PlayLimit{{GameID: gameID, PlayCode: code, PlayName: catalog[0].PlayName, Odds: 9.7}}
 		items := playLimitItemsForProfile(gameID, profile, catalog, rows)
-		if !items[0].Configured && items[0].Odds == 0 && items[0].ConfigurationSource == oddsSourceLegacyUnconfirmed {
+		if !items[0].Configured && items[0].Odds == 0 && items[0].ConfigurationSource == oddsSourceUnconfigured {
 			continue
 		}
 		t.Fatalf("%s legacy row became a live quote: %+v", gameID, items[0])
 	}
 }
 
-func TestUpgradedGamesNeverSeedHardcodedOdds(t *testing.T) {
-	for _, gameID := range []string{"speed-ssc", "au-lucky-5", "bingo-ssc-1", "bingo-racing-a", "pc-canada", "canada-28", "canada-20"} {
+func TestEverySupportedGameRequiresExplicitOdds(t *testing.T) {
+	for _, gameID := range []string{"speed-racing", "speed-ssc", "au-lucky-5", "bingo-ssc-1", "bingo-racing-a", "pc-canada", "canada-28", "canada-20", "bingo-mark-six"} {
 		profile, ready := rulesForGame(&lottery.Game{ID: gameID})
-		if !ready || !requiresExplicitOddsConfiguration(gameID, profile) {
-			t.Fatalf("%s could still receive code-level default odds: profile=%+v ready=%v", gameID, profile, ready)
+		if !ready {
+			t.Fatalf("%s rules missing: profile=%+v ready=%v", gameID, profile, ready)
 		}
 	}
-	for _, gameID := range []string{"speed-racing", "bingo-racing-b", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
+	for _, gameID := range []string{"bingo-racing-b", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
 		profile, ready := rulesForGame(&lottery.Game{ID: gameID})
-		if !ready || requiresExplicitOddsConfiguration(gameID, profile) {
-			t.Fatalf("existing %s default policy changed: profile=%+v ready=%v", gameID, profile, ready)
+		if ready {
+			t.Fatalf("unverified %s unexpectedly has live rules: profile=%+v", gameID, profile)
 		}
 	}
 }

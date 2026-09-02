@@ -1,6 +1,6 @@
 import { formatBetAmount } from './betAmount'
 import { boardAmountCents } from './fullBetSelection'
-import { isDigit5V3Game } from './lotteryRules'
+import { isDigit5V3Game, lotteryRuleProfile } from './lotteryRules'
 
 export const digitNumbers = Array.from({ length: 10 }, (_, index) => String(index))
 export const digitSides = ['大', '小', '单', '双']
@@ -28,26 +28,29 @@ export type DigitSelection = {
 }
 
 export const digitBallLabel = (position: number) => `第${['一', '二', '三', '四', '五'][position - 1] ?? position}球`
-export const digitDragonPositions = (ballCount: 3 | 5, gameId = '', ruleVersion = '') => isDigit5V3Game(gameId, ruleVersion) ? [1] : Array.from({ length: Math.floor(ballCount / 2) }, (_, index) => index + 1)
-export const digitDragonSelections = (gameId = '', ruleVersion = '') => isDigit5V3Game(gameId, ruleVersion) ? [...digitDragons, digitDragonTie] : digitDragons
+const digitBallCountForGame = (gameId: string, ruleVersion: string) => isDigit5V3Game(gameId, ruleVersion) ? 5 : lotteryRuleProfile(gameId).family === 'digit3' ? 3 : null
+export const digitDragonPositions = (ballCount: 3 | 5, gameId = '', ruleVersion = '') => digitBallCountForGame(gameId, ruleVersion) === ballCount ? [1] : []
+export const digitDragonSelections = (gameId = '', ruleVersion = '') => isDigit5V3Game(gameId, ruleVersion) ? [...digitDragons, digitDragonTie] : lotteryRuleProfile(gameId).family === 'digit3' ? digitDragons : []
 export const digitDragonLabel = (position: number, ballCount: 3 | 5) => `${digitBallLabel(position)} vs ${digitBallLabel(ballCount + 1 - position)}`
 export const digitPatternTarget = (position: number) => digitPatternPositions.find(item => item.position === position)
 export const digitSelectionKey = (item: DigitSelection) => `${item.kind}:${item.position}:${item.selection}`
 
 export function digitChoice(kind: DigitBetKind, selection: string, position = 1, gameId = '', ruleVersion = ''): DigitSelection | null {
+  const ballCount = digitBallCountForGame(gameId, ruleVersion)
+  if (ballCount === null) return null
   if (kind === 'ball') {
-    if (!Number.isInteger(position) || position < 1 || position > 5) return null
+    if (!Number.isInteger(position) || position < 1 || position > ballCount) return null
     if (digitNumbers.includes(selection)) return { kind, position, selection, playCode: 'ball_1_5' }
     if (digitSides.includes(selection)) return { kind, position, selection, playCode: 'two_sided' }
-  } else if (!isDigit5V3Game(gameId, ruleVersion) && ((kind === 'sum' && digitSides.includes(selection)) || (kind === 'sum_tail' && digitNumbers.includes(selection)))) {
+  } else if (ballCount === 3 && ((kind === 'sum' && digitSides.includes(selection)) || (kind === 'sum_tail' && digitNumbers.includes(selection)))) {
     return { kind, position: 6, selection, playCode: 'sum' }
   } else if (kind === 'pattern') {
     const pattern = digitPatterns.find(item => item.selection === selection)
     const validPosition = position === 1 || (isDigit5V3Game(gameId, ruleVersion) && (position === 2 || position === 3))
     if (pattern && validPosition) return { kind, position, ...pattern }
-  } else if (kind === 'dragon_tiger' && Number.isInteger(position) && position >= 1 && position <= 2) {
+  } else if (kind === 'dragon_tiger' && position === 1) {
     if (isDigit5V3Game(gameId, ruleVersion)) {
-      if (position !== 1 || !digitDragonSelections(gameId, ruleVersion).includes(selection)) return null
+      if (!digitDragonSelections(gameId, ruleVersion).includes(selection)) return null
       return { kind, position, selection, playCode: selection === digitDragonTie ? 'dragon_tiger_tie' : 'dragon_tiger' }
     }
     if (digitDragons.includes(selection)) return { kind, position, selection, playCode: 'dragon_tiger' }
@@ -79,6 +82,7 @@ export function digitSelectionGroups(items: DigitSelection[], ballCount: 3 | 5 =
 
 /** Keep each option explicit so 0, sum tails and patterns cannot become racing shorthand. */
 export function digitSelectionCommand(items: DigitSelection[], amount: string, ballCount: 3 | 5, gameId = '', ruleVersion = ''): string {
+  if (digitBallCountForGame(gameId, ruleVersion) !== ballCount) return ''
   const cents = boardAmountCents(amount)
   if (cents === null || !items.length || !Number.isSafeInteger(cents * items.length)) return ''
   if (new Set(items.map(digitSelectionKey)).size !== items.length) return ''

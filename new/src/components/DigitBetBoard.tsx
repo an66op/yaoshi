@@ -7,7 +7,7 @@ import { digitBallLabel, digitChoice, digitCommandLengthError, digitDragonLabel,
 import { boardAmountCents } from '../utils/fullBetSelection'
 import { roomBettingTarget } from '../utils/gameRoomBetting'
 import { canSubmitPlayWithOddsResponse, oddsForPlayCode, oddsLabel, type PlayOdds } from '../utils/gameRoomSafety'
-import { isDigit5V3Game } from '../utils/lotteryRules'
+import { gameRulesReady, isDigit5V3Game, lotteryRuleProfile } from '../utils/lotteryRules'
 import { Icon } from './Icon'
 import './digit-bet-board.css'
 
@@ -35,7 +35,7 @@ export function DigitBetBoard({ game, ballCount, submitting, embedded = false, a
   const effectiveRuleVersion = ruleVersion ?? game.ruleVersion ?? ''
   const context = `${game.id}:${effectiveRuleVersion}:${ballCount}`
   const [cart, setCart] = useState<{ context: string; items: DigitSelection[] }>({ context, items: [] })
-  const [tab, setTab] = useState<DigitBetKind>('ball')
+  const [requestedTab, setTab] = useState<DigitBetKind>('ball')
   const [position, setPosition] = useState(1)
   const [patternPosition, setPatternPosition] = useState(1)
   const [dragonPosition, setDragonPosition] = useState(1)
@@ -52,12 +52,11 @@ export function DigitBetBoard({ game, ballCount, submitting, embedded = false, a
   // A route change must not offer the previous game's cart even before effects run.
   const selections = cart.context === context ? cart.items : []
   const v3 = isDigit5V3Game(game.id, effectiveRuleVersion)
-  // The supplied speed/AU v3 manual does not define the legacy local sum or
-  // sum-tail extensions. Keep them available to v2 products, but do not
-  // advertise or serialize them under the stricter v3 contract.
+  // Totals and tails belong to the current three-ball contract only.
   const tabs = baseTabs
-    .filter(item => !v3 || (item.id !== 'sum' && item.id !== 'sum_tail'))
-    .map(item => item.id === 'pattern' && v3 ? { ...item, label: '三段形态' } : item)
+    .filter(item => ballCount === 3 || (item.id !== 'sum' && item.id !== 'sum_tail'))
+    .map(item => item.id === 'pattern' && ballCount === 5 ? { ...item, label: '三段形态' } : item)
+  const tab = tabs.some(item => item.id === requestedTab) ? requestedTab : 'ball'
   const activePosition = position <= ballCount ? position : 1
   const activePatternPosition = v3 && digitPatternTarget(patternPosition) ? patternPosition : 1
   const dragonPositions = digitDragonPositions(ballCount, game.id, effectiveRuleVersion)
@@ -65,7 +64,12 @@ export function DigitBetBoard({ game, ballCount, submitting, embedded = false, a
   const activeDragonPosition = dragonPositions.includes(dragonPosition) ? dragonPosition : 1
   const groups = digitSelectionGroups(selections, ballCount)
   const { issue, timing } = roomBettingTarget(game)
-  const rulesReady = game.rulesReady !== false
+  const family = lotteryRuleProfile(game.id).family
+  const quoteVersionReady = oddsInfo === undefined || (oddsInfo?.game_id === game.id
+    && oddsInfo.rules_ready === true && oddsInfo.rule_version === effectiveRuleVersion)
+  const rulesReady = gameRulesReady(game) && (ballCount === 3
+    ? family === 'digit3'
+    : family === 'ssc' && v3 && game.ruleVersion === effectiveRuleVersion && quoteVersionReady)
   const cents = boardAmountCents(amount)
   const totalCents = cents === null ? null : cents * selections.length
   const validAmount = totalCents !== null && Number.isSafeInteger(totalCents)

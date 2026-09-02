@@ -590,13 +590,10 @@ func parseAssistantBetForGame(game *lottery.Game, content string) ([]AssistantBe
 	return mergeAssistantLines(lines), nil
 }
 
-// AssistantRepeatContent freezes the accepted line semantics before a repeat
-// is parsed under the current game contract. Reusing a historical raw command
-// would be unsafe across a version upgrade: digits5-v2 "豹子/20" meant one
-// front-three bet, while digits5-v3 deliberately expands the same shorthand to
-// three windows. Explicit reconstruction keeps that old ticket to one line;
-// a retired choice such as v2's second-vs-fourth dragon/tiger is then rejected
-// by the current placement gate instead of being silently moved elsewhere.
+// AssistantRepeatContent reconstructs explicit selections from the accepted
+// receipt. Repeating a single scoped shape must not expand into all three
+// windows through an unscoped shorthand; every line is validated again by the
+// current placement gate.
 func AssistantRepeatContent(gameID string, lines []AssistantBetLine) (string, error) {
 	rules, ready := rulesForGame(&lottery.Game{ID: strings.TrimSpace(gameID)})
 	if !ready || rules.MarkSix {

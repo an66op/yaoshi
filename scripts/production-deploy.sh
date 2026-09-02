@@ -201,10 +201,6 @@ done
 # board, so refuse a package that contains only one side (or neither side).
 validate_member_betting_contract() {
   local candidate="$1"
-  grep -aFq 'mark6-v1' "$candidate/bin/wangzhe-backend" || {
-    echo "发布包后端缺少宾果六合彩历史 mark6-v1 规则" >&2
-    return 1
-  }
   grep -aFq 'mark6-v2' "$candidate/bin/wangzhe-backend" || {
     echo "发布包后端缺少宾果六合彩当前 mark6-v2 规则" >&2
     return 1

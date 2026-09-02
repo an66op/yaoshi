@@ -29,13 +29,13 @@ describe('grouped assistant receipts', () => {
     expect(assistantReceiptLines(receipt('1/3/50#2/0/50#3/0/50#4/9/50#5/0/50#6/9/50#7/4/50#8/7/50#9/6/50#0/6/50'))).toEqual(['冠军[3/50]', '亚军[10/50]', '第三名[10/50]', '第四名[9/50]', '第五名[10/50]', '第六名[9/50]', '第七名[4/50]', '第八名[7/50]', '第九名[6/50]', '第十名[6/50]'])
   })
 
-  it.each(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10', 'bingo-racing-a', 'bingo-racing-b'])('preserves existing grouped racing receipts when %s is supplied explicitly', gameId => {
+  it.each(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10', 'bingo-racing-a'])('preserves existing grouped racing receipts when %s is supplied explicitly', gameId => {
     const items = receipt('1/0/20#1/大/20#6/小/20#冠亚/大/20', gameId)
     expect(assistantReceiptLines(items, gameId)).toEqual(['冠军[10/20 大/20]', '第六名[小/20]', '冠亚和[大/20]'])
     expect(assistantReceiptLines(items, gameId)).toEqual(assistantReceiptLines(items))
   })
 
-  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4', 'official-fc3d', 'official-pl3'])('separates ball, sum, sum-tail and first-three shapes for %s', gameId => {
+  it.each(['official-fc3d', 'official-pl3'])('separates ball, sum, sum-tail and first-three shapes for %s', gameId => {
     const items = receipt('1/0/20#总和/大/20#总和尾/7/20#前三/豹子/20', gameId)
     const original = structuredClone(items)
     expect(assistantReceiptLines(items, gameId)).toEqual(['第1球[0/20]', '总和[大/20]', '总和尾[7/20]', '前三形态[豹子/20]'])
@@ -44,12 +44,12 @@ describe('grouped assistant receipts', () => {
   })
 
   it('groups only matching digit categories and preserves real fractional amounts and zero tails', () => {
-    const gameId = 'speed-ssc'
-    const items = receipt('前三/杂六/0.50#5/0/1.25#2/9/20#总和尾/0/1.25#总和/双/10#2/单/20#前三/豹子/20#总和尾/7/0.50', gameId)
-    expect(assistantReceiptLines(items, gameId)).toEqual(['第2球[9/20 单/20]', '第5球[0/1.25]', '总和[双/10]', '总和尾[0/1.25 7/0.50]', '前三形态[豹子/20 杂六/0.50]'])
+    const gameId = 'official-fc3d'
+    const items = receipt('前三/杂六/0.50#3/0/1.25#2/9/20#总和尾/0/1.25#总和/双/10#2/单/20#前三/豹子/20#总和尾/7/0.50', gameId)
+    expect(assistantReceiptLines(items, gameId)).toEqual(['第2球[9/20 单/20]', '第3球[0/1.25]', '总和[双/10]', '总和尾[0/1.25 7/0.50]', '前三形态[豹子/20 杂六/0.50]'])
   })
 
-  it.each(['speed-ssc', 'au-lucky-5', 'bingo-ssc-1'])('groups all exact digits5-v3 segments and tie independently for %s', gameId => {
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('groups all exact digits5-v3 segments and tie independently for %s', gameId => {
     const ruleVersion = 'digits5-v3'
     const items = receipt('前三/豹子/5#中三/顺子/5#后三/对子/5#1/龙/5#1/和/5', gameId, ruleVersion)
     expect(assistantReceiptLines(items, gameId, ruleVersion)).toEqual([
@@ -71,11 +71,14 @@ describe('grouped assistant receipts', () => {
     ])
   })
 
-  it('does not reinterpret SG or an unversioned speed ticket as v3', () => {
-    const legacy = receipt('前三/豹子/5#1/龙/5', 'speed-ssc')
-    expect(assistantReceiptLines(legacy, 'speed-ssc')).toEqual(['第1球[龙/5]', '前三形态[豹子/5]'])
-    const sg = receipt('前三/豹子/5#1/龙/5', 'sg-ssc', 'digits5-v3')
-    expect(assistantReceiptLines(sg, 'sg-ssc', 'digits5-v3')).toEqual(['第1球[龙/5]', '前三形态[豹子/5]'])
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('preserves server labels without inferring a contract for unversioned %s receipts', gameId => {
+    const items: AssistantBetLine[] = [
+      { position: 1, selection: 'leopard', amount: 5, play_code: 'leopard', play_name: '服务端形态说明', label: '服务端原始回执', odds: 50 },
+      { position: 1, selection: '龙', amount: 5, play_code: 'dragon_tiger', play_name: '服务端比较说明', label: '', odds: 2 },
+    ]
+    for (const ruleVersion of [undefined, '', 'digits5-v2', 'digits5-v4']) {
+      expect(assistantReceiptLines(items, gameId, ruleVersion)).toEqual(['服务端原始回执', '服务端比较说明[龙/5]'])
+    }
   })
 
   it('does not label invalid three-ball positions as supported ball bets', () => {
@@ -83,7 +86,7 @@ describe('grouped assistant receipts', () => {
     expect(assistantReceiptLines([item], 'official-fc3d')).toEqual(['原始第五球记录'])
   })
 
-  it.each(['pc-canada', 'canada-28', 'canada-20', 'bingo-mark-six', 'official-tw-bingo'])('uses original labels instead of inventing rules for %s', gameId => {
+  it.each(['pc-canada', 'canada-28', 'canada-20', 'bingo-mark-six', 'official-tw-bingo', 'bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('uses original labels instead of inventing rules for %s', gameId => {
     const items: AssistantBetLine[] = [
       { position: 6, selection: '7', amount: 20, play_code: 'sum', play_name: '原始和值玩法', label: '平台原始记录：7/20', odds: 2 },
       { position: 1, selection: '0', amount: 1.25, play_code: 'ball_1_5', play_name: '', label: '', odds: 2 },

@@ -1,4 +1,4 @@
-.PHONY: dev health smoke test race verify release release-contract-check production-check production-config-check backup upload-backup backup-integrity monitor restore-drill pitr-restore-drill shellcheck readiness-test rclone-integration-test dev-reset-plan dev-full-reset-plan dev-reset-sentinel-plan production-test-install production-system-test integration-test catalog-integration-test timing-integration-test e2e-test load-test
+.PHONY: dev health smoke test race verify release release-contract-check production-check production-config-check backup upload-backup backup-integrity monitor restore-drill pitr-restore-drill shellcheck readiness-test rclone-integration-test dev-reset-plan dev-full-reset-plan dev-reset-sentinel-plan production-test-install production-system-test integration-test migration-integration-test catalog-integration-test timing-integration-test e2e-test load-test
 
 RELEASE_GOOS ?= linux
 RELEASE_GOARCH ?= amd64
@@ -60,7 +60,6 @@ release: verify readiness-test
 # is accidentally packaged after the source has already enabled the board.
 release-contract-check:
 	@test -x release/bin/wangzhe-backend || { echo "发布包缺少后端二进制" >&2; exit 1; }
-	@grep -aFq 'mark6-v1' release/bin/wangzhe-backend || { echo "后端发布包缺少历史 mark6-v1" >&2; exit 1; }
 	@grep -aFq 'mark6-v2' release/bin/wangzhe-backend || { echo "后端发布包缺少当前 mark6-v2" >&2; exit 1; }
 	@grep -aFRq 'mark-six-bet-board' release/member/assets || { echo "会员端发布包缺少宾果六合彩网投面板" >&2; exit 1; }
 	@grep -aFRq 'web-bets' release/member/assets || { echo "会员端发布包缺少批量网投接口" >&2; exit 1; }
@@ -142,6 +141,10 @@ production-system-test:
 
 integration-test:
 	SYSTEM_TEST_SUITE=integration bash scripts/release-system-test.sh
+
+migration-integration-test:
+	@test -n "$$BACKEND_MIGRATIONS_TEST_DSN" || { echo "请设置独立空库 BACKEND_MIGRATIONS_TEST_DSN" >&2; exit 1; }
+	cd backend && go test ./migrations -run '^TestMigrationsPostgres' -count=1 -v
 
 catalog-integration-test:
 	@test -n "$$BACKEND_CATALOG_TEST_DSN" || { echo "请设置独立空库 BACKEND_CATALOG_TEST_DSN" >&2; exit 1; }

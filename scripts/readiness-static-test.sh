@@ -443,7 +443,7 @@ sed -n '/^validate_member_betting_contract() {$/,/^}$/p' "$deploy_script" >"$con
 # shellcheck disable=SC1090
 source "$contract_helper"
 declare -F validate_member_betting_contract >/dev/null
-current_mark_six_rule="$(sed -nE 's/^const markSixRuleVersion = "([^"]+)"$/\1/p' "$ROOT_DIR/backend/services/mark_six_rules.go")"
+current_mark_six_rule="$(sed -nE 's/^[[:space:]]*markSixRuleVersion[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$ROOT_DIR/backend/services/mark_six_rules.go")"
 [[ -n "$current_mark_six_rule" ]] || { echo "无法读取当前六合彩规则版本" >&2; exit 1; }
 rg -Fq "'$current_mark_six_rule'" "$deploy_script" "$ROOT_DIR/Makefile"
 contract_workspace="$fixture_dir/betting-contract"
@@ -582,10 +582,9 @@ pg_dump_line="$(rg -n '^pg_dump \\' "$ROOT_DIR/scripts/postgres-backup.sh" | cut
   exit 1
 }
 
-# The explicit full-reset fixture must provision the exact identities exercised
-# by the smoke test; ordinary debug startup must remain safe for an existing DB.
+# The explicit local bootstrap must provision the exact identities audited by
+# the database-only read-only audit; ordinary debug startup remains non-seeding.
 rg -Fq 'DefaultAdminPassword = "Admin8801!"' "$ROOT_DIR/backend/constants/system.go"
-rg -Fq '"username":"admin","password":"Admin8801!"' "$ROOT_DIR/scripts/local-smoke.sh"
 for fixture in \
   'demoAgentUsername  = "suyang"' \
   'demoAgentPassword  = "Room8801"' \
@@ -593,16 +592,80 @@ for fixture in \
   'demoTenantPassword = "WzTenant8801"'; do
   rg -Fq "$fixture" "$ROOT_DIR/backend/services/demo_member.go"
 done
-rg -Fq '"username":"suyang","password":"Room8801"' "$ROOT_DIR/scripts/local-smoke.sh"
-rg -Fq '"username":"wangzhetenant","password":"WzTenant8801"' "$ROOT_DIR/scripts/local-smoke.sh"
-rg -Fq 'SeedExperienceAccounts bool' "$ROOT_DIR/backend/services/bootstrap.go"
-rg -Fq 'SeedExperienceAccounts: cfg.Server.SeedExperienceAccounts' "$ROOT_DIR/backend/main.go"
+rg -q 'SeedExperienceAccounts[[:space:]]+bool' "$ROOT_DIR/backend/services/bootstrap.go"
+rg -q 'SeedExperienceAccounts:[[:space:]]+cfg\.Server\.SeedExperienceAccounts' "$ROOT_DIR/backend/main.go"
 if rg -Fq 'BACKEND_SEED_EXPERIENCE_ACCOUNTS' "$ROOT_DIR/scripts/local-dev.sh"; then
   echo "普通 debug 启动错误地默认启用体验账号夹具" >&2
   exit 1
 fi
-rg -Fq 'export BACKEND_SERVER_BIND="${BACKEND_SERVER_BIND:-0.0.0.0}"' "$ROOT_DIR/scripts/local-dev.sh"
-rg -Fq 'export BACKEND_DATABASE_DBNAME="${BACKEND_DATABASE_DBNAME:-wangzhe}"' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'source "$ROOT_DIR/scripts/lib/backend-env.sh"' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'apply_local_backend_defaults' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'export BACKEND_SERVER_BIND="${BACKEND_SERVER_BIND:-0.0.0.0}"' "$ROOT_DIR/scripts/lib/backend-env.sh"
+rg -Fq 'export BACKEND_DATABASE_DBNAME="${BACKEND_DATABASE_DBNAME:-wangzhe}"' "$ROOT_DIR/scripts/lib/backend-env.sh"
+rg -Fq 'go run ./cmd/dev-bootstrap --confirm-local-development' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'go run ./cmd/dev-bootstrap --confirm-local-development --audit-only' "$ROOT_DIR/scripts/local-smoke.sh"
+rg -Fq '.agent_room_code == "88001"' "$ROOT_DIR/scripts/local-smoke.sh"
+! rg -Fq '/login' "$ROOT_DIR/scripts/local-smoke.sh"
+! rg -Fq 'curl ' "$ROOT_DIR/scripts/local-smoke.sh"
+rg -Fq 'if grep -Fqx -- "$BACKEND_DATABASE_DBNAME"' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'createdb_cmd' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq -- '--template template0' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'require_local_postgres_server "$psql_cmd"' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'acquire_local_init_lock' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'pg_try_advisory_lock(hashtextextended' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'require_local_init_lock' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'ln "$temporary_receipt_path" "$receipt_path"' "$ROOT_DIR/scripts/local-init.sh"
+! rg -Fq 'mv -f "$temporary_receipt_path" "$receipt_path"' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'version=2\nphase=bound\nsystem_identifier=%s\ndatabase_name=%s\ndatabase_oid=%s\nnonce=%s\n' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq '[[ "$pending_database_oid" == "$database_oid" ]]' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'dependency_env=(env -u PGPASSWORD -u ENV_FILE)' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'dependency_env+=(-u "$backend_environment_name")' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq '"${dependency_env[@]}" go mod download' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq '"${dependency_env[@]}" npm ci --ignore-scripts' "$ROOT_DIR/scripts/local-init.sh"
+[[ "$(rg -c '^[[:space:]]+exec 9>&-$' "$ROOT_DIR/scripts/local-init.sh")" -ge 4 ]] || {
+  echo "local-init 子进程没有全部关闭 advisory lock FIFO 描述符" >&2
+  exit 1
+}
+rg -Fq 'development_initializing_marker="${development_marker_namespace}:initializing:${LOCAL_POSTGRES_SYSTEM_IDENTIFIER}:${pending_nonce}"' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'BACKEND_LOCAL_INIT_NONCE="$pending_nonce"' "$ROOT_DIR/scripts/local-init.sh"
+local_init_lock_line="$(rg -n '^acquire_local_init_lock$' "$ROOT_DIR/scripts/local-init.sh" | cut -d: -f1)"
+local_init_database_recheck_line="$(rg -n '^database_names=' "$ROOT_DIR/scripts/local-init.sh" | cut -d: -f1)"
+local_init_marker_recheck_line="$(rg -n '^database_marker=' "$ROOT_DIR/scripts/local-init.sh" | cut -d: -f1)"
+[[ -n "$local_init_lock_line" && -n "$local_init_database_recheck_line" && -n "$local_init_marker_recheck_line" &&
+  "$local_init_lock_line" -lt "$local_init_database_recheck_line" &&
+  "$local_init_database_recheck_line" -lt "$local_init_marker_recheck_line" ]] || {
+  echo "local-init 没有在 (cluster, database) 互斥锁内重查数据库和初始化凭证" >&2
+  exit 1
+}
+createdb_execution_line="$(rg -n '^  if ! "\$createdb_cmd"' "$ROOT_DIR/scripts/local-init.sh" | cut -d: -f1)"
+receipt_bind_line="$(rg -n '^  create_pending_receipt "\$database_oid"$' "$ROOT_DIR/scripts/local-init.sh" | cut -d: -f1)"
+initial_comment_line="$(rg -n -- '--command "COMMENT ON DATABASE' "$ROOT_DIR/scripts/local-init.sh" | head -n1 | cut -d: -f1)"
+[[ -n "$createdb_execution_line" && -n "$receipt_bind_line" && -n "$initial_comment_line" &&
+  "$createdb_execution_line" -lt "$receipt_bind_line" && "$receipt_bind_line" -lt "$initial_comment_line" ]] || {
+  echo "local-init 必须在 createdb 明确成功后按 OID 绑定收据并立即建立 initializing 凭证" >&2
+  exit 1
+}
+rg -Fq 'lsof -nP -a "-iTCP@${lsof_server_address}:${endpoint_server_port}" -sTCP:LISTEN -t' "$ROOT_DIR/scripts/lib/backend-env.sh"
+rg -Fq 'socket_start_time' "$ROOT_DIR/scripts/lib/backend-env.sh"
+database_gate_line="$(rg -n 'if err := EnsureDatabaseInitializationComplete\(db\)' "$ROOT_DIR/backend/config/database.go" | head -n1 | cut -d: -f1)"
+database_migration_line="$(rg -n 'if err := migrations.Run\(db\)' "$ROOT_DIR/backend/config/database.go" | head -n1 | cut -d: -f1)"
+[[ -n "$database_gate_line" && -n "$database_migration_line" && "$database_gate_line" -lt "$database_migration_line" ]] || {
+  echo "数据库 initializing 门禁必须在普通启动迁移前执行" >&2
+  exit 1
+}
+! rg -i -e '\b(dropdb|truncate|drop[[:space:]]+database)\b' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'require_local_postgres_server "$psql_cmd"' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'require_completed_local_database "$psql_cmd"' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'require_loopback_http_origin BACKEND_URL "$BACKEND_URL" "$BACKEND_SERVER_PORT"' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'require_loopback_http_origin MEMBER_URL "$MEMBER_URL" 5173' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'require_loopback_http_origin ADMIN_URL "$ADMIN_URL" 5174' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'unset VITE_API_BASE_URL' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'export VITE_API_PORT="$BACKEND_SERVER_PORT"' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'done < <(compgen -e)' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'frontend_env+=(-u "$backend_environment_name")' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq '拒绝把它误认为本次' "$ROOT_DIR/scripts/local-dev.sh"
+rg -Fq 'TestDevelopmentAcceptanceOuterTransactionPostgresRollsBackEveryStep' "$ROOT_DIR/Makefile"
+rg -Fq 'TestUserAdminCreateMemberPostgresActivatesAgentRoomAtomically' "$ROOT_DIR/Makefile"
 rg -Fq 'PG_DB="${BACKEND_DATABASE_DBNAME:-wangzhe}"' "$ROOT_DIR/scripts/local-health.sh"
 rg -q '^  dbname: wangzhe$' "$ROOT_DIR/backend/config/config.example.yaml"
 rg -q '^BACKEND_DATABASE_DBNAME=wangzhe$' "$ROOT_DIR/deploy/env/backend.env.example"

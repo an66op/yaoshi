@@ -80,6 +80,17 @@ func (s *OddsAdminService) Get(gameID string) (*GameOddsLimits, error) {
 	return result, err
 }
 
+// getReadOnly returns the same catalogue without row locks or a nested
+// read-write transaction. It is reserved for callers already holding a stable
+// read-only snapshot, such as the local acceptance auditor.
+func (s *OddsAdminService) getReadOnly(gameID string) (*GameOddsLimits, error) {
+	game, err := s.loadGame(gameID)
+	if err != nil {
+		return nil, err
+	}
+	return s.readGameLimits(game)
+}
+
 func (s *OddsAdminService) readGameLimits(game *lottery.Game) (*GameOddsLimits, error) {
 	profile, ready := rulesForGame(game)
 	if !ready {

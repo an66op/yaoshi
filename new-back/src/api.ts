@@ -238,6 +238,9 @@ export type ReconciliationSummary = {
   notification_financial_error_count: number
   rebate_financial_error_count: number
   profit_share_financial_error_count: number
+  account_hierarchy_error_count: number
+  workspace_hierarchy_error_count: number
+  membership_hierarchy_error_count: number
 }
 
 export type ReconciliationRefundResult = {
@@ -1476,7 +1479,10 @@ type ApiResponse<T> = { code: number; message: string; error_code?: string; data
 const apiBase = (() => {
   const configured = String(import.meta.env.VITE_API_BASE_URL ?? '').trim()
   if (configured) return configured.replace(/\/$/, '')
-  if (import.meta.env.DEV) return `${window.location.protocol}//${window.location.hostname}:8080/api`
+  if (import.meta.env.DEV) {
+    const port = String(import.meta.env.VITE_API_PORT ?? '8080').trim()
+    return `${window.location.protocol}//${window.location.hostname}:${port}/api`
+  }
   return `${window.location.origin}/api`
 })()
 const healthBase = apiBase.replace(/\/api\/?$/, '')

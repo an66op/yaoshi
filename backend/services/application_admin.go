@@ -476,6 +476,9 @@ func (s *ApplicationAdminService) review(id uint64, input ReviewApplicationInput
 		if item.Status != "pending" {
 			return apperrors.NewBusinessError("ALREADY_REVIEWED", "该申请已经审核，不能重复操作")
 		}
+		if item.RequestType == "agent" && input.Decision == "approved" {
+			return apperrors.NewBusinessError("AGENT_APPLICATION_RETIRED", "旧版代理申请已停用，请通过代理管理创建代理账号")
+		}
 		if !allowJoin && !platformMayProcessApplication(item.RequestType) {
 			return apperrors.NewBusinessError("FORBIDDEN", "入房申请只能由目标房间处理")
 		}
@@ -484,7 +487,7 @@ func (s *ApplicationAdminService) review(id uint64, input ReviewApplicationInput
 		if ownerWorkspaceID != nil && item.WorkspaceID != *ownerWorkspaceID {
 			return apperrors.NewBusinessError("FORBIDDEN", "该申请不属于当前房间")
 		}
-		if ownerWorkspaceID != nil || (input.Decision == "approved" && (item.RequestType == "credit" || item.RequestType == "debit" || item.RequestType == "agent" || item.RequestType == "join")) {
+		if ownerWorkspaceID != nil || (input.Decision == "approved" && (item.RequestType == "credit" || item.RequestType == "debit" || item.RequestType == "join")) {
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, item.UserID).Error; err != nil {
 				return err
 			}
@@ -524,14 +527,6 @@ func (s *ApplicationAdminService) review(id uint64, input ReviewApplicationInput
 			}
 			record := user.BalanceTransaction{WorkspaceID: item.WorkspaceID, UserID: account.UserID, Reference: "application:" + formatUint(item.ID) + ":" + item.RequestType, AmountCents: change, BeforeCents: before, AfterCents: after, Type: "application_" + item.RequestType, Remark: "申请 #" + formatUint(item.ID) + " 审核通过", Operator: defaultString(input.Operator, "后台管理员")}
 			if err := tx.Create(&record).Error; err != nil {
-				return err
-			}
-		}
-		if input.Decision == "approved" && item.RequestType == "agent" {
-			if !accountLoaded {
-				return fmt.Errorf("review account lock was not acquired")
-			}
-			if err := tx.Model(&account).Update("role", "agent").Error; err != nil {
 				return err
 			}
 		}
@@ -680,7 +675,7 @@ func applicationReviewMessage(app AdminApplication) string {
 
 func validRequestType(value string) (string, error) {
 	switch value {
-	case "credit", "debit", "agent", "join":
+	case "credit", "debit", "join":
 		return value, nil
 	default:
 		return "", apperrors.NewBusinessError("INVALID_REQUEST_TYPE", "申请类型不正确")

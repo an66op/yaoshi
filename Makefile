@@ -1,16 +1,25 @@
-.PHONY: dev health smoke test race verify release release-contract-check production-check production-config-check backup upload-backup backup-integrity monitor restore-drill pitr-restore-drill shellcheck readiness-test rclone-integration-test dev-reset-plan dev-full-reset-plan dev-reset-sentinel-plan production-test-install production-system-test integration-test migration-integration-test catalog-integration-test timing-integration-test e2e-test load-test
+.PHONY: dev dev-init dev-first-run dev-audit health smoke test race verify release release-contract-check production-check production-config-check backup upload-backup backup-integrity monitor restore-drill pitr-restore-drill shellcheck readiness-test rclone-integration-test dev-reset-plan dev-full-reset-plan dev-reset-sentinel-plan production-test-install production-system-test integration-test migration-integration-test catalog-integration-test timing-integration-test e2e-test load-test
 
 RELEASE_GOOS ?= linux
 RELEASE_GOARCH ?= amd64
 
 dev:
-	bash scripts/local-dev.sh
+	@if [ -n "$(ENV_FILE)" ]; then bash scripts/local-dev.sh "$(ENV_FILE)"; else bash scripts/local-dev.sh; fi
+
+dev-init:
+	@if [ -n "$(ENV_FILE)" ]; then bash scripts/local-init.sh "$(ENV_FILE)"; else bash scripts/local-init.sh; fi
+
+dev-first-run: dev-init
+	@if [ -n "$(ENV_FILE)" ]; then bash scripts/local-dev.sh "$(ENV_FILE)"; else bash scripts/local-dev.sh; fi
+
+dev-audit:
+	@if [ -n "$(ENV_FILE)" ]; then bash scripts/local-smoke.sh "$(ENV_FILE)"; else bash scripts/local-smoke.sh; fi
 
 health:
-	bash scripts/local-health.sh
+	@if [ -n "$(ENV_FILE)" ]; then bash scripts/local-health.sh "$(ENV_FILE)"; else bash scripts/local-health.sh; fi
 
 smoke:
-	bash scripts/local-smoke.sh
+	@if [ -n "$(ENV_FILE)" ]; then bash scripts/local-smoke.sh "$(ENV_FILE)"; else bash scripts/local-smoke.sh; fi
 
 test:
 	cd backend && go test ./...
@@ -152,7 +161,7 @@ catalog-integration-test:
 
 timing-integration-test:
 	@test -n "$$BACKEND_TIMING_TEST_DSN" || { echo "请设置独立空库 BACKEND_TIMING_TEST_DSN" >&2; exit 1; }
-	cd backend && go test ./services -run '^TestLotteryTimingPostgres' -count=1 -v
+	cd backend && go test ./services -run '^(TestLotteryTimingPostgres|TestUserAdminCreateMemberPostgresActivatesAgentRoomAtomically|TestSystemAuditHierarchyCountersPostgres|TestDevelopmentAcceptanceProfilePostgresFreshIdempotentAndNonOverwriting|TestDevelopmentAcceptanceOuterTransactionPostgresRollsBackEveryStep)' -count=1 -v
 
 e2e-test:
 	SYSTEM_TEST_SUITE=e2e bash scripts/release-system-test.sh

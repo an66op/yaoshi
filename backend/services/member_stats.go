@@ -9,7 +9,6 @@ import (
 	"backend/data/models/user"
 	apperrors "backend/errors"
 	"backend/ws"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -133,19 +132,17 @@ func (s *MemberPortalService) RebatePreview(userID uint64) (*MemberRebatePreview
 
 func (s *MemberPortalService) loadRebateConfig(workspaceID uint64) (RebateConfig, error) {
 	var row settings.SystemConfig
-	cfg := RebateConfig{Enabled: true, RatePercent: 0.5, MinTurnover: 0, SettleMode: "daily"}
 	if err := s.db.Where("workspace_id = ?", workspaceID).First(&row).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return cfg, nil
+			return *disabledRebateConfig(), nil
 		}
 		return RebateConfig{}, err
 	}
-	raw := defaultJSON(row.RebateSettingsJSON, "{}")
-	_ = json.Unmarshal([]byte(raw), &cfg)
-	if cfg.SettleMode == "" {
-		cfg.SettleMode = "daily"
+	cfg, err := decodeStoredRebateConfig(row.RebateSettingsJSON)
+	if err != nil {
+		return RebateConfig{}, err
 	}
-	return cfg, nil
+	return *cfg, nil
 }
 
 func (s *MemberPortalService) GameFeed(userID uint64, gameID, issue string, limit int) ([]GameFeedItem, error) {

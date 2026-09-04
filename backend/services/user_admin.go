@@ -876,20 +876,13 @@ func (s *UserAdminService) Create(input CreateAdminUserInput) (*AdminUser, error
 	if err != nil {
 		return nil, err
 	}
-	loginScope := platformLoginScope
-	var parentAgentID *uint64
-	var parentTenantID *uint64
-	if role == "member" && input.ParentAgentID > 0 {
-		scope, tenantID, scopeErr := loginScopeForAgent(s.db, input.ParentAgentID)
-		if scopeErr != nil {
-			return nil, scopeErr
-		}
-		loginScope = scope
-		parentAgentID = &input.ParentAgentID
-		parentTenantID = tenantID
-	}
-	if err := s.ensureUnique(0, loginScope, input.Username, input.Email); err != nil {
-		return nil, err
+	// Tenant and agent accounts own workspaces and therefore require the
+	// dedicated account services that create the owner, workspace, membership
+	// and settings atomically. The generic user endpoint is intentionally only
+	// a member-account entry point; allowing a caller to choose an owner role
+	// here would create an account without its required ownership topology.
+	if role != "member" {
+		return nil, apperrors.NewBusinessError("DEDICATED_ACCOUNT_SERVICE_REQUIRED", "租户、代理和管理员账号必须通过对应的专用开户流程创建")
 	}
 	risk, err := validRisk(input.RiskLevel)
 	if err != nil {
@@ -899,8 +892,73 @@ func (s *UserAdminService) Create(input CreateAdminUserInput) (*AdminUser, error
 	if err != nil {
 		return nil, err
 	}
-	row := user.User{Username: input.Username, LoginScope: loginScope, Password: hash, Email: input.Email, Nickname: strings.TrimSpace(input.Nickname), Phone: strings.TrimSpace(input.Phone), Role: role, Remark: strings.TrimSpace(input.Remark), RiskLevel: risk, Status: normalizeStatus(input.Status), ParentAgentID: parentAgentID, ParentTenantID: parentTenantID}
-	if err := s.db.Create(&row).Error; err != nil {
+	var row user.User
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		loginScope := platformLoginScope
+		var parentAgentID *uint64
+		var parentTenantID *uint64
+		var targetRoom *workspacemodel.Workspace
+		if role == "member" && input.ParentAgentID > 0 {
+			var agent user.User
+			if lookupErr := tx.Clauses(clause.Locking{Strength: "SHARE"}).
+				Select("user_id", "parent_tenant_id", "role", "status").
+				Where("user_id = ? AND role = ? AND status = ?", input.ParentAgentID, "agent", 1).
+				First(&agent).Error; lookupErr != nil {
+				if lookupErr == gorm.ErrRecordNotFound {
+					return apperrors.NewBusinessError("ROOM_NOT_FOUND", "房间不存在或已停用")
+				}
+				return lookupErr
+			}
+			var room workspacemodel.Workspace
+			if lookupErr := tx.Clauses(clause.Locking{Strength: "SHARE"}).
+				Where("owner_user_id = ? AND type = ? AND status = ?", agent.UserID, workspacemodel.TypeAgent, 1).
+				First(&room).Error; lookupErr != nil {
+				if lookupErr == gorm.ErrRecordNotFound {
+					return apperrors.NewBusinessError("ROOM_NOT_FOUND", "房间不存在或已停用")
+				}
+				return lookupErr
+			}
+			expectedScope := agentLoginScope(agent.UserID)
+			if room.Scope != expectedScope {
+				return apperrors.NewBusinessError("ROOM_NOT_FOUND", "房间归属异常，请先修复代理工作区")
+			}
+			loginScope = room.Scope
+			parentAgentID = &agent.UserID
+			parentTenantID = agent.ParentTenantID
+			targetRoom = &room
+		} else {
+			// A member created without an agent still belongs to the platform
+			// lobby. Never leave an interactive identity at workspace_id=0: the
+			// zero value is reserved for platform-wide service filters and cannot
+			// safely identify a member's current room.
+			var platform workspacemodel.Workspace
+			if lookupErr := tx.Clauses(clause.Locking{Strength: "SHARE"}).
+				Where("type = ? AND status = ?", workspacemodel.TypePlatform, 1).
+				Order("id ASC").First(&platform).Error; lookupErr != nil {
+				if lookupErr == gorm.ErrRecordNotFound {
+					return apperrors.NewBusinessError("WORKSPACE_NOT_FOUND", "平台工作区不存在或已停用")
+				}
+				return lookupErr
+			}
+			loginScope = platformLoginScope
+			targetRoom = &platform
+		}
+		if uniqueErr := NewUserAdminService(tx).ensureUnique(0, loginScope, input.Username, input.Email); uniqueErr != nil {
+			return uniqueErr
+		}
+		row = user.User{Username: input.Username, LoginScope: loginScope, Password: hash, Email: input.Email, Nickname: strings.TrimSpace(input.Nickname), Phone: strings.TrimSpace(input.Phone), Role: role, Remark: strings.TrimSpace(input.Remark), RiskLevel: risk, Status: normalizeStatus(input.Status), ParentAgentID: parentAgentID, ParentTenantID: parentTenantID}
+		if createErr := tx.Create(&row).Error; createErr != nil {
+			return createErr
+		}
+		if membershipErr := ActivateWorkspaceMembership(tx, &row, *targetRoom); membershipErr != nil {
+			return membershipErr
+		}
+		if membershipErr := syncCurrentWorkspaceMembershipStatus(tx, row, row.Status); membershipErr != nil {
+			return membershipErr
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	result := adminUser(row)
@@ -920,14 +978,28 @@ func (s *UserAdminService) Update(id uint64, input UpdateAdminUserInput) (*Admin
 	if err != nil {
 		return nil, err
 	}
+	if role != row.Role {
+		return nil, apperrors.NewBusinessError("ROLE_CHANGE_NOT_ALLOWED", "账号角色不能在会员资料中修改，请使用对应的专用转换流程")
+	}
 	risk, err := validRisk(input.RiskLevel)
 	if err != nil {
 		return nil, err
 	}
 	nickname := strings.TrimSpace(input.Nickname)
-	updates := map[string]any{"email": input.Email, "nickname": nickname, "phone": strings.TrimSpace(input.Phone), "role": role, "remark": strings.TrimSpace(input.Remark), "risk_level": risk, "status": normalizeStatus(input.Status)}
+	targetStatus := normalizeStatus(input.Status)
+	updates := map[string]any{"email": input.Email, "nickname": nickname, "phone": strings.TrimSpace(input.Phone), "remark": strings.TrimSpace(input.Remark), "risk_level": risk, "status": targetStatus}
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&row).Updates(updates).Error; err != nil {
+		var locked user.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, id).Error; err != nil {
+			return err
+		}
+		if locked.Role != role {
+			return apperrors.NewBusinessError("ROLE_CHANGE_NOT_ALLOWED", "账号角色不能在会员资料中修改，请使用对应的专用转换流程")
+		}
+		if err := tx.Model(&locked).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := syncCurrentWorkspaceMembershipStatus(tx, locked, targetStatus); err != nil {
 			return err
 		}
 		return tx.Model(&chat.Message{}).Where("user_id = ?", id).Update("nickname", nickname).Error
@@ -962,7 +1034,11 @@ func (s *UserAdminService) SetStatusInWorkspace(id, workspaceID uint64, status i
 		if row.WorkspaceID != workspaceID || row.Role != "member" {
 			return apperrors.NewBusinessError("FORBIDDEN", "该用户不属于当前房间")
 		}
-		if err := tx.Model(&row).Update("status", normalizeStatus(status)).Error; err != nil {
+		targetStatus := normalizeStatus(status)
+		if err := tx.Model(&row).Update("status", targetStatus).Error; err != nil {
+			return err
+		}
+		if err := syncCurrentWorkspaceMembershipStatus(tx, row, targetStatus); err != nil {
 			return err
 		}
 		// Read the response while the membership/account row is still locked;
@@ -987,13 +1063,37 @@ func (s *UserAdminService) setStatus(id uint64, status int, ownerAgentID *uint64
 		if err := requireRoomOwnership(row, ownerAgentID); err != nil {
 			return err
 		}
-		return tx.Model(&row).Update("status", normalizeStatus(status)).Error
+		targetStatus := normalizeStatus(status)
+		if err := tx.Model(&row).Update("status", targetStatus).Error; err != nil {
+			return err
+		}
+		return syncCurrentWorkspaceMembershipStatus(tx, row, targetStatus)
 	})
 	if err != nil {
 		return nil, err
 	}
 	ws.DisconnectUser(id)
 	return s.Get(id)
+}
+
+// syncCurrentWorkspaceMembershipStatus keeps the account row and the current
+// membership as one authorization fact. A missing membership is not repaired
+// silently here: status changes must fail and roll back so the hierarchy audit
+// can surface the broken account instead of certifying a partial update.
+func syncCurrentWorkspaceMembershipStatus(tx *gorm.DB, account user.User, status int) error {
+	if account.UserID == 0 || account.WorkspaceID == 0 {
+		return apperrors.NewBusinessError("WORKSPACE_MEMBERSHIP_MISSING", "账号尚未绑定有效工作区")
+	}
+	result := tx.Model(&workspacemodel.Membership{}).
+		Where("workspace_id = ? AND user_id = ?", account.WorkspaceID, account.UserID).
+		Update("status", normalizeStatus(status))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return apperrors.NewBusinessError("WORKSPACE_MEMBERSHIP_MISSING", "账号当前工作区成员关系不存在")
+	}
+	return nil
 }
 
 func (s *UserAdminService) ResetPassword(id uint64, password string) error {

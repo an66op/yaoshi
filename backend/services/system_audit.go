@@ -82,6 +82,9 @@ type ReconciliationSummary struct {
 	NotificationFinancialErrors   int64                   `json:"notification_financial_error_count"`
 	RebateFinancialErrors         int64                   `json:"rebate_financial_error_count"`
 	ProfitShareFinancialErrors    int64                   `json:"profit_share_financial_error_count"`
+	AccountHierarchyErrorCount    int64                   `json:"account_hierarchy_error_count"`
+	WorkspaceHierarchyErrorCount  int64                   `json:"workspace_hierarchy_error_count"`
+	MembershipHierarchyErrorCount int64                   `json:"membership_hierarchy_error_count"`
 }
 
 func (s *SystemAuditService) Reconciliation() (ReconciliationSummary, error) {
@@ -163,6 +166,9 @@ func (s *SystemAuditService) Reconciliation() (ReconciliationSummary, error) {
 		{`SELECT COUNT(*) FROM member_notifications WHERE bet_count < 0 OR won_count < 0 OR won_count > bet_count OR stake_cents < 0 OR payout_cents < 0 OR category NOT IN ('system', 'account', 'activity', 'winning') OR level NOT IN ('info', 'success', 'warning', 'error')`, &result.NotificationFinancialErrors},
 		{`SELECT COUNT(*) FROM rebate_daily_records WHERE turnover_cents < 0 OR rate_percent NOT BETWEEN 0 AND 100 OR amount_cents < 0 OR status <> 'credited'`, &result.RebateFinancialErrors},
 		{`SELECT COUNT(*) FROM agent_profit_share_records WHERE bet_count < 0 OR turnover_cents < 0 OR payout_cents < 0 OR rebate_cents < 0 OR accrued_share_cents < 0 OR paid_share_cents < 0 OR paid_share_cents > accrued_share_cents OR run_count < 0 OR BTRIM(room_scope) = '' OR status NOT IN ('pending', 'credited')`, &result.ProfitShareFinancialErrors},
+		{accountHierarchyAuditSQL, &result.AccountHierarchyErrorCount},
+		{workspaceHierarchyAuditSQL, &result.WorkspaceHierarchyErrorCount},
+		{membershipHierarchyAuditSQL, &result.MembershipHierarchyErrorCount},
 	}
 	for _, check := range secondaryChecks {
 		if err := s.db.Raw(check.query).Scan(check.target).Error; err != nil {
@@ -207,3 +213,91 @@ func (s *SystemAuditService) Reconciliation() (ReconciliationSummary, error) {
 	}
 	return result, nil
 }
+
+const accountHierarchyAuditSQL = `
+	SELECT COUNT(*)
+	FROM "user" AS account
+	LEFT JOIN workspaces AS current_workspace ON current_workspace.id = account.workspace_id
+	LEFT JOIN "user" AS parent_agent ON parent_agent.user_id = account.parent_agent_id AND parent_agent.deleted_at IS NULL
+	LEFT JOIN "user" AS parent_tenant ON parent_tenant.user_id = account.parent_tenant_id AND parent_tenant.deleted_at IS NULL
+	WHERE account.deleted_at IS NULL AND (
+		account.role NOT IN ('admin', 'tenant', 'agent', 'member')
+		OR account.status IS NULL OR account.status NOT IN (0, 1)
+		OR account.workspace_id = 0 OR current_workspace.id IS NULL
+		OR CASE account.role
+			WHEN 'admin' THEN current_workspace.type <> 'platform'
+				OR current_workspace.owner_user_id <> account.user_id
+				OR account.parent_agent_id IS NOT NULL OR account.parent_tenant_id IS NOT NULL
+				OR account.login_scope <> 'platform'
+			WHEN 'tenant' THEN current_workspace.type <> 'tenant'
+				OR current_workspace.owner_user_id <> account.user_id
+				OR account.parent_agent_id IS NOT NULL OR account.parent_tenant_id IS NOT NULL
+				OR account.login_scope <> 'platform'
+			WHEN 'agent' THEN current_workspace.type <> 'agent'
+				OR current_workspace.owner_user_id <> account.user_id
+				OR account.parent_agent_id IS NOT NULL
+				OR (account.parent_tenant_id IS NULL AND account.login_scope <> 'platform')
+				OR (account.parent_tenant_id IS NOT NULL AND (
+					parent_tenant.user_id IS NULL OR parent_tenant.role <> 'tenant'
+					OR account.login_scope <> 'tenant:' || account.parent_tenant_id::text
+				))
+			WHEN 'member' THEN
+				(current_workspace.type = 'platform' AND account.login_scope <> 'platform')
+				OR (current_workspace.type <> 'platform' AND account.login_scope <> current_workspace.scope)
+				OR CASE current_workspace.type
+					WHEN 'platform' THEN account.parent_agent_id IS NOT NULL OR account.parent_tenant_id IS NOT NULL
+					WHEN 'tenant' THEN account.parent_agent_id IS NOT NULL
+						OR account.parent_tenant_id IS DISTINCT FROM current_workspace.owner_user_id
+					WHEN 'agent' THEN account.parent_agent_id IS DISTINCT FROM current_workspace.owner_user_id
+						OR parent_agent.user_id IS NULL OR parent_agent.role <> 'agent'
+						OR account.parent_tenant_id IS DISTINCT FROM parent_agent.parent_tenant_id
+					ELSE TRUE
+				END
+			ELSE TRUE
+		END
+	)`
+
+const workspaceHierarchyAuditSQL = `
+	SELECT COUNT(*)
+	FROM workspaces AS workspace
+	LEFT JOIN "user" AS owner ON owner.user_id = workspace.owner_user_id AND owner.deleted_at IS NULL
+	LEFT JOIN workspaces AS parent ON parent.id = workspace.parent_id
+	WHERE owner.user_id IS NULL
+		OR workspace.type NOT IN ('platform', 'tenant', 'agent')
+		OR workspace.status NOT IN (0, 1)
+		OR workspace.status IS DISTINCT FROM owner.status
+		OR (workspace.type = 'platform' AND owner.role <> 'admin')
+		OR (workspace.type = 'tenant' AND owner.role <> 'tenant')
+		OR (workspace.type = 'agent' AND owner.role <> 'agent')
+		OR owner.workspace_id <> workspace.id
+		OR CASE workspace.type
+			WHEN 'platform' THEN workspace.parent_id IS NOT NULL
+				OR workspace.code <> '00000' OR workspace.scope <> 'lobby'
+			WHEN 'tenant' THEN parent.id IS NULL OR parent.type <> 'platform'
+				OR workspace.scope <> 'tenant:' || workspace.owner_user_id::text
+			WHEN 'agent' THEN workspace.scope <> 'agent:' || workspace.owner_user_id::text
+				OR parent.id IS NULL
+				OR (owner.parent_tenant_id IS NULL AND parent.type <> 'platform')
+				OR (owner.parent_tenant_id IS NOT NULL AND (
+					parent.type <> 'tenant' OR parent.owner_user_id IS DISTINCT FROM owner.parent_tenant_id
+				))
+			ELSE TRUE
+		END`
+
+const membershipHierarchyAuditSQL = `
+	SELECT COUNT(*)
+	FROM "user" AS account
+	LEFT JOIN workspace_memberships AS current_membership
+		ON current_membership.user_id = account.user_id
+		AND current_membership.workspace_id = account.workspace_id
+	WHERE account.deleted_at IS NULL AND (
+		account.workspace_id = 0 OR current_membership.id IS NULL
+		OR current_membership.role <> account.role
+		OR current_membership.status <> account.status
+		OR EXISTS (
+			SELECT 1 FROM workspace_memberships AS active_membership
+			WHERE active_membership.user_id = account.user_id
+				AND active_membership.status = 1
+				AND (account.status <> 1 OR active_membership.workspace_id <> account.workspace_id)
+		)
+	)`

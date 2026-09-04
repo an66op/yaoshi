@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -200,7 +201,6 @@ func (s *RebateAdminService) RunTodayForWorkspace(workspaceID uint64, operator s
 
 func (s *RebateAdminService) loadConfig(workspaceID uint64) (*RebateConfig, error) {
 	var row settings.SystemConfig
-	cfg := &RebateConfig{Enabled: true, RatePercent: 0.5, MinTurnover: 0, SettleMode: "daily", AutoCredit: false}
 	query := s.db.Model(&settings.SystemConfig{})
 	if workspaceID > 0 {
 		query = query.Where("workspace_id = ?", workspaceID)
@@ -214,14 +214,30 @@ func (s *RebateAdminService) loadConfig(workspaceID uint64) (*RebateConfig, erro
 	}
 	if err := query.First(&row).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return cfg, nil
+			return disabledRebateConfig(), nil
 		}
 		return nil, err
 	}
-	raw := defaultJSON(row.RebateSettingsJSON, "{}")
-	_ = json.Unmarshal([]byte(raw), cfg)
-	if cfg.SettleMode == "" {
-		cfg.SettleMode = "daily"
+	return decodeStoredRebateConfig(row.RebateSettingsJSON)
+}
+
+func disabledRebateConfig() *RebateConfig {
+	return &RebateConfig{Enabled: false, RatePercent: 0, MinTurnover: 0, SettleMode: "daily", AutoCredit: false}
+}
+
+// decodeStoredRebateConfig is fail-closed. A missing or malformed room setting
+// must never silently turn on a financial credit at the historic 0.5% value.
+func decodeStoredRebateConfig(raw string) (*RebateConfig, error) {
+	cfg := disabledRebateConfig()
+	if strings.TrimSpace(raw) == "" {
+		return cfg, nil
+	}
+	if err := json.Unmarshal([]byte(raw), cfg); err != nil {
+		return nil, apperrors.NewSystemError("REBATE_CONFIG_INVALID", "回水配置格式错误，请先在系统设置中修复", err)
+	}
+	if math.IsNaN(cfg.RatePercent) || math.IsInf(cfg.RatePercent, 0) || cfg.RatePercent < 0 || cfg.RatePercent > 100 ||
+		math.IsNaN(cfg.MinTurnover) || math.IsInf(cfg.MinTurnover, 0) || cfg.MinTurnover < 0 || cfg.SettleMode != "daily" {
+		return nil, apperrors.NewBusinessError("REBATE_CONFIG_INVALID", "回水配置数值或结算模式不正确")
 	}
 	return cfg, nil
 }

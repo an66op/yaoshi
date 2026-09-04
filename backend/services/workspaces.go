@@ -556,6 +556,7 @@ func ensureWorkspaceRobotAccounts(tx *gorm.DB) error {
 		return err
 	}
 	for roomIndex, room := range rooms {
+		roomLoginScope := accountLoginScopeForWorkspace(room)
 		var existing int64
 		if err := validWorkspaceRobotProfilesQuery(tx, room.ID).Count(&existing).Error; err != nil {
 			return err
@@ -587,7 +588,7 @@ func ensureWorkspaceRobotAccounts(tx *gorm.DB) error {
 					return err
 				}
 				account = user.User{
-					Username: username, LoginScope: room.Scope, Password: hash,
+					Username: username, LoginScope: roomLoginScope, Password: hash,
 					Nickname: roomActivityAliases[aliasIndex], Role: "member", Remark: roomActivityRemark,
 					Status: 1, BalanceCents: 1_000_000_000, WorkspaceID: room.ID,
 					ParentTenantID: parentTenantID, ParentAgentID: parentAgentID,
@@ -615,7 +616,7 @@ func ensureWorkspaceRobotAccounts(tx *gorm.DB) error {
 				// Existing status and profile switches are operator-owned. A restart
 				// must never silently reactivate a robot that was deliberately paused.
 				if err := tx.Model(&account).Updates(map[string]any{
-					"login_scope": room.Scope, "parent_tenant_id": parentTenantID, "parent_agent_id": parentAgentID,
+					"login_scope": roomLoginScope, "parent_tenant_id": parentTenantID, "parent_agent_id": parentAgentID,
 					"remark": roomActivityRemark,
 				}).Error; err != nil {
 					return err
@@ -733,7 +734,8 @@ func ActivateWorkspaceMembership(tx *gorm.DB, account *user.User, target workspa
 		return err
 	}
 
-	updates := map[string]any{"workspace_id": target.ID, "login_scope": target.Scope}
+	loginScope := accountLoginScopeForWorkspace(target)
+	updates := map[string]any{"workspace_id": target.ID, "login_scope": loginScope}
 	switch target.Type {
 	case workspacemodel.TypeAgent:
 		owner := target.OwnerUserID
@@ -751,7 +753,7 @@ func ActivateWorkspaceMembership(tx *gorm.DB, account *user.User, target workspa
 		updates["parent_agent_id"] = nil
 		updates["parent_tenant_id"] = nil
 	}
-	if err := ensureUsernameInScope(tx, target.Scope, account.Username, account.UserID); err != nil {
+	if err := ensureUsernameInScope(tx, loginScope, account.Username, account.UserID); err != nil {
 		return err
 	}
 	if err := tx.Model(account).Updates(updates).Error; err != nil {
@@ -759,6 +761,17 @@ func ActivateWorkspaceMembership(tx *gorm.DB, account *user.User, target workspa
 	}
 	account.WorkspaceID = target.ID
 	return nil
+}
+
+// accountLoginScopeForWorkspace separates the credential namespace from the
+// business room scope. Platform business rows use "lobby", while every
+// interactive or robot identity in that workspace authenticates in the
+// established "platform" namespace.
+func accountLoginScopeForWorkspace(target workspacemodel.Workspace) string {
+	if target.Type == workspacemodel.TypePlatform {
+		return platformLoginScope
+	}
+	return target.Scope
 }
 
 func TenantWorkspaceCodes(items []workspacemodel.Workspace) []string {

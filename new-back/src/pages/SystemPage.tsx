@@ -139,6 +139,9 @@ export function SystemPage() {
     reconciliation.notification_financial_error_count,
     reconciliation.rebate_financial_error_count,
     reconciliation.profit_share_financial_error_count,
+    reconciliation.account_hierarchy_error_count,
+    reconciliation.workspace_hierarchy_error_count,
+    reconciliation.membership_hierarchy_error_count,
   ].reduce((total, value) => total + value, 0) : 0
 
   const load = useCallback(async (notify = false) => {
@@ -449,6 +452,9 @@ export function SystemPage() {
                   ['通知金额异常', reconciliation?.notification_financial_error_count ?? 0],
                   ['回水记录异常', reconciliation?.rebate_financial_error_count ?? 0],
                   ['代理分成异常', reconciliation?.profit_share_financial_error_count ?? 0],
+                  ['账号层级异常', reconciliation?.account_hierarchy_error_count ?? 0],
+                  ['工作区层级异常', reconciliation?.workspace_hierarchy_error_count ?? 0],
+                  ['房间成员关系异常', reconciliation?.membership_hierarchy_error_count ?? 0],
                 ].map(([label, value]) => <Paper key={label} variant="outlined" sx={{ p: 1.6 }}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography fontSize={24} fontWeight={850}>{value}</Typography></Paper>)}
               </Box>
               <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' }, gap: 2 }}>

@@ -7,7 +7,10 @@ import { broadcastMemberLogout } from '../utils/businessStorage'
 const apiBase = (() => {
   const configured = String(import.meta.env.VITE_API_BASE_URL ?? '').trim()
   if (configured) return configured.replace(/\/$/, '')
-  if (import.meta.env.DEV) return `${window.location.protocol}//${window.location.hostname}:8080/api`
+  if (import.meta.env.DEV) {
+    const port = String(import.meta.env.VITE_API_PORT ?? '8080').trim()
+    return `${window.location.protocol}//${window.location.hostname}:${port}/api`
+  }
   return `${window.location.origin}/api`
 })()
 

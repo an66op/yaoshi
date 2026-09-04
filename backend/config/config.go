@@ -169,7 +169,7 @@ func loadFromEnv() error {
 	if user := os.Getenv("BACKEND_DATABASE_USER"); user != "" {
 		Config.Database.User = user
 	}
-	if password := os.Getenv("BACKEND_DATABASE_PASSWORD"); password != "" {
+	if password, exists := os.LookupEnv("BACKEND_DATABASE_PASSWORD"); exists {
 		Config.Database.Password = password
 	}
 	if dbname := os.Getenv("BACKEND_DATABASE_DBNAME"); dbname != "" {

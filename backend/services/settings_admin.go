@@ -348,7 +348,11 @@ func (s *SettingsAdminService) UpdateForWorkspace(workspaceID uint64, input Upda
 	previousGameSettings := row.GameSettingsJSON
 	row.GameSettingsJSON = string(gameSettings)
 	row.QuickRepliesJSON = rawOrEmptyArray(input.QuickReplies)
-	row.RebateSettingsJSON = rawOrEmptyObject(input.Rebate)
+	rebateSettings, err := normalizeRebateSettingsForUpdate(input.Rebate)
+	if err != nil {
+		return nil, err
+	}
+	row.RebateSettingsJSON = rebateSettings
 	var notificationWorkspace workspacemodel.Workspace
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(row).Error; err != nil {
@@ -519,8 +523,23 @@ func toSettingsView(row *settings.SystemConfig) *SystemSettingsView {
 		Announcements:         announcements,
 		Game:                  game,
 		QuickReplies:          json.RawMessage(defaultJSON(row.QuickRepliesJSON, `[]`)),
-		Rebate:                json.RawMessage(defaultJSON(row.RebateSettingsJSON, `{"enabled":true,"rate_percent":0.5,"min_turnover":0,"settle_mode":"daily","auto_credit":false}`)),
+		Rebate:                json.RawMessage(defaultJSON(row.RebateSettingsJSON, `{"enabled":false,"rate_percent":0,"min_turnover":0,"settle_mode":"daily","auto_credit":false}`)),
 	}
+}
+
+func normalizeRebateSettingsForUpdate(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{"enabled":false,"rate_percent":0,"min_turnover":0,"settle_mode":"daily","auto_credit":false}`)
+	}
+	cfg, err := decodeStoredRebateConfig(string(raw))
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		return "", apperrors.NewSystemError("SETTINGS_ENCODE_FAILED", "编码回水设置失败", err)
+	}
+	return string(encoded), nil
 }
 
 // applyAuthoritativeWorkspaceIdentity keeps the compatibility columns in the

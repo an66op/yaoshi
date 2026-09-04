@@ -32,6 +32,29 @@ func TestBuildPostgresDSNPinsPublicSearchPath(t *testing.T) {
 	}
 }
 
+func TestExplicitLocalDevelopmentInitializationBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		mode string
+		host string
+		want bool
+	}{
+		{name: "local debug hostname", mode: "debug", host: "localhost", want: true},
+		{name: "local debug ipv4", mode: "debug", host: "127.0.0.1", want: true},
+		{name: "local debug ipv6", mode: "debug", host: "::1", want: true},
+		{name: "remote debug", mode: "debug", host: "db.example.test", want: false},
+		{name: "local test", mode: "test", host: "127.0.0.1", want: false},
+		{name: "local release", mode: "release", host: "127.0.0.1", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := &Configuration{Server: ServerConfig{Mode: test.mode}, Database: DatabaseConfig{Host: test.host}}
+			if got := requiresExplicitLocalDevelopmentInitialization(cfg); got != test.want {
+				t.Fatalf("requiresExplicitLocalDevelopmentInitialization() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestOriginAllowed(t *testing.T) {
 	allowed := []string{"http://localhost:5173", "https://example.com"}
 	for _, origin := range []string{"http://localhost:5173", "https://example.com", ""} {
@@ -183,6 +206,19 @@ func TestExperienceAccountSeedConfigurationIsTypedAndDebugOnly(t *testing.T) {
 	t.Setenv("BACKEND_SEED_EXPERIENCE_ACCOUNTS", "sometimes")
 	if err := loadFromEnv(); err == nil {
 		t.Fatal("invalid experience seed boolean was silently accepted")
+	}
+}
+
+func TestDatabasePasswordEnvironmentCanExplicitlyBeEmpty(t *testing.T) {
+	previous := Config
+	t.Cleanup(func() { Config = previous })
+	Config = validTestConfig("debug")
+	t.Setenv("BACKEND_DATABASE_PASSWORD", "")
+	if err := loadFromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if Config.Database.Password != "" {
+		t.Fatal("explicit empty local database password was ignored")
 	}
 }
 

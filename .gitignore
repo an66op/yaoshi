@@ -9,6 +9,7 @@ test-results/
 release/
 .backups/
 .local-logs/
+.local-state/
 backend/uploads/
 
 # Runtime files and local development settings
@@ -17,6 +18,7 @@ backend/uploads/
 .env
 .env.*
 !.env.example
+deploy/env/local-backend.env
 backend/config/config.yaml
 new/public/test-login.json
 new-back/public/test-login.json

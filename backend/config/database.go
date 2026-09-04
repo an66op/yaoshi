@@ -15,6 +15,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const LocalDevelopmentDatabaseMarkerNamespace = "wangzhe-local-development-v1"
+
 // ConnectDB is the only application database bootstrap. The project has not
 // shipped with a pre-versioned schema, so startup always applies the checked-in
 // SQL inventory and never infers schema changes from Go models.
@@ -23,12 +25,63 @@ func ConnectDB() (*gorm.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := EnsureDatabaseInitializationComplete(db); err != nil {
+		return nil, err
+	}
 	if err := migrations.Run(db); err != nil {
 		return nil, fmt.Errorf("%s: %w", constants.ErrDatabaseMigrationFailed, err)
 	}
 
 	log.Println(constants.DatabaseConnectionSuccess)
 	return db, nil
+}
+
+// EnsureDatabaseInitializationComplete runs before migrations so an ordinary
+// backend cannot mutate a database while explicit local initialization is
+// still incomplete. A brand-new loopback debug database must also enter
+// through local-init: this closes the short createdb-to-COMMENT window even
+// when a developer bypasses local-dev and starts the Go process directly.
+func EnsureDatabaseInitializationComplete(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("数据库连接不可用")
+	}
+	var marker string
+	if err := db.Raw(`
+		SELECT COALESCE(shobj_description(oid, 'pg_database'), '')
+		FROM pg_database WHERE datname = current_database()
+	`).Scan(&marker).Error; err != nil {
+		return fmt.Errorf("读取数据库初始化状态失败: %w", err)
+	}
+	if strings.HasPrefix(marker, LocalDevelopmentDatabaseMarkerNamespace+":initializing:") {
+		return fmt.Errorf("本地数据库初始化尚未完成；请先重新运行 make dev-init")
+	}
+	if strings.HasPrefix(marker, LocalDevelopmentDatabaseMarkerNamespace+":") &&
+		!strings.HasPrefix(marker, LocalDevelopmentDatabaseMarkerNamespace+":complete:") {
+		return fmt.Errorf("本地数据库初始化状态无效；请停止服务并检查初始化凭证")
+	}
+	cfg := GetConfig()
+	if marker == "" && requiresExplicitLocalDevelopmentInitialization(cfg) {
+		var migrationsTableExists bool
+		if err := db.Raw(`SELECT to_regclass('public.schema_migrations') IS NOT NULL`).Scan(&migrationsTableExists).Error; err != nil {
+			return fmt.Errorf("检查本地数据库迁移状态失败: %w", err)
+		}
+		if !migrationsTableExists {
+			return fmt.Errorf("本地 debug 空数据库必须先执行 make dev-init；普通后端不会接管未初始化数据库")
+		}
+	}
+	return nil
+}
+
+func requiresExplicitLocalDevelopmentInitialization(cfg *Configuration) bool {
+	if cfg == nil || !strings.EqualFold(strings.TrimSpace(cfg.Server.Mode), "debug") {
+		return false
+	}
+	host := strings.TrimSpace(cfg.Database.Host)
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // OpenDatabase opens and configures PostgreSQL without changing its schema.

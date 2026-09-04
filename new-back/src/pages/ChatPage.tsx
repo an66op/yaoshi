@@ -14,10 +14,13 @@ import { adminApi, type AdminChatConversation, type AdminChatMessage, type Admin
 import { useFeedback } from '../components/feedback'
 import { AdminRedPacketCard, RedPacketForm, type RedPacketCover } from '../components/RedPacketForm'
 import { MANAGEMENT_WS_EVENT, useManagementWebSocketConnected } from '../hooks/useManagementWebSocket'
+import { useSGGameCatalog } from '../hooks/useSGGameCatalog'
 import type { ManagementWsEvent } from '../api'
 import { gameLogo } from '../gameLogos'
 import { mergeAdminChatMessages, sameConversation, selectConversation } from '../utils/chatState'
 import { createRequestId } from '../utils/requestId'
+import { currentIssueLabel, describeIssueState, gameSourceLabel } from '../utils/drawTiming'
+import { chatCountdownText } from '../utils/chatCountdown'
 import { responsiveSplitPanelBorderSx } from '../theme'
 import {
   CHAT_OPEN_CONVERSATION_EVENT, chatPageForTarget, consumePendingChatConversation, reportChatUnreadChanged,
@@ -35,12 +38,6 @@ const conversationPreview = (item: AdminChatConversation) => {
   return `${item.latest_is_staff ? '客服' : '会员'}：${item.latest_text}`
 }
 
-const issueStatusText: Record<string, string> = { accepting: '受理中', sealed: '已封盘', awaiting_draw: '待开奖', settling: '结算中', settled: '已结算', abnormal: '异常' }
-const countdownText = (target: string | undefined, now: number) => {
-  const seconds = Math.max(0, Math.ceil((new Date(target || 0).getTime() - now) / 1000))
-  const minutes = Math.floor(seconds / 60)
-  return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
-}
 const ballColor = (value: number) => ['#f97316', '#ef4444', '#0ea5e9', '#8b5cf6', '#16a34a'][Math.abs(value) % 5]
 const identityGradient = 'linear-gradient(135deg,#0891b2 0%,#2563eb 54%,#7c3aed 100%)'
 const memberAvatar = (userID: number, provided?: string) => provided?.trim() || `/images/avatars/avatar-${String(Math.abs(Math.trunc(userID || 0)) % 16).padStart(2, '0')}.png`
@@ -86,6 +83,7 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
   const connectionStatusInitialized = useRef(false)
 	const conversationRequestRef = useRef(0)
 	const messageRequestRef = useRef(0)
+	const readGames = useSGGameCatalog(adminApi.games, setGames, lotteryView ? selected?.game_id : undefined, 'platform')
 	useEffect(() => { selectedRef.current = selected }, [selected])
 	const focusConversation = useCallback((target: ChatConversationTarget) => {
 		if (chatPageForTarget(target) !== (lotteryView ? '/lottery-chat' : '/chat')) return
@@ -111,12 +109,12 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
 	useEffect(() => () => setActiveChatConversation(null), [])
 	useEffect(() => {
 		if (!lotteryView) return
-		void adminApi.games().then(rows => setGames(Array.isArray(rows) ? rows : [])).catch(reason => setError(reason instanceof Error ? reason.message : '彩票信息暂时未加载'))
+		void readGames().catch(reason => setError(reason instanceof Error ? reason.message : '彩票信息暂时未加载'))
 		const tick = () => setNow(new Date().getTime())
 		const initial = window.setTimeout(tick, 0)
 		const timer = window.setInterval(tick, 1000)
 		return () => { window.clearTimeout(initial); window.clearInterval(timer) }
-	}, [lotteryView])
+	}, [lotteryView, readGames])
 	useEffect(() => {
 		if (!lotteryView || !selected?.game_id || selected.game_id === 'lobby') {
 			const timer = window.setTimeout(() => setDraws([]), 0)
@@ -320,13 +318,13 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
 		const onDraw = (event: Event) => {
 			const detail = (event as CustomEvent<ManagementWsEvent>).detail
 			if (detail?.type !== 'draw_update') return
-			void adminApi.games().then(rows => setGames(Array.isArray(rows) ? rows : [])).catch(reason => setError(reason instanceof Error ? reason.message : '彩票信息暂时未更新'))
+			void readGames().catch(reason => setError(reason instanceof Error ? reason.message : '彩票信息暂时未更新'))
 			const gameID = detail.game_id || String(detail.data?.game_id || '')
 			if (gameID && gameID === selectedRef.current?.game_id) void adminApi.draws(gameID).then(rows => setDraws(Array.isArray(rows) ? rows : [])).catch(reason => setError(reason instanceof Error ? reason.message : '开奖记录暂时未更新'))
 		}
 		window.addEventListener(MANAGEMENT_WS_EVENT, onDraw)
 		return () => window.removeEventListener(MANAGEMENT_WS_EVENT, onDraw)
-	}, [lotteryView])
+	}, [lotteryView, readGames])
 
   const title = selected?.title ?? '选择一个会话'
   const subtitle = selected?.subtitle ?? '从左侧选择需要处理的会话'
@@ -337,6 +335,7 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
     ? conversations.filter(item => item.lobby_category?.trim() === activeLotteryCategory)
     : conversations, [activeLotteryCategory, conversations, view])
 	const selectedGame = useMemo(() => games.find(game => game.id === selected?.game_id), [games, selected?.game_id])
+	const selectedIssueState = describeIssueState(selectedGame, now)
 	const activeRoom = useMemo(() => rooms.find(room => room.scope === roomScope), [roomScope, rooms])
 	const activeRoomName = activeRoom?.room_name.trim() || (activeRoom?.room_code ? `房间 ${activeRoom.room_code}` : '当前房间')
 	const activeRoomLogo = activeRoom?.room_logo.trim() || ''
@@ -512,9 +511,9 @@ export function ChatPage({ view = 'support' }: { view?: 'support' | 'lottery' })
           <Stack direction="row" alignItems="center" gap={1} px={2} py={1.35} borderBottom={1} borderColor="divider"><Avatar src={lotteryView && selectedGame ? gameLogo(selectedGame.id) : undefined} sx={{ bgcolor: selected?.room_type === 'group' ? 'secondary.main' : 'primary.main', width: 36, height: 36 }}>{lotteryView && selectedGame ? selectedGame.name.slice(0, 1) : selected?.room_type === 'group' ? <ForumRounded fontSize="small" /> : <SupportAgentRounded fontSize="small" />}</Avatar><Box minWidth={0} flex={1}><Typography fontSize={13} fontWeight={850} noWrap>{title}</Typography><Typography fontSize={10} color="text.secondary" noWrap>{subtitle}</Typography></Box>{!lotteryView && selected?.room_type === 'group' && <Button size="small" color="secondary" startIcon={<CardGiftcardRounded />} onClick={openRedPacket}>发红包</Button>}{!lotteryView && mode === 'room' && selected?.room_type === 'group' && selected.room_scope.startsWith('agent:') && (selected.group_chat_enabled ? <Button size="small" color="warning" startIcon={<VolumeOffRounded />} disabled={saving} onClick={() => void setRoomGroupChat(false)}>开启禁言</Button> : <Button size="small" color="success" startIcon={<VolumeUpRounded />} disabled={saving} onClick={() => void setRoomGroupChat(true)}>关闭禁言</Button>)}</Stack>
 			{lotteryView && selectedGame && <Box px={{ xs: 1.4, md: 2 }} py={1.15} borderBottom={1} borderColor="divider" sx={{ background: theme => theme.palette.mode === 'dark' ? 'linear-gradient(90deg,rgba(14,165,233,.14),rgba(139,92,246,.08))' : 'linear-gradient(90deg,#effbff,#f5f2ff)' }}>
 				<Stack direction={{ xs: 'column', sm: 'row' }} gap={{ xs: 1, sm: 1.8 }} alignItems={{ sm: 'center' }}>
-					<Stack direction="row" gap={1} alignItems="center" minWidth={{ sm: 170 }}><Avatar src={gameLogo(selectedGame.id)} sx={{ width: 44, height: 44, bgcolor: 'background.paper', border: 1, borderColor: 'divider' }}>{selectedGame.name.slice(0, 1)}</Avatar><Box minWidth={0}><Typography fontSize={14} fontWeight={900} noWrap>{selectedGame.name}</Typography><Typography fontSize={10} color="text.secondary" noWrap>第 {selectedGame.current_issue || selectedGame.issue || '—'} 期</Typography><Typography fontSize={9.5} color={selectedGame.source_healthy === false ? 'warning.main' : 'success.main'} noWrap>{selectedGame.source_name || (selectedGame.source_kind === 'official' ? '外部开奖源' : '平台开奖')} · {selectedGame.source_healthy === false ? '异常' : '正常'}</Typography></Box></Stack>
-					<Box minWidth={88}><Typography fontSize={9.5} color="text.secondary">封盘倒计时</Typography><Typography fontSize={23} lineHeight={1.1} fontWeight={950} color={new Date(selectedGame.seal_at || selectedGame.next_draw_at).getTime() <= now ? 'warning.main' : 'primary.main'}>{countdownText(selectedGame.seal_at || selectedGame.next_draw_at, now)}</Typography></Box>
-					<Box flex={1} minWidth={0}><Stack direction="row" alignItems="center" gap={.7} mb={.55}><Typography fontSize={9.5} color="text.secondary">上期 {latestDraw?.issue || '—'}</Typography><Chip size="small" label={issueStatusText[selectedGame.issue_status || ''] || '运行中'} color={selectedGame.issue_status === 'abnormal' || selectedGame.source_healthy === false ? 'warning' : 'success'} sx={{ height: 19, fontSize: 9 }} /></Stack><Stack direction="row" gap={.42} flexWrap="wrap" useFlexGap>{(latestDraw?.numbers || selectedGame.latest_numbers || []).map((number, index) => <Box key={`${index}-${number}`} sx={{ width: 25, height: 25, display: 'grid', placeItems: 'center', borderRadius: 1, bgcolor: ballColor(number), color: '#fff', fontSize: 11, fontWeight: 950, boxShadow: '0 2px 5px rgba(15,23,42,.18)' }}>{number}</Box>)}{!(latestDraw?.numbers || selectedGame.latest_numbers || []).length && <Typography fontSize={11} color="text.secondary">等待开奖数据</Typography>}</Stack></Box>
+					<Stack direction="row" gap={1} alignItems="center" minWidth={{ sm: 170 }}><Avatar src={gameLogo(selectedGame.id)} sx={{ width: 44, height: 44, bgcolor: 'background.paper', border: 1, borderColor: 'divider' }}>{selectedGame.name.slice(0, 1)}</Avatar><Box minWidth={0}><Typography fontSize={14} fontWeight={900} noWrap>{selectedGame.name}</Typography><Typography fontSize={10} color="text.secondary" noWrap>第 {currentIssueLabel(selectedGame)} 期</Typography><Typography fontSize={9.5} color={selectedGame.source_healthy === false ? 'warning.main' : 'success.main'} noWrap>{gameSourceLabel(selectedGame)} · {selectedGame.source_healthy === false ? '异常' : '正常'}</Typography></Box></Stack>
+					<Box minWidth={88}><Typography fontSize={9.5} color="text.secondary">封盘倒计时</Typography><Typography fontSize={23} lineHeight={1.1} fontWeight={950} color={new Date(selectedGame.seal_at || selectedGame.next_draw_at).getTime() <= now ? 'warning.main' : 'primary.main'}>{chatCountdownText(selectedGame.seal_at || selectedGame.next_draw_at, now)}</Typography></Box>
+					<Box flex={1} minWidth={0}><Stack direction="row" alignItems="center" gap={.7} mb={.55}><Typography fontSize={9.5} color="text.secondary">上期 {latestDraw?.issue || '—'}</Typography><Chip size="small" label={selectedIssueState} color={selectedIssueState === '受理中' ? 'success' : 'warning'} sx={{ height: 19, fontSize: 9 }} /></Stack><Stack direction="row" gap={.42} flexWrap="wrap" useFlexGap>{(latestDraw?.numbers || selectedGame.latest_numbers || []).map((number, index) => <Box key={`${index}-${number}`} sx={{ width: 25, height: 25, display: 'grid', placeItems: 'center', borderRadius: 1, bgcolor: ballColor(number), color: '#fff', fontSize: 11, fontWeight: 950, boxShadow: '0 2px 5px rgba(15,23,42,.18)' }}>{number}</Box>)}{!(latestDraw?.numbers || selectedGame.latest_numbers || []).length && <Typography fontSize={11} color="text.secondary">等待开奖数据</Typography>}</Stack></Box>
 				</Stack>
 			</Box>}
           <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', p: { xs: 1.5, md: 2 }, bgcolor: 'background.default' }}>

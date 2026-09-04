@@ -17,7 +17,7 @@ func TestGenerateDrawNumbersUsesIndependentDigitsAndRejectionSampling(t *testing
 		entropy      []byte
 		want         []int
 	}{
-		{"independent five digits", "sg-ssc", []byte{0, 1, 2, 3, 4}, []int{0, 1, 2, 3, 4}},
+		{"independent five digits", "speed-ssc", []byte{0, 1, 2, 3, 4}, []int{0, 1, 2, 3, 4}},
 		{"duplicates remain legal", "speed-ssc", []byte{0, 0, 0, 0, 0}, []int{0, 0, 0, 0, 0}},
 		{"three digits", "official-fc3d", []byte{9, 8, 7}, []int{9, 8, 7}},
 		{"pc28 three digits", "pc-canada", []byte{9, 8, 7}, []int{9, 8, 7}},
@@ -64,7 +64,7 @@ func TestGenerateDrawNumbersFailsClosedOnEntropyFailure(t *testing.T) {
 }
 
 func TestGenerateDrawNumbersRefusesUnmodelledGames(t *testing.T) {
-	for _, gameID := range []string{"happy8-mark-six", "hong-kong-mark-six", "official-kl8", "official-tw-bingo", "bingo-racing-b", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4", "unknown"} {
+	for _, gameID := range []string{"official-kl8", "official-tw-bingo", "unknown"} {
 		got, err := generateDrawNumbers(&lottery.Game{ID: gameID, Name: "极速赛车", Category: "赛车"}, failingDrawEntropy{errors.New("must not read entropy")})
 		if got != nil || apperrors.GetErrorCode(err) != "RULES_NOT_READY" {
 			t.Fatalf("game=%s got=%v err=%v", gameID, got, err)
@@ -72,10 +72,12 @@ func TestGenerateDrawNumbersRefusesUnmodelledGames(t *testing.T) {
 	}
 }
 
-func TestGenerateDrawNumbersNeverInventsBingoMarkSix(t *testing.T) {
-	got, err := generateDrawNumbers(&lottery.Game{ID: "bingo-mark-six"}, failingDrawEntropy{errors.New("must not read entropy")})
-	if got != nil || apperrors.GetErrorCode(err) != "DRAW_NOT_FOUND" {
-		t.Fatalf("got=%v err=%v", got, err)
+func TestGenerateDrawNumbersNeverInventsMarkSix(t *testing.T) {
+	for _, gameID := range []string{"bingo-mark-six", "hong-kong-mark-six", "happy8-mark-six", "new-macau-mark-six", "old-macau-mark-six"} {
+		got, err := generateDrawNumbers(&lottery.Game{ID: gameID}, failingDrawEntropy{errors.New("must not read entropy")})
+		if got != nil || apperrors.GetErrorCode(err) != "DRAW_NOT_FOUND" {
+			t.Fatalf("game=%s got=%v err=%v", gameID, got, err)
+		}
 	}
 }
 
@@ -87,7 +89,7 @@ func TestGenerateDrawNumbersNeverInventsExternalResults(t *testing.T) {
 		}
 	}
 	for _, sourceKind := range []string{"platform", "simulated"} {
-		got, err := generateDrawNumbers(&lottery.Game{ID: "sg-ssc", SourceKind: sourceKind}, bytes.NewReader([]byte{1, 2, 3, 4, 5}))
+		got, err := generateDrawNumbers(&lottery.Game{ID: "speed-ssc", SourceKind: sourceKind}, bytes.NewReader([]byte{1, 2, 3, 4, 5}))
 		if err != nil || !reflect.DeepEqual(got, []int{1, 2, 3, 4, 5}) {
 			t.Fatalf("source=%q got=%v err=%v", sourceKind, got, err)
 		}
@@ -95,7 +97,7 @@ func TestGenerateDrawNumbersNeverInventsExternalResults(t *testing.T) {
 }
 
 func TestGenerateDrawNumbersCryptoReaderProducesValidProfiles(t *testing.T) {
-	for _, gameID := range []string{"speed-racing", "bingo-racing-a", "sg-ssc", "official-fc3d"} {
+	for _, gameID := range []string{"speed-racing", "bingo-racing-a", "speed-ssc", "official-fc3d"} {
 		game := &lottery.Game{ID: gameID, SourceKind: "platform"}
 		profile, _ := rulesForGame(game)
 		for i := 0; i < 16; i++ {

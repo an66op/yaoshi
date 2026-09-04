@@ -72,7 +72,8 @@ esac
 
 # Reset receipts are immutable audit/idempotency evidence. Session revocations
 # must survive until delivered; advancing auth_version below appends new ones.
-# Plan automation rows are operator-owned configuration, not generated history.
+# Plan automation rows are operator-owned configuration, not generated history;
+# their last-run fields are reset below with the other preserved runtime state.
 preserved_tables=(
   schema_migrations development_reset_receipts workspace_migration_markers
   workspace_robot_reset_receipts ws_session_revocation_outbox
@@ -86,14 +87,17 @@ preserved_tables=(
 # Derived cursors/windows must be cleared with messages/issues because the
 # corresponding identities restart. Stream children and their parent streams
 # are listed together so no CASCADE can widen the approved reset boundary.
+# SG recovery attempts and their queue are business history; clear both in the
+# same authorized reset so old completions cannot suppress recovery afterward.
 cleared_tables=(
+  lottery_sgssc_backfill_attempts lottery_sgssc_backfill_items
   user_balance_transactions user_applications lottery_issues lottery_draws lottery_issue_windows
   lottery_bets lottery_assistant_requests lottery_bet_requests plan_recommendations
   plan_generation_receipts plan_streams plan_stream_cycles plan_stream_periods
   member_payment_accounts activity_participations special_number_grants
   admin_notifications member_notifications member_chat_messages member_chat_read_cursors chat_red_packets
   chat_red_packet_claims rebate_daily_records agent_profit_share_records
-  admin_audit_logs data_cleanup_runs admin_audit_log_archives lottery_bet_archives
+  admin_audit_logs system_event_logs data_cleanup_runs admin_audit_log_archives lottery_bet_archives
   user_balance_transaction_archives
 )
 
@@ -101,6 +105,7 @@ echo "目标数据库：$BACKEND_DATABASE_HOST:$BACKEND_DATABASE_PORT/$BACKEND_D
 echo "保留表（${#preserved_tables[@]}）：${preserved_tables[*]}"
 echo "清理表（${#cleared_tables[@]}）：${cleared_tables[*]}"
 echo "账号余额将归零、登录会话将失效、机器人总开关将关闭。"
+echo "彩票期号/同步状态、活动参与/剩余奖池、特殊号码发放计数和计划运行统计将复位。"
 
 if [[ "$mode" == "dry-run" ]]; then
   echo "仅预览：没有连接数据库、没有备份、没有修改任何数据。"
@@ -137,9 +142,8 @@ unset sentinel_token BACKEND_DEVELOPMENT_RESET_SENTINEL_TOKEN
 identity_before="$(reset_verified_identity "$token_sha256" true)"
 IFS=$'\t' read -r server_system_identifier server_address server_port _ _ _ <<<"$identity_before"
 
-echo "开始创建重置前完整备份……"
-backup_source="${env_file:---current-env}"
-backup_output="$(BACKUP_DIR="$backup_dir" BACKUP_RETENTION_DAYS=3650 "$script_dir/postgres-backup.sh" "$backup_source")"
+echo "开始创建重置前完整加密备份……"
+backup_output="$("$script_dir/dev-postgres-backup.sh" --backup-dir "$backup_dir")"
 printf '%s\n' "$backup_output"
 backup_file="$(printf '%s\n' "$backup_output" | sed -n 's/^数据库备份完成：//p' | tail -n 1)"
 [[ -n "$backup_file" && -f "$backup_file" && -f "$backup_file.sha256" ]] || {
@@ -150,6 +154,7 @@ backup_sha256="$(awk 'NR == 1 { print $1 }' "$backup_file.sha256")"
 [[ "$backup_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "备份 SHA-256 不正确" >&2; exit 1; }
 backup_name="$(basename "$backup_file")"
 request_id="dev-reset-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
+unset BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY
 
 reset_assert_backend_port_stopped
 identity_after="$(reset_verified_identity "$token_sha256" true)"
@@ -240,6 +245,7 @@ INSERT INTO dev_reset_manifest (table_name, disposition) VALUES
   ('special_number_resources','preserve'), ('special_number_campaigns','preserve'),
   ('entertainment_platforms','preserve'), ('wallet_payment_channels','preserve'),
   ('plan_automations','preserve'),
+  ('lottery_sgssc_backfill_attempts','clear'), ('lottery_sgssc_backfill_items','clear'),
   ('user_balance_transactions','clear'), ('user_applications','clear'),
   ('lottery_issues','clear'), ('lottery_draws','clear'), ('lottery_issue_windows','clear'), ('lottery_bets','clear'),
   ('lottery_assistant_requests','clear'), ('lottery_bet_requests','clear'),
@@ -250,7 +256,7 @@ INSERT INTO dev_reset_manifest (table_name, disposition) VALUES
   ('admin_notifications','clear'), ('member_notifications','clear'),
   ('member_chat_messages','clear'), ('member_chat_read_cursors','clear'), ('chat_red_packets','clear'),
   ('chat_red_packet_claims','clear'), ('rebate_daily_records','clear'),
-  ('agent_profit_share_records','clear'), ('admin_audit_logs','clear'),
+  ('agent_profit_share_records','clear'), ('admin_audit_logs','clear'), ('system_event_logs','clear'),
   ('data_cleanup_runs','clear'), ('admin_audit_log_archives','clear'),
   ('lottery_bet_archives','clear'), ('user_balance_transaction_archives','clear');
 
@@ -281,6 +287,7 @@ SELECT set_config('wangzhe.dev_reset', 'confirmed:' || current_database(), true)
 SELECT set_config('wangzhe.lifecycle_delete', 'on', true);
 
 TRUNCATE TABLE
+    public.lottery_sgssc_backfill_attempts, public.lottery_sgssc_backfill_items,
     public.user_balance_transactions, public.user_applications,
     public.lottery_issues, public.lottery_draws, public.lottery_issue_windows, public.lottery_bets,
     public.lottery_assistant_requests, public.lottery_bet_requests,
@@ -291,7 +298,7 @@ TRUNCATE TABLE
     public.admin_notifications, public.member_notifications,
     public.member_chat_messages, public.member_chat_read_cursors, public.chat_red_packets,
     public.chat_red_packet_claims, public.rebate_daily_records,
-    public.agent_profit_share_records, public.admin_audit_logs,
+    public.agent_profit_share_records, public.admin_audit_logs, public.system_event_logs,
     public.data_cleanup_runs, public.admin_audit_log_archives,
     public.lottery_bet_archives, public.user_balance_transaction_archives
 RESTART IDENTITY;
@@ -311,6 +318,111 @@ SET enabled = false,
     last_run_at = NULL,
     last_error = '',
     updated_at = now();
+
+-- Preserved catalogue/configuration rows also contain derived runtime fields.
+-- Reset only those fields after their corresponding history was truncated.
+-- External and official games stay unavailable until a verified source sync
+-- republishes an explicit next issue and draw time.
+UPDATE public.lottery_games
+SET next_issue = '',
+    next_draw_at = NULL,
+    timing_source = CASE
+        WHEN lower(btrim(source_kind)) IN ('external', 'official') THEN 'pending'
+        ELSE 'configured'
+    END,
+    sync_status = CASE
+        WHEN lower(btrim(source_kind)) IN ('external', 'official') THEN 'stale'
+        ELSE 'idle'
+    END,
+    last_sync_at = NULL,
+    last_sync_error = '',
+    updated_at = now();
+
+UPDATE public.ops_activities
+SET participants = 0,
+    pool_remaining_cents = pool_total_cents,
+    updated_at = now();
+
+UPDATE public.special_number_campaigns
+SET granted_count = 0,
+    updated_at = now();
+
+UPDATE public.plan_automations
+SET last_run_at = NULL,
+    last_created_count = 0,
+    last_error = '',
+    updated_at = now();
+
+-- Fail closed before writing the immutable receipt. A future trigger or schema
+-- change must not leave cleared business rows or stale derived state behind.
+DO $$
+DECLARE
+    cleared_table text;
+    remaining_rows bigint;
+BEGIN
+    FOR cleared_table IN
+        SELECT table_name
+        FROM dev_reset_manifest
+        WHERE disposition = 'clear'
+        ORDER BY table_name
+    LOOP
+        EXECUTE format('SELECT count(*) FROM public.%I', cleared_table)
+        INTO remaining_rows;
+        IF remaining_rows <> 0 THEN
+            RAISE EXCEPTION 'cleared table % still contains % row(s) after reset',
+                cleared_table, remaining_rows;
+        END IF;
+    END LOOP;
+
+    IF EXISTS (
+        SELECT 1 FROM public."user"
+        WHERE balance_cents <> 0 OR muted_until IS NOT NULL
+           OR COALESCE(mute_reason, '') <> '' OR last_login_at IS NOT NULL
+           OR login_count <> 0
+    ) THEN
+        RAISE EXCEPTION 'user runtime state was not fully reset';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM public.workspace_robot_settings
+        WHERE enabled OR pause_reason <> '开发业务数据重置后需人工重新启用'
+           OR last_run_at IS NOT NULL OR COALESCE(last_error, '') <> ''
+    ) THEN
+        RAISE EXCEPTION 'robot runtime state was not fully reset';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM public.lottery_games
+        WHERE next_issue <> '' OR next_draw_at IS NOT NULL
+           OR last_sync_at IS NOT NULL OR COALESCE(last_sync_error, '') <> ''
+           OR timing_source <> CASE
+                WHEN lower(btrim(source_kind)) IN ('external', 'official') THEN 'pending'
+                ELSE 'configured'
+              END
+           OR sync_status <> CASE
+                WHEN lower(btrim(source_kind)) IN ('external', 'official') THEN 'stale'
+                ELSE 'idle'
+              END
+    ) THEN
+        RAISE EXCEPTION 'lottery runtime state was not fully reset';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM public.ops_activities
+        WHERE participants <> 0 OR pool_remaining_cents <> pool_total_cents
+    ) THEN
+        RAISE EXCEPTION 'activity runtime state was not fully reset';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM public.special_number_campaigns WHERE granted_count <> 0
+    ) THEN
+        RAISE EXCEPTION 'special-number campaign counters were not fully reset';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM public.plan_automations
+        WHERE last_run_at IS NOT NULL OR last_created_count <> 0
+           OR COALESCE(last_error, '') <> ''
+    ) THEN
+        RAISE EXCEPTION 'plan automation runtime state was not fully reset';
+    END IF;
+END $$;
 
 INSERT INTO public.development_reset_receipts (
     request_id, database_name, backup_filename, backup_sha256,

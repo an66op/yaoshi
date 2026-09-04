@@ -95,9 +95,10 @@ func TestAggregatePlacementRowsDoesNotCrossContractKeys(t *testing.T) {
 
 func TestAggregatePlacementRowsRejectsChangedFinancialSnapshots(t *testing.T) {
 	for name, mutate := range map[string]func(*bet.Bet){
-		"odds":   func(row *bet.Bet) { row.Odds = 8 },
-		"rebate": func(row *bet.Bet) { row.RebateRateSnapshot = 1.5 },
-		"share":  func(row *bet.Bet) { row.AgentShareRateSnapshot = 40 },
+		"odds":        func(row *bet.Bet) { row.Odds = 8 },
+		"rebate":      func(row *bet.Bet) { row.RebateRateSnapshot = 1.5 },
+		"share":       func(row *bet.Bet) { row.AgentShareRateSnapshot = 40 },
+		"draw source": func(row *bet.Bet) { row.DrawSourceRevision = "other-source" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			first := placementTestDraft()

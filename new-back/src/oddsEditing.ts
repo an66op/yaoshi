@@ -25,6 +25,7 @@ export function oddsDraftItems(items: PlayLimitItem[], saved: PlayLimitItem[]) {
   return items.map(item => {
     const original = baseline.get(item.play_code)
     if (original && sameOddsValues(item, original)) return original
+    if (item.configured === false && item.configuration_source === 'pending_admin_save' && item.configured_at === null) return item
     return { ...item, configured: false, configuration_source: 'pending_admin_save', configured_at: null }
   })
 }

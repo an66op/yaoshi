@@ -119,14 +119,14 @@ func TestPC28ReverseRestrictionOnlyCoversAggregateSumMarkets(t *testing.T) {
 	}
 }
 
-func TestPC28EvaluationCoversDrawMarketsAndNonWrappingStraight(t *testing.T) {
+func TestPC28EvaluationCoversDrawMarketsAndOriginalWrappingStraight(t *testing.T) {
 	profile, ok := rulesForVersion(pc28RuleV1)
 	if !ok {
 		t.Fatal("missing pc28-v1 profile")
 	}
-	for _, values := range [][]int{{8, 9, 0}, {9, 0, 1}, {0, 1, 9}} {
-		if shape := pc28Shape(values); shape == pc28Straight {
-			t.Fatalf("wrapping sequence %v counted as a straight", values)
+	for _, values := range [][]int{{8, 9, 0}, {9, 0, 1}, {0, 1, 9}, {0, 9, 8}, {1, 9, 0}} {
+		if shape := pc28Shape(values); shape != pc28Straight {
+			t.Fatalf("original wrapping sequence %v got shape %s", values, shape)
 		}
 	}
 	for _, values := range [][]int{{0, 1, 2}, {2, 0, 1}, {7, 8, 9}} {
@@ -151,7 +151,7 @@ func TestPC28EvaluationCoversDrawMarketsAndNonWrappingStraight(t *testing.T) {
 		{[]int{1, 2, 3}, pc28ColorRed, 0, "红波", false, true, markSixOutcomeWon},
 		{[]int{3, 3, 3}, pc28Leopard, 0, "豹子", false, true, markSixOutcomeWon},
 		{[]int{3, 3, 4}, pc28Pair, 0, "对子", false, true, markSixOutcomeWon},
-		{[]int{8, 9, 0}, pc28Straight, 0, "顺子", false, false, markSixOutcomeLost},
+		{[]int{8, 9, 0}, pc28Straight, 0, "顺子", false, true, markSixOutcomeWon},
 		{[]int{4, 4, 5}, pc28ColorRed, 0, "红波", true, false, markSixOutcomePush},
 	}
 	for _, check := range checks {

@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 reset_script="$script_dir/dev-reset-business-data.sh"
+dev_backup_script="$script_dir/dev-postgres-backup.sh"
 full_reset_script="$script_dir/dev-reset-database.sh"
 sentinel_script="$script_dir/dev-reset-init-sentinel.sh"
 verify_script="$script_dir/dev-reset-verify-bootstrap.sh"
@@ -11,7 +12,7 @@ migration="$script_dir/../backend/migrations/202608270010_dev_reset_guard.sql"
 marker_migration="$script_dir/../backend/migrations/202608270011_reset_guard_workspace_marker.sql"
 identity_migration="$script_dir/../backend/migrations/202608270012_reset_identity_receipts.sql"
 
-bash -n "$reset_script" "$full_reset_script" "$sentinel_script" "$verify_script" "$complete_receipt_script" "$script_dir/lib/dev-reset-safety.sh"
+bash -n "$reset_script" "$dev_backup_script" "$full_reset_script" "$sentinel_script" "$verify_script" "$complete_receipt_script" "$script_dir/lib/dev-reset-safety.sh"
 test_root="$(mktemp -d)"
 trap 'rm -rf -- "$test_root"' EXIT INT TERM
 
@@ -31,11 +32,34 @@ write_env() {
 }
 
 write_env "$test_root/debug.env" debug 127.0.0.1
+printf '%s\n' 'BACKEND_SEED_EXPERIENCE_ACCOUNTS=true' >>"$test_root/debug.env"
 dry_run_output="$(bash "$reset_script" --dry-run "$test_root/debug.env")"
 grep -Fq '仅预览：没有连接数据库、没有备份、没有修改任何数据。' <<<"$dry_run_output"
 grep -Fq 'schema_migrations' <<<"$dry_run_output"
 grep -Fq 'development_reset_receipts' <<<"$dry_run_output"
 grep -Fq 'workspace_migration_markers' <<<"$dry_run_output"
+
+write_env "$test_root/debug-without-experience-seed.env" debug 127.0.0.1
+if bash "$full_reset_script" --dry-run "$test_root/debug-without-experience-seed.env" >"$test_root/full-missing-experience-seed.out" 2>&1; then
+  echo "完整重建错误地允许未显式启用体验账号夹具" >&2
+  exit 1
+fi
+grep -Fq '完整重建必须显式设置 BACKEND_SEED_EXPERIENCE_ACCOUNTS=true' "$test_root/full-missing-experience-seed.out"
+if bash "$verify_script" "$test_root/debug-without-experience-seed.env" >"$test_root/verify-missing-experience-seed.out" 2>&1; then
+  echo "只读验收错误地允许未显式启用体验账号夹具" >&2
+  exit 1
+fi
+grep -Fq '只读重建验收必须显式设置 BACKEND_SEED_EXPERIENCE_ACCOUNTS=true' "$test_root/verify-missing-experience-seed.out"
+printf '%s\n' 'BACKEND_SEED_EXPERIENCE_ACCOUNTS=false' >>"$test_root/debug-without-experience-seed.env"
+if bash "$verify_script" "$test_root/debug-without-experience-seed.env" >"$test_root/verify-false-experience-seed.out" 2>&1; then
+  echo "只读验收错误地允许禁用的体验账号夹具" >&2
+  exit 1
+fi
+grep -Fq '只读重建验收必须显式设置 BACKEND_SEED_EXPERIENCE_ACCOUNTS=true' "$test_root/verify-false-experience-seed.out"
+if grep -Fq 'BACKEND_SEED_EXPERIENCE_ACCOUNTS' "$script_dir/local-dev.sh"; then
+  echo "普通 local-dev.sh 不得默认设置体验账号夹具开关" >&2
+  exit 1
+fi
 
 # Purely static: prove the human preview, audited SQL manifest and explicit
 # truncate statement describe the same exact tables, then compare that union
@@ -47,6 +71,10 @@ manifest_preserved="$(grep -Eo "\('[a-z_][a-z0-9_]*','preserve'\)" "$reset_scrip
 manifest_cleared="$(grep -Eo "\('[a-z_][a-z0-9_]*','clear'\)" "$reset_script" | cut -d "'" -f2 | LC_ALL=C sort)"
 truncate_statement="$(sed -n '/^TRUNCATE TABLE$/,/^RESTART IDENTITY;$/p' "$reset_script")"
 truncate_tables="$(grep -Eo 'public\.[a-z_][a-z0-9_]*' <<<"$truncate_statement" | cut -d. -f2 | LC_ALL=C sort)"
+[[ "$(grep -c . <<<"$manifest_preserved")" == "25" && "$(grep -c . <<<"$manifest_cleared")" == "32" ]] || {
+  echo "业务重置必须保持当前 25 张保留表、32 张清理表的审定边界" >&2
+  exit 1
+}
 [[ -n "$preview_preserved" && "$preview_preserved" == "$manifest_preserved" ]] || { echo "保留表预览与 SQL manifest 不一致" >&2; exit 1; }
 [[ -n "$preview_cleared" && "$preview_cleared" == "$manifest_cleared" && "$manifest_cleared" == "$truncate_tables" ]] || {
   echo "清理表预览、SQL manifest 与明确 TRUNCATE 范围不一致" >&2
@@ -70,11 +98,68 @@ schema_tables="$(printf '%s\n' schema_migrations "$schema_tables" | LC_ALL=C sor
   diff <(printf '%s\n' "$schema_tables") <(printf '%s\n' "$manifest_tables") >&2 || true
   exit 1
 }
-for preserved in schema_migrations development_reset_receipts workspace_migration_markers workspace_robot_reset_receipts ws_session_revocation_outbox plan_automations; do
+for preserved in schema_migrations development_reset_receipts workspace_migration_markers workspace_robot_reset_receipts ws_session_revocation_outbox lottery_games ops_activities special_number_campaigns plan_automations; do
   grep -Fxq "$preserved" <<<"$manifest_preserved" || { echo "不可变凭证、安全撤销意图或配置表未保留：$preserved" >&2; exit 1; }
 done
-for cleared in member_chat_read_cursors lottery_issue_windows plan_generation_receipts plan_streams plan_stream_cycles plan_stream_periods; do
+for cleared in member_payment_accounts special_number_grants member_chat_read_cursors lottery_issue_windows plan_generation_receipts plan_streams plan_stream_cycles plan_stream_periods lottery_sgssc_backfill_attempts lottery_sgssc_backfill_items system_event_logs; do
   grep -Fxq "$cleared" <<<"$truncate_tables" || { echo "运行记录未随关联业务一起清理：$cleared" >&2; exit 1; }
+done
+grep -Fq 'public.lottery_sgssc_backfill_attempts, public.lottery_sgssc_backfill_items,' <<<"$truncate_statement" || {
+  echo "SG 补采尝试与父队列必须按明确顺序纳入同一条受控 TRUNCATE" >&2
+  exit 1
+}
+empty_table_assertions="$(sed -n '/FOREACH table_name IN ARRAY ARRAY\[/,/] LOOP/p' "$verify_script")"
+for empty_table in lottery_sgssc_backfill_attempts lottery_sgssc_backfill_items system_event_logs; do
+  grep -Fq "'$empty_table'" <<<"$empty_table_assertions" || { echo "新库验收遗漏 SG 补采空历史表：$empty_table" >&2; exit 1; }
+done
+
+runtime_reset_sql="$(sed -n '/^-- Preserved catalogue\/configuration rows also contain derived runtime fields\./,/^-- Fail closed before writing the immutable receipt\./p' "$reset_script")"
+for fragment in \
+  'UPDATE public.lottery_games' "next_issue = ''" 'next_draw_at = NULL' \
+  "THEN 'pending'" "THEN 'stale'" 'last_sync_at = NULL' "last_sync_error = ''" \
+  'UPDATE public.ops_activities' 'participants = 0' 'pool_remaining_cents = pool_total_cents' \
+  'UPDATE public.special_number_campaigns' 'granted_count = 0' \
+  'UPDATE public.plan_automations' 'last_run_at = NULL' 'last_created_count = 0'; do
+  grep -Fq "$fragment" <<<"$runtime_reset_sql" || { echo "业务重置缺少运行态复位：$fragment" >&2; exit 1; }
+done
+
+lottery_runtime_reset="$(sed -n '/^UPDATE public.lottery_games$/,/^    updated_at = now();$/p' "$reset_script")"
+for forbidden in 'code =' 'name =' 'category =' 'lobby_category =' 'lobby_sort_order =' 'badge =' 'badge_color =' 'enabled =' 'sort_order =' 'draw_interval =' 'source_kind =' 'source_name =' 'source_url =' 'odds_config_revision ='; do
+  if grep -Fq "$forbidden" <<<"$lottery_runtime_reset"; then
+    echo "彩票运行态复位错误地改写保留配置：$forbidden" >&2
+    exit 1
+  fi
+done
+plan_runtime_reset="$(sed -n '/^UPDATE public.plan_automations$/,/^    updated_at = now();$/p' "$reset_script")"
+for forbidden in 'enabled =' 'mode =' 'game_ids_json =' 'positions_json =' 'plan_keys_json ='; do
+  if grep -Fq "$forbidden" <<<"$plan_runtime_reset"; then
+    echo "计划运行态复位错误地改写保留配置：$forbidden" >&2
+    exit 1
+  fi
+done
+activity_runtime_reset="$(sed -n '/^UPDATE public.ops_activities$/,/^    updated_at = now();$/p' "$reset_script")"
+for forbidden in 'workspace_id =' 'type =' 'title =' 'subtitle =' 'status =' 'cover =' 'reward_cents =' 'pool_total_cents =' 'config_json =' 'sort_order =' 'starts_at =' 'ends_at ='; do
+  if grep -Fq "$forbidden" <<<"$activity_runtime_reset"; then
+    echo "活动运行态复位错误地改写保留配置：$forbidden" >&2
+    exit 1
+  fi
+done
+special_campaign_runtime_reset="$(sed -n '/^UPDATE public.special_number_campaigns$/,/^    updated_at = now();$/p' "$reset_script")"
+for forbidden in 'title =' 'status =' 'rule_text =' 'starts_at =' 'ends_at ='; do
+  if grep -Fq "$forbidden" <<<"$special_campaign_runtime_reset"; then
+    echo "特殊号码计数复位错误地改写保留配置：$forbidden" >&2
+    exit 1
+  fi
+done
+
+post_reset_assertions="$(sed -n '/^-- Fail closed before writing the immutable receipt\./,/^INSERT INTO public.development_reset_receipts (/p' "$reset_script")"
+for fragment in \
+  'FROM dev_reset_manifest' "WHERE disposition = 'clear'" \
+  "format('SELECT count(*) FROM public.%I', cleared_table)" \
+  'cleared table % still contains % row(s) after reset' \
+  'FROM public.lottery_games' 'FROM public.ops_activities' \
+  'FROM public.special_number_campaigns' 'FROM public.plan_automations'; do
+  grep -Fq "$fragment" <<<"$post_reset_assertions" || { echo "业务重置缺少事务内结果断言：$fragment" >&2; exit 1; }
 done
 
 full_dry_run_output="$(bash "$full_reset_script" --dry-run "$test_root/debug.env")"
@@ -96,6 +181,7 @@ current_env_output="$(
 grep -Fq '仅预览：没有连接数据库、没有备份、没有修改任何数据。' <<<"$current_env_output"
 current_env_full_output="$(
   BACKEND_SERVER_MODE=debug \
+  BACKEND_SEED_EXPERIENCE_ACCOUNTS=true \
   BACKEND_SERVER_PORT=8080 \
   BACKEND_DATABASE_HOST=::1 \
   BACKEND_DATABASE_PORT=5432 \
@@ -107,6 +193,17 @@ current_env_full_output="$(
 )"
 grep -Fq '仅预览：没有连接数据库、没有备份、没有修改任何 schema 或数据。' <<<"$current_env_full_output"
 grep -Fq -- '--current-env' "$script_dir/postgres-backup.sh"
+grep -Fq '"$script_dir/dev-postgres-backup.sh" --backup-dir "$backup_dir"' "$reset_script"
+grep -Fq 'age --recipient "$backup_recipient"' "$dev_backup_script"
+grep -Fq 'age --decrypt --identity "$identity_file"' "$dev_backup_script"
+[[ "$(grep -Fc '"$pg_restore_bin" --list' "$dev_backup_script")" == "2" ]] || {
+  echo "本机开发备份必须同时验证原始 pg_dump 与加密回读内容" >&2
+  exit 1
+}
+if grep -Eq '(^|[[:space:]])(find .*-delete|rm -rf)([[:space:]]|$)' "$dev_backup_script"; then
+  echo "本机开发备份不得自动删除历史备份或递归删除目录" >&2
+  exit 1
+fi
 
 # File mode cannot inherit a dangerous authorization that the file omitted.
 if BACKEND_ALLOW_DEVELOPMENT_RESET=YES \
@@ -135,6 +232,7 @@ grep -Fq 'FROM public.schema_migrations' "$reset_script"
 grep -Fq 'FROM pg_catalog.pg_stat_activity' "$reset_script"
 grep -Fq 'public.workspace_robot_settings' "$reset_script"
 grep -Fq 'UPDATE public."user"' "$reset_script"
+grep -Fq '彩票期号/同步状态、活动参与/剩余奖池、特殊号码发放计数和计划运行统计将复位。' <<<"$dry_run_output"
 grep -Fq 'INSERT INTO public.development_reset_receipts' "$reset_script"
 grep -Fq 'public.user_balance_transactions' "$reset_script"
 grep -Fq 'SET LOCAL search_path = pg_catalog, public;' "$full_reset_script"

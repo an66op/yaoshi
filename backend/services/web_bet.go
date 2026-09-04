@@ -50,7 +50,7 @@ func (s *BetAssistantService) PlaceWeb(userID uint64, gameID, issue string, item
 		code := strings.ToLower(strings.TrimSpace(item.PlayCode))
 		selection := strings.TrimSpace(item.Selection)
 		if profile.MarkSix {
-			selection = markSixNormalizeSelection(code, selection)
+			selection = markSixNormalizeSelectionForVersion(profile.Version, code, selection)
 		} else {
 			selection = pc28NormalizeSelection(code, selection)
 		}
@@ -214,7 +214,7 @@ func (s *BetAssistantService) placeWeb(userID uint64, gameID, issue string, item
 		}
 		remark := "PC28详细网投"
 		if profile.MarkSix {
-			remark = "宾果六合彩网投"
+			remark = "六合彩网投"
 		}
 		inputs = append(inputs, PlaceBetInput{
 			GameID: game.ID, Issue: requestedIssue, UserID: userID,

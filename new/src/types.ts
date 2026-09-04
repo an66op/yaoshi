@@ -22,6 +22,7 @@ export type Game = {
   issueStatus: string
   sourceKind: string
   sourceName: string
+  sourceURL?: string
   sourceHealthy: boolean
   syncStatus: string
   sourceError: string

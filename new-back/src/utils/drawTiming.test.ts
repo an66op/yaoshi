@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  currentIssueLabel,
   describeGameSchedule,
   describeIssueState,
   formatBeijingDateTime,
   formatDurationSeconds,
   formatFeedCountdown,
+  gameSourceLabel,
 } from './drawTiming'
 
 describe('Beijing draw timestamps', () => {
@@ -110,9 +112,36 @@ describe('current-period status', () => {
     expect(describeIssueState({ ...game, issue_status: 'settled' }, now)).toBe('已结算')
   })
 
+  it('closes an accepting SG lifecycle when the server reports stale source health, then recovers', () => {
+    const now = Date.parse('2026-08-30T05:30:20Z')
+    const sg = { ...game, id: 'sg-ssc', source_healthy: false, sync_status: 'ok', enabled: true, rules_ready: true }
+    expect(describeIssueState(sg, now)).toBe('开奖源异常 · 已停盘')
+    expect(describeIssueState({ ...sg, source_healthy: true }, now)).toBe('受理中')
+    expect(describeIssueState({ ...sg, source_healthy: true, enabled: false }, now)).toBe('彩种已关闭')
+    expect(describeIssueState({ ...sg, source_healthy: true, rules_ready: false }, now)).toBe('玩法待配置')
+    expect(describeIssueState({ ...sg, source_healthy: true, issue_status: 'error' }, now)).toBe('开奖异常')
+  })
+
   it('uses the server lifecycle until time is calibrated and tolerates absent timing', () => {
     expect(describeIssueState({ ...game, issue_status: 'sealed' }, 0)).toBe('封盘中')
     expect(describeIssueState({ ...game, next_draw_at: 'invalid', seal_at: undefined, accept_at: undefined }, Number.NaN)).toBe('受理中')
     expect(describeIssueState(undefined, 0)).toBe('等待期号')
+  })
+})
+
+describe('SG current issue and source labels', () => {
+  it('keeps trusted history distinct from a missing current issue', () => {
+    const game = { current_issue: '', issue: '20260903095' }
+    expect(currentIssueLabel(game)).toBe('—')
+    expect(currentIssueLabel({ ...game, current_issue: '20260903096' })).toBe('20260903096')
+    expect(currentIssueLabel(undefined)).toBe('—')
+    expect(game.issue).toBe('20260903095')
+  })
+
+  it('never describes an external SG source as platform or official', () => {
+    expect(gameSourceLabel({ source_kind: 'external', source_name: 'SG时时彩双站核对（168＋115）' })).toBe('SG时时彩双站核对（168＋115）')
+    expect(gameSourceLabel({ source_kind: 'external', source_name: '' })).toBe('外部开奖源')
+    expect(gameSourceLabel({ source_kind: 'official', source_name: '中国福彩网' })).toBe('中国福彩网')
+    expect(gameSourceLabel({ source_kind: 'platform', source_name: '' })).toBe('平台开奖')
   })
 })

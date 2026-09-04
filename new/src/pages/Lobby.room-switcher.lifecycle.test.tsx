@@ -262,6 +262,51 @@ describe('lobby room switcher cards', () => {
     expect(gameCards().map(element => text(element))).toEqual([expect.stringContaining('极速赛车')])
   })
 
+  it('shows friendly results-only and draw-pause states without technical source details', () => {
+    const timing = {
+      phase: 'unavailable' as const, phaseLabel: '仅开奖', statusLabel: '仅展示已公布开奖 · 投注未开放', accepting: false,
+      due: '--:--', remainingSeconds: null, drawAtMs: null, sealAtMs: null, acceptAtMs: null, intervalSeconds: null, sealSeconds: null,
+    }
+    const baseGame: Props['games'][number] = {
+      id: 'hong-kong-mark-six', title: '香港六合彩', lobbyCategory: '彩票', timing, tag: '香港', category: '六合彩', online: '—',
+      period: '100', latestIssue: '99', due: '--:--', color: '#d64155', balls: [1, 7, 18, 25, 30, 42, 49], issueStatus: 'pending',
+      sourceKind: 'external', sourceName: 'internal-provider-name', sourceHealthy: true, syncStatus: 'error', sourceError: 'secret upstream timeout', rulesReady: false,
+    }
+    const root = render({ games: [baseGame, { ...baseGame, id: 'new-macau-mark-six', title: '新澳门六合彩', sourceHealthy: false, rulesReady: true }] })
+    const gameCards = elements(root).filter(element => hasClass(element, 'game-card')).map(element => text(element))
+    expect(gameCards).toEqual([expect.stringContaining('仅开奖 · 投注未开放'), expect.stringContaining('开奖暂停 · 投注暂停')])
+    expect(gameCards.join('')).not.toContain('internal-provider-name')
+    expect(gameCards.join('')).not.toContain('secret upstream timeout')
+    expect(elements(root).filter(element => element.props.className?.includes('mark-six-special-ball'))).toHaveLength(2)
+  })
+
+  it('shows all three enabled PC catalogue entries as independent game cards', () => {
+    const timing = {
+      phase: 'accepting' as const, phaseLabel: '受理倒计时', statusLabel: '正在受理', accepting: true,
+      due: '00:30', remainingSeconds: 30, drawAtMs: 60_000, sealAtMs: 55_000, acceptAtMs: 0,
+      intervalSeconds: 210, sealSeconds: 5,
+    }
+    const games: Props['games'] = [
+      ['pc-canada', 'PC加拿大', 'pc28-v1'],
+      ['canada-28', '加拿大28', 'pc28-v2'],
+      ['canada-20', '加拿大2.0', 'pc28-v3'],
+    ].map(([id, title, ruleVersion]) => ({
+      id, title, lobbyCategory: 'PC', timing, tag: title, category: 'PC', online: '—', period: '100', latestIssue: '99',
+      due: timing.due, color: '#4aa3b4', balls: [9, 1, 9], issueStatus: 'accepting', sourceKind: 'external',
+      sourceName: '163开奖', sourceHealthy: true, syncStatus: 'ready', sourceError: '', rulesReady: true, ruleVersion,
+    }))
+    const onOpenGame = vi.fn()
+    const root = render({ games, initialFilter: 'PC', onOpenGame })
+    const gameCards = elements(root).filter(element => hasClass(element, 'game-card'))
+    expect(gameCards.map(element => text(element))).toEqual([
+      expect.stringContaining('PC加拿大'), expect.stringContaining('加拿大28'), expect.stringContaining('加拿大2.0'),
+    ])
+    gameCards.forEach(card => card.props.onClick!())
+    expect(onOpenGame.mock.calls).toEqual([
+      ['pc-canada', 'PC'], ['canada-28', 'PC'], ['canada-20', 'PC'],
+    ])
+  })
+
   it('synchronizes a cleared category route back to the default lottery category', () => {
     const timing = {
       phase: 'accepting' as const, phaseLabel: '受理倒计时', statusLabel: '正在受理', accepting: true,

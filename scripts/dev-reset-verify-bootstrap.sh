@@ -9,6 +9,8 @@ usage() {
 只读验收“完整重建 public schema 后第一次 debug bootstrap”。
 迁移版本、SHA-256 和表清单从当前 backend/migrations/*.sql 读取。
 不传 ENV_FILE 时，必须由当前进程显式提供全部 BACKEND_* 数据库变量。
+必须显式设置 BACKEND_SEED_EXPERIENCE_ACCOUNTS=true，表明本次验收的
+首次后端启动确实包含全新体验账号夹具。
 只允许本机 debug 数据库；REPEATABLE READ + READ ONLY 事务不会修改数据。
 USAGE
 }
@@ -48,6 +50,10 @@ esac
 [[ "$BACKEND_DATABASE_PORT" =~ ^[0-9]{1,5}$ ]] &&
   (( 10#$BACKEND_DATABASE_PORT > 0 && 10#$BACKEND_DATABASE_PORT <= 65535 )) || { echo "数据库端口不正确" >&2; exit 1; }
 [[ "$BACKEND_DATABASE_DBNAME" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "数据库名不正确" >&2; exit 1; }
+[[ "${BACKEND_SEED_EXPERIENCE_ACCOUNTS:-}" == "true" ]] || {
+  echo "只读重建验收必须显式设置 BACKEND_SEED_EXPERIENCE_ACCOUNTS=true" >&2
+  exit 1
+}
 
 psql_bin="${PSQL_BIN:-}"
 if [[ -z "$psql_bin" ]]; then
@@ -298,11 +304,12 @@ DECLARE
 BEGIN
   FOREACH table_name IN ARRAY ARRAY[
     'development_reset_receipts', 'workspace_robot_reset_receipts', 'user_applications',
+    'lottery_sgssc_backfill_attempts', 'lottery_sgssc_backfill_items',
     'lottery_bets', 'lottery_assistant_requests', 'lottery_bet_requests', 'member_payment_accounts',
     'activity_participations', 'special_number_resources', 'special_number_campaigns', 'special_number_grants',
     'admin_notifications', 'member_notifications', 'member_chat_messages', 'member_chat_read_cursors',
     'chat_red_packets', 'chat_red_packet_claims', 'rebate_daily_records', 'agent_profit_share_records',
-    'admin_audit_logs', 'data_cleanup_runs', 'admin_audit_log_archives', 'lottery_bet_archives',
+    'admin_audit_logs', 'system_event_logs', 'data_cleanup_runs', 'admin_audit_log_archives', 'lottery_bet_archives',
     'user_balance_transaction_archives', 'lottery_play_limits', 'user_play_odds', 'room_play_odds',
     'workspace_robot_games', 'plan_recommendations', 'plan_automations', 'plan_generation_receipts',
     'plan_streams', 'plan_stream_cycles', 'plan_stream_periods'

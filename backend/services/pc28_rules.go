@@ -125,7 +125,7 @@ func pc28PlaySpecs() []pc28PlaySpec {
 		{Code: pc28ColorBlue, Name: "蓝波", Category: "色波", Description: "和值命中蓝波；灰/黄波按下注时冻结的房间返本设置处理", Example: "蓝波/5"},
 		{Code: pc28Leopard, Name: "豹子", Category: "形态", Description: "三球号码全部相同", Example: "豹子/5"},
 		{Code: pc28Pair, Name: "对子", Category: "形态", Description: "三球中恰有两个号码相同", Example: "对子/5"},
-		{Code: pc28Straight, Name: "顺子", Category: "形态", Description: "三球互不相同且排序后连续；890、901不算顺子", Example: "顺子/5"},
+		{Code: pc28Straight, Name: "顺子", Category: "形态", Description: "三球互不相同且为连续号；原版明确890、901循环连续号也算顺子", Example: "顺子/5"},
 	}
 	for index := range fixed {
 		fixed[index].SortOrder = order
@@ -471,7 +471,9 @@ func pc28Shape(numbers []int) string {
 	}
 	values := append([]int(nil), numbers...)
 	sort.Ints(values)
-	if values[1] == values[0]+1 && values[2] == values[1]+1 {
+	if values[1] == values[0]+1 && values[2] == values[1]+1 ||
+		values[0] == 0 && values[1] == 8 && values[2] == 9 ||
+		values[0] == 0 && values[1] == 1 && values[2] == 9 {
 		return pc28Straight
 	}
 	return ""

@@ -94,16 +94,10 @@ func TestEveryUnconfirmedOddsRowRemainsUnavailable(t *testing.T) {
 }
 
 func TestEverySupportedGameRequiresExplicitOdds(t *testing.T) {
-	for _, gameID := range []string{"speed-racing", "speed-ssc", "au-lucky-5", "bingo-ssc-1", "bingo-racing-a", "pc-canada", "canada-28", "canada-20", "bingo-mark-six"} {
+	for _, gameID := range []string{"speed-racing", "speed-ssc", "au-lucky-5", "bingo-ssc-1", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4", "bingo-racing-a", "bingo-racing-b", "pc-canada", "canada-28", "canada-20", "bingo-mark-six"} {
 		profile, ready := rulesForGame(&lottery.Game{ID: gameID})
 		if !ready {
 			t.Fatalf("%s rules missing: profile=%+v ready=%v", gameID, profile, ready)
-		}
-	}
-	for _, gameID := range []string{"bingo-racing-b", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
-		profile, ready := rulesForGame(&lottery.Game{ID: gameID})
-		if ready {
-			t.Fatalf("unverified %s unexpectedly has live rules: profile=%+v", gameID, profile)
 		}
 	}
 }

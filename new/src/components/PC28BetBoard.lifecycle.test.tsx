@@ -4,6 +4,7 @@ import type { AssistantBetResult } from '../api/bets'
 import type { GameOdds } from '../api/portal'
 import type { Game } from '../types'
 import { HookHarness } from '../test/hookHarness'
+import { pc28PricedPlayCodes } from '../utils/pc28BetSelection'
 import { resolveLotteryTiming } from '../utils/lotteryTiming'
 import { PC28BetBoard } from './PC28BetBoard'
 
@@ -65,10 +66,35 @@ describe('PC28 detailed web board lifecycle', () => {
   })
 
   it('enables exact sums only when their actual symmetric play code is returned', () => {
+    expect(text(render())).toContain('赔率目录 11/32')
     expect(choice('0').props.disabled).toBe(false)
     expect(choice('27').props.disabled).toBe(false)
     expect(choice('1').props.disabled).toBe(true)
     expect(text(choice('1'))).toContain('待配置')
+  })
+
+  it.each([
+    ['pc-canada', 'PC加拿大', 'pc28-v1'],
+    ['canada-28', '加拿大28', 'pc28-v2'],
+    ['canada-20', '加拿大2.0', 'pc28-v3'],
+  ])('binds all 32 current price rows to the exact product identity for %s', (gameId, title, ruleVersion) => {
+    props.game = { ...game, id: gameId, title, ruleVersion }
+    props.ruleVersion = ruleVersion
+    props.oddsInfo = {
+      ...oddsInfo,
+      game_id: gameId,
+      game_name: title,
+      rule_version: ruleVersion,
+      items: pc28PricedPlayCodes.map(playCode => quote(playCode, 2)),
+    }
+    expect(text(render())).toContain('赔率目录 32/32')
+    expect(choice('0').props.disabled).toBe(false)
+
+    props.oddsInfo = { ...props.oddsInfo, game_id: 'another-game' }
+    expect(text(render())).toContain('赔率目录 0/32')
+    expect(text(render())).toContain('赔率目录身份或规则版本不匹配')
+    expect(choice('0').props.disabled).toBe(true)
+    expect(find(node => node.props.className === 'full-bet-confirm')!.props.disabled).toBe(true)
   })
 
   it('keeps the tie disabled until its independent quote exists', () => {
@@ -79,6 +105,14 @@ describe('PC28 detailed web board lifecycle', () => {
     props.oddsInfo = { ...oddsInfo, items: [...oddsInfo.items, quote('pc28_dragon_tiger_tie', 8.5)] }
     expect(choice('和').props.disabled).toBe(false)
     expect(text(choice('和'))).toContain('8.50')
+  })
+
+  it('fails closed inside the board when the draw source becomes unhealthy', () => {
+    props.game = { ...game, sourceHealthy: false }
+    props.rulesMessage = '开奖同步暂时暂停，当前可查看已公布结果和聊天，投注已暂停。'
+    expect(choice('0').props.disabled).toBe(true)
+    expect(text(render())).toContain(props.rulesMessage)
+    expect(text(find(node => node.props.className === 'full-bet-confirm'))).toContain('开奖暂停')
   })
 
   it('submits package-three as one sorted typed row and clears the accepted cart', async () => {
@@ -106,9 +140,9 @@ describe('PC28 detailed web board lifecycle', () => {
     expect(props.onConfirm).toHaveBeenCalledWith([{ play_code: 'pc28_position_number', play_name: '三球定位号码', position: 3, selection: '8', amount: 20 }])
   })
 
-  it('documents the non-circular straight boundary and disables all prices on a version mismatch', () => {
+  it('documents the original circular straight boundary and disables all prices on a version mismatch', () => {
     button('形态').props.onClick!()
-    expect(text(render())).toContain('890、901及019均不算顺子')
+    expect(text(render())).toContain('890、901及同组不同排列均算顺子')
     expect(choice('豹子').props.disabled).toBe(false)
     props.oddsInfo = { ...oddsInfo, rule_version: 'pc28-v1' }
     expect(choice('豹子').props.disabled).toBe(true)

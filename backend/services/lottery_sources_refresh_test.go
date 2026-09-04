@@ -14,7 +14,7 @@ import (
 
 func TestOfficialGameCatalogChangedOnlyPublishesVisibleChanges(t *testing.T) {
 	base := lottery.Game{
-		ID: "speed-racing", Enabled: true, SourceKind: "external", SyncStatus: "ok",
+		ID: "speed-racing", Enabled: true, SourceKind: "external", SourceName: source163MirrorName, SourceURL: source163MirrorURL, SyncStatus: "ok",
 		NextIssue: "34136855", NextDrawAt: time.Date(2026, 8, 30, 6, 48, 3, 0, time.UTC),
 		DrawInterval: 75, TimingSource: "upstream",
 	}

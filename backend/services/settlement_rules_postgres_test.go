@@ -25,6 +25,10 @@ func TestSettlementRulesPostgresAtomicity(t *testing.T) {
 	seed := func(t *testing.T, gameID, issue string, numbers []int, versions []string) []bet.Bet {
 		t.Helper()
 		draw := lottery.Draw{GameID: gameID, Issue: issue, Numbers: joinNumbers(numbers), DrawAt: time.Now().UTC().Add(-time.Minute)}
+		sourceRevision, conversionRevision, versioned := trustedDrawRevision(gameID)
+		if versioned {
+			draw.SourceRevision, draw.ConversionRevision = sourceRevision, conversionRevision
+		}
 		if err := db.Create(&draw).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -40,6 +44,9 @@ func TestSettlementRulesPostgresAtomicity(t *testing.T) {
 				PlayCode: "two_sided", PlayName: "两面", Position: 1, Selection: selection,
 				AmountCents: 200, Odds: 2, Status: "pending", Remark: "accepted fixture",
 				RequestReference: fmt.Sprintf("rule-atomic:%s:%d", issue, index),
+			}
+			if versioned {
+				row.DrawSourceRevision = sourceRevision
 			}
 			if err := db.Create(&row).Error; err != nil {
 				t.Fatal(err)
@@ -150,13 +157,15 @@ func TestDrawGenerationPostgresFailureIsReadOnly(t *testing.T) {
 		name, gameID, sourceKind, code string
 		numbers                        []int
 	}{
-		{"platform entropy failure", "sg-ssc", "platform", "DRAW_RANDOM_FAILED", nil},
-		{"simulated entropy failure", "sg-ssc", "simulated", "DRAW_RANDOM_FAILED", nil},
-		{"missing source must not generate", "sg-ssc", "", "DRAW_NOT_FOUND", nil},
-		{"external missing result", "speed-racing", "external", "DRAW_NOT_FOUND", nil},
+		{"platform entropy failure", "pc-canada", "platform", "DRAW_RANDOM_FAILED", nil},
+		{"simulated entropy failure", "pc-canada", "simulated", "DRAW_RANDOM_FAILED", nil},
+		{"missing source must not generate", "official-fc3d", "", "DRAW_NOT_FOUND", nil},
+		{"external missing result", "hong-kong-mark-six", "external", "DRAW_NOT_FOUND", nil},
 		{"official missing result", "official-fc3d", "official", "DRAW_NOT_FOUND", nil},
 		{"unmodelled generator", "happy8-mark-six", "platform", "RULES_NOT_READY", nil},
-		{"invalid explicit result", "sg-ssc", "platform", "INVALID_DRAW", []int{1, 2, 3}},
+		{"invalid explicit result", "pc-canada", "platform", "INVALID_DRAW", []int{1, 2}},
+		{"SG cannot downgrade to platform", "sg-ssc", "platform", "EXTERNAL_DRAW_MANUAL_FORBIDDEN", nil},
+		{"SG cannot publish explicit results", "sg-ssc", "external", "EXTERNAL_DRAW_MANUAL_FORBIDDEN", []int{1, 2, 3, 4, 5}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			issue := fmt.Sprintf("962%02d", index)

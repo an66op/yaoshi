@@ -60,7 +60,11 @@ func main() {
 		log.Fatalf("%s: %v", constants.ErrDatabaseConnectionFailed, err)
 	}
 	// 集中初始化：正式环境不会落入本地账号、模拟历史开奖或计划数据。
-	if err := services.Bootstrap(db, services.BootstrapOptions{Mode: cfg.Server.Mode}); err != nil {
+	if err := services.Bootstrap(db, services.BootstrapOptions{
+		Mode:                            cfg.Server.Mode,
+		SeedExperienceAccounts:          cfg.Server.SeedExperienceAccounts,
+		SeedDeterministicLotteryHistory: cfg.Server.SeedDeterministicLotteryHistory,
+	}); err != nil {
 		log.Fatalf("%s: %v", constants.ErrInitDependenciesFailed, err)
 	}
 
@@ -73,6 +77,7 @@ func main() {
 		}
 		return mapped
 	})
+	scheduler.SetEventSink(services.NewSystemLogService(db).RecordSchedulerEvent)
 	gin.SetMode(cfg.Server.Mode)
 	r := gin.New()
 	if err := r.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
@@ -101,6 +106,7 @@ func main() {
 	scheduler.Start(rootContext)
 	services.StartSimulatedDrawLoop(rootContext, db)
 	services.StartSettlementRecovery(rootContext, db)
+	services.StartSGSSCBackfill(rootContext, db)
 	services.StartIdempotencyRecovery(rootContext, db)
 	services.StartDataLifecycleLoop(rootContext, db)
 	services.StartRoomActivityForMode(rootContext.Done(), db, cfg.Server.Mode)

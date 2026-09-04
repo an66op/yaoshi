@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { GameOdds } from '../api/portal'
 import {
+  PC28_PRICED_PLAY_CODE_COUNT,
   isPC28EnabledPlayCode,
   pc28BatchError,
   pc28BatchItems,
   pc28MarketsForCategory,
   pc28OddsItem,
   pc28PackageTicket,
+  pc28PricedPlayCodes,
   pc28SingleTicket,
   pc28SumExactPlayCode,
   pc28TicketAddError,
@@ -32,6 +34,22 @@ const odds = (items: ReturnType<typeof quote>[], ruleVersion = 'pc28-v2', showOd
 })
 
 describe('PC28 typed web-bet contract', () => {
+  it('exposes the exact 32-row price catalogue without duplicate or fallback codes', () => {
+    const expected = [
+      ...Array.from({ length: 14 }, (_, value) => `pc28_sum_exact_${value}_${27 - value}`),
+      'pc28_package_three', 'pc28_position_number', 'pc28_position_two_sided',
+      'pc28_dragon_tiger', 'pc28_dragon_tiger_tie', 'pc28_sum_size', 'pc28_sum_parity',
+      'pc28_combo_big_odd', 'pc28_combo_big_even', 'pc28_combo_small_odd', 'pc28_combo_small_even',
+      'pc28_extreme', 'pc28_leopard', 'pc28_pair', 'pc28_straight',
+      'pc28_color_red', 'pc28_color_green', 'pc28_color_blue',
+    ]
+    expect(PC28_PRICED_PLAY_CODE_COUNT).toBe(32)
+    expect(pc28PricedPlayCodes).toHaveLength(PC28_PRICED_PLAY_CODE_COUNT)
+    expect(new Set(pc28PricedPlayCodes).size).toBe(PC28_PRICED_PLAY_CODE_COUNT)
+    expect(new Set(pc28PricedPlayCodes)).toEqual(new Set(expected))
+    expect(pc28PricedPlayCodes.every(isPC28EnabledPlayCode)).toBe(true)
+  })
+
   it('maps every sum to its own symmetric odds band without using a generic fallback', () => {
     expect(pc28SumExactPlayCode(0)).toBe('pc28_sum_exact_0_27')
     expect(pc28SumExactPlayCode(27)).toBe('pc28_sum_exact_0_27')
@@ -66,6 +84,8 @@ describe('PC28 typed web-bet contract', () => {
     expect(pc28OddsItem('canada-28', 'pc28_dragon_tiger_tie', response)).toBeNull()
     expect(pc28OddsItem('canada-28', 'pc28_dragon_tiger', odds([quote('pc28_dragon_tiger', 1)]))).toBeNull()
     expect(pc28OddsItem('canada-28', 'pc28_dragon_tiger', odds([quote('pc28_dragon_tiger')], 'pc28-v1'))).toBeNull()
+    expect(pc28OddsItem('canada-28', 'pc28_dragon_tiger', { ...response, game_id: 'another-game' })).toBeNull()
+    expect(pc28OddsItem('canada-28', 'pc28_dragon_tiger', { ...response, rules_ready: undefined })).toBeNull()
     expect(pc28OddsItem('canada-28', 'pc28_dragon_tiger', odds([quote('pc28_dragon_tiger', 0)], 'pc28-v2', false))).not.toBeNull()
   })
 

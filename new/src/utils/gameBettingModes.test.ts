@@ -11,17 +11,21 @@ describe('roomBettingAssembly', () => {
       defaultMode: 'mode1',
     })
     expect(roomBettingAssembly('speed-ssc').modes[1]?.board).toBe('digit')
-    expect(roomBettingAssembly('pc-canada')).toEqual({
-      modes: [
-        { id: 'mode1', label: '聊天', surface: 'chat' },
-        { id: 'mode2', label: '网投', surface: 'detail', board: 'pc28' },
-      ],
-      defaultMode: 'mode1',
-    })
+    expect(roomBettingAssembly('bingo-racing-b').modes[1]?.board).toBe('racing')
+    for (const id of ['bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4']) expect(roomBettingAssembly(id).modes[1]?.board).toBe('digit')
+    for (const id of ['pc-canada', 'canada-28', 'canada-20']) {
+      expect(roomBettingAssembly(id)).toEqual({
+        modes: [
+          { id: 'mode1', label: '聊天', surface: 'chat' },
+          { id: 'mode2', label: '网投', surface: 'detail', board: 'pc28' },
+        ],
+        defaultMode: 'mode1',
+      })
+    }
   })
 
-  it('opens Bingo Mark Six directly in its only web board mode', () => {
-    const assembly = roomBettingAssembly('bingo-mark-six')
+  it.each(['bingo-mark-six', 'hong-kong-mark-six', 'happy8-mark-six', 'new-macau-mark-six', 'old-macau-mark-six'])('opens %s directly in its only web board mode', id => {
+    const assembly = roomBettingAssembly(id)
     expect(assembly).toEqual({
       modes: [{ id: 'mode2', label: '网投', surface: 'detail', board: 'mark-six' }],
       defaultMode: 'mode2',

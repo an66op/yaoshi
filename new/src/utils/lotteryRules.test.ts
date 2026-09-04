@@ -1,19 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { exactRuleResponsesReady, gameRulesReady, isBingoRacingAReady, isBingoSSC1Ready, lotteryResultSummary, lotteryRuleProfile, markSixBallClass, markSixDrawBallClass, markSixWave, markSixZodiac, markSixZodiacLabel, pc28RuleVersionForGame, pc28TripleShape, requiredRuleVersionForGame } from './lotteryRules'
+import { exactRuleResponsesReady, gameRulesReady, isBingoRacingAReady, isBingoSSC1Ready, lotteryResultSummary, lotteryRuleProfile, markSixBallClass, markSixDrawBallClass, markSixWave, markSixZodiac, markSixZodiacLabel, pc28RuleVersionForGame, pc28TripleShape, requiredRuleVersionForGame, usesMarkSixDrawPresentation } from './lotteryRules'
 
 describe('explicit lottery result profiles', () => {
-  it.each(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10', 'bingo-racing-a'])('uses only the first two numbers and five mirrored pairs for %s', id => {
+  it.each(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10', 'bingo-racing-a', 'bingo-racing-b'])('uses only the first two numbers and five mirrored pairs for %s', id => {
     expect(lotteryRuleProfile(id).family).toBe('racing')
     expect(lotteryResultSummary(id, [4, 7, 1, 2, 3, 5, 6, 8, 9, 10])).toMatchObject({ label: '冠亚和', total: 11, size: '小', parity: '单', dragons: ['虎', '虎', '虎', '虎', '虎'] })
   })
 
-  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('uses all five digits and one verified first-versus-fifth comparison for %s', id => {
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('uses all five digits and one verified first-versus-fifth comparison for %s', id => {
     expect(lotteryRuleProfile(id).family).toBe('ssc')
     expect(lotteryResultSummary(id, [9, 8, 1, 2, 3], 'digits5-v3')).toMatchObject({ label: '总和', total: 23, size: '大', parity: '单', dragons: ['龙'] })
     expect(lotteryResultSummary(id, [7, 1, 2, 3, 7], 'digits5-v3')).toMatchObject({ dragons: ['和'], dragonLabel: '第一球 vs 第五球 龙虎和' })
   })
 
-  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('does not infer five-ball outcomes or enable %s without the exact server version', id => {
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('does not infer five-ball outcomes or enable %s without the exact server version', id => {
     for (const ruleVersion of [undefined, '', 'digits5-v2', 'digits5-v4']) {
       expect(lotteryResultSummary(id, [9, 8, 1, 2, 3], ruleVersion)).toBeNull()
       expect(gameRulesReady({ id, rulesReady: true, ruleVersion })).toBe(false)
@@ -39,14 +39,22 @@ describe('explicit lottery result profiles', () => {
 
   it.each([
     ['bingo-racing-a', 'racing-v2'],
+    ['bingo-racing-b', 'racing-v2'],
     ['speed-ssc', 'digits5-v3'],
     ['sg-ssc', 'digits5-v3'],
     ['au-lucky-5', 'digits5-v3'],
     ['bingo-ssc-1', 'digits5-v3'],
+    ['bingo-ssc-2', 'digits5-v3'],
+    ['bingo-ssc-3', 'digits5-v3'],
+    ['bingo-ssc-4', 'digits5-v3'],
     ['pc-canada', 'pc28-v1'],
     ['canada-28', 'pc28-v2'],
     ['canada-20', 'pc28-v3'],
     ['bingo-mark-six', 'mark6-v2'],
+    ['hong-kong-mark-six', 'hk-mark6-v1'],
+    ['happy8-mark-six', 'happy8-mark6-v1'],
+    ['new-macau-mark-six', 'new-macau-mark6-v1'],
+    ['old-macau-mark-six', 'old-macau-mark6-v1'],
   ])('requires matching catalog, odds and assistant versions for %s', (id, version) => {
     const game = { id, rulesReady: true, ruleVersion: version }
     const matching = { game_id: id, rules_ready: true, rule_version: version }
@@ -68,16 +76,18 @@ describe('explicit lottery result profiles', () => {
     expect(exactRuleResponsesReady(racing, null, null)).toBe(true)
   })
 
-  it.each(['bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('does not borrow another product contract for unverified %s', id => {
-    expect(lotteryRuleProfile(id).family).toBe('unknown')
-    expect(requiredRuleVersionForGame(id)).toBeNull()
-    for (const ruleVersion of [undefined, '', 'racing-v2', 'digits5-v2', 'digits5-v3']) {
-      const game = { id, rulesReady: true, ruleVersion }
-      const response = { game_id: id, rules_ready: true, rule_version: ruleVersion }
-      expect(lotteryResultSummary(id, [9, 8, 1, 2, 3], ruleVersion)).toBeNull()
-      expect(gameRulesReady(game)).toBe(false)
-      expect(exactRuleResponsesReady(game, response, response)).toBe(false)
-    }
+  it('binds the verified Bingo B conversion only to racing-v2', () => {
+    expect(lotteryRuleProfile('bingo-racing-b').family).toBe('racing')
+    expect(requiredRuleVersionForGame('bingo-racing-b')).toBe('racing-v2')
+    expect(gameRulesReady({ id: 'bingo-racing-b', rulesReady: true, ruleVersion: 'racing-v2' })).toBe(true)
+    expect(gameRulesReady({ id: 'bingo-racing-b', rulesReady: true, ruleVersion: 'racing-v1' })).toBe(false)
+  })
+
+  it.each(['bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('binds verified %s only to digits5-v3', id => {
+    expect(lotteryRuleProfile(id).family).toBe('ssc')
+    expect(requiredRuleVersionForGame(id)).toBe('digits5-v3')
+    expect(gameRulesReady({ id, rulesReady: true, ruleVersion: 'digits5-v3' })).toBe(true)
+    expect(gameRulesReady({ id, rulesReady: true, ruleVersion: 'digits5-v2' })).toBe(false)
   })
 
   it.each(['official-fc3d', 'official-pl3'])('uses three-digit sum boundaries for %s', id => {
@@ -100,12 +110,13 @@ describe('explicit lottery result profiles', () => {
     expect(gameRulesReady({ id, rulesReady: true })).toBe(false)
   })
 
-  it('locks the PC28 non-circular straight boundary', () => {
+  it('locks the original PC28 circular straight boundary', () => {
     expect(pc28TripleShape([0, 1, 2])).toBe('顺子')
     expect(pc28TripleShape([2, 0, 1])).toBe('顺子')
-    expect(pc28TripleShape([8, 9, 0])).toBe('杂六')
-    expect(pc28TripleShape([9, 0, 1])).toBe('杂六')
-    expect(pc28TripleShape([0, 1, 9])).toBe('杂六')
+    expect(pc28TripleShape([8, 9, 0])).toBe('顺子')
+    expect(pc28TripleShape([9, 0, 1])).toBe('顺子')
+    expect(pc28TripleShape([0, 1, 9])).toBe('顺子')
+    expect(pc28TripleShape([9, 8, 0])).toBe('顺子')
     expect(pc28TripleShape([6, 6, 6])).toBe('豹子')
     expect(pc28TripleShape([6, 1, 6])).toBe('对子')
   })
@@ -126,6 +137,20 @@ describe('explicit lottery result profiles', () => {
     expect(gameRulesReady({ id: 'bingo-mark-six', rulesReady: true, ruleVersion: 'mark6-v2' })).toBe(true)
   })
 
+  it.each([
+    ['hong-kong-mark-six', 'hk-mark6-v1'],
+    ['happy8-mark-six', 'happy8-mark6-v1'],
+    ['new-macau-mark-six', 'new-macau-mark6-v1'],
+    ['old-macau-mark-six', 'old-macau-mark6-v1'],
+  ])('binds %s to its own seven-ball betting contract %s', (id, version) => {
+    expect(usesMarkSixDrawPresentation(id)).toBe(true)
+    expect(lotteryRuleProfile(id)).toMatchObject({ family: 'mark-six', ballCount: 7 })
+    expect(requiredRuleVersionForGame(id)).toBe(version)
+    expect(lotteryResultSummary(id, [1, 7, 18, 25, 30, 42, 49], version)).toMatchObject({ total: 49, size: '和' })
+    expect(gameRulesReady({ id, rulesReady: true, ruleVersion: version })).toBe(true)
+    expect(gameRulesReady({ id, rulesReady: true, ruleVersion: 'mark6-v2' })).toBe(false)
+  })
+
   it('maps numbers by the draw-date lunar zodiac and changes exactly at Lunar New Year', () => {
     const horseYear = '2026-09-01T12:00:00+08:00'
     expect([35, 34, 23, 30, 22, 6, 20].map(number => markSixZodiac(number, horseYear))).toEqual(['猴', '鸡', '猴', '牛', '鸡', '牛', '猪'])
@@ -137,7 +162,7 @@ describe('explicit lottery result profiles', () => {
     expect(markSixZodiac(50, horseYear)).toBeNull()
   })
 
-  it.each(['hong-kong-mark-six', 'official-kl8', 'official-tw-bingo', 'renamed-speed-racing'])('does not guess result/betting rules for %s', id => {
+  it.each(['official-kl8', 'official-tw-bingo', 'renamed-speed-racing'])('does not guess result/betting rules for %s', id => {
     expect(lotteryRuleProfile(id).family).toBe('unknown')
     expect(lotteryResultSummary(id, [1, 2, 3])).toBeNull()
     expect(gameRulesReady({ id, rulesReady: true })).toBe(false)

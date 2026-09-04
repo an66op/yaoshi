@@ -116,27 +116,16 @@ export const pc28Markets: readonly PC28MarketSpec[] = [
   ]),
 ]
 
-const enabledPlayCodes = new Set<string>([
-  ...pc28SumOptions.map(option => option.playCode!),
-  'pc28_package_three',
-  'pc28_position_number',
-  'pc28_position_two_sided',
-  'pc28_dragon_tiger',
-  'pc28_dragon_tiger_tie',
-  'pc28_sum_size',
-  'pc28_sum_parity',
-  'pc28_combo_big_odd',
-  'pc28_combo_big_even',
-  'pc28_combo_small_odd',
-  'pc28_combo_small_even',
-  'pc28_extreme',
-  'pc28_color_red',
-  'pc28_color_green',
-  'pc28_color_blue',
-  'pc28_leopard',
-  'pc28_pair',
-  'pc28_straight',
-])
+/**
+ * The exact member-facing PC28 price catalogue. Options which share a price
+ * (for example 0/27 or dragon/tiger) intentionally collapse to one row.
+ */
+export const pc28PricedPlayCodes: readonly string[] = [...new Set(pc28Markets.flatMap(marketSpec =>
+  marketSpec.options.map(option => option.playCode ?? marketSpec.playCode).filter((playCode): playCode is string => Boolean(playCode)),
+))]
+export const PC28_PRICED_PLAY_CODE_COUNT = 32
+
+const enabledPlayCodes = new Set(pc28PricedPlayCodes)
 
 export function isPC28EnabledPlayCode(playCode: string) {
   return enabledPlayCodes.has(playCode)
@@ -229,7 +218,11 @@ export function pc28TicketAddError(current: readonly PC28Ticket[], ticket: PC28T
 }
 
 export function pc28OddsItem(gameId: string, playCode: string, response: GameOdds | null | undefined): OddsItem | null {
-  if (!response || response.rules_ready === false || !isPC28RuleVersion(gameId, response.rule_version) || !Array.isArray(response.items)) return null
+  if (!response
+    || response.game_id !== gameId
+    || response.rules_ready !== true
+    || !isPC28RuleVersion(gameId, response.rule_version)
+    || !Array.isArray(response.items)) return null
   const item = response.items.find(row => row.play_code === playCode)
   if (!item) return null
   if (response.show_odds !== false && (typeof item.odds !== 'number' || !Number.isFinite(item.odds) || item.odds <= 1)) return null

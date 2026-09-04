@@ -212,7 +212,7 @@ func memberOddsRuleStatus(gameID string) (bool, string, string, MemberBetModes) 
 	switch rules.Version {
 	case "racing-v2", "digits5-v3", "digits3-v2", pc28RuleV1, pc28RuleV2, pc28RuleV3:
 		return true, rules.Version, "", MemberBetModes{Chat: true, Web: true}
-	case markSixRuleVersion:
+	case markSixRuleVersion, hongKongMarkSixRuleVersion, happy8MarkSixRuleVersion, newMacauMarkSixRuleVersion, oldMacauMarkSixRuleVersion:
 		return true, rules.Version, "", MemberBetModes{Chat: false, Web: true}
 	default:
 		return false, "", gameRulesUnavailableMessage, MemberBetModes{}

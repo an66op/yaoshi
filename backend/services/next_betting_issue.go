@@ -92,7 +92,7 @@ func (s *BetAdminService) bettingIssueForGame(game *lottery.Game, current *lotte
 		return current, nil
 	}
 	var draws []lottery.Draw
-	if err := s.db.Where("game_id = ?", game.ID).Order("draw_at desc, id desc").Limit(4).Find(&draws).Error; err != nil {
+	if err := trustedDrawsForGame(s.db, game.ID).Order("draw_at desc, id desc").Limit(4).Find(&draws).Error; err != nil {
 		return nil, apperrors.NewSystemError("DRAW_READ_FAILED", "读取下一期时间依据失败", err)
 	}
 	next, ok := nextBettingSchedule(game, current, draws, time.Now().UTC())
@@ -172,8 +172,23 @@ func lockBettingIssue(db *gorm.DB, gameID, issue string) error {
 	if err != nil {
 		return err
 	}
+	if !sourceHealthyForGame(game) {
+		return apperrors.NewBusinessError("SOURCE_UNAVAILABLE", "开奖数据暂时异常，本期已暂停投注")
+	}
 	if err := NewBetAdminService(db).ensureIssueOpen(game, issue); err != nil {
 		return err
 	}
-	return lockAcceptingIssue(db, gameID, issue)
+	if err := lockAcceptingIssue(db, gameID, issue); err != nil {
+		return err
+	}
+	if game.ID == "sg-ssc" {
+		// The Game SHARE and Issue UPDATE locks remain held until placement
+		// commits. Never bind a new verified ticket to a legacy platform issue.
+		var row lottery.Issue
+		if err := db.Where("game_id = ? AND issue = ?", game.ID, issue).First(&row).Error; err != nil {
+			return err
+		}
+		return sgSSCIssueEvidenceError(db, issue, &row)
+	}
+	return nil
 }

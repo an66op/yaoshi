@@ -29,11 +29,13 @@ type Configuration struct {
 
 // ServerConfig 服务器配置
 type ServerConfig struct {
-	Bind           string   `mapstructure:"bind"`
-	Port           int      `mapstructure:"port"`
-	Mode           string   `mapstructure:"mode"`
-	AllowedOrigins []string `mapstructure:"allowed_origins"`
-	TrustedProxies []string `mapstructure:"trusted_proxies"`
+	Bind                            string   `mapstructure:"bind"`
+	Port                            int      `mapstructure:"port"`
+	Mode                            string   `mapstructure:"mode"`
+	SeedExperienceAccounts          bool     `mapstructure:"seed_experience_accounts"`
+	SeedDeterministicLotteryHistory bool     `mapstructure:"seed_deterministic_lottery_history"`
+	AllowedOrigins                  []string `mapstructure:"allowed_origins"`
+	TrustedProxies                  []string `mapstructure:"trusted_proxies"`
 }
 
 // DatabaseConfig 数据库配置
@@ -131,6 +133,20 @@ func loadFromEnv() error {
 	}
 	if mode := os.Getenv("BACKEND_SERVER_MODE"); mode != "" {
 		Config.Server.Mode = mode
+	}
+	if seedValue, exists := os.LookupEnv("BACKEND_SEED_EXPERIENCE_ACCOUNTS"); exists {
+		enabled, err := strconv.ParseBool(strings.TrimSpace(seedValue))
+		if err != nil {
+			return fmt.Errorf("BACKEND_SEED_EXPERIENCE_ACCOUNTS 必须是 true 或 false")
+		}
+		Config.Server.SeedExperienceAccounts = enabled
+	}
+	if seedValue, exists := os.LookupEnv("BACKEND_SEED_DETERMINISTIC_LOTTERY_HISTORY"); exists {
+		enabled, err := strconv.ParseBool(strings.TrimSpace(seedValue))
+		if err != nil {
+			return fmt.Errorf("BACKEND_SEED_DETERMINISTIC_LOTTERY_HISTORY 必须是 true 或 false")
+		}
+		Config.Server.SeedDeterministicLotteryHistory = enabled
 	}
 	if origins := os.Getenv("BACKEND_SERVER_ALLOWED_ORIGINS"); origins != "" {
 		Config.Server.AllowedOrigins = splitCSV(origins)
@@ -277,6 +293,12 @@ func validateConfig(cfg *Configuration) error {
 	}
 	if cfg.Server.Mode != "debug" && cfg.Server.Mode != "release" && cfg.Server.Mode != "test" {
 		return fmt.Errorf("服务器模式必须是 debug/release/test，当前值: %s", cfg.Server.Mode)
+	}
+	if cfg.Server.SeedExperienceAccounts && cfg.Server.Mode != "debug" {
+		return fmt.Errorf("BACKEND_SEED_EXPERIENCE_ACCOUNTS 仅允许在 debug 模式启用")
+	}
+	if cfg.Server.SeedDeterministicLotteryHistory && cfg.Server.Mode != "debug" {
+		return fmt.Errorf("BACKEND_SEED_DETERMINISTIC_LOTTERY_HISTORY 仅允许在 debug 模式启用")
 	}
 
 	// 根据模式设置 Gin 模式

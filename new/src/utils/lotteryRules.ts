@@ -1,17 +1,24 @@
 import type { LotteryTiming } from './lotteryTiming'
 
 export type LotteryRuleFamily = 'racing' | 'ssc' | 'digit3' | 'pc28' | 'mark-six' | 'unknown'
-const racingIDs = new Set(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10', 'bingo-racing-a'])
-const sscIDs = new Set(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])
+const racingIDs = new Set(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10', 'bingo-racing-a', 'bingo-racing-b'])
+const sscIDs = new Set(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])
 // Only these products have the versioned middle/back-three and 1↔5
 // dragon/tiger/tie settlement contract. Do not infer this capability from the
-// generic five-ball family. Bingo variants 2–4 have no verified bet contract.
-const digit5V3IDs = new Set(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])
+// generic five-ball family.
+const digit5V3IDs = new Set(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])
 const digit3IDs = new Set(['official-fc3d', 'official-pl3'])
 const pc28RuleVersions = {
   'pc-canada': 'pc28-v1',
   'canada-28': 'pc28-v2',
   'canada-20': 'pc28-v3',
+} as const
+const markSixRuleVersions = {
+  'bingo-mark-six': 'mark6-v2',
+  'hong-kong-mark-six': 'hk-mark6-v1',
+  'happy8-mark-six': 'happy8-mark6-v1',
+  'new-macau-mark-six': 'new-macau-mark6-v1',
+  'old-macau-mark-six': 'old-macau-mark6-v1',
 } as const
 // These products changed financial/settlement semantics in place.  Opening a
 // board from one endpoint's version while another endpoint still serves the
@@ -20,16 +27,21 @@ const pc28RuleVersions = {
 // explicit and require the catalog, odds and assistant snapshots to agree.
 const crossResponseRuleVersions = {
   'bingo-racing-a': 'racing-v2',
+  'bingo-racing-b': 'racing-v2',
   'speed-ssc': 'digits5-v3',
   'sg-ssc': 'digits5-v3',
   'au-lucky-5': 'digits5-v3',
   'bingo-ssc-1': 'digits5-v3',
+  'bingo-ssc-2': 'digits5-v3',
+  'bingo-ssc-3': 'digits5-v3',
+  'bingo-ssc-4': 'digits5-v3',
   ...pc28RuleVersions,
-  'bingo-mark-six': 'mark6-v2',
+  ...markSixRuleVersions,
 } as const
-// Only Bingo Mark Six has the product contract being implemented here. Other
-// seven-ball games remain unknown until their own rules are versioned.
-const markSixIDs = new Set(['bingo-mark-six'])
+// Every seven-ball product owns an exact rule version and independent price
+// snapshot, even though they intentionally reuse the same Mark Six board.
+const markSixIDs = new Set(Object.keys(markSixRuleVersions))
+const markSixDrawPresentationIDs = new Set(Object.keys(markSixRuleVersions))
 
 const redWaveNumbers = new Set([1, 2, 7, 8, 12, 13, 18, 19, 23, 24, 29, 30, 34, 35, 40, 45, 46])
 const blueWaveNumbers = new Set([3, 4, 9, 10, 14, 15, 20, 25, 26, 31, 36, 37, 41, 42, 47, 48])
@@ -110,6 +122,11 @@ export function markSixDrawBallClass(number: number, index: number, length: numb
   return `${markSixBallClass(number)}${index === 6 && length === 7 ? ' mark-six-special-ball' : ''}`
 }
 
+/** Seven-ball draw styling only; this helper never implies a rule family. */
+export function usesMarkSixDrawPresentation(gameId: string) {
+  return markSixDrawPresentationIDs.has(gameId)
+}
+
 /** Identity, not a mutable name/category or the latest draw's shape, owns rules. */
 export function lotteryRuleProfile(gameId: string) {
   const family: LotteryRuleFamily = racingIDs.has(gameId) ? 'racing' : sscIDs.has(gameId) ? 'ssc' : digit3IDs.has(gameId) ? 'digit3' : pc28RuleVersionForGame(gameId) !== null ? 'pc28' : markSixIDs.has(gameId) ? 'mark-six' : 'unknown'
@@ -169,17 +186,16 @@ export function exactRuleResponsesReady(
 
 export type PC28TripleShape = '豹子' | '对子' | '顺子' | '杂六'
 
-/**
- * PC/28 straights are ordinary consecutive digits after sorting. They are not
- * circular SSC straights: 890, 901 and 019 therefore remain 杂六.
- */
+/** PC/28 follows the original rules: 890 and 901 are circular straights. */
 export function pc28TripleShape(numbers: readonly number[]): PC28TripleShape | null {
   if (numbers.length !== 3 || numbers.some(number => !Number.isInteger(number) || number < 0 || number > 9)) return null
   const unique = new Set(numbers).size
   if (unique === 1) return '豹子'
   if (unique === 2) return '对子'
   const sorted = [...numbers].sort((left, right) => left - right)
-  return sorted[1] === sorted[0] + 1 && sorted[2] === sorted[1] + 1 ? '顺子' : '杂六'
+  const consecutive = sorted[1] === sorted[0] + 1 && sorted[2] === sorted[1] + 1
+  const circular = sorted[0] === 0 && (sorted[1] === 8 && sorted[2] === 9 || sorted[1] === 1 && sorted[2] === 9)
+  return consecutive || circular ? '顺子' : '杂六'
 }
 
 export function isDigit5V3Game(gameId: string, ruleVersion: string | null | undefined) {
@@ -215,12 +231,22 @@ export function gameRulesReady(game: { id: string; rulesReady?: boolean; ruleVer
 }
 
 export function rulesBlockedTiming(timing: LotteryTiming): LotteryTiming {
-  return { ...timing, phase: 'unavailable', phaseLabel: '玩法待配置', statusLabel: '玩法待配置 · 暂停受理', accepting: false, due: '--:--', remainingSeconds: null }
+  return { ...timing, phase: 'unavailable', phaseLabel: '仅开奖', statusLabel: '仅展示已公布开奖 · 投注未开放', accepting: false, due: '--:--', remainingSeconds: null }
+}
+
+export function sourcePausedTiming(timing: LotteryTiming): LotteryTiming {
+  return { ...timing, phase: 'unavailable', phaseLabel: '开奖暂停', statusLabel: '开奖同步暂停 · 投注已暂停', accepting: false, due: '--:--', remainingSeconds: null }
 }
 
 export function lotteryResultSummary(gameId: string, numbers: number[], ruleVersion = '') {
   const profile = lotteryRuleProfile(gameId)
   if (profile.family === 'ssc' && !isDigit5V3Game(gameId, ruleVersion)) return null
+  // The four direct Mark Six products were promoted from results-only shelves
+  // to independent betting contracts.  Keep their seven-ball presentation for
+  // historic rows, but never infer a playable outcome unless the response
+  // carries that exact product version. Bingo retains its established
+  // version-omission-compatible result display.
+  if (profile.family === 'mark-six' && gameId !== 'bingo-mark-six' && ruleVersion !== requiredRuleVersionForGame(gameId)) return null
   const minimum = profile.family === 'racing' || profile.family === 'mark-six' ? 1 : 0
   const maximum = profile.family === 'racing' ? 10 : profile.family === 'mark-six' ? 49 : 9
   const valid = profile.ballCount !== null && numbers.length === profile.ballCount

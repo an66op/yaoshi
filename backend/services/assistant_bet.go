@@ -344,7 +344,7 @@ func (s *BetAssistantService) place(userID uint64, gameID, issue, content, opera
 		return nil, apperrors.NewBusinessError("RULES_NOT_READY", "该彩种玩法规则尚未配置完整")
 	}
 	if rules.MarkSix {
-		return nil, apperrors.NewBusinessError("BET_MODE_UNAVAILABLE", "宾果六合彩仅支持网投，不支持聊天投注")
+		return nil, apperrors.NewBusinessError("BET_MODE_UNAVAILABLE", "六合彩仅支持网投，不支持聊天投注")
 	}
 	parseContent, allIn, err := normalizeAssistantAllIn(content)
 	if err != nil {
@@ -544,7 +544,7 @@ func parseAssistantBetForGame(game *lottery.Game, content string) ([]AssistantBe
 	}
 	rules, _ := rulesForGame(game)
 	if rules.MarkSix {
-		return nil, apperrors.NewBusinessError("BET_MODE_UNAVAILABLE", "宾果六合彩仅支持网投，不支持聊天投注")
+		return nil, apperrors.NewBusinessError("BET_MODE_UNAVAILABLE", "六合彩仅支持网投，不支持聊天投注")
 	}
 	if rules.PC28 > 0 {
 		return parsePC28AssistantBet(content)

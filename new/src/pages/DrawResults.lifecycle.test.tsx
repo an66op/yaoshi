@@ -67,13 +67,15 @@ describe('draw history uses explicit per-game rule profiles', () => {
     expect(words(markup())).toEqual(['大', '单', '龙'])
     expect(markup()).toContain('第一球 vs 第五球 龙虎和：龙')
 
-    const bingo = { ...makeGame('bingo-ssc-1', [9, 8, 1, 2, 3]), ruleVersion: 'digits5-v3' }
-    runtime.hooks = new HookHarness()
-    props.games = [bingo]
-    props.initialGameId = bingo.id
-    runtime.draws = [makeDraw(bingo.id, bingo.balls)]
-    clickMode('总和/龙虎')
-    expect(words(markup())).toEqual(['大', '单', '龙'])
+    for (const id of ['bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4']) {
+      const bingo = { ...makeGame(id, [9, 8, 1, 2, 3]), ruleVersion: 'digits5-v3' }
+      runtime.hooks = new HookHarness()
+      props.games = [bingo]
+      props.initialGameId = bingo.id
+      runtime.draws = [makeDraw(bingo.id, bingo.balls)]
+      clickMode('总和/龙虎')
+      expect(words(markup())).toEqual(['大', '单', '龙'])
+    }
 
     const sg = { ...makeGame('sg-ssc', [9, 8, 1, 2, 3]), ruleVersion: 'digits5-v3' }
     runtime.hooks = new HookHarness()
@@ -84,7 +86,7 @@ describe('draw history uses explicit per-game rule profiles', () => {
     expect(words(markup())).toEqual(['大', '单', '龙'])
   })
 
-  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('shows only original numbers when %s has no exact five-ball contract', id => {
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('shows only original numbers when %s has no exact five-ball contract', id => {
     for (const ruleVersion of [undefined, '', 'digits5-v2', 'digits5-v4']) {
       runtime.hooks = new HookHarness()
       const game = { ...makeGame(id, [9, 8, 1, 2, 3]), ruleVersion }
@@ -120,7 +122,8 @@ describe('draw history uses explicit per-game rule profiles', () => {
   })
 
   it.each(['pc-canada', 'canada-28', 'canada-20'])('shows the three PC28 balls, their sum and first-versus-third result for %s', id => {
-    const game = makeGame(id, [9, 1, 9])
+    const version = id === 'pc-canada' ? 'pc28-v1' : id === 'canada-28' ? 'pc28-v2' : 'pc28-v3'
+    const game = { ...makeGame(id, [9, 1, 9]), ruleVersion: version }
     props.games = [game]
     props.initialGameId = id
     runtime.draws = [makeDraw(id, game.balls)]
@@ -146,7 +149,7 @@ describe('draw history uses explicit per-game rule profiles', () => {
   })
 
   it('renders Bingo Mark Six with fixed wave colours, a separated seventh ball and special attributes', () => {
-    const markSix = makeGame('bingo-mark-six', [5, 9, 40, 47, 29, 2, 49])
+    const markSix = { ...makeGame('bingo-mark-six', [5, 9, 40, 47, 29, 2, 49]), ruleVersion: 'mark6-v2' }
     props.games = [markSix]
     props.initialGameId = markSix.id
     runtime.draws = [makeDraw(markSix.id, markSix.balls)]
@@ -165,7 +168,21 @@ describe('draw history uses explicit per-game rule profiles', () => {
     expect(markup()).toContain('特码：49 绿波 和局')
   })
 
-  it.each(['hk-marksix', 'official-qxc', 'official-tw-bingo', 'bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('offers only original numbers for an unconfigured %s game', id => {
+  it.each(['hong-kong-mark-six', 'happy8-mark-six', 'new-macau-mark-six', 'old-macau-mark-six'])('renders %s with seven-ball colours and a special seventh ball, but only offers raw-number mode', id => {
+    const game = makeGame(id, [5, 9, 40, 47, 29, 2, 49])
+    props.games = [game]
+    props.initialGameId = id
+    runtime.draws = [makeDraw(id, game.balls)]
+    expect(modeLabels()).toEqual(['号码'])
+    const html = markup()
+    expect(html).toContain('mark-six-result-balls')
+    expect(html).toContain('mark-six-ball wave-green')
+    expect(html).toContain('mark-six-ball wave-blue')
+    expect(html).toContain('mark-six-ball wave-green mark-six-special-ball')
+    expect(html).not.toContain('trend-cells')
+  })
+
+  it.each(['hk-marksix', 'official-qxc', 'official-tw-bingo', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('offers only original numbers for an unconfigured %s game', id => {
     const game = makeGame(id, [1, 10, 3])
     props.games = [game]
     props.initialGameId = id
@@ -174,6 +191,18 @@ describe('draw history uses explicit per-game rule profiles', () => {
     const html = markup()
     expect(html).toContain('result-mode-numbers')
     expect(html).not.toContain('racing-results-table')
+    expect(html).not.toContain('trend-cells')
+    expect(words(html)).toEqual([])
+  })
+
+  it('recognizes Bingo Racing B presentation while withholding derived modes without racing-v2', () => {
+    const game = makeGame('bingo-racing-b', [1, 10, 3])
+    props.games = [game]
+    props.initialGameId = game.id
+    runtime.draws = [makeDraw(game.id, game.balls)]
+    expect(modeLabels()).toEqual(['号码'])
+    const html = markup()
+    expect(html).toContain('racing-results-table')
     expect(html).not.toContain('trend-cells')
     expect(words(html)).toEqual([])
   })

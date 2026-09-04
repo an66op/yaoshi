@@ -89,24 +89,37 @@ describe('authoritative game odds', () => {
     expect(canSubmitPlayWithOddsResponse('dragon_tiger_tie', response([], true))).toBe(false)
   })
 
-  it('prices Bingo Racing A crown sums by the exact selected outcome', () => {
-    const racingA = {
+  it.each([
+    ['bingo-racing-a', '宾果赛车(A)'],
+    ['bingo-racing-b', '宾果赛车(B)'],
+  ])('prices and authorizes crown sums for %s by the exact selected outcome', (gameId, gameName) => {
+    const racing = {
       ...response([
         { play_code: 'sum', play_name: '旧通用冠亚和', odds: 99, min_bet: 1, max_bet: 1000, max_user_period: 5000 },
         { play_code: 'sum_big', play_name: '冠亚和大', odds: 2.18, min_bet: 1, max_bet: 1000, max_user_period: 5000 },
         { play_code: 'sum_11', play_name: '冠亚和11', odds: 8.5, min_bet: 1, max_bet: 1000, max_user_period: 5000 },
       ]),
-      game_id: 'bingo-racing-a',
-      game_name: '宾果赛车(A)',
+      game_id: gameId,
+      game_name: gameName,
     }
-    const odds = playOddsFromResponse(racingA)
-    expect(oddsForPlaySelection('bingo-racing-a', 'sum', '大', odds)).toBe(2.18)
-    expect(oddsForPlaySelection('bingo-racing-a', 'sum', '11', odds)).toBe(8.5)
-    expect(oddsForPlaySelection('bingo-racing-a', 'sum', '小', odds)).toBeNull()
-    expect(canSubmitPlayWithOddsResponse('sum', racingA, '大')).toBe(true)
-    expect(canSubmitPlayWithOddsResponse('sum', racingA, '11')).toBe(true)
-    expect(canSubmitPlayWithOddsResponse('sum', racingA, '小')).toBe(false)
-    expect(canSubmitPlayWithOddsResponse('sum', racingA)).toBe(false)
+    const odds = playOddsFromResponse(racing)
+    expect(oddsForPlaySelection(gameId, 'sum', '大', odds)).toBe(2.18)
+    expect(oddsForPlaySelection(gameId, 'sum', '11', odds)).toBe(8.5)
+    expect(oddsForPlaySelection(gameId, 'sum', '小', odds)).toBeNull()
+    expect(canSubmitPlayWithOddsResponse('sum', racing, '大')).toBe(true)
+    expect(canSubmitPlayWithOddsResponse('sum', racing, '11')).toBe(true)
+    expect(canSubmitPlayWithOddsResponse('sum', racing, '小')).toBe(false)
+    expect(canSubmitPlayWithOddsResponse('sum', racing)).toBe(false)
+
+    const hiddenRacing = { ...racing, show_odds: false }
+    expect(canSubmitPlayWithOddsResponse('sum', hiddenRacing, '大')).toBe(true)
+    expect(canSubmitPlayWithOddsResponse('sum', hiddenRacing, '11')).toBe(true)
+    expect(canSubmitPlayWithOddsResponse('sum', hiddenRacing, '小')).toBe(false)
+    expect(canSubmitPlayWithOddsResponse('sum', hiddenRacing)).toBe(false)
+  })
+
+  it('keeps ordinary racing games on their shared crown-sum price', () => {
+    expect(oddsForPlaySelection('speed-racing', 'sum', '大', { sum: 1.97, sum_big: 2.18 })).toBe(1.97)
   })
 
   it('never invents a fallback when odds are hidden, missing, or invalid', () => {

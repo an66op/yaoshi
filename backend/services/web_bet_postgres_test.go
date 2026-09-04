@@ -67,7 +67,7 @@ func TestBingoMarkSixMemberOddsOnlyExposeConfiguredAtomicMarkets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range view.Items {
-		if item.PlayCode == "marksix_special_zodiac" {
+		if item.PlayCode == "marksix_special_zodiac_horse" {
 			t.Fatalf("unpriced atomic market leaked to member odds: %+v", item)
 		}
 	}
@@ -78,7 +78,7 @@ func TestBingoMarkSixMemberOddsOnlyExposeConfiguredAtomicMarkets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index := range limits.Items {
-		if limits.Items[index].PlayCode == "marksix_special_zodiac" {
+		if limits.Items[index].PlayCode == "marksix_special_zodiac_horse" {
 			limits.Items[index].Odds = 2.8
 		}
 	}
@@ -91,7 +91,7 @@ func TestBingoMarkSixMemberOddsOnlyExposeConfiguredAtomicMarkets(t *testing.T) {
 	}
 	found := false
 	for _, item := range view.Items {
-		if item.PlayCode == "marksix_special_zodiac" {
+		if item.PlayCode == "marksix_special_zodiac_horse" {
 			found = true
 			// This room hides displayed odds, but the configured play remains
 			// available. The separate Configured gate prevents an unpriced zero
@@ -228,6 +228,149 @@ func TestBingoMarkSixWebBatchPostgresIsAtomicIdempotentAndServerPriced(t *testin
 	final := timingPostgresMoney(t, db, member.UserID)
 	if final.BalanceCents != 265000 || final.Pending != 0 || final.Bets != after.Bets {
 		t.Fatalf("settlement funds mismatch: %+v", final)
+	}
+}
+
+func TestBingoMarkSixCompositeAndLinkedWebTicketsFreezeServerTerms(t *testing.T) {
+	db := timingPostgresDatabase(t)
+	game, member := markSixPostgresFixture(t, db, "986051")
+	configureTestGameOdds(t, db, game.ID, map[string]float64{
+		"marksix_combo_3_2_exact2":        20.1,
+		"marksix_combo_3_2_exact3":        125,
+		"marksix_combo_2_special_mixed":   22,
+		"marksix_combo_2_special_regular": 55,
+		"marksix_link_zodiac_2_rat":       4.2,
+		"marksix_link_zodiac_2_ox":        3.55,
+		"marksix_link_tail_2_0":           7.5,
+		"marksix_link_tail_2_1":           3,
+	})
+	service := NewBetAssistantService(db)
+	service.bets.suppressNotifications = true
+	items := []WebBetItem{
+		{PlayCode: "marksix_combo_3_2", Position: 0, Selection: "1,2,3", Amount: 10},
+		{PlayCode: "marksix_combo_2_special", Position: 0, Selection: "4,5", Amount: 10},
+		{PlayCode: "marksix_link_zodiac_2", Position: 0, Selection: "鼠,牛", Amount: 10},
+		{PlayCode: "marksix_link_tail_2", Position: 0, Selection: "0尾,1尾", Amount: 10},
+	}
+
+	before := timingPostgresMoney(t, db, member.UserID)
+	receipt, err := service.PlaceWeb(member.UserID, game.ID, game.NextIssue, items, member.Username, "marksix-composite-linked-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := timingPostgresMoney(t, db, member.UserID)
+	if receipt.BetCount != 4 || receipt.Total != 40 || after.BalanceCents != before.BalanceCents-4000 || after.Bets != before.Bets+4 || after.LedgerRows != before.LedgerRows+1 {
+		t.Fatalf("composite batch was not one four-line financial operation: receipt=%+v before=%+v after=%+v", receipt, before, after)
+	}
+
+	var rows []bet.Bet
+	if err := db.Where("user_id = ? AND game_id = ? AND issue = ?", member.UserID, game.ID, game.NextIssue).Order("id asc").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("stored %d Mark Six rows, want 4: %+v", len(rows), rows)
+	}
+	want := []struct {
+		code        string
+		odds        float64
+		pricingCode string
+		exactThree  float64
+		twoRegular  float64
+	}{
+		{code: "marksix_combo_3_2", odds: 20.1, exactThree: 125},
+		{code: "marksix_combo_2_special", odds: 22, twoRegular: 55},
+		{code: "marksix_link_zodiac_2", odds: 3.55, pricingCode: "marksix_link_zodiac_2_ox"},
+		{code: "marksix_link_tail_2", odds: 3, pricingCode: "marksix_link_tail_2_1"},
+	}
+	for index, expected := range want {
+		row := rows[index]
+		terms, termsErr := decodeMarkSixOddsTerms(row)
+		if termsErr != nil {
+			t.Fatalf("decode frozen terms for %s: %v (%q)", row.PlayCode, termsErr, row.OddsTerms)
+		}
+		if row.PlayCode != expected.code || row.Odds != expected.odds || terms.Version != markSixOddsTermsVersion || terms.PricingCode != expected.pricingCode || terms.ExactThreeOdds != expected.exactThree || terms.TwoRegularOdds != expected.twoRegular {
+			t.Fatalf("stored public code or frozen price mismatch: row=%+v terms=%+v want=%+v", row, terms, expected)
+		}
+	}
+
+	// The period limit belongs to the public 三中二 market, not to each
+	// three-number selection. Changing the combination must not reset it.
+	limitService := NewOddsAdminService(db)
+	limits, err := limitService.Get(game.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range limits.Items {
+		if limits.Items[index].PlayCode == "marksix_combo_3_2_exact2" {
+			limits.Items[index].MaxUserPeriod = 15
+		}
+		if limits.Items[index].PlayCode == "marksix_link_zodiac_2_rat" {
+			limits.Items[index].MaxUserPeriod = 15
+		}
+	}
+	if _, err := limitService.Update(game.ID, oddsUpdateInput(limits)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PlaceWeb(member.UserID, game.ID, game.NextIssue, []WebBetItem{{
+		PlayCode: "marksix_combo_3_2", Position: 0, Selection: "7,8,9", Amount: 10,
+	}}, member.Username, "marksix-composite-period-limit-001"); apperrors.GetErrorCode(err) != "PERIOD_LIMIT" {
+		t.Fatalf("a different 三中二 selection bypassed the public period limit: %v", err)
+	}
+	if money := timingPostgresMoney(t, db, member.UserID); money != after {
+		t.Fatalf("period-limit rejection changed money: before=%+v after=%+v", after, money)
+	}
+	if _, err := service.PlaceWeb(member.UserID, game.ID, game.NextIssue, []WebBetItem{{
+		PlayCode: "marksix_link_zodiac_2", Position: 0, Selection: "鼠,牛", Amount: 10,
+	}}, member.Username, "marksix-linked-all-price-limits-001"); apperrors.GetErrorCode(err) != "PERIOD_LIMIT" {
+		t.Fatalf("linked ticket ignored the stricter non-winning pricing row limit: %v", err)
+	}
+	if money := timingPostgresMoney(t, db, member.UserID); money != after {
+		t.Fatalf("linked period-limit rejection changed money: before=%+v after=%+v", after, money)
+	}
+
+	// Internal rows exist solely to configure a public composite ticket. They
+	// must never become independently chargeable bets.
+	if _, err := service.PlaceWeb(member.UserID, game.ID, game.NextIssue, []WebBetItem{{
+		PlayCode: "marksix_combo_3_2_exact3", Position: 0, Selection: "1,2,3", Amount: 10,
+	}}, member.Username, "marksix-internal-price-rejected-001"); apperrors.GetErrorCode(err) != "INVALID_REQUEST" {
+		t.Fatalf("internal pricing row was accepted as a ticket: %v", err)
+	}
+	if money := timingPostgresMoney(t, db, member.UserID); money != after {
+		t.Fatalf("rejected internal pricing row changed money: before=%+v after=%+v", after, money)
+	}
+
+	// A linked ticket needs every selected atom priced. Removing one price must
+	// fail the whole request before debit; the server must not silently fall
+	// back to the remaining (and therefore higher) quote.
+	if err := db.Where("game_id = ? AND play_code = ?", game.ID, "marksix_link_tail_2_1").Delete(&odds.PlayLimit{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PlaceWeb(member.UserID, game.ID, game.NextIssue, []WebBetItem{{
+		PlayCode: "marksix_link_tail_2", Position: 0, Selection: "0尾,1尾", Amount: 10,
+	}}, member.Username, "marksix-linked-missing-price-001"); apperrors.GetErrorCode(err) != "ODDS_NOT_CONFIGURED" {
+		t.Fatalf("linked ticket with one missing atom returned %v", err)
+	}
+	if money := timingPostgresMoney(t, db, member.UserID); money != after {
+		t.Fatalf("linked missing-price rejection changed money: before=%+v after=%+v", after, money)
+	}
+
+	draw := lottery.Draw{
+		GameID: game.ID, Issue: game.NextIssue, Numbers: "1,2,3,4,5,6,49", DrawAt: time.Now().UTC(),
+		SourceRevision: bingoOrderedSourceRevision, ConversionRevision: bingoMarkSixConversionVersion,
+	}
+	if err := db.Create(&draw).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewBetAdminService(db).SettleIssue(game.ID, game.NextIssue, "Mark Six composite snapshot test"); err != nil {
+		t.Fatal(err)
+	}
+	var settled []bet.Bet
+	if err := db.Where("id IN ?", []uint64{rows[0].ID, rows[1].ID}).Order("id asc").Find(&settled).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(settled) != 2 || settled[0].Status != "won" || settled[0].SettlementOdds == nil || *settled[0].SettlementOdds != 125 || settled[0].PayoutCents != 125000 ||
+		settled[1].Status != "won" || settled[1].SettlementOdds == nil || *settled[1].SettlementOdds != 55 || settled[1].PayoutCents != 55000 {
+		t.Fatalf("settlement did not use the frozen alternate tiers: %+v", settled)
 	}
 }
 

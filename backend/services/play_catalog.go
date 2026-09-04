@@ -112,11 +112,11 @@ func InferPlayForGame(game *lottery.Game, playCode, playName string, position in
 	selection = strings.TrimSpace(selection)
 	if rules.MarkSix {
 		if code == "" {
-			return "", "", apperrors.NewBusinessError("INVALID_REQUEST", "宾果六合彩网投必须明确玩法编号")
+			return "", "", apperrors.NewBusinessError("INVALID_REQUEST", "六合彩网投必须明确玩法编号")
 		}
-		play, ok := markSixPlayByCode(code)
+		play, ok := markSixPlayByCodeForVersion(rules.Version, code)
 		if !ok {
-			return "", "", apperrors.NewBusinessError("INVALID_REQUEST", "宾果六合彩当前不支持该玩法")
+			return "", "", apperrors.NewBusinessError("INVALID_REQUEST", "当前六合彩彩种不支持该玩法")
 		}
 		return code, play.Name, nil
 	}

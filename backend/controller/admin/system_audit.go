@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -14,11 +16,12 @@ import (
 
 type SystemAuditHandler struct {
 	service   *services.SystemAuditService
+	systemLog *services.SystemLogService
 	lifecycle *services.DataLifecycleService
 }
 
 func NewSystemAuditHandler(db *gorm.DB) *SystemAuditHandler {
-	return &SystemAuditHandler{service: services.NewSystemAuditService(db), lifecycle: services.NewDataLifecycleService(db)}
+	return &SystemAuditHandler{service: services.NewSystemAuditService(db), systemLog: services.NewSystemLogService(db), lifecycle: services.NewDataLifecycleService(db)}
 }
 
 func (h *SystemAuditHandler) Logs(c *gin.Context) {
@@ -30,6 +33,86 @@ func (h *SystemAuditHandler) Logs(c *gin.Context) {
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+func (h *SystemAuditHandler) SystemLogs(c *gin.Context) {
+	filter, err := systemLogFilter(c)
+	if err != nil {
+		constants.SendError(c, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	result, err := h.systemLog.Logs(filter)
+	if err != nil {
+		constants.SendError(c, http.StatusInternalServerError, "读取系统运行日志失败", err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	constants.SendSuccess(c, http.StatusOK, "ok", result)
+}
+
+func systemLogFilter(c *gin.Context) (services.SystemLogFilter, error) {
+	allowedKeys := map[string]bool{"before_id": true, "limit": true, "category": true, "type": true, "status": true, "game_id": true, "source_group": true, "q": true, "from": true, "to": true}
+	for key := range c.Request.URL.Query() {
+		if !allowedKeys[key] {
+			return services.SystemLogFilter{}, fmt.Errorf("不支持的日志筛选参数: %s", key)
+		}
+	}
+	beforeID, err := strconv.ParseUint(c.DefaultQuery("before_id", "0"), 10, 64)
+	if err != nil {
+		return services.SystemLogFilter{}, fmt.Errorf("日志游标不正确")
+	}
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if err != nil || limit < 1 || limit > 100 {
+		return services.SystemLogFilter{}, fmt.Errorf("每页日志数量必须为1到100")
+	}
+	filter := services.SystemLogFilter{
+		BeforeID: beforeID, Limit: limit, Category: strings.TrimSpace(c.Query("category")),
+		EventType: strings.TrimSpace(c.Query("type")), Status: strings.TrimSpace(c.Query("status")),
+		GameID: strings.TrimSpace(c.Query("game_id")), SourceGroup: strings.TrimSpace(c.Query("source_group")),
+		Query: strings.TrimSpace(c.Query("q")),
+	}
+	if !allowedSystemLogValue(filter.Category, "", "source", "scheduler") {
+		return services.SystemLogFilter{}, fmt.Errorf("日志分类只支持 source 或 scheduler")
+	}
+	if !allowedSystemLogValue(filter.Status, "", "ok", "error", "standby", "started", "stopped") {
+		return services.SystemLogFilter{}, fmt.Errorf("日志状态参数不正确")
+	}
+	if !allowedSystemLogValue(filter.EventType, "", "sync_error", "sync_recovered", "scheduler_error", "scheduler_recovered", "scheduler_started", "scheduler_stopped", "standby") {
+		return services.SystemLogFilter{}, fmt.Errorf("日志事件类型参数不正确")
+	}
+	if len(filter.GameID) > 40 || len(filter.SourceGroup) > 48 {
+		return services.SystemLogFilter{}, fmt.Errorf("彩种或来源分组参数过长")
+	}
+	if len([]rune(filter.Query)) > 80 {
+		return services.SystemLogFilter{}, fmt.Errorf("日志原因搜索不能超过80个字符")
+	}
+	if raw := strings.TrimSpace(c.Query("from")); raw != "" {
+		parsed, parseErr := time.Parse(time.RFC3339, raw)
+		if parseErr != nil {
+			return services.SystemLogFilter{}, fmt.Errorf("开始时间必须使用RFC3339格式")
+		}
+		filter.From = &parsed
+	}
+	if raw := strings.TrimSpace(c.Query("to")); raw != "" {
+		parsed, parseErr := time.Parse(time.RFC3339, raw)
+		if parseErr != nil {
+			return services.SystemLogFilter{}, fmt.Errorf("结束时间必须使用RFC3339格式")
+		}
+		filter.To = &parsed
+	}
+	if filter.From != nil && filter.To != nil && filter.From.After(*filter.To) {
+		return services.SystemLogFilter{}, fmt.Errorf("开始时间不能晚于结束时间")
+	}
+	return filter, nil
+}
+
+func allowedSystemLogValue(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *SystemAuditHandler) Reconciliation(c *gin.Context) {

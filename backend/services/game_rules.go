@@ -51,7 +51,7 @@ func rulesForVersion(version string) (gameRuleProfile, bool) {
 	case pc28RuleV1, pc28RuleV2, pc28RuleV3:
 		return gameRuleProfile{Version: version, BallCount: 3, MinNumber: 0, MaxNumber: 9,
 			SumBigFrom: 14, PositionBigFrom: 5, Patterns: true, PC28: pc28RuleVariant(version)}, true
-	case markSixRuleVersion:
+	case markSixRuleVersion, hongKongMarkSixRuleVersion, happy8MarkSixRuleVersion, newMacauMarkSixRuleVersion, oldMacauMarkSixRuleVersion:
 		return gameRuleProfile{Version: version, BallCount: 7, MinNumber: 1, MaxNumber: 49,
 			Unique: true, MarkSix: true}, true
 	default:
@@ -64,9 +64,9 @@ func rulesForGame(game *lottery.Game) (gameRuleProfile, bool) {
 		return gameRuleProfile{}, false
 	}
 	switch game.ID {
-	case "speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a":
+	case "speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a", "bingo-racing-b":
 		return rulesForVersion("racing-v2")
-	case "speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1":
+	case "speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4":
 		return rulesForVersion("digits5-v3")
 	case "official-fc3d", "official-pl3":
 		// Defining this existing digit contract does not classify or enable the
@@ -74,6 +74,14 @@ func rulesForGame(game *lottery.Game) (gameRuleProfile, bool) {
 		return rulesForVersion("digits3-v2")
 	case "bingo-mark-six":
 		return rulesForVersion(markSixRuleVersion)
+	case "hong-kong-mark-six":
+		return rulesForVersion(hongKongMarkSixRuleVersion)
+	case "happy8-mark-six":
+		return rulesForVersion(happy8MarkSixRuleVersion)
+	case "new-macau-mark-six":
+		return rulesForVersion(newMacauMarkSixRuleVersion)
+	case "old-macau-mark-six":
+		return rulesForVersion(oldMacauMarkSixRuleVersion)
 	case "pc-canada":
 		return rulesForVersion(pc28RuleV1)
 	case "canada-28":
@@ -272,7 +280,9 @@ func PlayCatalogForGame(gameID string) []PlayCatalogItem {
 		return items
 	}
 	if profile.MarkSix {
-		return markSixPlayCatalog()
+		// Every Mark Six product has the same 242-row pricing shape, but odds
+		// remain isolated by the game_id used by the persistence layer.
+		return markSixPlayCatalogForVersion(profile.Version)
 	}
 	if profile.PC28 > 0 {
 		return pc28PlayCatalog()
@@ -281,13 +291,12 @@ func PlayCatalogForGame(gameID string) []PlayCatalogItem {
 		if !profile.supportsPlay(item.PlayCode) {
 			continue
 		}
-		// Bingo Racing A's source is now order-verified, but its original
-		// crown-sum market is not one flat price.  Expose internal pricing codes
-		// for every mutually exclusive selection while placement and settlement
-		// continue to store the stable public play code "sum".  Other racing-v2
-		// games keep their existing single sum row unchanged.
-		if gameID == "bingo-racing-a" && item.PlayCode == "sum" {
-			items = append(items, bingoRacingASumOddsCatalog(item.SortOrder)...)
+		// Bingo Racing A's original crown-sum table is selection-specific. B has
+		// no separate original table, so it deliberately adopts the same pricing
+		// shape as a platform policy. Placement and settlement continue to store
+		// the stable public play code "sum" for both products.
+		if isBingoRacingGame(gameID) && item.PlayCode == "sum" {
+			items = append(items, bingoRacingSumOddsCatalog(item.SortOrder)...)
 			continue
 		}
 		item.PlayName = profile.playName(item.PlayCode, item.PlayName)
@@ -326,7 +335,7 @@ func PlayCatalogForGame(gameID string) []PlayCatalogItem {
 	return items
 }
 
-func bingoRacingASumOddsCatalog(baseOrder int) []PlayCatalogItem {
+func bingoRacingSumOddsCatalog(baseOrder int) []PlayCatalogItem {
 	selections := []struct {
 		key, name, example string
 	}{
@@ -339,14 +348,14 @@ func bingoRacingASumOddsCatalog(baseOrder int) []PlayCatalogItem {
 	for index, selection := range selections {
 		items = append(items, PlayCatalogItem{
 			PlayCode: "sum_" + selection.key, PlayName: selection.name, Category: "冠亚和",
-			Description: "宾果赛车(A)冠亚和按具体选项独立定价；未单独配置时该选项不可投注",
+			Description: "宾果赛车冠亚和按当前彩种的具体选项独立定价；未单独配置时该选项不可投注",
 			Example:     selection.example, SortOrder: baseOrder*100 + index,
 		})
 	}
 	for value := 3; value <= 19; value++ {
 		items = append(items, PlayCatalogItem{
 			PlayCode: fmt.Sprintf("sum_%d", value), PlayName: fmt.Sprintf("冠亚和%d", value), Category: "冠亚和",
-			Description: "宾果赛车(A)冠亚和值号码独立定价；未单独配置时该号码不可投注",
+			Description: "宾果赛车冠亚和值号码按当前彩种独立定价；未单独配置时该号码不可投注",
 			Example:     fmt.Sprintf("冠亚/%d/20", value),
 			SortOrder:   baseOrder*100 + len(selections) + value - 3,
 		})

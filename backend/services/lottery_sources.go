@@ -26,13 +26,15 @@ import (
 const officialUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36"
 
 var officialGroupLocks = map[string]*sync.Mutex{
-	"china-welfare":  {},
-	"china-sport":    {},
-	"taiwan-bingo":   {},
-	"taiwan-lottery": {},
-	"168-highfreq":   {},
-	"168-marksix":    {},
-	"168-bingo":      {},
+	"china-welfare":   {},
+	"china-sport":     {},
+	"taiwan-bingo":    {},
+	"taiwan-lottery":  {},
+	"163-highfreq":    {},
+	"163-pc28":        {},
+	"163-bingo":       {},
+	"163-marksix":     {},
+	"sg-ssc-verified": {},
 }
 
 // IsOfficialSourceGroup keeps the administrator test endpoint constrained to
@@ -74,7 +76,7 @@ type sourceDraw struct {
 // window to avoid putting pressure on upstream services.
 func (s *LotteryService) SyncOfficialSources(ctx context.Context) []SourceSyncResult {
 	results := make([]SourceSyncResult, 0, 8)
-	for _, group := range []string{"china-welfare", "china-sport", "taiwan-bingo", "taiwan-lottery", "168-highfreq", "168-marksix", "168-bingo"} {
+	for _, group := range []string{"china-welfare", "china-sport", "taiwan-bingo", "taiwan-lottery", "163-highfreq", "163-pc28", "163-bingo", "163-marksix", "sg-ssc-verified"} {
 		results = append(results, s.SyncOfficialGroup(ctx, group)...)
 	}
 	return results
@@ -107,12 +109,16 @@ func (s *LotteryService) SyncOfficialGroup(ctx context.Context, group string) []
 		return []SourceSyncResult{s.syncOfficialGame(ctx, "official-tw-bingo", fetchTaiwanBingo)}
 	case "taiwan-lottery":
 		return s.syncTaiwanLatest(ctx)
-	case "168-highfreq":
-		return s.sync168HighFreq(ctx)
-	case "168-marksix":
-		return s.sync168MarkSix(ctx)
-	case "168-bingo":
-		return s.sync168Bingo(ctx)
+	case "163-highfreq":
+		return s.sync163HighFreq(ctx)
+	case "163-pc28":
+		return s.sync163PC28(ctx)
+	case "163-bingo":
+		return s.sync163Bingo(ctx)
+	case "163-marksix":
+		return s.sync163MarkSix(ctx)
+	case "sg-ssc-verified":
+		return []SourceSyncResult{s.syncOfficialGame(ctx, "sg-ssc", fetchSGSSCVerified)}
 	default:
 		return nil
 	}
@@ -166,11 +172,28 @@ func (s *LotteryService) syncOfficialGameWithPublisher(ctx context.Context, game
 	if !game.Enabled {
 		return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "ok"}
 	}
+	if gameID == "sg-ssc" && !sgSSCSourceBound(&game) {
+		return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "ok"}
+	}
+	markSix168Binding, is168MarkSix := api168MarkSixBindingForGame(gameID)
+	if is168MarkSix && !api168MarkSixSourceBound(&game, markSix168Binding) {
+		return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "ok"}
+	}
 	previous := game
 	// Keep the previous error visible while retrying.  A failed source must not
 	// reopen betting until a complete successful response clears the error.
-	if err := s.db.Model(&game).Update("sync_status", "syncing").Error; err != nil {
-		return s.recordSyncErrorWithPublisher(gameID, err, publish)
+	syncing := s.db.Model(&lottery.Game{}).Where("id = ?", gameID)
+	if gameID == "sg-ssc" {
+		syncing = syncing.Where("enabled = ? AND source_kind = ? AND source_name = ? AND source_url = ?", true, "external", sgSSCVerifiedSourceName, sgSSCVerifiedSourceURL)
+	} else if is168MarkSix {
+		syncing = syncing.Where("enabled = ? AND source_kind = ? AND source_name = ? AND source_url = ?", true, "external", legacy168HighFreqName, legacy168HighFreqURL)
+	}
+	updated := syncing.Update("sync_status", "syncing")
+	if updated.Error != nil {
+		return s.recordSyncErrorWithPublisher(gameID, updated.Error, publish)
+	}
+	if updated.RowsAffected != 1 {
+		return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "ok"}
 	}
 	draws, err := fetch(ctx)
 	if err != nil {
@@ -197,6 +220,20 @@ func (s *LotteryService) syncOfficialGameWithPublisher(ctx context.Context, game
 		}
 		if !game.Enabled {
 			return nil
+		}
+		if gameID == "sg-ssc" {
+			if !sgSSCSourceBound(&game) {
+				return fmt.Errorf("SG时时彩来源绑定已变化，等待重新核验")
+			}
+			if err := validateSGSSCFreshness(draws[len(draws)-1], time.Now()); err != nil {
+				return err
+			}
+			if err := sgSSCIssueEvidenceError(tx, schedule.Issue, nil); err != nil {
+				return err
+			}
+		}
+		if is168MarkSix && !api168MarkSixSourceBound(&game, markSix168Binding) {
+			return err168MarkSixBindingChanged
 		}
 		var importErr error
 		imported, importErr = insertOfficialDraws(tx, gameID, draws)
@@ -231,21 +268,32 @@ func (s *LotteryService) syncOfficialGameWithPublisher(ctx context.Context, game
 		_, err := NewBetAdminService(tx).EnsureCurrentIssue(&game)
 		return err
 	})
+	if errors.Is(err, err168MarkSixBindingChanged) {
+		return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "ok"}
+	}
 	if err != nil {
 		return s.recordSyncErrorWithPublisher(gameID, err, publish)
 	}
 	if officialGameCatalogChanged(previous, game) {
 		publish(game)
 	}
-	if game.Enabled {
+	shouldSettle := game.Enabled
+	if shouldSettle && is168MarkSix {
+		var current lottery.Game
+		shouldSettle = s.db.First(&current, "id = ?", gameID).Error == nil && api168MarkSixSourceBound(&current, markSix168Binding)
+	}
+	if shouldSettle {
 		// Retrying an existing draw is deliberate: a process can stop after the
 		// draw/schedule commit but before settlement. SettleImportedDraw already
 		// makes completely settled periods a no-op, including notifications.
 		settleImportedDrawBatch(s.db, gameID, draws)
 	}
 	latestIssue := ""
-	if len(draws) > 0 {
-		latestIssue = draws[0].Issue
+	var latestAt time.Time
+	for _, draw := range draws {
+		if draw.DrawAt.After(latestAt) {
+			latestIssue, latestAt = draw.Issue, draw.DrawAt
+		}
 	}
 	return SourceSyncResult{GameID: gameID, SourceName: game.SourceName, Status: "ok", Imported: imported, LatestIssue: latestIssue}
 }
@@ -278,6 +326,11 @@ func validateSourceDrawBatch(game lottery.Game, draws []sourceDraw) error {
 	if err := validateOfficialDraws(game, draws); err != nil {
 		return err
 	}
+	if game.ID == "sg-ssc" {
+		if err := validateSGSSCImportRevision(draws); err != nil {
+			return err
+		}
+	}
 	for _, draw := range draws {
 		if strings.TrimSpace(draw.Issue) == "" || len(draw.Numbers) == 0 {
 			return fmt.Errorf("缺少有效开奖期号或号码")
@@ -290,6 +343,9 @@ func validateSourceDrawBatch(game lottery.Game, draws []sourceDraw) error {
 }
 
 func insertOfficialDraws(db *gorm.DB, gameID string, draws []sourceDraw) (int, error) {
+	if gameID == "sg-ssc" {
+		return insertVerifiedSGSSCDraws(db, draws)
+	}
 	verifiedExisting, err := verifiedBingoExistingDraws(db, gameID, draws)
 	if err != nil {
 		return 0, err
@@ -521,6 +577,32 @@ func settleImportedDrawBatch(db *gorm.DB, gameID string, draws []sourceDraw) {
 	for _, draw := range draws {
 		issues = append(issues, draw.Issue)
 	}
+	if len(trustedDrawRevisionContracts(gameID)) > 0 {
+		var trustedIssues []string
+		if err := trustedDrawsForGame(db.Model(&lottery.Draw{}), gameID).
+			Where("issue IN ?", issues).Pluck("issue", &trustedIssues).Error; err != nil {
+			log.Printf("可信开奖结算候选读取失败: game=%s error=%v", gameID, err)
+			return
+		}
+		trusted := make(map[string]bool, len(trustedIssues))
+		for _, issue := range trustedIssues {
+			trusted[issue] = true
+		}
+		filtered := make([]sourceDraw, 0, len(draws))
+		for _, draw := range draws {
+			if trusted[draw.Issue] {
+				filtered = append(filtered, draw)
+			}
+		}
+		draws = filtered
+		if len(draws) == 0 {
+			return
+		}
+		issues = issues[:0]
+		for _, draw := range draws {
+			issues = append(issues, draw.Issue)
+		}
+	}
 	// A two-day backfill can contain thousands of already settled rows. Filter
 	// these in bulk instead of issuing two extra queries for every historic row.
 	var settledIssues, pendingIssues []string
@@ -634,7 +716,14 @@ func (s *LotteryService) recordSyncErrorWithPublisher(gameID string, syncErr err
 	var game lottery.Game
 	_ = s.db.First(&game, "id = ?", gameID).Error
 	previous := game
-	if err := s.db.Model(&lottery.Game{}).Where("id = ?", gameID).Updates(map[string]any{"sync_status": "error", "last_sync_error": message}).Error; err == nil && s.db.First(&game, "id = ?", gameID).Error == nil {
+	update := s.db.Model(&lottery.Game{}).Where("id = ?", gameID)
+	if gameID == "sg-ssc" {
+		update = update.Where("enabled = ? AND source_kind = ? AND source_name = ? AND source_url = ?", true, "external", sgSSCVerifiedSourceName, sgSSCVerifiedSourceURL)
+	} else if _, ok := api168MarkSixBindingForGame(gameID); ok {
+		update = update.Where("enabled = ? AND source_kind = ? AND source_name = ? AND source_url = ?", true, "external", legacy168HighFreqName, legacy168HighFreqURL)
+	}
+	result := update.Updates(map[string]any{"sync_status": "error", "last_sync_error": message})
+	if result.Error == nil && result.RowsAffected == 1 && s.db.First(&game, "id = ?", gameID).Error == nil {
 		_, _ = NewBetAdminService(s.db).EnsureCurrentIssue(&game)
 		if officialGameCatalogChanged(previous, game) {
 			publish(game)

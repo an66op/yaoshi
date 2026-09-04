@@ -38,7 +38,7 @@
 
 4. 数据库名与确认口令完全一致。
 5. 前端、后台、后端和其他数据库客户端已经停止。
-6. 完整 `pg_dump` 备份及 SHA-256 校验成功。
+6. 完整 `pg_dump` 备份、加密解密回读及 SHA-256 校验成功。
 7. 数据库已经应用到 `202608270012_reset_identity_receipts.sql`，且独立 `wangzhe_meta` schema 中的开发 sentinel 与当前物理 PostgreSQL 实例完全匹配。
 8. 数据库中不存在未分类的新表；出现新表时必须先更新重置清单。
 9. 明确设置 `BACKEND_SERVER_PORT`；备份前后该端口都不得监听，目标数据库也不得存在其他客户端会话。
@@ -85,6 +85,8 @@ export BACKEND_ALLOW_DEVELOPMENT_RESET=YES
 export BACKEND_DEVELOPMENT_RESET_DATABASE=wangzhe_dev
 # 从密码管理器安全导出，不要写进 Git
 export BACKEND_DEVELOPMENT_RESET_SENTINEL_TOKEN='至少32字符的本机随机值'
+# 与 sentinel 分开的 age identity；同样只从密码管理器读取
+export BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY='AGE-SECRET-KEY-...'
 bash scripts/dev-reset-business-data.sh --dry-run
 ```
 
@@ -102,11 +104,29 @@ bash scripts/dev-reset-business-data.sh \
 
 使用当前环境执行时，省略命令末尾的环境文件即可；其他备份、确认口令和本机保护完全不变。
 
+业务数据重置使用专用的 `dev-postgres-backup.sh`：它只接受本机 debug PostgreSQL，
+把 `pg_dump` 临时明文放在 `mktemp` 创建的 owner-only 目录中，使用 age 收件人加密，
+再解密回读并通过 `pg_restore --list` 后才原子发布备份和 SHA-256 文件。它不会自动删除
+旧备份。`BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY` 必须与 sentinel token 分开保存在本机
+密码管理器中，不得写入仓库、环境文件或数据库。
+
+脚本会先读取 PostgreSQL 服务端主版本，并只使用同主版本的 `pg_dump`/`pg_restore`；
+它会自动检查常见 Homebrew、EnterpriseDB 路径。非标准安装可显式设置绝对路径
+`BACKEND_DEVELOPMENT_PG_BIN_DIR`，旧版本客户端不会被用于备份新版本数据库。
+
 成功后会同时生成数据库内不可变的 `development_reset_receipts` 记录和备份旁的 `.reset-receipt` 文件。先验证备份可读，再重新启动后端，让开奖期号重新同步。
 
 不要把上述两个开发授权变量加入服务器的 release 环境文件，也不要通过修改脚本绕开远程数据库、活动连接、备份或确认口令检查。
 
 ## 完整重起系统
+
+完整重建的验收合同包含全新体验账号和 `88001` 房间，因此该流程使用的专用环境必须额外包含：
+
+```dotenv
+BACKEND_SEED_EXPERIENCE_ACCOUNTS=true
+```
+
+该变量不用于业务数据重置，也不应写入普通本地启动或 release/test 环境。完整重建脚本和只读验收会拒绝缺失或不为 `true` 的值。
 
 先预览：
 
@@ -134,7 +154,7 @@ bash scripts/dev-reset-database.sh \
 
 该模式不会删除 PostgreSQL 数据库本身，但会执行 `DROP SCHEMA public CASCADE`。数据库内的审计凭证也会随 schema 清空，因此凭证只写到已验证备份旁边。执行前先写入 `schema_reset_authorized_pending`，schema 事务成功后再原子更新为 `bootstrap_pending`；两个状态都不能被当成完成。
 
-重启后端并等待 bootstrap 后，指定该次外部凭证运行只读验收：
+完整重建后的第一次后端启动必须沿用上述专用环境。使用当前 shell 时可以明确执行 `BACKEND_SEED_EXPERIENCE_ACCOUNTS=true make dev`；使用环境文件时，由后端进程管理方式安全加载同一文件。等待 bootstrap 后，指定该次外部凭证运行只读验收：
 
 ```bash
 bash scripts/dev-reset-complete-receipt.sh \

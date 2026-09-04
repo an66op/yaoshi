@@ -12,11 +12,13 @@ export type RoomFeatureSettings = {
 }
 
 export type BasePlayCode = 'two_sided' | 'ball_1_5' | 'dragon_tiger' | 'dragon_tiger_tie' | 'sum' | 'leopard' | 'straight' | 'pair' | 'half_straight' | 'mixed'
-type RacingASumSelectionKey = 'big' | 'small' | 'odd' | 'even' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | '11' | '12' | '13' | '14' | '15' | '16' | '17' | '18' | '19'
-export type RacingASumPricingCode = `sum_${RacingASumSelectionKey}`
-export type OddsPlayCode = BasePlayCode | RacingASumPricingCode
+type BingoRacingSumSelectionKey = 'big' | 'small' | 'odd' | 'even' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | '11' | '12' | '13' | '14' | '15' | '16' | '17' | '18' | '19'
+export type BingoRacingSumPricingCode = `sum_${BingoRacingSumSelectionKey}`
+export type OddsPlayCode = BasePlayCode | BingoRacingSumPricingCode
 export type PlayOdds = Partial<Record<OddsPlayCode, number>>
 type SupportedPlayCode = BasePlayCode
+
+const BINGO_RACING_GAME_IDS = new Set(['bingo-racing-a', 'bingo-racing-b'])
 
 /**
  * These are presentation preferences, not authorization boundaries. Legacy
@@ -60,18 +62,18 @@ function isOddsPlayCode(value: string): value is OddsPlayCode {
   return isSupportedPlayCode(value) || /^sum_(?:big|small|odd|even|[3-9]|1[0-9])$/.test(value)
 }
 
-export function racingASumPricingCode(selection: string): RacingASumPricingCode | null {
+export function bingoRacingSumPricingCode(selection: string): BingoRacingSumPricingCode | null {
   const normalized = selection.trim().toLowerCase()
   const side = ({ '大': 'big', '小': 'small', '单': 'odd', '双': 'even', big: 'big', small: 'small', odd: 'odd', even: 'even' } as const)[normalized as '大' | '小' | '单' | '双' | 'big' | 'small' | 'odd' | 'even']
   if (side) return `sum_${side}`
   if (!/^\d+$/.test(normalized)) return null
   const value = Number(normalized)
-  return value >= 3 && value <= 19 ? `sum_${value}` as RacingASumPricingCode : null
+  return value >= 3 && value <= 19 ? `sum_${value}` as BingoRacingSumPricingCode : null
 }
 
 export function pricingPlayCode(gameId: string, playCode: string, selection = ''): OddsPlayCode | null {
   if (!isSupportedPlayCode(playCode)) return null
-  if (gameId === 'bingo-racing-a' && playCode === 'sum') return racingASumPricingCode(selection)
+  if (BINGO_RACING_GAME_IDS.has(gameId) && playCode === 'sum') return bingoRacingSumPricingCode(selection)
   return playCode
 }
 
@@ -131,7 +133,7 @@ export function canSubmitPlayWithOddsResponse(playCode: string, response: GameOd
   // Hiding the numeric value is only a presentation policy. The endpoint still
   // returns one zero-valued item for every configured market, so its item list
   // remains the authoritative availability contract. Never let a hidden room
-  // resurrect a missing selection (notably one Bingo Racing A crown-sum price).
+  // resurrect a missing selection (notably one Bingo Racing crown-sum price).
   if (response.show_odds === false) return response.items.some(item => item.play_code === pricingCode)
   return oddsForPlayCode(pricingCode, playOddsFromResponse(response)) !== null
 }

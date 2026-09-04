@@ -67,7 +67,7 @@ type SettlementStatus struct {
 // settleIssueOnce performs one idempotent settlement attempt. SettleIssue in
 // settlement_recovery.go adds bounded retries for PostgreSQL deadlocks and
 // serialization failures around this operation.
-func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*SettlementResult, error) {
+func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string, gate func(*gorm.DB) error) (*SettlementResult, error) {
 	game, err := s.loadGame(gameID)
 	if err != nil {
 		return nil, err
@@ -89,29 +89,55 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 		}
 		return nil, revisionErr
 	}
+	if game.ID == "sg-ssc" {
+		var existing lottery.Issue
+		if err := s.db.Where("game_id = ? AND issue = ?", game.ID, issue).Limit(1).Find(&existing).Error; err != nil {
+			return nil, err
+		}
+		if err := sgSSCIssueEvidenceError(s.db, issue, &existing); err != nil {
+			if apperrors.GetErrorCode(err) == "DRAW_SOURCE_UNVERIFIED" {
+				if markErr := s.markUnverifiedOrderedBingoIssue(game, draw, err.Error()); markErr != nil {
+					return nil, markErr
+				}
+			}
+			return nil, err
+		}
+	}
 	numbers := parseNumbers(draw.Numbers)
 	if len(numbers) == 0 {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "开奖号码无效")
 	}
-	mode := "platform"
-	if game.SourceKind == "external" || game.SourceKind == "official" {
-		mode = "external"
-	}
-	interval := time.Duration(maxInt(game.DrawInterval, 60)) * time.Second
-	issueRow := lottery.Issue{
-		GameID: game.ID, Issue: issue, Status: lottery.IssueStatusSettling, SourceMode: mode,
-		AcceptAt: draw.DrawAt.UTC().Add(-interval), SealAt: draw.DrawAt.UTC().Add(-3 * time.Second),
-	}
-	if err := s.db.Where("game_id = ? AND issue = ?", game.ID, issue).FirstOrCreate(&issueRow).Error; err != nil {
-		return nil, apperrors.NewSystemError("ISSUE_SAVE_FAILED", "保存期号状态失败", err)
-	}
 	drawAt := draw.DrawAt.UTC()
-	alreadySettled := issueRow.Status == lottery.IssueStatusSettled
-	if !alreadySettled {
-		if err := s.setIssueStatus(game.ID, issue, lottery.IssueStatusSettling, "", &drawAt, nil); err != nil {
-			return nil, apperrors.NewSystemError("ISSUE_SAVE_FAILED", "更新期号结算状态失败", err)
+	var issueRow lottery.Issue
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if gate != nil {
+			if err := gate(tx); err != nil {
+				return err
+			}
+			// Re-read under the gate's Game lock; a snapshot from before a
+			// source change must not create a platform history lifecycle.
+			if err := tx.First(game, "id = ?", game.ID).Error; err != nil {
+				return err
+			}
 		}
+		mode := "platform"
+		if game.SourceKind == "external" || game.SourceKind == "official" {
+			mode = "external"
+		}
+		interval := time.Duration(maxInt(game.DrawInterval, 60)) * time.Second
+		issueRow = lottery.Issue{GameID: game.ID, Issue: issue, Status: lottery.IssueStatusSettling, SourceMode: mode,
+			AcceptAt: drawAt.Add(-interval), SealAt: drawAt.Add(-3 * time.Second)}
+		if err := tx.Where("game_id = ? AND issue = ?", game.ID, issue).FirstOrCreate(&issueRow).Error; err != nil {
+			return err
+		}
+		if issueRow.Status == lottery.IssueStatusSettled {
+			return nil
+		}
+		return NewBetAdminService(tx).setIssueStatus(game.ID, issue, lottery.IssueStatusSettling, "", &drawAt, nil)
+	}); err != nil {
+		return nil, apperrors.NewSystemError("ISSUE_SAVE_FAILED", "保存期号结算状态失败", err)
 	}
+	alreadySettled := issueRow.Status == lottery.IssueStatusSettled
 
 	var pending []bet.Bet
 	if err := s.db.Where("game_id = ? AND issue = ? AND status = ?", game.ID, issue, "pending").Order("id asc").Find(&pending).Error; err != nil {
@@ -124,11 +150,21 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 	if len(pending) == 0 {
 		// Re-reading an already settled draw is a no-op. A newly imported draw is
 		// still announced once even when nobody placed a bet.
-		if !alreadySettled {
-			settledAt := time.Now().UTC()
-			if err := s.setIssueStatus(game.ID, issue, lottery.IssueStatusSettled, "", &drawAt, &settledAt); err != nil {
-				return nil, apperrors.NewSystemError("ISSUE_SAVE_FAILED", "完成期号结算状态失败", err)
+		if err := s.db.Transaction(func(tx *gorm.DB) error {
+			if gate != nil {
+				if err := gate(tx); err != nil {
+					return err
+				}
 			}
+			if alreadySettled {
+				return nil
+			}
+			settledAt := time.Now().UTC()
+			return NewBetAdminService(tx).setIssueStatus(game.ID, issue, lottery.IssueStatusSettled, "", &drawAt, &settledAt)
+		}); err != nil {
+			return nil, apperrors.NewSystemError("ISSUE_SAVE_FAILED", "完成期号结算状态失败", err)
+		}
+		if !alreadySettled {
 			ws.NotifyDraw(gameID, issue, numbers)
 		}
 		return result, nil
@@ -139,6 +175,11 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 	deliveries := make([]settlementNotificationDelivery, 0)
 	roomMessages := make([]chat.Message, 0)
 	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if gate != nil {
+			if err := gate(tx); err != nil {
+				return err
+			}
+		}
 		pendingUserIDs := make([]uint64, 0, len(pending))
 		for _, item := range pending {
 			pendingUserIDs = append(pendingUserIDs, item.UserID)
@@ -169,6 +210,9 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 			}
 		}
 		for _, item := range pending {
+			if revisionErr := betDrawRevisionError(game.ID, issue, item.DrawSourceRevision, draw.SourceRevision); revisionErr != nil {
+				return apperrors.NewBusinessError("DRAW_SOURCE_UNVERIFIED", revisionErr.Error())
+			}
 			outcome, reason := markSixOutcomeLost, ""
 			effectiveOdds := item.Odds
 			validTurnoverCents := item.AmountCents
@@ -183,6 +227,14 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 				} else {
 					outcome, reason, effectiveOdds = decision.Outcome, decision.Reason, decision.EffectiveOdds
 					validTurnoverCents, userIssueStakeCents, settlementPolicy = decision.ValidTurnoverCents, decision.UserIssueStakeCents, decision.Policy
+				}
+			} else if gameProfile.MarkSix {
+				decision, decisionErr := decideMarkSixSettlement(game.ID, item, numbers, draw.DrawAt)
+				if decisionErr != nil {
+					evaluationErr = decisionErr
+				} else {
+					outcome, reason, effectiveOdds = decision.Outcome, decision.Reason, decision.EffectiveOdds
+					validTurnoverCents, settlementPolicy = decision.ValidTurnoverCents, decision.Policy
 				}
 			} else {
 				outcome, reason, evaluationErr = evaluateBetOutcomeForRuleVersionAt(game, item.RuleVersion, numbers, item.PlayCode, item.Position, item.Selection, draw.DrawAt)
@@ -325,7 +377,19 @@ func (s *BetAdminService) settleIssueOnce(gameID, issue, operator string) (*Sett
 			}).Error
 	})
 	if err != nil {
-		_ = s.setIssueStatus(game.ID, issue, lottery.IssueStatusError, err.Error(), &drawAt, nil)
+		if gate == nil {
+			_ = s.setIssueStatus(game.ID, issue, lottery.IssueStatusError, err.Error(), &drawAt, nil)
+		} else {
+			// A paused or replaced recovery worker must not overwrite a newer
+			// worker's completed lifecycle while reporting its own failure.
+			_ = s.db.Transaction(func(tx *gorm.DB) error {
+				if gateErr := gate(tx); gateErr != nil {
+					return gateErr
+				}
+				return tx.Model(&lottery.Issue{}).Where("game_id = ? AND issue = ? AND status <> ?", game.ID, issue, lottery.IssueStatusSettled).
+					Updates(map[string]any{"status": lottery.IssueStatusError, "last_error": limitDBText(err.Error(), 500), "draw_at": drawAt}).Error
+			})
+		}
 		if app, ok := err.(*apperrors.AppError); ok {
 			return nil, app
 		}
@@ -342,15 +406,11 @@ func orderedBingoSettlementRevisionError(gameID string, draw lottery.Draw) error
 		return nil
 	}
 	return apperrors.NewBusinessError("DRAW_SOURCE_UNVERIFIED",
-		fmt.Sprintf("第 %s 期不是当前双源验证版本，已保留注单并转人工对账", draw.Issue))
+		fmt.Sprintf("第 %s 期不是受信任的开奖来源版本，已保留注单并转人工对账", draw.Issue))
 }
 
 func orderedBingoDrawRevisionCurrent(gameID, sourceRevision, conversionRevision string) bool {
-	binding, ok := api168BingoBindingForGame(gameID)
-	if !ok || !binding.RequiresOrderedSource {
-		return true
-	}
-	return sourceRevision == bingoOrderedSourceRevision && conversionRevision == binding.ConversionVersion
+	return trustedDrawRevisionMatches(gameID, sourceRevision, conversionRevision)
 }
 
 func (s *BetAdminService) markUnverifiedOrderedBingoIssue(game *lottery.Game, draw lottery.Draw, reason string) error {
@@ -364,6 +424,9 @@ func (s *BetAdminService) markUnverifiedOrderedBingoIssue(game *lottery.Game, dr
 			GameID: game.ID, Issue: draw.Issue, Status: lottery.IssueStatusError, SourceMode: sourceMode(game.SourceKind),
 			AcceptAt: draw.DrawAt.UTC().Add(-interval), SealAt: draw.DrawAt.UTC().Add(-3 * time.Second),
 			DrawAt: &draw.DrawAt, LastError: reason,
+		}
+		if game.ID == "sg-ssc" {
+			row.SourceMode = "legacy"
 		}
 		if err := tx.Where("game_id = ? AND issue = ?", game.ID, draw.Issue).FirstOrCreate(&row).Error; err != nil {
 			return err
@@ -509,7 +572,7 @@ func settlementBetLabel(item bet.Bet) string {
 			}
 			return spec.Play.Name
 		}
-		return defaultString(strings.TrimSpace(item.PlayName), "宾果六合彩")
+		return defaultString(strings.TrimSpace(item.PlayName), "六合彩")
 	}
 	if profile.PC28 > 0 {
 		if spec, ok := pc28SpecByCode(item.PlayCode); ok {
@@ -729,8 +792,8 @@ func (s *BetAdminService) publishDrawWithEntropy(gameID, issue string, numbers [
 	if err != nil {
 		return nil, err
 	}
-	if bingoGameRequiresOrderedSource(game.ID) {
-		return nil, apperrors.NewBusinessError("EXTERNAL_DRAW_MANUAL_FORBIDDEN", "依赖双源顺序校验的宾果彩种禁止手工或随机开奖，请使用来源同步或人工对账流程")
+	if _, _, versionedSource := trustedDrawRevision(game.ID); versionedSource {
+		return nil, apperrors.NewBusinessError("EXTERNAL_DRAW_MANUAL_FORBIDDEN", "该彩种只能写入已核验并带来源版本的开奖结果，请使用来源同步或人工对账流程")
 	}
 	issue = strings.TrimSpace(issue)
 	if len(numbers) == 0 {
@@ -788,7 +851,7 @@ func (s *BetAdminService) SettlementStatus(gameID, issue string) (*SettlementSta
 	}
 	status := &SettlementStatus{GameID: game.ID, Issue: issue}
 	var draw lottery.Draw
-	if err := s.db.Where("game_id = ? AND issue = ?", game.ID, issue).First(&draw).Error; err == nil {
+	if err := trustedDrawsForGame(s.db, game.ID).Where("issue = ?", issue).First(&draw).Error; err == nil {
 		status.HasDraw = true
 		status.Numbers = parseNumbers(draw.Numbers)
 		status.DrawAt = &draw.DrawAt
@@ -1146,6 +1209,9 @@ func trimRemark(existing, reason string) string {
 // generateDrawNumbers samples only an explicitly modelled game. Entropy is
 // supplied per call so failure tests never replace the process-wide reader.
 func generateDrawNumbers(game *lottery.Game, entropy io.Reader) ([]int, error) {
+	if game != nil && game.ID == "sg-ssc" {
+		return nil, apperrors.NewBusinessError("DRAW_NOT_FOUND", "SG时时彩仅接受双站核对结果，不能自动生成")
+	}
 	profile, supported := rulesForGame(game)
 	if !supported {
 		return nil, apperrors.NewBusinessError("RULES_NOT_READY", "该彩种规则尚待核对，不能自动生成开奖号码")

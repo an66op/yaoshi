@@ -28,30 +28,31 @@ type BetAdminService struct {
 }
 
 type BetView struct {
-	ID               uint64    `json:"id"`
-	GameID           string    `json:"game_id"`
-	Issue            string    `json:"issue"`
-	UserID           uint64    `json:"user_id"`
-	Username         string    `json:"username"`
-	PlayCode         string    `json:"play_code"`
-	PlayName         string    `json:"play_name"`
-	RuleVersion      string    `json:"rule_version,omitempty"`
-	Position         int       `json:"position"`
-	Selection        string    `json:"selection"`
-	Amount           float64   `json:"amount"`
-	Odds             float64   `json:"odds"`
-	SettlementOdds   *float64  `json:"settlement_odds,omitempty"`
-	ValidTurnover    *float64  `json:"valid_turnover,omitempty"`
-	UserIssueStake   *float64  `json:"user_issue_stake,omitempty"`
-	SettlementPolicy string    `json:"settlement_policy,omitempty"`
-	Status           string    `json:"status"`
-	Payout           float64   `json:"payout"`
-	FlyAmount        float64   `json:"fly_amount"`
-	Remark           string    `json:"remark"`
-	Operator         string    `json:"operator"`
-	CreatedAt        time.Time `json:"created_at"`
-	Deducted         float64   `json:"deducted,omitempty"`
-	Balance          float64   `json:"balance,omitempty"`
+	ID                 uint64    `json:"id"`
+	GameID             string    `json:"game_id"`
+	Issue              string    `json:"issue"`
+	UserID             uint64    `json:"user_id"`
+	Username           string    `json:"username"`
+	PlayCode           string    `json:"play_code"`
+	PlayName           string    `json:"play_name"`
+	RuleVersion        string    `json:"rule_version,omitempty"`
+	DrawSourceRevision string    `json:"draw_source_revision,omitempty"`
+	Position           int       `json:"position"`
+	Selection          string    `json:"selection"`
+	Amount             float64   `json:"amount"`
+	Odds               float64   `json:"odds"`
+	SettlementOdds     *float64  `json:"settlement_odds,omitempty"`
+	ValidTurnover      *float64  `json:"valid_turnover,omitempty"`
+	UserIssueStake     *float64  `json:"user_issue_stake,omitempty"`
+	SettlementPolicy   string    `json:"settlement_policy,omitempty"`
+	Status             string    `json:"status"`
+	Payout             float64   `json:"payout"`
+	FlyAmount          float64   `json:"fly_amount"`
+	Remark             string    `json:"remark"`
+	Operator           string    `json:"operator"`
+	CreatedAt          time.Time `json:"created_at"`
+	Deducted           float64   `json:"deducted,omitempty"`
+	Balance            float64   `json:"balance,omitempty"`
 }
 
 type CancelIssueResult struct {
@@ -85,10 +86,12 @@ type PlaceBetInput struct {
 }
 
 type betLimitEntry struct {
-	PlayCode    string
-	Position    int
-	Selection   string
-	AmountCents int64
+	PricingCode  string
+	PricingCodes []string
+	PlayCode     string
+	Position     int
+	Selection    string
+	AmountCents  int64
 }
 
 type MonitorSnapshot struct {
@@ -307,7 +310,8 @@ func aggregatePlacementRows(rows []bet.Bet) ([]bet.Bet, []int, error) {
 		}
 		previous := &aggregated[index]
 		if previous.Odds != row.Odds || previous.RebateRateSnapshot != row.RebateRateSnapshot ||
-			previous.AgentShareRateSnapshot != row.AgentShareRateSnapshot || previous.PC28GrayPush != row.PC28GrayPush {
+			previous.AgentShareRateSnapshot != row.AgentShareRateSnapshot || previous.PC28GrayPush != row.PC28GrayPush ||
+			previous.DrawSourceRevision != row.DrawSourceRevision {
 			return nil, nil, apperrors.NewBusinessError("INVALID_REQUEST", "同一投注项的财务条件已变化，请重新提交")
 		}
 		amount, ok := safeAddInt64(previous.AmountCents, row.AmountCents)
@@ -481,7 +485,7 @@ func (s *BetAdminService) Place(input PlaceBetInput) (*BetView, error) {
 		row := bet.Bet{
 			WorkspaceID: account.WorkspaceID, GameID: game.ID, Issue: issue, RoomScope: roomScope, UserID: account.UserID, Username: account.Username,
 			PlayCode: playCode, PlayName: playName, Position: input.Position, Selection: selection, RequestReference: requestReference,
-			RuleVersion: profile.Version,
+			RuleVersion: profile.Version, DrawSourceRevision: placementDrawSourceRevision(game.ID),
 			AmountCents: amountCents, Odds: odds, ValidTurnoverCents: int64Pointer(amountCents), PC28GrayPush: pc28GrayPush,
 			Status: "pending", FlyCents: flyCents,
 			RebateRateSnapshot: financialTerms.rebateRate, AgentShareRateSnapshot: financialTerms.shareRate,
@@ -754,14 +758,17 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 	}
 
 	type preparedBet struct {
-		input       PlaceBetInput
-		playCode    string
-		playName    string
-		selection   string
-		amountCents int64
-		requestFly  float64
-		odds        float64
-		flyCents    int64
+		input        PlaceBetInput
+		playCode     string
+		playName     string
+		selection    string
+		amountCents  int64
+		requestFly   float64
+		odds         float64
+		oddsTerms    string
+		pricingCode  string
+		pricingCodes []string
+		flyCents     int64
 	}
 	prepared := make([]preparedBet, 0, len(inputs))
 	var totalCents int64
@@ -852,13 +859,62 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 			pc28GrayPush = configuredPC28GrayPush(rawSettings, game.ID)
 		}
 		quotedShapes := make(map[string]float64)
+		canonicalMarkSixLines := make(map[string]struct{}, len(prepared))
 		for index := range prepared {
 			item := &prepared[index]
-			resolved, resolveErr := trading.ResolveForAccountSelection(
-				account, game.ID, item.playCode, item.selection, centsToAmount(item.amountCents), item.input.Odds, financialTerms.flyRequest(item.requestFly),
-			)
-			if resolveErr != nil {
-				return resolveErr
+			resolveCode := func(code string) (*ResolvedTradeParams, error) {
+				return trading.ResolveForAccountSelection(
+					account, game.ID, code, item.selection, centsToAmount(item.amountCents), item.input.Odds, financialTerms.flyRequest(item.requestFly),
+				)
+			}
+			var resolved *ResolvedTradeParams
+			if candidates, linked, candidateErr := markSixLinkedPricingCandidates(profile.Version, item.playCode, item.selection); candidateErr != nil {
+				return candidateErr
+			} else if linked {
+				item.pricingCodes = append([]string(nil), candidates...)
+				var lowest *ResolvedTradeParams
+				lowestCode := ""
+				for _, candidate := range candidates {
+					quote, quoteErr := resolveCode(candidate)
+					if quoteErr != nil {
+						return quoteErr
+					}
+					if lowest == nil || quote.Odds < lowest.Odds || (quote.Odds == lowest.Odds && candidate < lowestCode) {
+						lowest, lowestCode = quote, candidate
+					}
+				}
+				if lowest == nil {
+					return apperrors.NewBusinessError("ODDS_NOT_CONFIGURED", "所选连肖或连尾缺少有效赔率")
+				}
+				resolved, item.pricingCode = lowest, lowestCode
+				item.oddsTerms, candidateErr = encodeMarkSixPricingCodeTermsForVersion(profile.Version, lowestCode)
+				if candidateErr != nil {
+					return candidateErr
+				}
+			} else {
+				var resolveErr error
+				resolved, resolveErr = resolveCode(item.playCode)
+				if resolveErr != nil {
+					return resolveErr
+				}
+			}
+			if primaryCode, secondaryCode, composite := markSixCompositePricingCodes(item.playCode); composite {
+				item.pricingCodes = []string{primaryCode, secondaryCode}
+				secondary, secondaryErr := resolveCode(secondaryCode)
+				if secondaryErr != nil {
+					return secondaryErr
+				}
+				item.oddsTerms, secondaryErr = encodeMarkSixOddsTerms(item.playCode, secondary.Odds)
+				if secondaryErr != nil {
+					return secondaryErr
+				}
+			}
+			if profile.MarkSix {
+				key := fmt.Sprintf("%s\x00%d\x00%s", item.playCode, item.input.Position, item.selection)
+				if _, duplicate := canonicalMarkSixLines[key]; duplicate {
+					return apperrors.NewBusinessError("INVALID_REQUEST", "同一张网投单不能包含重复投注项")
+				}
+				canonicalMarkSixLines[key] = struct{}{}
 			}
 			item.odds = resolved.Odds
 			if isFrontThreeShape(item.playCode) && item.odds > quotedShapes[item.playCode] {
@@ -882,7 +938,8 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 		limitEntries := make([]betLimitEntry, 0, len(prepared))
 		for _, item := range prepared {
 			limitEntries = append(limitEntries, betLimitEntry{
-				PlayCode: item.playCode, Position: item.input.Position, Selection: item.selection, AmountCents: item.amountCents,
+				PricingCode: item.pricingCode, PricingCodes: item.pricingCodes, PlayCode: item.playCode,
+				Position: item.input.Position, Selection: item.selection, AmountCents: item.amountCents,
 			})
 		}
 		if err := validateBetLimitEntries(tx, game.ID, issue, userID, limitEntries); err != nil {
@@ -920,8 +977,8 @@ func (s *BetAdminService) PlaceBatch(inputs []PlaceBetInput) ([]BetView, error) 
 			rows = append(rows, bet.Bet{
 				WorkspaceID: account.WorkspaceID, GameID: game.ID, Issue: issue, RoomScope: roomScope, UserID: account.UserID, Username: account.Username,
 				PlayCode: item.playCode, PlayName: item.playName, Position: item.input.Position, Selection: item.selection, RequestReference: requestReference,
-				RuleVersion: profile.Version,
-				AmountCents: item.amountCents, Odds: item.odds, ValidTurnoverCents: int64Pointer(item.amountCents), PC28GrayPush: pc28GrayPush,
+				RuleVersion: profile.Version, DrawSourceRevision: placementDrawSourceRevision(game.ID),
+				AmountCents: item.amountCents, Odds: item.odds, OddsTerms: defaultString(item.oddsTerms, "{}"), ValidTurnoverCents: int64Pointer(item.amountCents), PC28GrayPush: pc28GrayPush,
 				Status: "pending", FlyCents: item.flyCents,
 				RebateRateSnapshot: financialTerms.rebateRate, AgentShareRateSnapshot: financialTerms.shareRate,
 				Remark: strings.TrimSpace(item.input.Remark), Operator: defaultString(item.input.Operator, operator),
@@ -1728,7 +1785,7 @@ func validateBetChoice(game *lottery.Game, playCode string, position int, select
 
 func ensurePlacementBetMode(profile gameRuleProfile, mode string) error {
 	if profile.MarkSix && strings.TrimSpace(mode) != "web" {
-		return apperrors.NewBusinessError("BET_MODE_UNAVAILABLE", "宾果六合彩仅支持网投，不支持聊天或通用单注入口")
+		return apperrors.NewBusinessError("BET_MODE_UNAVAILABLE", "六合彩仅支持网投，不支持聊天或通用单注入口")
 	}
 	return nil
 }
@@ -1737,7 +1794,7 @@ func normalizeBetSelection(game *lottery.Game, playCode, selection string) strin
 	selection = strings.TrimSpace(selection)
 	if profile, ok := rulesForGame(game); ok {
 		if profile.MarkSix {
-			return markSixNormalizeSelection(playCode, selection)
+			return markSixNormalizeSelectionForVersion(profile.Version, playCode, selection)
 		}
 		if profile.PC28 > 0 {
 			return pc28NormalizeSelection(playCode, selection)
@@ -1775,8 +1832,8 @@ func toBetView(row bet.Bet) BetView {
 	view := BetView{
 		ID: row.ID, GameID: row.GameID, Issue: row.Issue, UserID: row.UserID, Username: row.Username,
 		PlayCode: row.PlayCode, PlayName: row.PlayName, Position: row.Position, Selection: row.Selection,
-		RuleVersion: row.RuleVersion,
-		Amount:      centsToAmount(row.AmountCents), Odds: row.Odds, SettlementOdds: row.SettlementOdds,
+		RuleVersion: row.RuleVersion, DrawSourceRevision: row.DrawSourceRevision,
+		Amount: centsToAmount(row.AmountCents), Odds: row.Odds, SettlementOdds: row.SettlementOdds,
 		SettlementPolicy: row.SettlementPolicy, Status: row.Status,
 		Payout: centsToAmount(row.PayoutCents), FlyAmount: centsToAmount(row.FlyCents),
 		Remark: row.Remark, Operator: row.Operator, CreatedAt: row.CreatedAt,
@@ -1790,6 +1847,28 @@ func toBetView(row bet.Bet) BetView {
 		view.UserIssueStake = &value
 	}
 	return view
+}
+
+// Newly accepted tickets freeze the draw-source revision that was active when
+// the bet was created. Views, retries and archive restoration must copy the
+// persisted value, not call this helper again.
+func placementDrawSourceRevision(gameID string) string {
+	if gameID == "sg-ssc" {
+		return sgSSCSourceRevision
+	}
+	if binding, ok := bingo163BindingForGame(gameID); ok {
+		return binding.SourceRevision
+	}
+	if binding, ok := source163MirrorBindingForGame(gameID); ok {
+		return binding.Revision
+	}
+	if binding, ok := source163PC28BindingForGame(gameID); ok {
+		return binding.Revision
+	}
+	if binding, ok := source163MarkSixBindingForGame(gameID); ok {
+		return binding.SourceRevision
+	}
+	return ""
 }
 
 func int64Pointer(value int64) *int64 { return &value }
@@ -1868,38 +1947,68 @@ func validateBetLimitEntries(db *gorm.DB, gameID, issue string, userID uint64, e
 		PricingCode string
 		PlayCode    string
 		// Selection is populated only when one public play has independently
-		// priced outcomes (currently Bingo Racing A crown sum).
+		// priced outcomes (the Bingo Racing crown-sum markets).
 		Selection string
 	}
 	lineDeltas := make(map[lineKey]int64)
 	playDeltas := make(map[marketKey]int64)
+	markSixPublicDeltas := make(map[string]int64)
 	for _, entry := range entries {
-		pricingCode, pricingErr := oddsPricingCode(gameID, entry.PlayCode, entry.Selection)
-		if pricingErr != nil {
-			return pricingErr
+		pricingCodes := append([]string(nil), entry.PricingCodes...)
+		if len(pricingCodes) == 0 {
+			pricingCode := strings.ToLower(strings.TrimSpace(entry.PricingCode))
+			if pricingCode != "" {
+				pricingCodes = []string{pricingCode}
+			}
 		}
-		limit, ok := limitByPlay[pricingCode]
-		if !ok {
-			continue
+		if len(pricingCodes) == 0 {
+			var pricingErr error
+			pricingCode, pricingErr := oddsPricingCode(gameID, entry.PlayCode, entry.Selection)
+			if pricingErr != nil {
+				return pricingErr
+			}
+			pricingCodes = []string{pricingCode}
 		}
-		if limit.MinBet > 0 && centsToAmount(entry.AmountCents) < limit.MinBet {
-			return apperrors.NewBusinessError("BET_TOO_SMALL", fmt.Sprintf("单注最低 %.2f 元", limit.MinBet))
+		seenPricingCodes := make(map[string]struct{}, len(pricingCodes))
+		for _, rawPricingCode := range pricingCodes {
+			pricingCode := strings.ToLower(strings.TrimSpace(rawPricingCode))
+			if pricingCode == "" {
+				continue
+			}
+			if _, duplicate := seenPricingCodes[pricingCode]; duplicate {
+				continue
+			}
+			seenPricingCodes[pricingCode] = struct{}{}
+			limit, ok := limitByPlay[pricingCode]
+			if !ok {
+				continue
+			}
+			if limit.MinBet > 0 && centsToAmount(entry.AmountCents) < limit.MinBet {
+				return apperrors.NewBusinessError("BET_TOO_SMALL", fmt.Sprintf("单注最低 %.2f 元", limit.MinBet))
+			}
+			key := lineKey{PricingCode: pricingCode, PlayCode: entry.PlayCode, Position: entry.Position, Selection: entry.Selection}
+			lineTotal, ok := safeAddInt64(lineDeltas[key], entry.AmountCents)
+			if !ok || lineTotal < 0 {
+				return apperrors.NewBusinessError("INVALID_REQUEST", "单注累计金额过大")
+			}
+			market := marketKey{PricingCode: pricingCode, PlayCode: entry.PlayCode}
+			if isBingoRacingGame(gameID) && strings.ToLower(strings.TrimSpace(entry.PlayCode)) == "sum" {
+				market.Selection = entry.Selection
+			}
+			playTotal, ok := safeAddInt64(playDeltas[market], entry.AmountCents)
+			if !ok || playTotal < 0 {
+				return apperrors.NewBusinessError("INVALID_REQUEST", "玩法累计金额过大")
+			}
+			lineDeltas[key] = lineTotal
+			playDeltas[market] = playTotal
 		}
-		key := lineKey{PricingCode: pricingCode, PlayCode: entry.PlayCode, Position: entry.Position, Selection: entry.Selection}
-		lineTotal, ok := safeAddInt64(lineDeltas[key], entry.AmountCents)
-		if !ok || lineTotal < 0 {
-			return apperrors.NewBusinessError("INVALID_REQUEST", "单注累计金额过大")
+		if gameID == "bingo-mark-six" {
+			publicTotal, publicOK := safeAddInt64(markSixPublicDeltas[entry.PlayCode], entry.AmountCents)
+			if !publicOK || publicTotal < 0 {
+				return apperrors.NewBusinessError("INVALID_REQUEST", "六合彩玩法累计金额过大")
+			}
+			markSixPublicDeltas[entry.PlayCode] = publicTotal
 		}
-		market := marketKey{PricingCode: pricingCode, PlayCode: entry.PlayCode}
-		if pricingCode != entry.PlayCode {
-			market.Selection = entry.Selection
-		}
-		playTotal, ok := safeAddInt64(playDeltas[market], entry.AmountCents)
-		if !ok || playTotal < 0 {
-			return apperrors.NewBusinessError("INVALID_REQUEST", "玩法累计金额过大")
-		}
-		lineDeltas[key] = lineTotal
-		playDeltas[market] = playTotal
 	}
 	for key, delta := range lineDeltas {
 		limit := limitByPlay[key.PricingCode]
@@ -1923,6 +2032,13 @@ func validateBetLimitEntries(db *gorm.DB, gameID, issue string, userID uint64, e
 	}
 	for market, delta := range playDeltas {
 		limit := limitByPlay[market.PricingCode]
+		if gameID == "bingo-mark-six" {
+			// Mark Six composite and linked tickets persist a stable public code,
+			// while the internal pricing row can vary by payout tier or selected
+			// animal/tail. Period limits therefore aggregate the complete public
+			// market, including every distinct combination in this same batch.
+			delta = markSixPublicDeltas[market.PlayCode]
+		}
 		if limit.MaxUserPeriod > 0 {
 			var userPeriodCents int64
 			query := db.Model(&bet.Bet{}).Where(

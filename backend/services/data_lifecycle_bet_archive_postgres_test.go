@@ -157,6 +157,7 @@ func TestRobotBetArchivePostgresRestoresLegacySnapshotSchemas(t *testing.T) {
 		{"request-before-rule-column", "rule_version", "", "assistant:legacy-request"},
 		{"rule-without-request-column", "request_reference", "racing-v2", ""},
 		{"before-pc28-financial-columns", "valid_turnover_cents,settlement_odds,user_issue_stake_cents_snapshot,settlement_policy,pc28_gray_push", "racing-v2", "assistant:legacy-finance"},
+		{"before-draw-source-snapshot", "draw_source_revision", "racing-v2", "assistant:legacy-draw-source"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			db := timingPostgresDatabase(t)
@@ -204,11 +205,17 @@ func TestRobotBetArchivePostgresRejectsInconsistentEvidenceAtomically(t *testing
 		{name: "legacy-version-cannot-be-invented", missingKeys: "rule_version", overrides: `{"rule_version":"racing-v2"}`},
 		{name: "present-request-must-still-match", version: "racing-v2", rewrittenColumn: "request_reference"},
 		{name: "present-version-must-still-match", version: "racing-v2", rewrittenColumn: "rule_version"},
+		{name: "draw-source-column", version: "racing-v2", overrides: `{"draw_source_revision":"forged-source"}`},
+		{name: "legacy-draw-source-cannot-be-invented", missingKeys: "draw_source_revision", overrides: `{"draw_source_revision":"forged-source"}`},
+		{name: "present-draw-source-must-still-match", version: "racing-v2", rewrittenColumn: "draw_source_revision"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			db := timingPostgresDatabase(t)
 			row := robotBetArchiveOwnedFixture(t, db)
 			row.RuleVersion, row.RequestReference = test.version, "assistant:immutable-archive-request"
+			if test.rewrittenColumn == "draw_source_revision" {
+				row.GameID, row.DrawSourceRevision = "sg-ssc", sgSSCSourceRevision
+			}
 			if err := db.Create(&row).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -250,6 +257,56 @@ func TestRobotBetArchivePostgresRejectsInconsistentEvidenceAtomically(t *testing
 	}
 }
 
+func TestRobotBetArchivePostgresPreservesSGDrawSourceSnapshots(t *testing.T) {
+	db := timingPostgresDatabase(t)
+	room := timingPostgresRoom(t, db, "archive_sg_source_room", "782022")
+	member := timingPostgresMember(t, db, room, "archive_sg_source_member")
+	if err := db.Create(&workspacemodel.RobotProfile{WorkspaceID: room.ID, UserID: member.UserID, Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	snapshots := map[uint64]string{}
+	for index, revision := range []string{"", sgSSCSourceRevision} {
+		row := robotBetArchiveFixture(room.ID, member.UserID, member.Username, room.Scope)
+		row.GameID, row.RuleVersion, row.DrawSourceRevision = "sg-ssc", "digits5-v3", revision
+		row.RequestReference = fmt.Sprintf("assistant:sg-source-archive-%d", index)
+		if err := db.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+		snapshots[row.ID] = robotBetHotJSON(t, db, row.ID)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := allowLifecycleDeletes(tx); err != nil {
+			return err
+		}
+		count, err := NewDataLifecycleService(tx).archiveRobotBets(tx, normalizedCleanupCriteria{WorkspaceID: room.ID}, "archive-sg-source", time.Now().UTC(), 100)
+		if err != nil {
+			return err
+		}
+		if count != 2 {
+			return fmt.Errorf("archived %d source snapshots, want 2", count)
+		}
+		var invalid int64
+		if err := tx.Raw(`SELECT COUNT(*) FROM lottery_bet_archives WHERE draw_source_revision IS DISTINCT FROM COALESCE(source_json ->> 'draw_source_revision', '')`).Scan(&invalid).Error; err != nil {
+			return err
+		}
+		if invalid != 0 {
+			return fmt.Errorf("archive changed %d source snapshots", invalid)
+		}
+		count, err = restoreRobotBetArchive(tx, "archive-sg-source")
+		if err == nil && count != 2 {
+			return fmt.Errorf("restored %d source snapshots, want 2", count)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for id, expected := range snapshots {
+		if actual := robotBetHotJSON(t, db, id); actual != expected {
+			t.Fatalf("restoration inferred or lost source snapshot for %d:\n%s\n%s", id, expected, actual)
+		}
+	}
+}
+
 func robotBetArchiveOwnedFixture(t *testing.T, db *gorm.DB) bet.Bet {
 	t.Helper()
 	var platform workspacemodel.Workspace
@@ -267,7 +324,8 @@ func robotBetArchiveFixture(workspaceID, userID uint64, username, roomScope stri
 	return bet.Bet{
 		WorkspaceID: workspaceID, UserID: userID, Username: username, RoomScope: roomScope,
 		GameID: "speed-racing", Issue: "archive-rule-1001", PlayCode: "ball_1_5", PlayName: "冠军", Position: 1, Selection: "2",
-		AmountCents: 1234, Odds: 9.96, ValidTurnoverCents: &validTurnover, SettlementOdds: &settlementOdds,
+		AmountCents: 1234, Odds: 9.96, OddsTerms: `{"version":1,"exact_three_odds":125}`,
+		ValidTurnoverCents: &validTurnover, SettlementOdds: &settlementOdds,
 		UserIssueStakeCentsSnapshot: &userIssueStake, SettlementPolicy: "pc28_archive_fixture", PC28GrayPush: true,
 		Status: "won", PayoutCents: 12291, FlyCents: 123,
 		RebateRateSnapshot: 1.23, RebateCents: 15, AgentShareRateSnapshot: 5.67, AgentShareCents: 89,

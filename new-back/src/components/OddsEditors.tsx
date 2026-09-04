@@ -1,10 +1,11 @@
 import { Alert, Avatar, Box, Button, Checkbox, Chip, FormControlLabel, InputAdornment, MenuItem, Paper, Stack, TextField, Typography } from '@mui/material'
 import KeyboardArrowRightRounded from '@mui/icons-material/KeyboardArrowRightRounded'
 import RestartAltRounded from '@mui/icons-material/RestartAltRounded'
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AdminGame, PlayLimitItem } from '../api'
 import { gameLogo } from '../gameLogos'
 import { applyOddsBatch, oddsEditableFields, type OddsEditableField } from '../oddsEditing'
+import { PlatformOddsRow } from './PlatformOddsRow'
 
 export type OddsOverrideItem = {
   play_code: string
@@ -35,12 +36,6 @@ function categoryForPlay(playCode: string, playName = '') {
   if (/^sum_(?:big|small|odd|even|\d+)$/.test(playCode)) return '冠亚和'
   if (playCode === 'sum' && playName.includes('总和')) return '总和'
   return playCategory[playCode] || '其他玩法'
-}
-
-function oddsConfirmationLabel(item: PlayLimitItem, configured: boolean) {
-  if (item.configuration_source === 'pending_admin_save') return '待保存确认'
-  if (item.configuration_source === 'rule_version_mismatch') return '规则已变更'
-  return configured ? '后台已确认' : '未配置 / 停用'
 }
 
 const categoryOrder = ['彩票', '168', '宾果', 'PC', '六合彩', '高频彩', '境外彩', '全国彩', '未分类']
@@ -100,7 +95,7 @@ export function GameOddsNavigation({ games, gameId, onSelect }: {
           <Avatar src={gameLogo(game.id)} alt="" sx={{ width: 24, height: 24, mr: .65, bgcolor: 'action.hover' }}>{game.name.slice(0, 1)}</Avatar>
           <Box textAlign="left" minWidth={0}>
             <Typography fontSize={11.5} fontWeight={850} noWrap>{game.name}</Typography>
-            <Typography fontSize={8.5} lineHeight={1.1} color="text.secondary" noWrap>{game.source_kind === 'official' ? '官方源' : game.source_kind === 'external' ? '外部源' : '平台彩'}</Typography>
+            <Typography fontSize={8.5} lineHeight={1.1} color="text.secondary" noWrap>{game.lobby_category?.trim() || '未分类'}</Typography>
           </Box>
         </Button>
       })}
@@ -180,6 +175,8 @@ export function OddsOverrideGrid({ items, level, onChange }: {
   </Stack>
 }
 
+const ODDS_RENDER_BATCH_SIZE = 12
+
 export function PlatformOddsGrid({ items, catalog, onChange, disabled = false }: {
   items: PlayLimitItem[]
   catalog: Record<string, { category?: string; description?: string; example?: string } | undefined>
@@ -192,15 +189,43 @@ export function PlatformOddsGrid({ items, catalog, onChange, disabled = false }:
   const [batchField, setBatchField] = useState<OddsEditableField>('odds')
   const [batchValue, setBatchValue] = useState('')
   const [batchError, setBatchError] = useState('')
+  const [renderLimit, setRenderLimit] = useState(ODDS_RENDER_BATCH_SIZE)
+  const loadMoreTarget = useRef<HTMLDivElement>(null)
+  const interaction = useRef({ items, onChange, disabled })
+  useLayoutEffect(() => { interaction.current = { items, onChange, disabled } }, [items, onChange, disabled])
   const categoryFor = (item: PlayLimitItem) => catalog[item.play_code]?.category || categoryForPlay(item.play_code, item.play_name)
   const categories = Array.from(new Set(items.map(categoryFor)))
   const visible = items.filter(item => (category === 'all' || categoryFor(item) === category) && `${item.play_code} ${item.play_name}`.toLowerCase().includes(query.trim().toLowerCase()))
   const selectedCodes = selected.filter(code => items.some(item => item.play_code === code))
   const allVisibleSelected = visible.length > 0 && visible.every(item => selectedCodes.includes(item.play_code))
   const someVisibleSelected = visible.some(item => selectedCodes.includes(item.play_code))
-  const update = (code: string, patch: Partial<PlayLimitItem>) => {
-    if (!disabled) onChange(items.map(item => item.play_code === code ? { ...item, ...patch } : item))
-  }
+  const rendered = visible.slice(0, renderLimit)
+  const hasMore = rendered.length < visible.length
+  const loadMore = useCallback(() => setRenderLimit(limit => limit + ODDS_RENDER_BATCH_SIZE), [])
+
+  useEffect(() => {
+    const target = loadMoreTarget.current
+    if (!target || !hasMore || typeof IntersectionObserver === 'undefined') return
+    let active = true
+    const observer = new IntersectionObserver(entries => {
+      if (!active || !entries.some(entry => entry.isIntersecting)) return
+      active = false
+      observer.disconnect()
+      loadMore()
+    }, { rootMargin: '120px 0px' })
+    observer.observe(target)
+    return () => { active = false; observer.disconnect() }
+  }, [hasMore, renderLimit, query, category, loadMore])
+
+  // Memoized rows use the latest committed draft, not a stale items closure.
+  const update = useCallback((code: string, patch: Partial<PlayLimitItem>) => {
+    const current = interaction.current
+    if (!current.disabled) current.onChange(current.items.map(item => item.play_code === code ? { ...item, ...patch } : item))
+  }, [])
+  const selectRow = useCallback((code: string, checked: boolean) => {
+    if (interaction.current.disabled) return
+    setSelected(previous => checked ? Array.from(new Set([...previous, code])) : previous.filter(item => item !== code))
+  }, [])
   const applyBatch = () => {
     if (disabled || !selectedCodes.length) return
     try {
@@ -213,8 +238,8 @@ export function PlatformOddsGrid({ items, catalog, onChange, disabled = false }:
   return <Stack gap={.65}>
     <Paper variant="outlined" sx={{ p: 1, borderRadius: 1 }}>
       <Stack direction={{ xs: 'column', sm: 'row' }} gap={.75}>
-        <TextField size="small" label="搜索玩法" value={query} onChange={event => setQuery(event.target.value)} sx={{ flex: 1 }} />
-        <TextField size="small" select label="玩法分类" value={category} onChange={event => setCategory(event.target.value)} sx={{ minWidth: 130 }}>
+        <TextField size="small" label="搜索玩法" value={query} onChange={event => { setQuery(event.target.value); setRenderLimit(ODDS_RENDER_BATCH_SIZE) }} sx={{ flex: 1 }} />
+        <TextField size="small" select label="玩法分类" value={category} onChange={event => { setCategory(event.target.value); setRenderLimit(ODDS_RENDER_BATCH_SIZE) }} sx={{ minWidth: 130 }}>
           <MenuItem value="all">全部分类</MenuItem>{categories.map(name => <MenuItem key={name} value={name}>{name}</MenuItem>)}
         </TextField>
       </Stack>
@@ -223,44 +248,24 @@ export function PlatformOddsGrid({ items, catalog, onChange, disabled = false }:
           const visibleCodes = new Set(visible.map(item => item.play_code))
           setSelected(checked ? Array.from(new Set([...selectedCodes, ...visibleCodes])) : selectedCodes.filter(code => !visibleCodes.has(code)))
         }} />} sx={{ mr: 0, '& .MuiFormControlLabel-label': { fontSize: 11 } }} />
-        <Typography fontSize={11} color="text.secondary">已选 {selectedCodes.length} 项 / 当前显示 {visible.length} 项</Typography>
+        <Typography fontSize={11} color="text.secondary">已选 {selectedCodes.length} 项 / 筛选结果 {visible.length} 项 / 已显示 {rendered.length} 项</Typography>
         <TextField size="small" select label="批量字段" value={batchField} onChange={event => setBatchField(event.target.value as OddsEditableField)} disabled={disabled} sx={{ minWidth: 165 }}>
           {oddsEditableFields.map(field => <MenuItem key={field.key} value={field.key}>{field.label}</MenuItem>)}
         </TextField>
         <TextField size="small" type="number" label="批量数值" value={batchValue} onChange={event => setBatchValue(event.target.value)} disabled={disabled} inputProps={{ min: 0, step: batchField === 'odds' ? .0001 : .01 }} sx={{ width: 135 }} />
         <Button size="small" variant="outlined" disabled={disabled || !selectedCodes.length || !batchValue.trim()} onClick={applyBatch}>应用到所选</Button>
       </Stack>
-      <Typography fontSize={10} color="text.secondary" mt={.5}>批量操作只修改草稿，需点击“保存设置”后才生效。赔率最多四位小数，限额最多两位小数。</Typography>
+      <Typography fontSize={10} color="text.secondary" mt={.5}>选择当前筛选会包含尚未滚动显示的玩法。批量操作只修改草稿，需点击“保存设置”后才生效。赔率最多四位小数，限额最多两位小数。</Typography>
       {batchError && <Alert severity="error" sx={{ mt: .75 }}>{batchError}</Alert>}
     </Paper>
-    {visible.map(item => {
-      const meta = catalog[item.play_code]
-      const modified = item.configuration_source === 'pending_admin_save'
-      const configured = item.configured === true && item.configuration_source === 'admin_save' && Number.isFinite(item.odds) && item.odds > 1
-      const confirmationLabel = oddsConfirmationLabel(item, configured)
-      return <Paper key={item.play_code} variant="outlined" sx={{ p: .75, borderRadius: 1, borderColor: modified ? 'warning.main' : !configured ? 'error.light' : 'divider' }}>
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', lg: 'minmax(155px,1.2fr) repeat(5,minmax(92px,1fr))' }, gap: .65, alignItems: 'center' }}>
-          <Box sx={{ gridColumn: { xs: '1 / -1', lg: 'auto' } }}>
-            <Stack direction="row" gap={.4} alignItems="center" flexWrap="wrap"><Checkbox size="small" checked={selectedCodes.includes(item.play_code)} disabled={disabled} inputProps={{ 'aria-label': `选择${item.play_name}` }} onChange={(_, checked) => setSelected(checked ? [...selectedCodes, item.play_code] : selectedCodes.filter(code => code !== item.play_code))} sx={{ p: .25 }} /><Typography fontSize={12.5} fontWeight={900}>{item.play_name}</Typography><Chip size="small" variant="outlined" label={meta?.category || categoryForPlay(item.play_code, item.play_name)} sx={{ height: 19, fontSize: 8.5 }} /><Chip size="small" color={modified ? 'warning' : configured ? 'success' : 'error'} variant="outlined" label={confirmationLabel} sx={{ height: 19, fontSize: 8.5 }} /></Stack>
-            <Typography fontSize={9} color="text.secondary">{item.play_code}{meta?.example ? ` · 例：${meta.example}` : ''}</Typography>
-          </Box>
-          {oddsEditableFields.map(field => <TextField
-            key={field.key}
-            size="small"
-            type="number"
-            label={field.label}
-            value={item[field.key]}
-            disabled={disabled}
-            onChange={event => {
-              const next = Number(event.target.value)
-              update(item.play_code, { [field.key]: next })
-            }}
-            inputProps={{ min: 0, step: field.step, 'aria-label': `${item.play_name}${field.label}` }}
-            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 1 } }}
-          />)}
-        </Box>
-      </Paper>
-    })}
+    {rendered.map(item => <PlatformOddsRow key={item.play_code} item={item}
+      category={categoryFor(item)} example={catalog[item.play_code]?.example}
+      selected={selectedCodes.includes(item.play_code)} disabled={disabled}
+      onSelect={selectRow} onChange={update} />)}
+    {hasMore && <Box ref={loadMoreTarget} textAlign="center" py={1}>
+      <Button size="small" onClick={loadMore}>继续加载玩法</Button>
+      <Typography fontSize={10} color="text.secondary">向下滚动自动加载 · 已显示 {rendered.length} / {visible.length} 项</Typography>
+    </Box>}
     {!visible.length && <Typography color="text.secondary" textAlign="center" py={3}>没有符合筛选条件的玩法</Typography>}
   </Stack>
 }

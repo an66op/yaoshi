@@ -2,6 +2,10 @@ server:
   bind: 127.0.0.1
   port: 8080
   mode: release
+  # Debug-only, one-time fixture provisioning. Keep disabled for normal starts.
+  seed_experience_accounts: false
+  # Debug-only synthetic draw fixtures. Normal starts and resets keep this false.
+  seed_deterministic_lottery_history: false
   # Add the actual frontend origin(s), including scheme and port when applicable.
   allowed_origins:
     - https://example.com

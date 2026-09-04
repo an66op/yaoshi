@@ -123,6 +123,45 @@ describe('member catalog hook recovery wiring', () => {
     expect(render().error).toBe('')
   })
 
+  it('closes only SG on catalog failure, keeps trusted history, and restores the confirmed issue after recovery', async () => {
+    const sg: LotteryGame = { ...game, id: 'sg-ssc', name: 'SG时时彩', category: 'ssc',
+      issue: '20260830177', current_issue: '20260830178', latest_numbers: [0, 9, 2, 7, 4],
+      source_name: 'SG时时彩母源（163:64＋115校验）', rules_ready: true, rule_version: 'digits5-v3' }
+    runtime.games.mockResolvedValue([sg, game])
+    render()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(render().games[0]).toMatchObject({ period: sg.current_issue, timing: { accepting: true } })
+
+    runtime.games.mockRejectedValueOnce(new Error('catalog unavailable'))
+    notify()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(render().games[0]).toMatchObject({ period: '—', latestIssue: sg.issue, balls: sg.latest_numbers,
+      sourceHealthy: false, sourceError: 'catalog unavailable', timing: { accepting: false, phase: 'unavailable', phaseLabel: '开奖暂停', due: '--:--' } })
+    expect(render().games[0].betting).toBeUndefined()
+    expect(render().games[1]).toMatchObject({ period: game.current_issue, timing: { accepting: true } })
+
+    const recovered = { ...sg, current_issue: '20260830179' }
+    runtime.games.mockResolvedValue([recovered, game])
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(render().error).toBe('')
+    expect(render().games[0]).toMatchObject({ period: recovered.current_issue, latestIssue: sg.issue,
+      balls: sg.latest_numbers, sourceHealthy: true, timing: { accepting: true } })
+  })
+
+  it('does not reopen SG when a retry returns a source failure rather than a healthy snapshot', async () => {
+    const sg: LotteryGame = { ...game, id: 'sg-ssc', rules_ready: true, rule_version: 'digits5-v3' }
+    runtime.games.mockResolvedValue([sg])
+    render()
+    await vi.advanceTimersByTimeAsync(0)
+    runtime.games.mockRejectedValueOnce(new Error('offline'))
+    notify()
+    await vi.advanceTimersByTimeAsync(100)
+    runtime.games.mockResolvedValue([{ ...sg, source_healthy: false, sync_status: 'error', last_sync_error: '双站校对分歧' }])
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(render().error).toBe('')
+    expect(render().games[0]).toMatchObject({ sourceHealthy: false, sourceError: '双站校对分歧', timing: { accepting: false } })
+  })
+
   it('pauses background polling and refreshes catalog plus clock on return', async () => {
     render()
     await vi.advanceTimersByTimeAsync(0)

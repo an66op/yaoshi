@@ -56,6 +56,7 @@ func main() {
 		}
 		return mapped
 	})
+	scheduler.SetEventSink(services.NewSystemLogService(db).RecordSchedulerEvent)
 	scheduler.Start(rootContext)
 	services.StartSettlementRecovery(rootContext, db)
 

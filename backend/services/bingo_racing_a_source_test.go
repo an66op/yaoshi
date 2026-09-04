@@ -176,7 +176,7 @@ func TestBingoOrderCrossCheckFailsClosedForEveryAuthorityAnomaly(t *testing.T) {
 	}
 }
 
-func TestBingoRacingAOnlyOpensOnExplicitDualSourceAndRacingContracts(t *testing.T) {
+func TestBingoRacingAOnlyOpensOnExplicit163DualSourceAndRacingContracts(t *testing.T) {
 	var binding *api168BingoBinding
 	for index := range api168BingoBindings {
 		if api168BingoBindings[index].GameID == "bingo-racing-a" {
@@ -192,21 +192,22 @@ func TestBingoRacingAOnlyOpensOnExplicitDualSourceAndRacingContracts(t *testing.
 		t.Fatalf("Bingo Racing A rule contract not explicitly bound: profile=%+v ready=%v", profile, ready)
 	}
 	kind, name, sourceURL, status := defaultLotterySource("bingo-racing-a")
-	if kind != "external" || name != bingoVerifiedSourceName || sourceURL != bingoVerifiedSourceURL || status != "stale" || !strings.Contains(name, "双源") {
+	if kind != "external" || name != bingo163OrderedSourceName || sourceURL != bingo163SourceURL || status != "stale" || !strings.Contains(name, "双源") {
 		t.Fatalf("Bingo Racing A hides an upstream: %q %q %q %q", kind, name, sourceURL, status)
 	}
-	if sourceHealthyForGame(&lottery.Game{SourceKind: kind, SyncStatus: status, LastSyncError: bingoOrderPendingMessage}) {
+	if sourceHealthyForGame(&lottery.Game{SourceKind: kind, SyncStatus: status, LastSyncError: bingo163PendingMessage}) {
 		t.Fatal("Bingo Racing A became healthy before its first successful dual-source validation")
 	}
-	if sourceHealthyForGame(&lottery.Game{SourceKind: kind, SyncStatus: "syncing", LastSyncError: bingoOrderPendingMessage}) {
+	if sourceHealthyForGame(&lottery.Game{SourceKind: kind, SyncStatus: "syncing", LastSyncError: bingo163PendingMessage}) {
 		t.Fatal("Bingo Racing A reopened while its first dual-source validation was in flight")
 	}
 	if !sourceHealthyForGame(&lottery.Game{SourceKind: kind, SyncStatus: "ok"}) {
 		t.Fatal("Bingo Racing A stayed unavailable after a complete dual-source sync cleared the pending error")
 	}
-	bKind, bName, _, bStatus := defaultLotterySource("bingo-racing-b")
-	if bKind != "external" || bName != "168开奖网" || bStatus != "idle" || !sourceHealthyForGame(&lottery.Game{SourceKind: bKind, SyncStatus: bStatus}) {
-		t.Fatalf("independent Bingo Racing B was paused by A's order gate: %q %q %q", bKind, bName, bStatus)
+	bKind, bName, bURL, bStatus := defaultLotterySource("bingo-racing-b")
+	if bKind != "external" || bName != bingo163OrderedSourceName || bURL != bingo163SourceURL || bStatus != "stale" ||
+		sourceHealthyForGame(&lottery.Game{SourceKind: bKind, SyncStatus: bStatus, LastSyncError: bingo163PendingMessage}) {
+		t.Fatalf("Bingo Racing B did not start fail-closed on the verified 163 ordered source: %q %q %q %q", bKind, bName, bURL, bStatus)
 	}
 }
 
@@ -277,22 +278,30 @@ func TestBingoOrderedSourceFailureIsIsolatedByExplicitBinding(t *testing.T) {
 }
 
 func TestOrderedBingoRecoveryRevisionContractMatchesSettlementGate(t *testing.T) {
-	for _, binding := range api168BingoBindings {
-		current := orderedBingoDrawRevisionCurrent(binding.GameID, bingoOrderedSourceRevision, binding.ConversionVersion)
-		if binding.RequiresOrderedSource {
-			if !current || orderedBingoDrawRevisionCurrent(binding.GameID, "", binding.ConversionVersion) ||
-				orderedBingoDrawRevisionCurrent(binding.GameID, bingoOrderedSourceRevision, "legacy") {
-				t.Fatalf("ordered settlement revision gate is not exact: %+v", binding)
-			}
-			continue
+	legacyOrderedCount := 0
+	for _, binding := range bingo163Bindings {
+		if !orderedBingoDrawRevisionCurrent(binding.GameID, binding.SourceRevision, binding.ConversionVersion) ||
+			orderedBingoDrawRevisionCurrent(binding.GameID, "", binding.ConversionVersion) ||
+			orderedBingoDrawRevisionCurrent(binding.GameID, binding.SourceRevision, "legacy") {
+			t.Fatalf("current 163 settlement revision gate is not exact: %+v", binding)
 		}
-		if !current || !orderedBingoDrawRevisionCurrent(binding.GameID, "", "") {
-			t.Fatalf("independent game inherited the ordered settlement gate: %+v", binding)
+		if bingo163LegacyRequiredOrder(binding.GameID) {
+			legacyOrderedCount++
+			if !orderedBingoDrawRevisionCurrent(binding.GameID, bingoOrderedSourceRevision, binding.ConversionVersion) {
+				t.Fatalf("verified 168+jyb history lost trust after cutover: %+v", binding)
+			}
+		} else if orderedBingoDrawRevisionCurrent(binding.GameID, bingoOrderedSourceRevision, binding.ConversionVersion) {
+			t.Fatalf("set-only game accepted an ordered legacy contract it never used: %+v", binding)
 		}
 	}
+	if !orderedBingoDrawRevisionCurrent("unknown-mark-six", "", "") {
+		t.Fatal("unrelated unversioned game inherited the Bingo source gate")
+	}
 	query, args := orderedBingoRecoveryRevisionSQL("bets.game_id", "draws")
+	contractCount := len(trustedDrawRevisionContracts("sg-ssc")) + len(source163MirrorBindings) + len(source163PC28Bindings) + len(source163MarkSixBindings) + len(bingo163Bindings) + legacyOrderedCount // SG current+legacy + current 163 mirrors + PC28/Mark Six variants + current Bingo seven + legacy ordered three.
+	wantArgs := 1 + contractCount*3 + 2                                                                                                                                                                   // versioned IDs + contracts + cutover guards.
 	if !strings.Contains(query, "bets.game_id NOT IN ?") || !strings.Contains(query, "draws.source_revision = ?") ||
-		!strings.Contains(query, "draws.conversion_revision = ?") || len(args) != 2+2*3 {
+		!strings.Contains(query, "draws.conversion_revision = ?") || len(args) != wantArgs {
 		t.Fatalf("bounded recovery predicate lost an ordered product or revision: query=%q args=%+v", query, args)
 	}
 }

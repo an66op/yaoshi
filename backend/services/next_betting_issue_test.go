@@ -12,7 +12,7 @@ func nextBettingFixture() (lottery.Game, lottery.Issue, []lottery.Draw, time.Tim
 	now := time.Date(2026, 8, 30, 12, 0, 1, 0, time.UTC)
 	drawAt := now.Add(-time.Second)
 	syncAt := now.Add(-2 * time.Second)
-	game := lottery.Game{ID: "speed-racing", Enabled: true, SourceKind: "external", SyncStatus: "ok",
+	game := lottery.Game{ID: "speed-racing", Enabled: true, SourceKind: "external", SourceName: source163MirrorName, SourceURL: source163MirrorURL, SyncStatus: "ok",
 		TimingSource: "upstream", NextIssue: "34137173", NextDrawAt: drawAt, DrawInterval: 75, LastSyncAt: &syncAt}
 	current := lottery.Issue{GameID: game.ID, Issue: game.NextIssue, Status: lottery.IssueStatusAwaiting, ScheduledDrawAt: &drawAt}
 	draws := make([]lottery.Draw, 4)

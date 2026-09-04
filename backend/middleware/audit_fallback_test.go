@@ -1,17 +1,46 @@
 package middleware
 
 import (
+	"backend/cluster"
 	"backend/data/models/audit"
 	"bufio"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+func TestReplayAuditFallbackTreatsMissingSpoolAsEmptyQueue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "never-created", "audit.jsonl")
+	t.Setenv("BACKEND_AUDIT_FALLBACK_FILE", path)
+
+	executed, err := cluster.RunWithLease(context.Background(), "test:missing-audit-fallback", time.Minute, func() error {
+		return replayAuditFallback(nil)
+	})
+	if err != nil {
+		t.Fatalf("missing audit spool escaped lease wrapper: %v", err)
+	}
+	if !executed {
+		t.Fatal("local fallback replay did not execute")
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("empty replay unexpectedly created a spool: %v", statErr)
+	}
+}
+
+func TestReplayAuditFallbackPreservesOtherReadErrors(t *testing.T) {
+	path := t.TempDir()
+	t.Setenv("BACKEND_AUDIT_FALLBACK_FILE", path)
+	if err := replayAuditFallback(nil); err == nil || os.IsNotExist(err) {
+		t.Fatalf("non-missing read failure was discarded: %v", err)
+	}
+}
 
 func TestPrivilegedAuditFailsClosedWhenNoDurableStoreIsAvailable(t *testing.T) {
 	gin.SetMode(gin.TestMode)

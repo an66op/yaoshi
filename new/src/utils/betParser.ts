@@ -1,6 +1,6 @@
 import { formatBetAmount } from './betAmount'
 import { betCommandError } from './betCommand'
-import { isDigit5V3Game, lotteryRuleProfile } from './lotteryRules'
+import { isDigit5V3Game, lotteryRuleProfile, requiredRuleVersionForGame } from './lotteryRules'
 
 export type BetPayload = {
   position: number
@@ -185,6 +185,8 @@ export function parseBetInput(content: string, gameId?: string, ruleVersion = ''
   // browser only builds its typed detailed-web rows and must not reinterpret
   // PC syntax through the generic three-digit parser.
   if (rules.family !== 'racing' && rules.family !== 'ssc' && rules.family !== 'digit3') return invalid()
+  const expectedVersion = requiredRuleVersionForGame(gameId ?? '')
+  if (expectedVersion !== null && ruleVersion !== expectedVersion) return invalid()
   // Five-ball products have one current contract. A missing/stale version
   // must not silently revive a different parser or produce financial rows.
   if (rules.family === 'ssc' && !isDigit5V3Game(gameId ?? '', ruleVersion)) return invalid()

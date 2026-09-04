@@ -70,31 +70,43 @@ func TestBingoMarkSixDefaultCadenceIsFiveMinutes(t *testing.T) {
 	t.Fatal("bingo-mark-six seed missing")
 }
 
-func TestDefaultGameCatalogRowStartsOrderedProductsFailClosed(t *testing.T) {
+func TestDefaultGameCatalogRowStartsAll163BingoProductsFailClosed(t *testing.T) {
 	now := time.Date(2026, 9, 2, 8, 0, 0, 0, time.UTC)
-	wantOrdered := map[string]bool{
-		"bingo-ssc-1": true, "bingo-racing-a": true, "bingo-mark-six": true,
-	}
-	seen := make(map[string]bool, len(wantOrdered))
+	seen := make(map[string]bool, len(bingo163Bindings))
 	for index, item := range defaultGames {
-		if _, target := wantOrdered[item.ID]; !target && item.ID != "bingo-racing-b" {
+		binding, target := bingo163BindingForGame(item.ID)
+		if !target {
 			continue
 		}
+		seen[item.ID] = true
 		game := defaultGameCatalogRow(item, index, now)
-		if wantOrdered[item.ID] {
-			seen[item.ID] = true
-			if game.SourceKind != "external" || game.SourceName != bingoVerifiedSourceName || game.SourceURL != bingoVerifiedSourceURL ||
-				game.SyncStatus != "stale" || game.LastSyncError != bingoOrderPendingMessage || sourceHealthyForGame(&game) {
-				t.Fatalf("%s can become visible between catalog insert and source revision: %+v", item.ID, game)
-			}
-			continue
-		}
-		if game.ID == "bingo-racing-b" && (game.SourceKind != "external" || game.SourceName != "168开奖网" || game.SyncStatus != "idle" || !sourceHealthyForGame(&game)) {
-			t.Fatalf("order-independent target inherited the ordered gate: %+v", game)
+		if !bingo163SourceBound(&game, binding) || game.SyncStatus != "stale" ||
+			game.LastSyncError != bingo163PendingMessage || sourceHealthyForGame(&game) {
+			t.Fatalf("%s can become visible before its first 163 source validation: %+v", item.ID, game)
 		}
 	}
-	if !reflect.DeepEqual(seen, wantOrdered) {
-		t.Fatalf("ordered target seed coverage=%+v want=%+v", seen, wantOrdered)
+	if len(seen) != len(bingo163Bindings) {
+		t.Fatalf("163 Bingo default seed coverage=%d want=%d: %+v", len(seen), len(bingo163Bindings), seen)
+	}
+}
+
+func TestDefaultGameCatalogRowStarts163MotherSourcesFailClosed(t *testing.T) {
+	now := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
+	seen := make(map[string]bool, len(source163MirrorBindings))
+	for index, item := range defaultGames {
+		binding, expected := source163MirrorBindingForGame(item.ID)
+		if !expected {
+			continue
+		}
+		seen[item.ID] = true
+		game := defaultGameCatalogRow(item, index, now)
+		if !source163MirrorBound(&game, binding) || game.SyncStatus != "stale" ||
+			game.LastSyncError != source163MirrorPendingMessage || sourceHealthyForGame(&game) {
+			t.Fatalf("%s did not start on the fail-closed 163 binding: %+v", item.ID, game)
+		}
+	}
+	if len(seen) != len(source163MirrorBindings) {
+		t.Fatalf("163 default coverage=%d want=%d", len(seen), len(source163MirrorBindings))
 	}
 }
 

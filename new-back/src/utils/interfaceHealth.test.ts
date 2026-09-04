@@ -45,6 +45,28 @@ describe('buildInterfaceHealthLines', () => {
     expect(line.overallStatus).toBe('error')
   })
 
+  it('keeps the SG external adapter in its own scheduler health line', () => {
+    const sg = game({ id: 'sg-ssc', name: 'SG时时彩', source_kind: 'external', source_name: 'SG时时彩双站校对', source_url: 'https://api.api168168.com/', schedule_mode: 'external-feed' })
+    const sgJob = { ...feed().jobs[0], id: 'sg-ssc', name: 'SG时时彩双站校对', group: 'sg-ssc', game_ids: ['sg-ssc'] }
+    const lines = buildInterfaceHealthLines(feed({ jobs: [...feed().jobs, sgJob] }), [game(), sg])
+    const line = lines.find(item => item.id === 'sg-ssc')!
+    expect(lines).toHaveLength(2)
+    expect(line).toMatchObject({ group: 'sg-ssc', overallStatus: 'healthy', interfaceStatus: 'ok', schedulerStatus: 'scheduled' })
+    expect(line.gameNames).toEqual(['SG时时彩'])
+    expect(line.sourceKinds).toEqual(['external'])
+    expect(line.sourceNames).toEqual(['SG时时彩双站校对'])
+  })
+
+  it('shows SG source disagreement as unhealthy even when the scheduler is waiting normally', () => {
+    const sg = game({ id: 'sg-ssc', name: 'SG时时彩', source_kind: 'external', sync_status: 'paused', source_healthy: false, last_sync_error: 'SG双站同一期号码或开奖时间不一致，暂停导入' })
+    const sgJob = { ...feed().jobs[0], id: 'sg-ssc', name: 'SG时时彩双站校对', group: 'sg-ssc', game_ids: ['sg-ssc'] }
+    const [line] = buildInterfaceHealthLines(feed({ jobs: [sgJob] }), [sg])
+    expect(line.interfaceStatus).toBe('error')
+    expect(line.schedulerStatus).toBe('scheduled')
+    expect(line.overallStatus).toBe('error')
+    expect(line.lastError).toContain('SG双站同一期号码或开奖时间不一致，暂停导入')
+  })
+
   it('does not report disabled integrations as outages', () => {
     const [line] = buildInterfaceHealthLines(feed(), [game({ enabled: false, sync_status: 'idle', last_sync_at: null })])
     expect(line.interfaceStatus).toBe('disabled')

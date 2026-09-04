@@ -1,6 +1,6 @@
 import type { DrawResult } from '../api/lottery'
 import type { Game } from '../types'
-import { isDigit5V3Game, lotteryResultSummary, lotteryRuleProfile } from './lotteryRules'
+import { isDigit5V3Game, lotteryResultSummary, lotteryRuleProfile, requiredRuleVersionForGame } from './lotteryRules'
 
 // Result-card artwork is shared by every lottery; game identity only supplies
 // the title. It must not be used as a game Logo or gated on a specific game ID.
@@ -161,7 +161,10 @@ export function paintCurrentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game,
     })
   }
 
-  const meta = lotteryResultSummary(draw.game_id, balls, game.ruleVersion)
+  const expectedVersion = requiredRuleVersionForGame(draw.game_id)
+  const meta = expectedVersion === null || game.ruleVersion === expectedVersion
+    ? lotteryResultSummary(draw.game_id, balls, game.ruleVersion)
+    : null
   ctx.fillStyle = 'rgba(4,25,43,.72)'
   ctx.beginPath(); ctx.roundRect(18, 382 + extraHeight, width - 36, 50, 12); ctx.fill()
   ctx.fillStyle = '#8bdfe7'
@@ -204,7 +207,9 @@ export function paintRecentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game, 
   }
   const profile = lotteryRuleProfile(rows[0]?.game_id ?? '')
   const headers: Array<[string, number]> = [['期号', 18], ['号码', 170]]
-  if (profile.family !== 'unknown' && (profile.family !== 'ssc' || isDigit5V3Game(rows[0]?.game_id ?? '', game.ruleVersion))) headers.push([profile.sumLabel, 520], ['龙虎', 625])
+  const expectedVersion = requiredRuleVersionForGame(rows[0]?.game_id ?? '')
+  const contractKnown = expectedVersion === null || game.ruleVersion === expectedVersion
+  if (contractKnown && profile.family !== 'unknown' && (profile.family !== 'ssc' || isDigit5V3Game(rows[0]?.game_id ?? '', game.ruleVersion))) headers.push([profile.sumLabel, 520], ['龙虎', 625])
   ctx.fillStyle = '#e5f1f4'; ctx.fillRect(0, headerHeight, width, 22)
   ctx.fillStyle = '#567582'; ctx.font = '700 12px Arial, sans-serif'
   headers.forEach(([label, x]) => ctx.fillText(label, x, headerHeight + 15))
@@ -216,7 +221,7 @@ export function paintRecentDrawCard(canvas: HTMLCanvasElement, game: Pick<Game, 
     ctx.fillStyle = '#314f5d'; ctx.font = '600 12px Arial, sans-serif'; ctx.textAlign = 'left'
     issueLines(draw.issue).forEach((line, index) => ctx.fillText(line, 18, y + 22 + index * 16, 140))
     draw.numbers.forEach((number, index) => drawBall(ctx, number, 170 + (index % 10) * 30, y + 5 + Math.floor(index / 10) * 30, 25))
-    const meta = lotteryResultSummary(draw.game_id, draw.numbers, game.ruleVersion)
+    const meta = contractKnown ? lotteryResultSummary(draw.game_id, draw.numbers, game.ruleVersion) : null
     if (meta) {
       ctx.fillStyle = '#405d69'; ctx.font = '700 12px Arial, sans-serif'; ctx.fillText(meta.spacedText, 520, y + 22)
       ctx.fillStyle = '#276c85'; ctx.fillText(meta.dragons.join(' '), 625, y + 22, 80)

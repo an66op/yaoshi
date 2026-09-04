@@ -12,7 +12,8 @@ import type { AnnouncementItem } from '../api/portal'
 import { buildRoomEntries, DEFAULT_ROOM_LOGO } from '../utils/roomHistory'
 import type { RoomHistoryItem } from '../utils/roomHistory'
 import { controlSurfaceProps } from '../utils/controlSurface'
-import { lotteryRuleProfile, markSixDrawBallClass } from '../utils/lotteryRules'
+import { markSixDrawBallClass, usesMarkSixDrawPresentation } from '../utils/lotteryRules'
+import { gameAvailability } from '../utils/gameAvailability'
 
 type Filter = string
 
@@ -47,6 +48,12 @@ const upcomingEntertainment: Record<'捕鱼' | '体育' | '真人' | '电子' | 
   真人: ['百家乐', '龙虎', '炸金花', '德州扑克'],
   电子: ['赏金船长', '麻将胡了'],
   电竞: ['王者荣耀', '炉石传说', '英雄联盟'],
+}
+
+function gameCardSubtitle(game: Game) {
+  const availability = gameAvailability(game)
+  if (availability) return availability.cardText
+  return game.online === '—' ? '实时开奖' : `在线 ${game.online} 人 · 实时开奖`
 }
 
 export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gamesLive, gamesError, initialFilter = '', onFilterChange, onOpenGame, onToggleTheme, onSwitchRoom }: Props) {
@@ -190,7 +197,7 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
     </header>
     <section className="lobby-body">
       <div className="lobby-category-shell" {...controlSurfaceProps}><div className="lobby-toolbar" aria-label="大厅分类" ref={categoryRailRef}>{filters.map((item) => <button aria-pressed={filter === item.id} className={filter === item.id ? 'toolbar-active' : ''} key={item.id} onClick={() => chooseFilter(item.id)}>{item.label}</button>)}</div><button className="lobby-category-next" aria-label="向右查看更多分类" onClick={() => categoryRailRef.current?.scrollBy({ left: 150, behavior: 'smooth' })}><Icon name="arrow" /></button></div>
-      {!showingEntertainment && <div className="game-list">{visibleGames.map((game) => <button className="game-card" key={game.id} onClick={() => onOpenGame(game.id, filter)}><div className="game-top" style={{ '--game': game.color } as CSSProperties}><div className="game-lead"><span className={`game-logo${game.logo ? ' has-image' : ''}`}>{game.logo ? <img alt={`${game.title} Logo`} src={game.logo} /> : game.tag.split(' ')[0].slice(0, 2)}</span><div><strong>{game.title}</strong><small>{game.online === '—' ? '实时开奖' : `在线 ${game.online} 人 · 实时开奖`}</small></div></div><div className="game-clock"><small>第 {game.period} 期</small><LotteryCountdown timing={game.timing} /></div></div><footer><span>上期 {game.latestIssue.slice(-8)}</span><div>{game.balls.map((number, index) => <b className={lotteryRuleProfile(game.id).family === 'mark-six' ? markSixDrawBallClass(number, index, game.balls.length) : ballTone(number)} key={index}>{number}</b>)}</div><Icon name="arrow" /></footer></button>)}</div>}
+      {!showingEntertainment && <div className="game-list">{visibleGames.map((game) => <button className="game-card" key={game.id} onClick={() => onOpenGame(game.id, filter)}><div className="game-top" style={{ '--game': game.color } as CSSProperties}><div className="game-lead"><span className={`game-logo${game.logo ? ' has-image' : ''}`}>{game.logo ? <img alt={`${game.title} Logo`} src={game.logo} /> : game.tag.split(' ')[0].slice(0, 2)}</span><div><strong>{game.title}</strong><small>{gameCardSubtitle(game)}</small></div></div><div className="game-clock"><small>第 {game.period} 期</small><LotteryCountdown timing={game.timing} /></div></div><footer><span>上期 {game.latestIssue.slice(-8)}</span><div>{game.balls.map((number, index) => <b className={usesMarkSixDrawPresentation(game.id) ? markSixDrawBallClass(number, index, game.balls.length) : ballTone(number)} key={index}>{number}</b>)}</div><Icon name="arrow" /></footer></button>)}</div>}
       {showingEntertainment && <div className="entertainment-list">{visibleEntertainment.map((name, index) => <button key={name} onClick={() => setEntertainmentMessage(`${name}暂未开放`)}><span style={{ '--entertainment-hue': `${(index * 47 + filter.length * 19) % 360}deg` } as CSSProperties}>{name.slice(0, 2)}</span><div><b>{name}</b><small>功能准备中</small></div><em className="maintenance">未开放</em><Icon name="arrow" /></button>)}</div>}
       {entertainmentMessage && <p className="entertainment-message">{entertainmentMessage}</p>}
       {!showingEntertainment && !gamesLive && <p className="lobby-tip">{gamesError ? '连接失败，正在自动重试' : '正在加载彩种…'}</p>}

@@ -35,9 +35,11 @@ import {
   type FeedStatus,
 } from "../api";
 import { PageHeader } from "../components/PageHeader";
+import { SGHistoryRecoveryPanel } from "../components/SGHistoryRecoveryPanel";
 import { useFeedback } from "../components/feedback";
 import { useServerClock } from "../hooks/useServerClock";
 import {
+  currentIssueLabel,
   describeGameSchedule,
   describeIssueState,
   formatBeijingDateTime,
@@ -200,11 +202,11 @@ export function ResultsPage() {
       showMessage(
         response.failed
           ? `同步完成，${response.failed} 个来源暂时失败`
-          : `官方数据同步完成，新增 ${imported} 期`,
+          : `开奖数据同步完成，新增 ${imported} 期`,
         response.failed ? "warning" : "success",
       );
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "官方数据同步失败");
+      setError(reason instanceof Error ? reason.message : "开奖数据同步失败");
     } finally {
       setSyncing(false);
     }
@@ -233,7 +235,7 @@ export function ResultsPage() {
   return (
     <Box p={{ xs: 2, lg: 2.5 }}>
       <PageHeader
-        eyebrow="游戏运营 / 官方开奖"
+        eyebrow="游戏运营 / 开奖来源"
         title="开奖结果查询"
         description=""
         actions={
@@ -332,7 +334,7 @@ export function ResultsPage() {
             <Box minWidth={0}>
               <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
                 <Typography fontWeight={800} noWrap>
-                  {currentJob?.name ?? "官方开奖同步服务"}
+                  {currentJob?.name ?? "开奖同步服务"}
                 </Typography>
                 <Chip
                   size="small"
@@ -377,7 +379,7 @@ export function ResultsPage() {
             <Typography variant="caption" color="text.secondary">当前期号 · {currentGame?.name ?? "等待彩种"}</Typography>
             <Stack direction="row" alignItems="center" gap={1} mt={0.5} flexWrap="wrap">
               <Typography fontWeight={800} sx={{ fontVariantNumeric: "tabular-nums" }}>
-                {currentGame?.current_issue || "—"}
+                {currentIssueLabel(currentGame)}
               </Typography>
               <Chip size="small" variant="outlined" color={currentGame?.issue_status === "error" ? "error" : issueState === "受理中" ? "success" : "default"} label={issueState} />
             </Stack>
@@ -421,7 +423,7 @@ export function ResultsPage() {
             >
               {games.map((game) => (
                 <MenuItem value={game.id} key={game.id}>
-                  {game.source_kind === "official" ? "【官方】" : "【平台】"}
+                  {game.source_kind === "official" ? "【官方】" : game.source_kind === "external" ? "【外部】" : "【平台】"}
                   {game.name}
                 </MenuItem>
               ))}
@@ -454,10 +456,10 @@ export function ResultsPage() {
             最近开奖期号：{currentGame?.issue || "—"}
           </Typography>
         </Stack>
-        {currentGame?.source_kind === "official" && (
+        {(currentGame?.source_kind === "official" || currentGame?.source_kind === "external") && (
           <Alert
             severity={
-              currentGame.sync_status === "error" ? "warning" : "success"
+              currentGame.source_healthy === false || ["error", "stale", "paused"].includes(currentGame.sync_status) || Boolean(currentGame.last_sync_error) ? "warning" : "success"
             }
             sx={{ mb: 1.5 }}
           >
@@ -466,7 +468,7 @@ export function ResultsPage() {
               gap={{ xs: 0.25, sm: 1 }}
             >
               <Typography component="span" variant="body2" fontWeight={750}>
-                官方数据 · {currentGame.source_name}
+                {currentGame.source_kind === "external" ? "外部数据" : "官方数据"} · {currentGame.source_name}
               </Typography>
               <Typography component="span" variant="body2">
                 {currentGame.last_sync_at
@@ -481,6 +483,7 @@ export function ResultsPage() {
             </Stack>
           </Alert>
         )}
+        {gameId === "sg-ssc" && <SGHistoryRecoveryPanel />}
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
             {error}

@@ -71,17 +71,20 @@ type SettlementRecoveryResult struct {
 }
 
 type settlementCandidate struct {
-	GameID      string
-	Issue       string
-	Pending     int64
-	OldestBetAt time.Time
-	GameExists  bool
-	GameEnabled bool
-	SourceKind  string
-	IssueID     uint64
-	IssueStatus string
-	IssueSealAt *time.Time
-	DrawID      uint64
+	GameID               string
+	Issue                string
+	Pending              int64
+	OldestBetAt          time.Time
+	GameExists           bool
+	GameEnabled          bool
+	SourceKind           string
+	IssueID              uint64
+	IssueStatus          string
+	IssueSealAt          *time.Time
+	IssueSourceMode      string
+	IssueScheduledDrawAt *time.Time
+	IssueLastError       string
+	DrawID               uint64
 }
 
 type recoveryAction int
@@ -95,9 +98,15 @@ const (
 // SettleIssue retries only database concurrency failures. Business errors and
 // invalid draw data are never retried or replaced with a generated result.
 func (s *BetAdminService) SettleIssue(gameID, issue, operator string) (*SettlementResult, error) {
+	return s.settleIssueGuarded(gameID, issue, operator, nil)
+}
+
+// Historical recovery can fence its own worker at the real financial commit
+// boundary. Ordinary settlement retains its existing policy and idempotency.
+func (s *BetAdminService) settleIssueGuarded(gameID, issue, operator string, gate func(*gorm.DB) error) (*SettlementResult, error) {
 	var lastErr error
 	for attempt := 0; attempt < settlementRetryAttempts; attempt++ {
-		result, err := s.settleIssueOnce(gameID, issue, operator)
+		result, err := s.settleIssueOnce(gameID, issue, operator, gate)
 		if err == nil {
 			return result, nil
 		}
@@ -160,7 +169,8 @@ func (s *BetAdminService) SettlementHealth(now time.Time) (SettlementHealthSumma
 	if err := base.Session(&gorm.Session{}).Where(unresolvedWhere, unresolvedStatuses, now.Add(-awaitingDrawStaleAfter)).Count(&result.UnresolvedBetCount).Error; err != nil {
 		return result, err
 	}
-	if err := base.Session(&gorm.Session{}).Where("draw_row.id IS NOT NULL").Count(&result.RecoverableBetCount).Error; err != nil {
+	verifiedSQL, verifiedArgs := orderedBingoRecoveryRevisionSQL("lottery_bets.game_id", "draw_row")
+	if err := base.Session(&gorm.Session{}).Where("draw_row.id IS NOT NULL").Where(verifiedSQL, verifiedArgs...).Count(&result.RecoverableBetCount).Error; err != nil {
 		return result, err
 	}
 	if err := base.Session(&gorm.Session{}).Where("issue_row.id IS NULL").Count(&result.MissingIssueBetCount).Error; err != nil {
@@ -288,6 +298,9 @@ func (s *BetAdminService) pendingSettlementCandidates(ctx context.Context, limit
 		       COALESCE(issues.id, 0) AS issue_id,
 		       COALESCE(issues.status, '') AS issue_status,
 		       issues.seal_at AS issue_seal_at,
+		       COALESCE(issues.source_mode, '') AS issue_source_mode,
+		       issues.scheduled_draw_at AS issue_scheduled_draw_at,
+		       COALESCE(issues.last_error, '') AS issue_last_error,
 		       COALESCE(draws.id, 0) AS draw_id
 		FROM lottery_bets AS bets
 		LEFT JOIN lottery_games AS games ON games.id = bets.game_id
@@ -297,7 +310,8 @@ func (s *BetAdminService) pendingSettlementCandidates(ctx context.Context, limit
 		  AND (bets.reconciliation_status <> 'abnormal'
 		       OR (draws.id IS NOT NULL AND %s))
 		GROUP BY bets.game_id, bets.issue, games.id, games.enabled, games.source_kind,
-		         issues.id, issues.status, issues.seal_at, draws.id
+		         issues.id, issues.status, issues.seal_at, issues.source_mode,
+		         issues.scheduled_draw_at, issues.last_error, draws.id
 		ORDER BY MIN(bets.created_at) ASC, bets.game_id ASC, bets.issue ASC
 		LIMIT ?
 	`, verifiedDrawSQL)
@@ -313,24 +327,59 @@ func (s *BetAdminService) pendingSettlementCandidates(ctx context.Context, limit
 // safe row and make it eligible again; unrelated games retain the legacy retry
 // policy.
 func orderedBingoRecoveryRevisionSQL(gameExpression, drawAlias string) (string, []any) {
-	orderedIDs := make([]string, 0, len(api168BingoBindings))
-	conversionCases := make([]string, 0, len(api168BingoBindings))
-	conversionArgs := make([]any, 0, len(api168BingoBindings)*2)
-	for _, binding := range api168BingoBindings {
-		if !binding.RequiresOrderedSource {
-			continue
-		}
-		orderedIDs = append(orderedIDs, binding.GameID)
-		conversionCases = append(conversionCases, fmt.Sprintf("(%s = ? AND %s.conversion_revision = ?)", gameExpression, drawAlias))
-		conversionArgs = append(conversionArgs, binding.GameID, binding.ConversionVersion)
+	versionedIDs := []string{"sg-ssc"}
+	contractCases := make([]string, 0)
+	contractArgs := make([]any, 0)
+	for _, contract := range trustedDrawRevisionContracts("sg-ssc") {
+		contractCases = append(contractCases, fmt.Sprintf("(%s = ? AND %s.source_revision = ? AND %s.conversion_revision = ?)", gameExpression, drawAlias, drawAlias))
+		contractArgs = append(contractArgs, "sg-ssc", contract.SourceRevision, contract.ConversionRevision)
 	}
-	if len(orderedIDs) == 0 {
+	// Both SG revisions require an exact immutable ticket snapshot. This keeps
+	// old tickets settleable against old verified draws without allowing either
+	// side of the cutover to acquire the other's identity.
+	currentSources := []string{sgSSCSourceRevision, sgSSCLegacySourceRevision, bingo163SetSourceRevision, bingo163OrderSourceRevision, bingo163VerifiedSourceRevision}
+	for _, binding := range source163MirrorBindings {
+		versionedIDs = append(versionedIDs, binding.GameID)
+		contractCases = append(contractCases, fmt.Sprintf("(%s = ? AND %s.source_revision = ? AND %s.conversion_revision = ?)", gameExpression, drawAlias, drawAlias))
+		contractArgs = append(contractArgs, binding.GameID, binding.Revision, source163MirrorConversionVersion)
+		currentSources = append(currentSources, binding.Revision)
+	}
+	for _, binding := range source163PC28Bindings {
+		versionedIDs = append(versionedIDs, binding.GameID)
+		contractCases = append(contractCases, fmt.Sprintf("(%s = ? AND %s.source_revision = ? AND %s.conversion_revision = ?)", gameExpression, drawAlias, drawAlias))
+		contractArgs = append(contractArgs, binding.GameID, binding.Revision, source163MirrorConversionVersion)
+		currentSources = append(currentSources, binding.Revision)
+	}
+	for _, binding := range source163MarkSixBindings {
+		versionedIDs = append(versionedIDs, binding.GameID)
+		contractCases = append(contractCases, fmt.Sprintf("(%s = ? AND %s.source_revision = ? AND %s.conversion_revision = ?)", gameExpression, drawAlias, drawAlias))
+		contractArgs = append(contractArgs, binding.GameID, binding.SourceRevision, binding.ConversionRevision)
+		currentSources = append(currentSources, binding.SourceRevision)
+	}
+	for _, binding := range bingo163Bindings {
+		versionedIDs = append(versionedIDs, binding.GameID)
+		for _, contract := range trustedDrawRevisionContracts(binding.GameID) {
+			contractCases = append(contractCases, fmt.Sprintf("(%s = ? AND %s.source_revision = ? AND %s.conversion_revision = ?)", gameExpression, drawAlias, drawAlias))
+			contractArgs = append(contractArgs, binding.GameID, contract.SourceRevision, contract.ConversionRevision)
+		}
+	}
+	if len(versionedIDs) == 0 {
 		return "TRUE", nil
 	}
-	query := fmt.Sprintf("(%s NOT IN ? OR (%s.source_revision = ? AND (%s)))",
-		gameExpression, drawAlias, strings.Join(conversionCases, " OR "))
-	args := []any{orderedIDs, bingoOrderedSourceRevision}
-	return query, append(args, conversionArgs...)
+	query := fmt.Sprintf("(%s NOT IN ? OR (%s))", gameExpression, strings.Join(contractCases, " OR "))
+	args := []any{versionedIDs}
+	args = append(args, contractArgs...)
+
+	// A newly versioned draw cannot give a legacy/blank ticket a new source
+	// identity. Old verified Bingo revisions remain readable and settleable;
+	// only the current 163/SG contracts require the placement snapshot.
+	query += fmt.Sprintf(` AND (%s NOT IN ? OR %s.source_revision NOT IN ? OR (
+		NOT EXISTS (SELECT 1 FROM lottery_issues legacy_issue WHERE legacy_issue.game_id = %s AND legacy_issue.issue = %s.issue AND legacy_issue.source_mode <> 'external')
+		AND NOT EXISTS (SELECT 1 FROM lottery_bets legacy_bet WHERE legacy_bet.game_id = %s AND legacy_bet.issue = %s.issue AND COALESCE(legacy_bet.draw_source_revision, '') <> %s.source_revision)
+		AND NOT EXISTS (SELECT 1 FROM lottery_bet_archives legacy_archive WHERE legacy_archive.game_id = %s AND legacy_archive.issue = %s.issue AND COALESCE(legacy_archive.draw_source_revision, '') <> %s.source_revision)
+	))`, gameExpression, drawAlias, gameExpression, drawAlias, gameExpression, drawAlias, drawAlias, gameExpression, drawAlias, drawAlias)
+	args = append(args, versionedIDs, currentSources)
+	return query, args
 }
 
 func recoveryActionForCandidate(candidate settlementCandidate, now time.Time) (recoveryAction, string) {
@@ -348,6 +397,9 @@ func recoveryActionForCandidate(candidate settlementCandidate, now time.Time) (r
 			return recoveryMarkAbnormal, "历史注单缺少期号生命周期，且没有可验证的开奖结果"
 		}
 		return recoveryDefer, "等待期号记录"
+	}
+	if sgSSCSourceFailureCanWait(candidate, now) {
+		return recoveryDefer, "SG时时彩本期尚未到已记录开奖时间，等待双站恢复"
 	}
 	switch candidate.IssueStatus {
 	case lottery.IssueStatusError, lottery.IssueStatusSettled:
@@ -377,6 +429,15 @@ func (s *BetAdminService) markUnsafeSettlement(ctx context.Context, candidate se
 			issueRow := lottery.Issue{
 				GameID: candidate.GameID, Issue: candidate.Issue, Status: lottery.IssueStatusError,
 				SourceMode: sourceMode(candidate.SourceKind), AcceptAt: candidate.OldestBetAt.UTC(), SealAt: candidate.OldestBetAt.UTC(), LastError: reason,
+			}
+			if candidate.GameID == "sg-ssc" && candidate.IssueID == 0 {
+				blocked, err := sgSSCLegacyIssues(tx, []string{candidate.Issue})
+				if err != nil {
+					return err
+				}
+				if blocked[candidate.Issue] {
+					issueRow.SourceMode = "legacy"
+				}
 			}
 			if issueRow.AcceptAt.IsZero() {
 				issueRow.AcceptAt = time.Now().UTC()

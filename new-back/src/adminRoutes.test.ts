@@ -7,12 +7,16 @@ describe('management route normalization', () => {
     expect(resolveAdminPath(path)).toBe('/members')
   })
 
-  it.each(['/', '/members', '/agents', '/tenants', '/menu-management', '/game-guide', '/applications'])('retains %s', path => {
+  it.each(['/', '/members', '/agents', '/tenants', '/menu-management', '/logs', '/game-guide', '/applications'])('retains %s', path => {
     expect(isRetiredAccountPath(path)).toBe(false)
     expect(resolveAdminPath(path)).toBe(path)
   })
 
   it.each(['/users/1', '/unknown', 'https://untrusted.example/users', '//untrusted.example'])('safely falls back for unsupported path %s', path => {
     expect(resolveAdminPath(path)).toBe('/')
+  })
+
+  it.each(['/audit', '/audit/'])('migrates the legacy audit route %s to logs', path => {
+    expect(resolveAdminPath(path)).toBe('/logs')
   })
 })

@@ -137,7 +137,7 @@ describe('per-game parsed receipt descriptions', () => {
     expect(parsed).toMatchObject({ lines: [], payloads: [], total: 0 })
   })
 
-  it.each(['official-tw-bingo', 'bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('never invents wager rules for an unverified %s game', gameId => {
+  it.each(['official-tw-bingo', 'official-qxc'])('never invents wager rules for an unverified %s game', gameId => {
     for (const ruleVersion of ['', 'racing-v2', 'digits5-v2', 'digits5-v3']) {
       for (const content of ['1/0/20#总和/大/20#前三/豹子/20', '1/1/20', '豹子5', '1/和/5']) {
         expect(parseBetInput(content, gameId, ruleVersion)).toMatchObject({ lines: [], payloads: [], total: 0 })
@@ -151,7 +151,16 @@ describe('per-game parsed receipt descriptions', () => {
     expect(parseBetInput(command, 'speed-racing').lines).toEqual(parseBetInput(command).lines)
   })
 
-  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('expands exact digits5-v3 shapes and tie for %s', gameId => {
+  it.each(['bingo-racing-a', 'bingo-racing-b'])('parses %s only under the exact racing-v2 contract', gameId => {
+    expect(parseBetInput('1/0/20#冠亚/14/20', gameId, 'racing-v2')).toMatchObject({
+      lines: ['冠军[10/20]', '冠亚和[14/20]'], total: 40,
+    })
+    for (const version of [undefined, '', 'racing-v1', 'racing-v3']) {
+      expect(parseBetInput('1/0/20', gameId, version)).toMatchObject({ lines: [], payloads: [], total: 0 })
+    }
+  })
+
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('expands exact digits5-v3 shapes and tie for %s', gameId => {
     const ruleVersion = 'digits5-v3'
     expect(parseBetInput('1/0/20', gameId, ruleVersion)).toMatchObject({ lines: ['第1球[0/20]'], total: 20 })
     expect(parseBetInput('中三顺子/5', gameId, ruleVersion)).toMatchObject({
@@ -181,7 +190,7 @@ describe('per-game parsed receipt descriptions', () => {
     expect(parseBetInput('总和尾7/5', gameId, ruleVersion).payloads).toEqual([])
   })
 
-  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('does not parse %s bets without the exact current five-ball version', gameId => {
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('does not parse %s bets without the exact current five-ball version', gameId => {
     for (const version of [undefined, '', 'digits5-v2', 'digits5-v4']) {
       for (const content of ['1/0/5', '中三顺子/5', '1/和/5', '豹子5', '总和/大/5']) {
         expect(parseBetInput(content, gameId, version)).toEqual({ content, lines: [], payloads: [], total: 0 })

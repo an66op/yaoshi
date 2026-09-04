@@ -75,6 +75,21 @@ describe('clock-independent game timeline', () => {
     expect(html).not.toContain('aria-label="预览宾果六合彩')
   })
 
+  it.each([
+    ['hong-kong-mark-six', '香港六合彩'],
+    ['happy8-mark-six', '快乐8六合彩'],
+    ['new-macau-mark-six', '新澳门六合彩'],
+    ['old-macau-mark-six', '老澳门六合彩'],
+  ])('renders results-only %s with seven-ball semantics but no inferred outcome card', (gameId, gameTitle) => {
+    const result: DrawResult = { id: 20, game_id: gameId, issue: '20260904001', numbers: [5, 9, 40, 47, 29, 2, 18], draw_at: '2026-09-04T06:45:00Z' }
+    const html = markup({ gameId, gameTitle, draws: [result], drawHistory: [result] })
+    expect(html).toContain('lottery-ball mark-six-ball wave-green')
+    expect(html).toContain('lottery-ball mark-six-ball wave-blue')
+    expect(html).toContain('lottery-ball mark-six-ball wave-red mark-six-special-ball')
+    expect(html).not.toContain('draw-announcement-meta')
+    expect(html).not.toContain('draw-result-card')
+  })
+
   it('keeps all shortcuts compact without a description output row', () => {
     const noop = () => undefined
     const html = renderToStaticMarkup(<BetKeyboard mode="quick" odds={{}} oddsHidden oddsResponseReady selectedCount={0} showModes={false} onShortcut={noop} onBackspace={noop} onClear={noop} onConfirm={noop} onModeChange={noop} onSelectNumber={noop} onSelectOption={noop} />)
@@ -86,18 +101,39 @@ describe('clock-independent game timeline', () => {
   it('adds the chat tie key only to exact contracts that support a tie selection', () => {
     const noop = () => undefined
     const keyboard = (gameId: string, ruleVersion?: string) => renderToStaticMarkup(<BetKeyboard gameId={gameId} ruleVersion={ruleVersion} mode="quick" odds={{}} oddsHidden oddsResponseReady selectedCount={0} showModes={false} onShortcut={noop} onBackspace={noop} onClear={noop} onConfirm={noop} onModeChange={noop} onSelectNumber={noop} onSelectOption={noop} />)
-    for (const gameId of ['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1']) {
+    for (const gameId of ['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4']) {
       expect(keyboard(gameId, 'digits5-v3')).toMatch(/<button[^>]*>和<\/button>/)
       expect(keyboard(gameId, 'digits5-v3')).not.toMatch(/<button[^>]*>总和<\/button>/)
     }
     expect(keyboard('speed-ssc')).not.toMatch(/<button[^>]*>和<\/button>/)
     expect(keyboard('speed-ssc', 'digits5-v2')).not.toMatch(/<button[^>]*>和<\/button>/)
     expect(keyboard('sg-ssc')).not.toMatch(/<button[^>]*>和<\/button>/)
-    for (const gameId of ['bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4']) expect(keyboard(gameId, 'digits5-v3')).not.toMatch(/<button[^>]*>和<\/button>/)
     expect(keyboard('pc-canada', 'pc28-v1')).toMatch(/<button[^>]*>和<\/button>/)
     expect(keyboard('canada-28', 'pc28-v2')).toMatch(/<button[^>]*>和<\/button>/)
     expect(keyboard('canada-20', 'pc28-v3')).toMatch(/<button[^>]*>和<\/button>/)
     expect(keyboard('canada-28', 'pc28-v1')).not.toMatch(/<button[^>]*>和<\/button>/)
+  })
+
+  it.each(['bingo-racing-a', 'bingo-racing-b'])('uses the exact crown-sum price for %s in the dual keyboard', gameId => {
+    const noop = () => undefined
+    const html = renderToStaticMarkup(<BetKeyboard
+      gameId={gameId}
+      ruleVersion="racing-v2"
+      mode="dual"
+      odds={{ two_sided: 1.99, dragon_tiger: 1.98, sum_big: 2.18, sum_small: 2.17, sum_odd: 2.16, sum_even: 2.15 }}
+      oddsHidden={false}
+      oddsResponseReady
+      selectedCount={0}
+      showModes
+      onShortcut={noop}
+      onBackspace={noop}
+      onClear={noop}
+      onConfirm={noop}
+      onModeChange={noop}
+      onSelectNumber={noop}
+      onSelectOption={noop}
+    />)
+    expect(html).toContain('<button><b>冠亚和大</b><small>2.18</small></button>')
   })
 })
 
@@ -121,7 +157,7 @@ describe('server-confirmed room betting target', () => {
   it('cannot open a next betting window for unknown rules or an explicit server denial', () => {
     const next = { ...game, betting: { issue: '34136855', timing: { ...timing, accepting: true } } }
     for (const blocked of [{ ...next, id: 'canada-28' }, { ...next, rulesReady: false }]) {
-      expect(roomBettingTarget(blocked)).toMatchObject({ issue: game.period, timing: { accepting: false, phaseLabel: '玩法待配置' } })
+      expect(roomBettingTarget(blocked)).toMatchObject({ issue: game.period, timing: { accepting: false, phaseLabel: '仅开奖' } })
     }
   })
 })

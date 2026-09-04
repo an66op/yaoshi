@@ -517,7 +517,7 @@ func (s *TradingAdminService) ResolveForAccount(account user.User, gameID, playC
 
 // ResolveForAccountSelection is the placement boundary for markets whose
 // price depends on the concrete selection while their persisted bet play code
-// remains stable.  Today that applies only to Bingo Racing A's crown sum.
+// remains stable. This includes both Bingo Racing crown-sum markets.
 func (s *TradingAdminService) ResolveForAccountSelection(account user.User, gameID, playCode, selection string, amount, requestOdds, requestFly float64) (*ResolvedTradeParams, error) {
 	return s.resolveForAccount(account, gameID, playCode, selection, amount, requestOdds, requestFly)
 }
@@ -551,7 +551,11 @@ func (s *TradingAdminService) resolveForAccount(account user.User, gameID, playC
 	if platformErr != nil && platformErr != gorm.ErrRecordNotFound {
 		return nil, platformErr
 	}
-	if platformErr == gorm.ErrRecordNotFound || !rulesReady || !profile.supportsPlay(playCode) || !isActivePlatformOdds(platform, profile.Version) {
+	supportedPrice := rulesReady && profile.supportsPlay(playCode)
+	if rulesReady && profile.MarkSix {
+		_, supportedPrice = markSixSpecByCode(profile.Version, pricingCode)
+	}
+	if platformErr == gorm.ErrRecordNotFound || !supportedPrice || !isActivePlatformOdds(platform, profile.Version) {
 		return nil, apperrors.NewBusinessError("ODDS_NOT_CONFIGURED", "当前玩法赔率尚未配置，请联系房间管理员")
 	}
 	if overrideErr == nil && isValidOddsOverride(override.Odds) {

@@ -264,19 +264,20 @@ type LifecycleRestoreResult struct {
 }
 
 type LifecycleArchiveRecord struct {
-	ID          uint64     `json:"id"`
-	WorkspaceID uint64     `json:"workspace_id"`
-	UserID      uint64     `json:"user_id"`
-	Kind        string     `json:"kind"`
-	GameID      string     `json:"game_id,omitempty"`
-	Issue       string     `json:"issue,omitempty"`
-	Status      string     `json:"status,omitempty"`
-	Reference   string     `json:"reference,omitempty"`
-	Type        string     `json:"type,omitempty"`
-	AmountCents int64      `json:"amount_cents"`
-	CreatedAt   *time.Time `json:"created_at,omitempty"`
-	ArchivedAt  time.Time  `json:"archived_at"`
-	RowHash     string     `json:"row_hash"`
+	ID                 uint64     `json:"id"`
+	WorkspaceID        uint64     `json:"workspace_id"`
+	UserID             uint64     `json:"user_id"`
+	Kind               string     `json:"kind"`
+	GameID             string     `json:"game_id,omitempty"`
+	Issue              string     `json:"issue,omitempty"`
+	Status             string     `json:"status,omitempty"`
+	DrawSourceRevision string     `json:"draw_source_revision,omitempty"`
+	Reference          string     `json:"reference,omitempty"`
+	Type               string     `json:"type,omitempty"`
+	AmountCents        int64      `json:"amount_cents"`
+	CreatedAt          *time.Time `json:"created_at,omitempty"`
+	ArchivedAt         time.Time  `json:"archived_at"`
+	RowHash            string     `json:"row_hash"`
 }
 
 type LifecycleArchivePage struct {
@@ -985,7 +986,7 @@ func (s *DataLifecycleService) Archives(requestID, kind string, beforeID uint64,
 	}
 	switch kind {
 	case "bets":
-		query = `SELECT id, workspace_id, user_id, 'bet' AS kind, game_id, issue, status, '' AS reference, '' AS type, amount_cents, created_at, archived_at, row_hash FROM lottery_bet_archives WHERE cleanup_request_id = ?` + before + ` ORDER BY id DESC LIMIT ?`
+		query = `SELECT id, workspace_id, user_id, 'bet' AS kind, game_id, issue, status, draw_source_revision, '' AS reference, '' AS type, amount_cents, created_at, archived_at, row_hash FROM lottery_bet_archives WHERE cleanup_request_id = ?` + before + ` ORDER BY id DESC LIMIT ?`
 	case "ledger":
 		query = `SELECT id, workspace_id, user_id, 'ledger' AS kind, '' AS game_id, '' AS issue, '' AS status, reference, type, amount_cents, created_at, archived_at, row_hash FROM user_balance_transaction_archives WHERE cleanup_request_id = ?` + before + ` ORDER BY id DESC LIMIT ?`
 	case "audit":
@@ -1946,7 +1947,7 @@ func (s *DataLifecycleService) archiveRobotBets(tx *gorm.DB, criteria normalized
 		), archived AS (
 			INSERT INTO lottery_bet_archives (
 				id, workspace_id, game_id, issue, room_scope, user_id, username,
-				play_code, play_name, position, selection, rule_version, amount_cents, odds,
+				play_code, play_name, position, selection, rule_version, draw_source_revision, amount_cents, odds, odds_terms,
 				valid_turnover_cents, settlement_odds, user_issue_stake_cents_snapshot, settlement_policy, pc28_gray_push, status,
 				payout_cents, fly_cents, rebate_rate_snapshot, rebate_cents,
 				agent_share_rate_snapshot, agent_share_cents, settled_at, remark,
@@ -1954,7 +1955,7 @@ func (s *DataLifecycleService) archiveRobotBets(tx *gorm.DB, criteria normalized
 				updated_at, source_json, row_hash, archived_at, cleanup_request_id
 			)
 			SELECT id, workspace_id, game_id, issue, room_scope, user_id, username,
-				play_code, play_name, position, selection, rule_version, amount_cents, odds,
+				play_code, play_name, position, selection, rule_version, draw_source_revision, amount_cents, odds, odds_terms,
 				valid_turnover_cents, settlement_odds, user_issue_stake_cents_snapshot, settlement_policy, pc28_gray_push, status,
 				payout_cents, fly_cents, rebate_rate_snapshot, rebate_cents,
 				agent_share_rate_snapshot, agent_share_cents, settled_at, remark,
@@ -2059,11 +2060,13 @@ func restoreRobotBetArchive(tx *gorm.DB, requestID string) (int64, error) {
 		SELECT COUNT(*) FROM lifecycle_restore_bets
 		WHERE row_hash <> md5(source_json::text)
 		   OR rule_version IS DISTINCT FROM COALESCE(source_json ->> 'rule_version', '')
+		   OR draw_source_revision IS DISTINCT FROM COALESCE(source_json ->> 'draw_source_revision', '')
 		   OR valid_turnover_cents IS DISTINCT FROM (source_json ->> 'valid_turnover_cents')::bigint
 		   OR settlement_odds IS DISTINCT FROM (source_json ->> 'settlement_odds')::numeric
 		   OR user_issue_stake_cents_snapshot IS DISTINCT FROM (source_json ->> 'user_issue_stake_cents_snapshot')::bigint
 		   OR settlement_policy IS DISTINCT FROM COALESCE(source_json ->> 'settlement_policy', '')
 		   OR pc28_gray_push IS DISTINCT FROM COALESCE((source_json ->> 'pc28_gray_push')::boolean, false)
+		   OR odds_terms IS DISTINCT FROM COALESCE(source_json -> 'odds_terms', '{}'::jsonb)
 	`).Scan(&invalid).Error; err != nil {
 		return 0, err
 	}
@@ -2079,7 +2082,7 @@ func restoreRobotBetArchive(tx *gorm.DB, requestID string) (int64, error) {
 	result := tx.Exec(`
 		INSERT INTO lottery_bets (
 			id, workspace_id, game_id, issue, room_scope, user_id, username,
-			play_code, play_name, position, selection, rule_version, request_reference, amount_cents, odds,
+			play_code, play_name, position, selection, rule_version, request_reference, draw_source_revision, amount_cents, odds, odds_terms,
 			valid_turnover_cents, settlement_odds, user_issue_stake_cents_snapshot, settlement_policy, pc28_gray_push, status,
 			payout_cents, fly_cents, rebate_rate_snapshot, rebate_cents,
 			agent_share_rate_snapshot, agent_share_cents, settled_at, remark,
@@ -2087,7 +2090,8 @@ func restoreRobotBetArchive(tx *gorm.DB, requestID string) (int64, error) {
 		)
 		SELECT id, workspace_id, game_id, issue, room_scope, user_id, username,
 			play_code, play_name, position, selection, rule_version,
-			COALESCE(source_json ->> 'request_reference', ''), amount_cents, odds,
+			COALESCE(source_json ->> 'request_reference', ''), draw_source_revision, amount_cents, odds,
+			COALESCE(source_json -> 'odds_terms', '{}'::jsonb),
 			valid_turnover_cents, settlement_odds, user_issue_stake_cents_snapshot, settlement_policy, pc28_gray_push, status,
 			payout_cents, fly_cents, rebate_rate_snapshot, rebate_cents,
 			agent_share_rate_snapshot, agent_share_cents, settled_at, remark,
@@ -2111,6 +2115,8 @@ func restoreRobotBetArchive(tx *gorm.DB, requestID string) (int64, error) {
 				THEN ARRAY[]::text[] ELSE ARRAY['request_reference']::text[] END
 			- CASE WHEN archive.source_json ? 'rule_version'
 				THEN ARRAY[]::text[] ELSE ARRAY['rule_version']::text[] END
+			- CASE WHEN archive.source_json ? 'draw_source_revision'
+				THEN ARRAY[]::text[] ELSE ARRAY['draw_source_revision']::text[] END
 			- CASE WHEN archive.source_json ? 'valid_turnover_cents'
 				THEN ARRAY[]::text[] ELSE ARRAY['valid_turnover_cents']::text[] END
 			- CASE WHEN archive.source_json ? 'settlement_odds'
@@ -2121,6 +2127,8 @@ func restoreRobotBetArchive(tx *gorm.DB, requestID string) (int64, error) {
 				THEN ARRAY[]::text[] ELSE ARRAY['settlement_policy']::text[] END
 			- CASE WHEN archive.source_json ? 'pc28_gray_push'
 				THEN ARRAY[]::text[] ELSE ARRAY['pc28_gray_push']::text[] END
+			- CASE WHEN archive.source_json ? 'odds_terms'
+				THEN ARRAY[]::text[] ELSE ARRAY['odds_terms']::text[] END
 		)::text)
 	`).Scan(&invalid).Error; err != nil {
 		return 0, err

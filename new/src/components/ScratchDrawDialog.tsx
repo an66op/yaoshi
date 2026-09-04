@@ -6,7 +6,7 @@ import { createScratchMask, scratchPoint, scratchResult, type ScratchMask, type 
 import { manageScratchDialogFocus } from '../utils/scratchDialogFocus'
 import { ActionDialog } from './Dialogs'
 import { controlSurfaceProps } from '../utils/controlSurface'
-import { lotteryResultSummary, lotteryRuleProfile, markSixDrawBallClass } from '../utils/lotteryRules'
+import { lotteryResultSummary, markSixDrawBallClass, usesMarkSixDrawPresentation } from '../utils/lotteryRules'
 import './scratch-draw.css'
 
 export function ScratchDrawDialog({ game, draw, onClose }: { game: Game; draw?: DrawResult; onClose: () => void }) {
@@ -92,13 +92,13 @@ function ScratchSurface({ numbers, gameId, ruleVersion = '' }: { numbers: number
   }
   const columns = numbers.length
   const summary = lotteryResultSummary(gameId, numbers, ruleVersion)
-  const markSix = lotteryRuleProfile(gameId).family === 'mark-six'
+  const markSix = usesMarkSixDrawPresentation(gameId)
 
   return <section className="scratch-draw-board" {...controlSurfaceProps}>
     <p className="scratch-draw-hint" role="status">{revealed ? '开奖结果已揭晓' : unavailable ? '点击全部揭晓查看结果' : '按住涂抹，刮开查看结果'}</p>
     <div ref={surfaceRef} className={`scratch-draw-surface${ready ? ' is-ready' : ''}${revealed ? ' is-revealed' : ''}`}>
       <div className="scratch-draw-grid" style={{ '--scratch-columns': columns } as CSSProperties} aria-hidden={!revealed} aria-label={revealed ? `开奖号码：${numbers.join('、')}` : undefined}>
-        {numbers.map((number, index) => <span className="scratch-draw-cell" key={index}><b className={markSix ? markSixDrawBallClass(number, index, numbers.length) : ballTone(number)}>{number}</b><small>{markSix && index === 6 ? '特' : index + 1}</small></span>)}
+        {numbers.map((number, index) => <span className="scratch-draw-cell" key={index}><b className={markSix ? markSixDrawBallClass(number, index, numbers.length) : ballTone(number)}>{number}</b><small>{markSix ? index === 6 ? '特码' : `正${index + 1}` : index + 1}</small></span>)}
       </div>
       <canvas ref={canvasRef} className="scratch-draw-mask" aria-hidden="true" onPointerDown={start} onPointerMove={move} onPointerUp={stop} onPointerCancel={stop} onLostPointerCapture={stop} />
     </div>

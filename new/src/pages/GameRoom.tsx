@@ -36,11 +36,12 @@ import type { WalletActionSlug } from '../router'
 import { chatScrollState } from '../utils/chatScroll'
 import { isClaimableRoomRedPacket } from '../utils/roomRedPacket'
 import { recentGameTimelineItems } from '../utils/gameTimelineBudget'
-import { exactRuleResponsesReady, gameRulesReady, isDigit5V3Game, isPC28RuleVersion, lotteryResultSummary, lotteryRuleProfile, markSixBallClass, markSixDrawBallClass, requiredRuleVersionForGame, rulesBlockedTiming, UNCONFIGURED_RULES_MESSAGE } from '../utils/lotteryRules'
+import { exactRuleResponsesReady, gameRulesReady, isDigit5V3Game, isPC28RuleVersion, lotteryResultSummary, lotteryRuleProfile, markSixBallClass, markSixDrawBallClass, requiredRuleVersionForGame, rulesBlockedTiming, sourcePausedTiming, UNCONFIGURED_RULES_MESSAGE, usesMarkSixDrawPresentation } from '../utils/lotteryRules'
+import { gameAvailability } from '../utils/gameAvailability'
 import { betCommandError } from '../utils/betCommand'
-import { DEFAULT_LOTTERY_SOURCE_URL, resolveLotterySourceURL } from '../utils/lotterySourceURL'
+import { DEFAULT_LOTTERY_SOURCE_URL, resolveGameLotterySourceURL, resolveLotterySourceURL } from '../utils/lotterySourceURL'
 import { roomBettingAssembly, roomBettingMode, type RoomBettingModeID } from '../utils/gameBettingModes'
-import { isMarkSixEnabledPlayCode, markSixOddsItem } from '../utils/markSixBetSelection'
+import { canSubmitMarkSixBatchItemWithOddsResponse } from '../utils/markSixBetSelection'
 import { isPC28EnabledPlayCode, pc28OddsItem } from '../utils/pc28BetSelection'
 import { betStatusText, betStatusTone } from '../utils/betStatus'
 import {
@@ -768,7 +769,7 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
     }
     const family = lotteryRuleProfile(game.id).family
     const containsUnavailableItem = items.some(item => family === 'mark-six'
-      ? !isMarkSixEnabledPlayCode(item.play_code) || !markSixOddsItem(item.play_code, oddsInfo)
+      ? !canSubmitMarkSixBatchItemWithOddsResponse(item, oddsInfo, game.id, effectiveRuleVersion)
       : family === 'pc28'
         ? !isPC28EnabledPlayCode(item.play_code) || !pc28OddsItem(game.id, item.play_code, oddsInfo)
         : true)
@@ -873,17 +874,20 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
   }
 
   const ruleProfile = lotteryRuleProfile(game.id)
-  const rulesReady = gameRulesReady(game)
+  const rulesReady = game.sourceHealthy && gameRulesReady(game)
     && assistantStatus?.rules_ready !== false
     && oddsInfo?.rules_ready !== false
     && ruleResponsesReady
   const upstreamRulesMessage = game.rulesMessage || assistantStatus?.rules_message || oddsInfo?.rules_message || UNCONFIGURED_RULES_MESSAGE
-  const rulesMessage = upstreamRulesMessage
+  const roomAvailability = gameAvailability(game, rulesReady)
+  const sourcePaused = roomAvailability?.kind === 'source-paused'
+  const rulesMessage = roomAvailability?.roomMessage || upstreamRulesMessage
   const useRoomWebKeyboard = roomFeatures.webKeyboard && rulesReady
-  const drawPositionLabels = ruleProfile.family === 'mark-six'
+  const markSixDrawPresentation = usesMarkSixDrawPresentation(game.id)
+  const drawPositionLabels = markSixDrawPresentation
     ? ['正1', '正2', '正3', '正4', '正5', '正6', '特'].slice(0, game.balls.length)
     : Array.from({ length: game.balls.length }, (_, index) => drawPositionNames[index] ?? String(index + 1))
-  const drawBallClass = (number: number, index: number, length: number) => ruleProfile.family === 'mark-six'
+  const drawBallClass = (number: number, index: number, length: number) => markSixDrawPresentation
     ? markSixDrawBallClass(number, index, length)
     : ballTone(number)
   const recentDraws = draws.slice(0, 8).map((draw) => {
@@ -898,7 +902,7 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
   const acceptance = gameAcceptance(game)
   const bettingTarget = roomBettingTarget(game)
   const assistantIssue = assistantStatus?.betting_window?.issue ?? assistantStatus?.issue
-  const assistantAcceptance = !rulesReady ? rulesMessage : !canAcceptBet(game)
+  const assistantAcceptance = roomAvailability ? rulesMessage : !canAcceptBet(game)
     ? `${acceptance.label}，当前暂停接单。`
     : assistantIssue === bettingTarget.issue && assistantStatus?.accepting === false
     ? '本期已封盘，请等待下一期开始受理。'
@@ -1022,16 +1026,16 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
       </div>
     </header>
     <section className="game-info">
-      <div className="game-round-info"><span className="game-round-issue" aria-label={`当前期号 ${game.period}`}><strong>{shortIssue(game.period)}</strong></span><LotteryCountdown timing={rulesReady ? game.timing : rulesBlockedTiming(game.timing)} compact /></div>
+      <div className="game-round-info"><span className="game-round-issue" aria-label={`当前期号 ${game.period}`}><strong>{shortIssue(game.period)}</strong></span><LotteryCountdown timing={sourcePaused ? sourcePausedTiming(game.timing) : rulesReady ? game.timing : rulesBlockedTiming(game.timing)} compact /></div>
       {(roomFeatures.showMipai || roomFeatures.showOrders || roomFeatures.showStreak || roomFeatures.showPrediction) && <nav className="game-tool-tabs" aria-label="游戏工具" {...controlSurfaceProps}>{roomFeatures.showMipai && <button onClick={() => setDialog('scratch')}>咪牌</button>}{roomFeatures.showOrders && <button onClick={() => setDialog('orders')}>注单</button>}{roomFeatures.showStreak && <button onClick={() => setDialog('trend')}>长龙</button>}{roomFeatures.showPrediction && <button onClick={() => setDialog('forecast')}>预测</button>}</nav>}
     </section>
     <span aria-live="polite" className="sr-only" role="status">{roomModeAnnouncement}</span>
-    {!rulesReady && <p className="game-rules-notice" role="status">{rulesMessage}</p>}
-    <section className={`draw-history ${historyOpen ? 'open' : ''}${ruleProfile.family === 'racing' ? ' racing-draw-ui' : ''}${ruleProfile.family === 'mark-six' ? ' mark-six-draw-ui' : ''}${ruleProfile.family === 'unknown' ? ' unprofiled-draw-ui' : ''}${drawPositionLabels.length > 10 ? ' extended-draw-ui' : ''}`}>
-      <button className="last-draw" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}><span>上期 {shortIssue(game.latestIssue)}</span><div>{game.balls.map((number, index) => ruleProfile.family === 'mark-six'
+    {roomAvailability && <p className="game-rules-notice" role="status">{rulesMessage}</p>}
+    <section className={`draw-history ${historyOpen ? 'open' : ''}${ruleProfile.family === 'racing' ? ' racing-draw-ui' : ''}${markSixDrawPresentation ? ' mark-six-draw-ui' : ''}${ruleProfile.family === 'unknown' && !markSixDrawPresentation ? ' unprofiled-draw-ui' : ''}${drawPositionLabels.length > 10 ? ' extended-draw-ui' : ''}`}>
+      <button className="last-draw" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}><span>上期 {shortIssue(game.latestIssue)}</span><div>{game.balls.map((number, index) => markSixDrawPresentation
         ? <MarkSixDrawBall drawAt={latestDrawAt} index={index} key={index} length={game.balls.length} number={number} />
         : <b className={drawBallClass(number, index, game.balls.length)} key={index}>{number}</b>)}</div>{latestMeta && <small>{latestMeta.label} <b>{latestMeta.text}</b></small>}</button>
-      <div className="recent-draws" aria-hidden={!historyOpen}><header><span>期数</span><b>{drawPositionLabels.map((label) => <i key={label}>{label}</i>)}</b>{latestMeta && <small><b>{latestMeta.label}</b>{latestMeta.dragonText && <><i aria-hidden="true">·</i><em>龙虎</em></>}</small>}</header>{drawsLoading && <p className="recent-draws-loading">加载开奖…</p>}{recentDraws.slice(0, 5).map((draw) => <article key={draw.period}><span>{shortIssue(draw.period)}</span><div>{draw.balls.map((ball, index) => ruleProfile.family === 'mark-six'
+      <div className="recent-draws" aria-hidden={!historyOpen}><header><span>期数</span><b>{drawPositionLabels.map((label) => <i key={label}>{label}</i>)}</b>{latestMeta && <small><b>{latestMeta.label}</b>{latestMeta.dragonText && <><i aria-hidden="true">·</i><em>龙虎</em></>}</small>}</header>{drawsLoading && <p className="recent-draws-loading">加载开奖…</p>}{recentDraws.slice(0, 5).map((draw) => <article key={draw.period}><span>{shortIssue(draw.period)}</span><div>{draw.balls.map((ball, index) => markSixDrawPresentation
         ? <MarkSixDrawBall drawAt={draw.drawAt} index={index} key={index} length={draw.balls.length} number={ball} />
         : <b className={drawBallClass(ball, index, draw.balls.length)} key={index}>{ball}</b>)}</div>{draw.meta && <small><b>{draw.meta.text}</b>{draw.meta.dragonText && <em>{draw.meta.dragonText}</em>}</small>}</article>)}<button className="more-draws" onClick={onOpenResults}>查看更多开奖</button></div>
     </section>
@@ -1057,15 +1061,15 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
     {activeRoomMode.surface === 'chat' && <>
     {showScrollLatest && <ScrollToLatestButton keyboardOpen={showKeyboard} onScrollToLatest={scrollToLatest} />}
     {showKeyboard && useRoomWebKeyboard && <BetKeyboard gameId={game.id} ruleVersion={effectiveRuleVersion} mode={betMode} odds={playOdds} oddsHidden={oddsHidden} oddsResponseReady={oddsResponseReady} selectedCount={betInput.length} submitting={submitting || sendingMessage} onShortcut={handleKeyboardShortcut} onBackspace={removeNumber} onClear={clearSelection} onConfirm={() => void submitInput()} onModeChange={setBetMode} onSelectNumber={appendNumber} onSelectOption={appendOption} showModes={false} />}
-    <QuickActions lotterySourceURL={lotterySourceURL} hasRedPacket={Boolean(roomRedPacket)} keyboardOpen={showKeyboard && useRoomWebKeyboard} onCheckIn={() => setShowCheckIn(true)} onCustomerService={onOpenService} onOpenRedPacket={openRoomRedPacket} onQuickBet={() => { setShowKeyboard(false); if (detailRoomMode) selectRoomMode(detailRoomMode.id); else { setBetError(game.rulesMessage || UNCONFIGURED_RULES_MESSAGE); setDialog('bet-error') } }} onSwitchGame={() => setShowGameSwitcher(true)} />
-    <section className="ticket-strip" onClick={(event) => event.stopPropagation()}>{useRoomWebKeyboard && <button aria-label={showKeyboard ? '收起快捷键盘' : '打开快捷键盘'} className="ticket-ime" onClick={toggleKeyboard}><img alt="" src="/icons/lucide/keyboard.svg" /></button>}{useRoomWebKeyboard ? <button aria-label="打开投注键盘" className="ticket-selection" onClick={toggleKeyboard}>{bettingTarget.issue !== game.period && <small className="ticket-betting-issue">下期 {shortIssue(bettingTarget.issue)}</small>}{betInput || '输入玩法/金额或聊天内容'}</button> : <input aria-label="输入玩法、金额或聊天内容" className="ticket-selection ticket-native-input" autoComplete="off" disabled={submitting || sendingMessage} enterKeyHint="send" placeholder={!rulesReady ? '仅聊天 · 当前玩法暂停受理' : bettingTarget.issue !== game.period ? `下期 ${shortIssue(bettingTarget.issue)} · 输入玩法/金额` : '输入玩法/金额或聊天内容'} value={betInput} onChange={(event) => setBetInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void submitInput() } }} />}{betInput ? <button aria-label="发送" className="ticket-add ticket-send" disabled={submitting || sendingMessage} onClick={() => void submitInput()}>{submitting || sendingMessage ? '…' : '发送'}</button> : <button aria-expanded={showAddMenu} aria-label="打开更多功能" className="ticket-add" onClick={() => { setShowKeyboard(false); setShowAddMenu((visible) => !visible) }}><Icon name="plus" /></button>}</section>
+    <QuickActions lotterySourceURL={resolveGameLotterySourceURL(game, lotterySourceURL)} hasRedPacket={Boolean(roomRedPacket)} keyboardOpen={showKeyboard && useRoomWebKeyboard} onCheckIn={() => setShowCheckIn(true)} onCustomerService={onOpenService} onOpenRedPacket={openRoomRedPacket} onQuickBet={() => { setShowKeyboard(false); if (detailRoomMode) selectRoomMode(detailRoomMode.id); else { setBetError(rulesMessage); setDialog('bet-error') } }} onSwitchGame={() => setShowGameSwitcher(true)} />
+    <section className="ticket-strip" onClick={(event) => event.stopPropagation()}>{useRoomWebKeyboard && <button aria-label={showKeyboard ? '收起快捷键盘' : '打开快捷键盘'} className="ticket-ime" onClick={toggleKeyboard}><img alt="" src="/icons/lucide/keyboard.svg" /></button>}{useRoomWebKeyboard ? <button aria-label="打开投注键盘" className="ticket-selection" onClick={toggleKeyboard}>{bettingTarget.issue !== game.period && <small className="ticket-betting-issue">下期 {shortIssue(bettingTarget.issue)}</small>}{betInput || '输入玩法/金额或聊天内容'}</button> : <input aria-label="输入玩法、金额或聊天内容" className="ticket-selection ticket-native-input" autoComplete="off" disabled={submitting || sendingMessage} enterKeyHint="send" placeholder={roomAvailability ? `${roomAvailability.label} · 仅聊天` : bettingTarget.issue !== game.period ? `下期 ${shortIssue(bettingTarget.issue)} · 输入玩法/金额` : '输入玩法/金额或聊天内容'} value={betInput} onChange={(event) => setBetInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void submitInput() } }} />}{betInput ? <button aria-label="发送" className="ticket-add ticket-send" disabled={submitting || sendingMessage} onClick={() => void submitInput()}>{submitting || sendingMessage ? '…' : '发送'}</button> : <button aria-expanded={showAddMenu} aria-label="打开更多功能" className="ticket-add" onClick={() => { setShowKeyboard(false); setShowAddMenu((visible) => !visible) }}><Icon name="plus" /></button>}</section>
     {showAddMenu && <AddMenu onSelect={(action) => onOpenWallet(action)} />}
     </>}
     {rulesReady && detailRoomMode?.board === 'racing' && <FullBetBoard active={activeRoomMode.surface === 'detail'} embedded key={game.id} surfaceId={`room-detail-surface-${game.id}`} game={game} mode={betMode} submitting={submitting} odds={playOdds} oddsHidden={oddsHidden} oddsResponseReady={oddsResponseReady} oddsInfo={oddsInfo} onClose={closeDetailMode} onConfirm={(content) => void submitBet(content)} onModeChange={setBetMode} />}
     {rulesReady && detailRoomMode?.board === 'digit' && <DigitBetBoard active={activeRoomMode.surface === 'detail'} embedded key={game.id} surfaceId={`room-detail-surface-${game.id}`} game={game} ballCount={ruleProfile.family === 'digit3' ? 3 : 5} ruleVersion={effectiveRuleVersion} submitting={submitting} odds={playOdds} oddsHidden={oddsHidden} oddsResponseReady={oddsResponseReady} oddsInfo={oddsInfo} onClose={closeDetailMode} onConfirm={(content) => void submitBet(content)} />}
     {rulesReady && detailRoomMode?.board === 'pc28' && <PC28BetBoard active={activeRoomMode.surface === 'detail'} key={game.id} surfaceId={`room-detail-surface-${game.id}`} game={game} ruleVersion={effectiveRuleVersion} oddsInfo={oddsInfo} rulesReady={rulesReady} rulesMessage={rulesMessage} submitting={submitting} onClose={closeDetailMode} onConfirm={submitWebBetBatch} />}
     {rulesReady && detailRoomMode?.board === 'mark-six' && <MarkSixBetBoard active={activeRoomMode.surface === 'detail'} key={game.id} surfaceId={`room-detail-surface-${game.id}`} game={game} oddsInfo={oddsInfo} rulesReady={rulesReady} rulesMessage={rulesMessage} submitting={submitting} onConfirm={submitWebBetBatch} />}
-    {activeRoomMode.surface === 'detail' && (!rulesReady || activeRoomMode.board === 'pending') && <section className="detail-mode-pending" id={`room-detail-surface-${game.id}`} role="status" aria-label="详细投注暂停受理"><div><small>网投</small><b>{game.title}详细投注待配置</b><p>{rulesMessage}</p><span>玩法、赔率、封盘与结算全部核验通过后才会开放提交，当前不会生成注单。</span>{chatRoomMode && <button type="button" onClick={closeDetailMode}>返回聊天</button>}</div></section>}
+    {activeRoomMode.surface === 'detail' && (!rulesReady || activeRoomMode.board === 'pending') && <section className="detail-mode-pending" id={`room-detail-surface-${game.id}`} role="status" aria-label="详细投注暂停受理"><div><small>网投</small><b>{game.title}详细投注{sourcePaused ? '暂停受理' : '待开放'}</b><p>{rulesMessage}</p><span>{roomAvailability?.detailText || '玩法、赔率、封盘与结算全部核验通过后才会开放提交，当前不会生成注单。'}</span>{chatRoomMode && <button type="button" onClick={closeDetailMode}>返回聊天</button>}</div></section>}
     {roomModeSwitchAvailable && rulesReady && !submitting && !showKeyboard && !showAddMenu && <div
       aria-hidden="true"
       className={`room-mode-edge-gesture ${activeRoomMode.surface === 'detail' ? 'from-left' : 'from-right'}`}
@@ -1137,7 +1141,7 @@ export function DrawAssistantMessage({ gameTitle, ruleVersion = '', draw, draws 
   const [initialHistory] = useState(() => drawHistoryAtIssue(draws, draw))
   const history = useMemo(() => initialHistory.map(row => row.issue === draw.issue ? draw : row), [draw, initialHistory])
   const meta = lotteryResultSummary(draw.game_id, draw.numbers, ruleVersion)
-  const isMarkSix = lotteryRuleProfile(draw.game_id).family === 'mark-six'
+  const isMarkSix = usesMarkSixDrawPresentation(draw.game_id)
   return <div className="admin-message draw-announcement">
     <span className="service-logo draw-assistant-logo"><img alt="开奖助手头像" src="/images/draw-assistant-avatar-v1.jpg" /></span>
     <div><small>开奖助手 · 24小时在线</small><article>
@@ -1193,7 +1197,7 @@ export function BetKeyboard({ gameId, ruleVersion = '', mode, odds, oddsHidden, 
   const activeMode = showModes ? mode : 'quick'
   const keyClass = (key: string) => `bet-key ${key === '确认' ? 'confirm' : key === '←' ? 'command' : quickOptions.has(key) ? 'option' : 'number'}`
   const shortcuts: Array<{ id: KeyboardShortcut; label: string }> = [{ id: 'all-in', label: '梭哈' }, { id: 'cancel', label: '取消' }, { id: 'credit', label: '上分' }, { id: 'check', label: '查' }, { id: 'debit', label: '下分' }, { id: 'repeat', label: '重复' }]
-  return <section className={`bet-keyboard ${showModes ? 'complex-bet-keyboard' : 'input-bet-keyboard'}`} onClick={(event) => event.stopPropagation()} {...controlSurfaceProps}>{showModes && <header><div className="bet-mode-tabs">{modes.map((item) => <button className={mode === item.id ? 'active' : ''} key={item.id} onClick={() => onModeChange(item.id)}>{item.label}</button>)}</div><span>已选 <b>{selectedCount}</b> 项</span>{selectedCount > 0 && <button className="clear-selection" onClick={onClear}>清空</button>}</header>}<nav className="keyboard-shortcuts" aria-label="快捷操作">{shortcuts.map((item) => <button className={`keyboard-shortcut ${item.id}`} key={item.id} type="button" onClick={() => onShortcut(item.id)}>{item.label}</button>)}</nav>{activeMode === 'quick' ? <div>{quickKeys.map((key) => <button className={keyClass(key)} disabled={submitting && key === '确认'} key={key} onClick={() => key === '←' ? deleteOne() : selectQuick(key)} onPointerCancel={key === '←' ? endDelete : undefined} onPointerDown={key === '←' ? startDelete : undefined} onPointerLeave={key === '←' ? endDelete : undefined} onPointerUp={key === '←' ? endDelete : undefined}>{key === '确认' ? (submitting ? '提交中' : '确认投注') : key}</button>)}</div> : activeMode === 'dual' ? <div className="dual-board">{dualOptions.map((option) => { const value = oddsForSelection(option, odds); return <button disabled={!oddsResponseReady || (!oddsHidden && value === null)} key={option} onClick={() => onSelectOption(option)}><b>{option}</b><small>{oddsLabel(value, 3, oddsHidden)}</small></button> })}</div> : <div className="number-board">{Array.from({ length: 10 }, (_, index) => index + 1).map((number) => <button disabled={!oddsResponseReady || (!oddsHidden && oddsForPlayCode('ball_1_5', odds) === null)} key={number} onClick={() => onSelectNumber(number)}>{number}</button>)}</div>}</section>
+  return <section className={`bet-keyboard ${showModes ? 'complex-bet-keyboard' : 'input-bet-keyboard'}`} onClick={(event) => event.stopPropagation()} {...controlSurfaceProps}>{showModes && <header><div className="bet-mode-tabs">{modes.map((item) => <button className={mode === item.id ? 'active' : ''} key={item.id} onClick={() => onModeChange(item.id)}>{item.label}</button>)}</div><span>已选 <b>{selectedCount}</b> 项</span>{selectedCount > 0 && <button className="clear-selection" onClick={onClear}>清空</button>}</header>}<nav className="keyboard-shortcuts" aria-label="快捷操作">{shortcuts.map((item) => <button className={`keyboard-shortcut ${item.id}`} key={item.id} type="button" onClick={() => onShortcut(item.id)}>{item.label}</button>)}</nav>{activeMode === 'quick' ? <div>{quickKeys.map((key) => <button className={keyClass(key)} disabled={submitting && key === '确认'} key={key} onClick={() => key === '←' ? deleteOne() : selectQuick(key)} onPointerCancel={key === '←' ? endDelete : undefined} onPointerDown={key === '←' ? startDelete : undefined} onPointerLeave={key === '←' ? endDelete : undefined} onPointerUp={key === '←' ? endDelete : undefined}>{key === '确认' ? (submitting ? '提交中' : '确认投注') : key}</button>)}</div> : activeMode === 'dual' ? <div className="dual-board">{dualOptions.map((option) => { const value = oddsForSelection(option, odds, gameId ?? ''); return <button disabled={!oddsResponseReady || (!oddsHidden && value === null)} key={option} onClick={() => onSelectOption(option)}><b>{option}</b><small>{oddsLabel(value, 3, oddsHidden)}</small></button> })}</div> : <div className="number-board">{Array.from({ length: 10 }, (_, index) => index + 1).map((number) => <button disabled={!oddsResponseReady || (!oddsHidden && oddsForPlayCode('ball_1_5', odds) === null)} key={number} onClick={() => onSelectNumber(number)}>{number}</button>)}</div>}</section>
 }
 
 function OrdersDialog({ bets, onCancel, onClose }: { bets: MemberBet[]; onCancel: (id: number) => void; onClose: () => void }) {
@@ -1277,5 +1281,8 @@ function AddMenu({ onSelect }: { onSelect: (action?: WalletActionSlug) => void }
 }
 
 function GameSwitcher({ currentGame, games, onClose, onSelect }: { currentGame: string; games: Game[]; onClose: () => void; onSelect: (id: string) => void }) {
-  return <div className="game-menu-layer game-switch-layer" onClick={onClose}><aside className="game-switch-sheet" {...controlSurfaceProps} onClick={(event) => event.stopPropagation()}><header><b>⇄ 切换游戏</b><button onClick={onClose}>×</button></header>{games.map((item) => <button className={item.id === currentGame ? 'current' : ''} key={item.id} onClick={() => { onClose(); if (item.id !== currentGame) onSelect(item.id) }}><span className={item.logo ? 'has-image' : ''} style={{ background: item.logo ? 'transparent' : item.color }}>{item.logo ? <img alt={`${item.title} Logo`} src={item.logo} draggable={false} /> : item.tag.slice(0, 2)}</span><div><b>{item.title}</b><small>第 {item.period} 期</small></div><em>{item.id === currentGame ? '当前游戏' : `剩余 ${item.due}`}</em></button>)}</aside></div>
+  return <div className="game-menu-layer game-switch-layer" onClick={onClose}><aside className="game-switch-sheet" {...controlSurfaceProps} onClick={(event) => event.stopPropagation()}><header><b>⇄ 切换游戏</b><button onClick={onClose}>×</button></header>{games.map((item) => {
+    const availability = gameAvailability(item)
+    return <button className={item.id === currentGame ? 'current' : ''} key={item.id} onClick={() => { onClose(); if (item.id !== currentGame) onSelect(item.id) }}><span className={item.logo ? 'has-image' : ''} style={{ background: item.logo ? 'transparent' : item.color }}>{item.logo ? <img alt={`${item.title} Logo`} src={item.logo} draggable={false} /> : item.tag.slice(0, 2)}</span><div><b>{item.title}</b><small>第 {item.period} 期</small></div><em>{item.id === currentGame ? '当前游戏' : availability?.label || `剩余 ${item.due}`}</em></button>
+  })}</aside></div>
 }

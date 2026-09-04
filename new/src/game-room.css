@@ -2617,27 +2617,96 @@
 .game-room .recent-draws article > small > b { grid-column: 1; }
 .game-room .recent-draws article > small > em { grid-column: 3; }
 
-/* 宾果六合彩：号码、生肖组成一个单元，列宽随三瓣球同步。 */
-.game-room .mark-six-draw-ui .last-draw { min-height: 55px; }
+/* 六合彩：期号和摘要不占用七球的空间，特码分隔符也计入网格。
+   桌面仍是 430px 的手机框，不能依赖桌面断点把三组内容强塞进一行。 */
+.game-room .mark-six-draw-ui .last-draw {
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 7px 8px;
+  padding: 8px 34px 9px 12px;
+}
+.game-room .mark-six-draw-ui .last-draw > span {
+  grid-column: 1;
+  grid-row: 1;
+  max-width: none;
+}
+.game-room .mark-six-draw-ui .last-draw > small {
+  grid-column: 2;
+  grid-row: 1;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  line-height: 1.3;
+  white-space: normal;
+}
+.game-room .mark-six-draw-ui .last-draw > div {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
 .game-room .mark-six-draw-ui .last-draw > div,
 .game-room .mark-six-draw-ui .recent-draws header > b,
 .game-room .mark-six-draw-ui .recent-draws article > div {
-  grid-auto-columns: 29px;
-  gap: 5px;
+  grid-template-columns: repeat(6, minmax(0, 1fr)) minmax(0, 1.4fr);
+  grid-auto-columns: auto;
+  justify-items: center;
+  align-items: start;
+  gap: 4px;
+  width: 100%;
   overflow: visible;
 }
-.game-room .mark-six-draw-ui .recent-draws header > b > i { width: 29px; }
 .game-room .mark-six-draw-ui .recent-draws header,
 .game-room .mark-six-draw-ui .recent-draws article {
-  grid-template-columns: minmax(68px, 18%) minmax(0, 1fr) minmax(76px, 22%);
-  min-height: 47px;
+  grid-template-columns: minmax(76px, 22%) minmax(0, 1fr);
+  gap: 5px 7px;
 }
 .game-room .mark-six-draw-ui .recent-draws header { min-height: 31px; }
-.game-room .mark-six-draw-ui .recent-draws article > div { align-items: start; }
+.game-room .mark-six-draw-ui .recent-draws header > small { display: none; }
+.game-room .mark-six-draw-ui .recent-draws header > b > i {
+  width: min(100%, 29px);
+}
+.game-room .mark-six-draw-ui .recent-draws header > b > i:last-child {
+  box-sizing: border-box;
+  width: min(100%, 40px);
+  padding-left: 11px;
+}
+.game-room .mark-six-draw-ui .recent-draws article { padding-block: 8px; }
+.game-room .mark-six-draw-ui .recent-draws article > span {
+  grid-column: 1;
+  grid-row: 1 / 3;
+  align-self: center;
+}
+.game-room .mark-six-draw-ui .recent-draws article > div {
+  grid-column: 2;
+  grid-row: 1;
+}
+.game-room .mark-six-draw-ui .recent-draws article > small {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  overflow: visible;
+  line-height: 1.3;
+  white-space: normal;
+}
 .game-room .mark-six-draw-ui .last-draw > div > .mark-six-draw-cell,
-.game-room .mark-six-draw-ui .recent-draws article > div > .mark-six-draw-cell { width: 29px; }
+.game-room .mark-six-draw-ui .recent-draws article > div > .mark-six-draw-cell {
+  box-sizing: border-box;
+  width: min(100%, 29px);
+  min-width: 0;
+}
 .game-room .mark-six-draw-ui .last-draw > div > .mark-six-draw-cell.is-special,
-.game-room .mark-six-draw-ui .recent-draws article > div > .mark-six-draw-cell.is-special { width: 29px; }
+.game-room .mark-six-draw-ui .recent-draws article > div > .mark-six-draw-cell.is-special {
+  width: min(100%, 40px);
+  margin-left: 0;
+  padding-left: 11px;
+}
+.game-room .mark-six-draw-ui .mark-six-draw-cell > .mark-six-ball {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  aspect-ratio: 1;
+}
+.game-room .mark-six-draw-ui .mark-six-draw-cell.is-special::before { left: 0; }
 
 /* 赛车/飞艇十球：期号、号码、冠亚/龙虎单行密排。 */
 .game-room .racing-draw-ui .last-draw {
@@ -2720,6 +2789,7 @@
 .theme-night.game-room .recent-draws article {
   border-bottom-color: #376074;
 }
+.theme-night.game-room .mark-six-draw-ui .recent-draws article > small > b { color: #89d3e2; }
 
 @media (max-width: 390px) {
   .game-room .last-draw {
@@ -2754,33 +2824,6 @@
     font-size: 10px !important;
   }
   .game-room .racing-draw-ui .recent-draws header > b > i { width: 16px; }
-  .game-room .mark-six-draw-ui .last-draw {
-    grid-template-columns: minmax(52px, max-content) minmax(0, 1fr) minmax(62px, max-content);
-    column-gap: 5px;
-    padding-left: 7px;
-  }
-  .game-room .mark-six-draw-ui .last-draw > div,
-  .game-room .mark-six-draw-ui .recent-draws header > b,
-  .game-room .mark-six-draw-ui .recent-draws article > div {
-    grid-auto-columns: 24px;
-    gap: 4px;
-  }
-  .game-room .mark-six-draw-ui .recent-draws header > b > i { width: 24px; font-size: 8px; }
-  .game-room .mark-six-draw-ui .mark-six-draw-cell { min-width: 24px; }
-  .game-room .mark-six-draw-ui .mark-six-draw-cell > .mark-six-ball {
-    width: 24px;
-    height: 24px;
-    min-width: 24px;
-    font-size: 11px !important;
-  }
-  .game-room .mark-six-draw-ui .mark-six-draw-cell > small { font-size: 8px; }
-  .game-room .mark-six-draw-ui .mark-six-draw-cell.is-special { width: 24px !important; margin-left: 7px; }
-  .game-room .mark-six-draw-ui .mark-six-draw-cell.is-special::before { top: 5px; left: -8px; font-size: 11px; }
-  .game-room .mark-six-draw-ui .recent-draws header,
-  .game-room .mark-six-draw-ui .recent-draws article {
-    grid-template-columns: minmax(54px, 17%) minmax(0, 1fr) minmax(64px, 20%);
-    column-gap: 4px;
-  }
 }
 
 @media (max-height: 680px) {

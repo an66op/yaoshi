@@ -19,10 +19,12 @@ func TestRobotBetArchiveRetainsRequestAndRuleSnapshotChecks(t *testing.T) {
 	}
 	restore := source[start:end]
 	for _, fragment := range []string{
-		"rule_version, request_reference, amount_cents",
+		"rule_version, request_reference, draw_source_revision, amount_cents",
 		"valid_turnover_cents, settlement_odds, user_issue_stake_cents_snapshot, settlement_policy, pc28_gray_push",
 		"COALESCE(source_json ->> 'request_reference', '')",
 		"rule_version IS DISTINCT FROM COALESCE(source_json ->> 'rule_version', '')",
+		"draw_source_revision IS DISTINCT FROM COALESCE(source_json ->> 'draw_source_revision', '')",
+		"odds_terms IS DISTINCT FROM COALESCE(source_json -> 'odds_terms', '{}'::jsonb)",
 		"valid_turnover_cents IS DISTINCT FROM (source_json ->> 'valid_turnover_cents')::bigint",
 		"settlement_odds IS DISTINCT FROM (source_json ->> 'settlement_odds')::numeric",
 		"user_issue_stake_cents_snapshot IS DISTINCT FROM (source_json ->> 'user_issue_stake_cents_snapshot')::bigint",
@@ -31,6 +33,8 @@ func TestRobotBetArchiveRetainsRequestAndRuleSnapshotChecks(t *testing.T) {
 		"row_hash <> md5(source_json::text)",
 		"WHEN archive.source_json ? 'request_reference'",
 		"WHEN archive.source_json ? 'rule_version'",
+		"WHEN archive.source_json ? 'draw_source_revision'",
+		"WHEN archive.source_json ? 'odds_terms'",
 		"WHEN archive.source_json ? 'valid_turnover_cents'",
 		"WHEN archive.source_json ? 'settlement_odds'",
 		"WHEN archive.source_json ? 'user_issue_stake_cents_snapshot'",
@@ -41,6 +45,9 @@ func TestRobotBetArchiveRetainsRequestAndRuleSnapshotChecks(t *testing.T) {
 		if !strings.Contains(restore, fragment) {
 			t.Fatalf("restore lost immutable evidence check %q", fragment)
 		}
+	}
+	if !strings.Contains(source, "rule_version, draw_source_revision, amount_cents, odds, odds_terms") {
+		t.Fatal("archive INSERT/SELECT must retain immutable draw-source and tiered-odds snapshots")
 	}
 	for _, financial := range []string{"amount_cents", "payout_cents", "odds", "rebate_cents", "agent_share_cents"} {
 		if strings.Contains(restore, "ARRAY['"+financial+"']") {

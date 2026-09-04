@@ -152,6 +152,74 @@ func TestValidateConfigRejectsInvalidModeInsteadOfFallingBack(t *testing.T) {
 	}
 }
 
+func TestExperienceAccountSeedConfigurationIsTypedAndDebugOnly(t *testing.T) {
+	previous := Config
+	t.Cleanup(func() { Config = previous })
+
+	Config = validTestConfig("debug")
+	if Config.Server.SeedExperienceAccounts {
+		t.Fatal("experience account seed must default to false")
+	}
+	t.Setenv("BACKEND_SEED_EXPERIENCE_ACCOUNTS", "true")
+	if err := loadFromEnv(); err != nil {
+		t.Fatalf("load typed experience seed setting: %v", err)
+	}
+	if !Config.Server.SeedExperienceAccounts {
+		t.Fatal("explicit true did not enable the experience account seed")
+	}
+	if err := validateConfig(Config); err != nil {
+		t.Fatalf("debug configuration rejected explicit experience seed: %v", err)
+	}
+
+	for _, mode := range []string{"test", "release"} {
+		cfg := validTestConfig(mode)
+		cfg.Server.SeedExperienceAccounts = true
+		if err := validateConfig(cfg); err == nil {
+			t.Fatalf("%s configuration accepted the debug-only experience seed", mode)
+		}
+	}
+
+	Config = validTestConfig("debug")
+	t.Setenv("BACKEND_SEED_EXPERIENCE_ACCOUNTS", "sometimes")
+	if err := loadFromEnv(); err == nil {
+		t.Fatal("invalid experience seed boolean was silently accepted")
+	}
+}
+
+func TestDeterministicLotteryHistorySeedConfigurationIsTypedAndDebugOnly(t *testing.T) {
+	previous := Config
+	t.Cleanup(func() { Config = previous })
+
+	Config = validTestConfig("debug")
+	if Config.Server.SeedDeterministicLotteryHistory {
+		t.Fatal("deterministic lottery history seed must default to false")
+	}
+	t.Setenv("BACKEND_SEED_DETERMINISTIC_LOTTERY_HISTORY", "true")
+	if err := loadFromEnv(); err != nil {
+		t.Fatalf("load typed deterministic lottery history setting: %v", err)
+	}
+	if !Config.Server.SeedDeterministicLotteryHistory {
+		t.Fatal("explicit true did not enable deterministic lottery history")
+	}
+	if err := validateConfig(Config); err != nil {
+		t.Fatalf("debug configuration rejected explicit deterministic lottery history: %v", err)
+	}
+
+	for _, mode := range []string{"test", "release"} {
+		cfg := validTestConfig(mode)
+		cfg.Server.SeedDeterministicLotteryHistory = true
+		if err := validateConfig(cfg); err == nil {
+			t.Fatalf("%s configuration accepted debug-only deterministic lottery history", mode)
+		}
+	}
+
+	Config = validTestConfig("debug")
+	t.Setenv("BACKEND_SEED_DETERMINISTIC_LOTTERY_HISTORY", "sometimes")
+	if err := loadFromEnv(); err == nil {
+		t.Fatal("invalid deterministic lottery history boolean was silently accepted")
+	}
+}
+
 func TestValidateConfigReleaseTransportBoundaries(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -6,7 +6,8 @@ import { readServerClock, resolveLotteryBetting, resolveLotteryTiming, sampleSer
 import { createRefreshLoop } from '../utils/refreshLoop'
 import { gameCatalogRefreshDelay } from '../utils/gameCatalogRefresh'
 import type { Game } from '../types'
-import { gameRulesReady, rulesBlockedTiming, UNCONFIGURED_RULES_MESSAGE } from '../utils/lotteryRules'
+import { gameRulesReady, rulesBlockedTiming, sourcePausedTiming } from '../utils/lotteryRules'
+import { gameAvailability } from '../utils/gameAvailability'
 
 export const gameLogoPaths: Partial<Record<string, string>> = {
   'speed-racing': '/images/game-logos/speed-racing.png',
@@ -57,7 +58,9 @@ const resolvedBadgeColor = (item: LotteryGame) => {
 export const mapLotteryGame = (item: LotteryGame, nowMs: number): Game => {
   const rulesReady = gameRulesReady({ id: item.id, rulesReady: item.rules_ready, ruleVersion: item.rule_version })
   const resolvedTiming = resolveLotteryTiming(item, nowMs)
-  const timing = rulesReady ? resolvedTiming : rulesBlockedTiming(resolvedTiming)
+  const sourceHealthy = item.source_healthy !== false
+  const timing = !sourceHealthy ? sourcePausedTiming(resolvedTiming) : rulesReady ? resolvedTiming : rulesBlockedTiming(resolvedTiming)
+  const availability = gameAvailability({ id: item.id, sourceHealthy, rulesReady: item.rules_ready, ruleVersion: item.rule_version }, rulesReady)
   return {
     id: item.id,
     title: item.name,
@@ -79,12 +82,13 @@ export const mapLotteryGame = (item: LotteryGame, nowMs: number): Game => {
     issueStatus: item.issue_status || 'pending',
     sourceKind: item.source_kind || 'platform',
     sourceName: item.source_name || '王者开奖',
-    sourceHealthy: item.source_healthy !== false,
+    sourceURL: item.source_url || '',
+    sourceHealthy,
     syncStatus: item.sync_status || 'idle',
     sourceError: item.last_sync_error || '',
     rulesReady,
     ruleVersion: item.rule_version || '',
-    rulesMessage: rulesReady ? '' : item.rules_message || UNCONFIGURED_RULES_MESSAGE,
+    rulesMessage: availability?.roomMessage || '',
     lastSyncAt: item.last_sync_at || undefined,
   }
 }
@@ -132,7 +136,8 @@ export function useLotteryGames(enabled = true, roomKey = '', activeGameId: stri
         setLoading(false)
       },
       onError: (reason) => {
-        // Preserve the last confirmed room snapshot during transient failures.
+        // Preserve historical results; SG's current betting snapshot is
+        // invalidated below until its strict external source can be reread.
         setError(reason instanceof Error ? reason.message : '网络连接失败，请稍后重试')
         setLoading(false)
       },
@@ -195,7 +200,14 @@ export function useLotteryGames(enabled = true, roomKey = '', activeGameId: stri
     // `remote !== null` means the request succeeded. Preserve an intentionally
     // 启用列表为空时保持空状态，不使用本地业务数据补位。
     if (remote !== null && loadedRoomKey === roomKey) {
-      return { games: remote.map((item) => mapLotteryGame(item, serverNowMs)), loading, error, live: true }
+      return { games: remote.map((item) => mapLotteryGame(item.id === 'sg-ssc' && error ? {
+        ...item,
+        current_issue: '',
+        issue_status: 'error',
+        source_healthy: false,
+        last_sync_error: error,
+        betting_window: null,
+      } : item, serverNowMs)), loading, error, live: true }
     }
     return { games: [], loading, error, live: false }
   }, [remote, loadedRoomKey, roomKey, serverNowMs, loading, error])

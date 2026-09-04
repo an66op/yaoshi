@@ -21,11 +21,11 @@ const (
 	demoBalanceCents   = int64(1_000_000_000) // 10,000,000.00 元
 )
 
-// SeedExperienceMember creates local acceptance accounts only when they do not
-// exist.  A bootstrap must never turn a deliberately disabled account back on,
-// reset its password, move it to another room, or replace a member nickname.
-// Conflicting fixed usernames/room numbers fail visibly instead of silently
-// taking ownership of operator-managed data.
+// SeedExperienceMember creates explicitly requested local acceptance accounts
+// only when they do not exist. A bootstrap must never turn a deliberately
+// disabled account back on, reset its password, move it to another room, or
+// replace a member nickname. Conflicting fixed usernames/room numbers fail
+// visibly instead of silently taking ownership of operator-managed data.
 func SeedExperienceMember(db *gorm.DB) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		var tenant user.User

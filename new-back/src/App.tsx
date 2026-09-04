@@ -38,6 +38,7 @@ const WorkspaceGamesPage = lazy(() => import('./pages/WorkspaceGamesPage').then(
 const DataMaintenancePage = lazy(() => import('./pages/DataMaintenancePage').then(module => ({ default: module.DataMaintenancePage })))
 const FlyOrderPage = lazy(() => import('./pages/FlyOrderPage').then(module => ({ default: module.FlyOrderPage })))
 const GameDocumentationPage = lazy(() => import('./pages/GameDocumentationPage').then(module => ({ default: module.GameDocumentationPage })))
+const SystemLogsPage = lazy(() => import('./pages/SystemLogsPage').then(module => ({ default: module.SystemLogsPage })))
 
 const currentPath = () => resolveAdminPath(window.location.pathname)
 const allowPageNavigation = () => window.dispatchEvent(new Event('yaotu-before-navigate', { cancelable: true }))
@@ -202,7 +203,7 @@ function App() {
     : path === '/wallet' ? <WalletPage />
     : path === '/limits' ? <LimitsPage />
     : path === '/menu-management' ? <MenuManagementPage />
-    : path === '/audit' ? <ReportsPage initialReport="logs" />
+    : path === '/logs' ? <SystemLogsPage />
     : path === '/data-maintenance' ? <DataMaintenancePage />
     : path === '/game-guide' ? <GameDocumentationPage />
     : path === '/system' ? <SystemPage />

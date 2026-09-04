@@ -582,8 +582,8 @@ pg_dump_line="$(rg -n '^pg_dump \\' "$ROOT_DIR/scripts/postgres-backup.sh" | cut
   exit 1
 }
 
-# Fresh debug databases must provision the exact identities exercised by the
-# smoke test; acceptance may not depend on accounts left in a developer DB.
+# The explicit full-reset fixture must provision the exact identities exercised
+# by the smoke test; ordinary debug startup must remain safe for an existing DB.
 rg -Fq 'DefaultAdminPassword = "Admin8801!"' "$ROOT_DIR/backend/constants/system.go"
 rg -Fq '"username":"admin","password":"Admin8801!"' "$ROOT_DIR/scripts/local-smoke.sh"
 for fixture in \
@@ -595,6 +595,12 @@ for fixture in \
 done
 rg -Fq '"username":"suyang","password":"Room8801"' "$ROOT_DIR/scripts/local-smoke.sh"
 rg -Fq '"username":"wangzhetenant","password":"WzTenant8801"' "$ROOT_DIR/scripts/local-smoke.sh"
+rg -Fq 'SeedExperienceAccounts bool' "$ROOT_DIR/backend/services/bootstrap.go"
+rg -Fq 'SeedExperienceAccounts: cfg.Server.SeedExperienceAccounts' "$ROOT_DIR/backend/main.go"
+if rg -Fq 'BACKEND_SEED_EXPERIENCE_ACCOUNTS' "$ROOT_DIR/scripts/local-dev.sh"; then
+  echo "普通 debug 启动错误地默认启用体验账号夹具" >&2
+  exit 1
+fi
 rg -Fq 'export BACKEND_SERVER_BIND="${BACKEND_SERVER_BIND:-0.0.0.0}"' "$ROOT_DIR/scripts/local-dev.sh"
 rg -Fq 'export BACKEND_DATABASE_DBNAME="${BACKEND_DATABASE_DBNAME:-wangzhe}"' "$ROOT_DIR/scripts/local-dev.sh"
 rg -Fq 'PG_DB="${BACKEND_DATABASE_DBNAME:-wangzhe}"' "$ROOT_DIR/scripts/local-health.sh"

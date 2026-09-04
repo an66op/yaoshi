@@ -298,7 +298,7 @@ func (s *PlanContentService) StreamDetail(workspaceID uint64, position int, key 
 		draws := map[string]lottery.Draw{}
 		if len(issues) > 0 {
 			var rows []lottery.Draw
-			if err := s.db.Where("game_id = ? AND issue IN ?", "speed-racing", issues).Find(&rows).Error; err != nil {
+			if err := trustedDrawsForGame(s.db, "speed-racing").Where("issue IN ?", issues).Find(&rows).Error; err != nil {
 				return result, err
 			}
 			for _, row := range rows {

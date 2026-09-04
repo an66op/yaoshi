@@ -8,14 +8,18 @@ import (
 
 func TestGameRulesCoverExplicitCatalogWithoutNameInference(t *testing.T) {
 	families := map[string][]string{
-		"racing-v2":  {"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a"},
-		"digits5-v3": {"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1"},
-		"digits3-v2": {"official-fc3d", "official-pl3"},
-		"mark6-v2":   {"bingo-mark-six"},
-		pc28RuleV1:   {"pc-canada"},
-		pc28RuleV2:   {"canada-28"},
-		pc28RuleV3:   {"canada-20"},
-		"":           {"bingo-racing-b", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4", "hong-kong-mark-six", "new-macau-mark-six", "old-macau-mark-six", "happy8-mark-six", "official-qxc", "official-kl8", "official-tw-bingo", "official-tw-super-lotto", "official-tw-daily539", "official-tw-lotto649"},
+		"racing-v2":                {"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a", "bingo-racing-b"},
+		"digits5-v3":               {"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"},
+		"digits3-v2":               {"official-fc3d", "official-pl3"},
+		"mark6-v2":                 {"bingo-mark-six"},
+		hongKongMarkSixRuleVersion: {"hong-kong-mark-six"},
+		happy8MarkSixRuleVersion:   {"happy8-mark-six"},
+		newMacauMarkSixRuleVersion: {"new-macau-mark-six"},
+		oldMacauMarkSixRuleVersion: {"old-macau-mark-six"},
+		pc28RuleV1:                 {"pc-canada"},
+		pc28RuleV2:                 {"canada-28"},
+		pc28RuleV3:                 {"canada-20"},
+		"":                         {"official-qxc", "official-kl8", "official-tw-bingo", "official-tw-super-lotto", "official-tw-daily539", "official-tw-lotto649"},
 	}
 	count := 0
 	for version, ids := range families {
@@ -60,8 +64,10 @@ func TestGameRulesKeepShapeWindowsVersioned(t *testing.T) {
 		{gameID: "speed-ssc", valid: []int{1, 2, 3}, invalid: []int{0, 4, 5, 6}},
 		{gameID: "au-lucky-5", valid: []int{1, 2, 3}, invalid: []int{0, 4, 5, 6}},
 		{gameID: "bingo-ssc-1", valid: []int{1, 2, 3}, invalid: []int{0, 4, 5, 6}},
+		{gameID: "bingo-ssc-2", valid: []int{1, 2, 3}, invalid: []int{0, 4, 5, 6}},
+		{gameID: "bingo-ssc-3", valid: []int{1, 2, 3}, invalid: []int{0, 4, 5, 6}},
+		{gameID: "bingo-ssc-4", valid: []int{1, 2, 3}, invalid: []int{0, 4, 5, 6}},
 		{gameID: "sg-ssc", valid: []int{1, 2, 3}, invalid: []int{0, 4, 5, 6}},
-		{gameID: "bingo-ssc-2", invalid: []int{0, 1, 2, 3, 4, 5, 6}},
 	} {
 		game := &lottery.Game{ID: test.gameID}
 		for _, code := range []string{"leopard", "straight", "pair", "half_straight", "mixed"} {
@@ -92,7 +98,7 @@ func TestGameRulesCatalogIsGameSpecificAndParseable(t *testing.T) {
 		{"sg-ssc", 9, ""},
 		{"official-fc3d", 9, "总和 / 总和尾"},
 		{"pc-canada", len(pc28PlaySpecs()), ""},
-		{"bingo-mark-six", len(markSixV2Specs), ""},
+		{"bingo-mark-six", len(markSixPlayCatalog()), ""},
 	} {
 		catalog := PlayCatalogForGame(test.gameID)
 		profile, _ := rulesForGame(&lottery.Game{ID: test.gameID})

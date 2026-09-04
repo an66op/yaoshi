@@ -9,7 +9,7 @@ import { CurrentRules, GameDocumentationPage } from './GameDocumentationPage'
 const game: AdminGame = {
   id: 'sg-ssc', code: 'SGSSC', name: 'SG时时彩', category: 'ssc', lobby_category: 'lottery', lobby_sort_order: 1,
   badge: '', badge_color: '', enabled: true, issue: '10001', next_draw_at: '2026-09-03T00:01:00Z', turnover: 0, profit: 0,
-  source_kind: 'platform', source_name: '王者开奖', source_url: '', sync_status: 'ok', last_sync_at: null, last_sync_error: '', schedule_mode: 'interval',
+  source_kind: 'external', source_name: 'SG时时彩母源（163:64＋115校验）', source_url: 'http://23.97.72.253:50163/', sync_status: 'ok', last_sync_at: null, last_sync_error: '', schedule_mode: 'external-feed',
   rules_ready: true, rule_version: 'digits5-v3',
 }
 const catalog: PlayCatalogItem[] = [
@@ -39,8 +39,16 @@ describe('GameDocumentationPage', () => {
     expect(html).toContain('待配置')
     const table = html.match(/<table[\s\S]*?<\/table>/)?.[0] ?? ''
     expect([...table.matchAll(/<th\b/g)]).toHaveLength(4)
-    expect(html).toContain('王者平台自开')
-    expect(html).toContain('不宣称与SG外部开奖同步')
+    expect(html).toContain('163目录ID64是唯一号码母源')
+    expect(html).toContain('115的sgssc产品只读校验')
+    expect(html).toContain('最近连续24期')
+    expect(html).toContain('不能替代或补写ID64缺失的号码')
+    expect(html).toContain('暂停导入、投注及未核验期结算')
+    expect(html).toContain('按匹配的注单来源快照幂等处理')
+    expect(html).toContain('不保证上游独立')
+    expect(html).toContain('ID169属于另一套开奖结果系统')
+    expect(html).not.toContain('api.api168168.com')
+    expect(html).not.toContain('王者开奖')
   })
 
   it('never borrows a removed catalog default when no backend quote exists', () => {

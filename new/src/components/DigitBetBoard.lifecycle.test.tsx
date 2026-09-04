@@ -55,7 +55,7 @@ describe('digit lottery board lifecycle and submission gates', () => {
     expect(props.onClose).toHaveBeenCalledOnce()
   })
 
-  it.each(['speed-ssc', 'sg-ssc', 'bingo-ssc-1', 'au-lucky-5'])('offers five independent balls numbered 0–9 for %s', id => {
+  it.each(['speed-ssc', 'sg-ssc', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4', 'au-lucky-5'])('offers five independent balls numbered 0–9 for %s', id => {
     props.game = { ...game, id, ruleVersion: 'digits5-v3' }
     props.ruleVersion = 'digits5-v3'
     expect(label('数字彩投注面板').props).toMatchObject(controlSurfaceProps)
@@ -129,7 +129,7 @@ describe('digit lottery board lifecycle and submission gates', () => {
     expect(choice('2').props['aria-pressed']).toBe(true)
   })
 
-  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('offers three independent shape segments and one independently-priced tie group for exact v3 %s', id => {
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('offers three independent shape segments and one independently-priced tie group for exact v3 %s', id => {
     props.game = { ...game, id, ruleVersion: 'digits5-v3' }
     props.ruleVersion = 'digits5-v3'
     props.odds = { ...props.odds, dragon_tiger_tie: 8.75 }
@@ -152,6 +152,31 @@ describe('digit lottery board lifecycle and submission gates', () => {
     expect(props.onConfirm).toHaveBeenCalledWith('前三/豹子/20#中三/顺子/20#后三/对子/20#1/和/20')
   })
 
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5'])('opens every newly priced v3 shape and tie option from the authoritative %s response', id => {
+    props.game = { ...game, id, ruleVersion: 'digits5-v3' }
+    props.ruleVersion = 'digits5-v3'
+    props.odds = {
+      ball_1_5: 9.9, two_sided: 1.993, dragon_tiger: 1.993, dragon_tiger_tie: 8.7,
+      leopard: 80, straight: 15.08, pair: 3.38, half_straight: 2.58, mixed: 3.08,
+    }
+    props.oddsInfo = {
+      game_id: id, game_name: props.game.title, show_odds: true, rules_ready: true, rule_version: 'digits5-v3',
+      items: Object.entries(props.odds).map(([play_code, value]) => ({
+        play_code, play_name: play_code, odds: value, min_bet: 1, max_bet: 1000, max_user_period: 5000,
+      })),
+    }
+    tab('三段形态')
+    for (const item of digitPatterns) {
+      expect(choice(item.selection).props.disabled).toBe(false)
+      clickChoice(item.selection)
+    }
+    tab('龙虎')
+    expect(choice('和').props.disabled).toBe(false)
+    clickChoice('和')
+    confirm().props.onClick!()
+    expect(props.onConfirm).toHaveBeenCalledWith('前三/豹子/20#前三/顺子/20#前三/对子/20#前三/半顺/20#前三/杂六/20#1/和/20')
+  })
+
   it('disables a missing v3 tie price without disabling the configured dragon price', () => {
     props.game = { ...game, id: 'speed-ssc', rulesReady: true, ruleVersion: 'digits5-v3' }
     props.ruleVersion = 'digits5-v3'
@@ -163,7 +188,7 @@ describe('digit lottery board lifecycle and submission gates', () => {
     expect(confirm().props.disabled).toBe(false)
   })
 
-  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1'])('requires the exact current version before %s offers choices', id => {
+  it.each(['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('requires the exact current version before %s offers choices', id => {
     for (const ruleVersion of [undefined, '', 'digits5-v2', 'digits5-v4']) {
       props.game = { ...game, id, ruleVersion }
       props.ruleVersion = ruleVersion
@@ -175,7 +200,8 @@ describe('digit lottery board lifecycle and submission gates', () => {
     }
   })
 
-  it.each(['bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('never opens a borrowed five-ball board for unverified %s', id => {
+  it('never opens a five-ball board for Bingo Racing B', () => {
+    const id = 'bingo-racing-b'
     props.game = { ...game, id, ruleVersion: 'digits5-v3' }
     props.ruleVersion = 'digits5-v3'
     expect(choice('0')).toBeUndefined()

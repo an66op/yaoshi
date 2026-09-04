@@ -3,6 +3,7 @@ import { isValidElement, type DependencyList, type ReactElement, type ReactNode,
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminGame, GameOddsLimits, PlayCatalogItem, PlayLimitItem, UpdateOddsLimitsInput } from '../api'
 import { GameOddsNavigation, PlatformOddsGrid } from '../components/OddsEditors'
+import { PlatformOddsRow, PlatformOddsRowView } from '../components/PlatformOddsRow'
 import { LimitsPage } from './LimitsPage'
 import { oddsDraftItems } from '../oddsEditing'
 
@@ -13,10 +14,11 @@ class PageHarness {
   private slots: Slot[] = []
   private cursor = 0
   private effects = new Set<number>()
+  stateUpdates = 0
   render<T>(factory: () => T): T { this.cursor = 0; return factory() }
   useState<T>(initial: T | (() => T)): [T, (value: SetStateAction<T>) => void] {
     const slot = this.slots[this.cursor++] ??= { value: typeof initial === 'function' ? (initial as () => T)() : initial }
-    return [slot.value as T, value => { slot.value = typeof value === 'function' ? (value as (previous: T) => T)(slot.value as T) : value }]
+    return [slot.value as T, value => { this.stateUpdates++; slot.value = typeof value === 'function' ? (value as (previous: T) => T)(slot.value as T) : value }]
   }
   useRef<T>(initial: T) {
     const slot = this.slots[this.cursor++] ??= { value: { current: initial } }
@@ -59,6 +61,7 @@ vi.mock('react', async importOriginal => ({
   useMemo: <T,>(factory: () => T, deps: DependencyList) => runtime.hooks!.useMemo(factory, deps),
   useCallback: <T,>(callback: T, deps: DependencyList) => runtime.hooks!.useMemo(() => callback, deps),
   useEffect: (effect: () => void | (() => void), deps?: DependencyList) => runtime.hooks!.useEffect(effect, deps),
+  useLayoutEffect: (effect: () => void | (() => void), deps?: DependencyList) => runtime.hooks!.useEffect(effect, deps),
 }))
 vi.mock('../api', () => ({ adminApi: {
   games: runtime.games, oddsLimits: runtime.oddsLimits, playCatalog: runtime.playCatalog,
@@ -76,6 +79,10 @@ type Element = ReactElement<Props>
 function elements(node: ReactNode): Element[] {
   if (Array.isArray(node)) return node.flatMap(elements)
   if (!isValidElement<Props>(node)) return []
+  if (node.type === PlatformOddsRow) {
+    const props = node.props as unknown as Parameters<typeof PlatformOddsRowView>[0]
+    return [node, ...elements(PlatformOddsRowView(props))]
+  }
   return [node, ...elements(node.props.children), ...elements(node.props.actions), ...elements(node.props.control)]
 }
 function text(node: ReactNode): string {
@@ -193,6 +200,26 @@ afterEach(() => {
 })
 
 describe('per-game platform odds lifecycle', () => {
+  it.each(['resolve', 'abort'] as const)('cancels the initial games request on unmount and ignores its later %s', async outcome => {
+    const pendingGames = deferred<AdminGame[]>()
+    runtime.games.mockReturnValueOnce(pendingGames.promise)
+    render()
+    await vi.runOnlyPendingTimersAsync()
+    expect(runtime.games).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal))
+    const signal = runtime.games.mock.calls[0][0] as AbortSignal
+    expect(signal.aborted).toBe(false)
+    runtime.hooks!.unmount()
+    expect(signal.aborted).toBe(true)
+    const updatesAtUnmount = runtime.hooks!.stateUpdates
+    if (outcome === 'resolve') pendingGames.resolve(allGames)
+    else pendingGames.reject(new DOMException('已取消', 'AbortError'))
+    for (let index = 0; index < 16; index++) await Promise.resolve()
+    expect(runtime.hooks!.stateUpdates).toBe(updatesAtUnmount)
+    expect(runtime.oddsLimits).not.toHaveBeenCalled()
+    expect(runtime.playCatalog).not.toHaveBeenCalled()
+    expect(runtime.showMessage).not.toHaveBeenCalled()
+  })
+
   it('distinguishes an audited backend save from a legacy price awaiting confirmation', () => {
     const catalog = Object.fromEntries([
       catalogItem('sum_big', '冠亚和大', '冠亚和', '冠亚和大', '冠亚/大/20'),
@@ -206,6 +233,7 @@ describe('per-game platform odds lifecycle', () => {
       catalog,
       onChange: vi.fn(),
     })
+    runtime.hooks!.flushEffects()
     expect(text(root)).toContain('冠亚和')
     expect(chips(root)).toContain('后台已确认')
     expect(chips(root)).toContain('未配置 / 停用')
@@ -245,8 +273,8 @@ describe('per-game platform odds lifecycle', () => {
 
   it('loads racing odds and the matching four-play guide together', async () => {
     let root = await ready()
-    expect(runtime.oddsLimits).toHaveBeenCalledExactlyOnceWith(racing.id)
-    expect(runtime.playCatalog).toHaveBeenCalledExactlyOnceWith(racing.id)
+    expect(runtime.oddsLimits).toHaveBeenCalledExactlyOnceWith(racing.id, expect.any(AbortSignal))
+    expect(runtime.playCatalog).toHaveBeenCalledExactlyOnceWith(racing.id, runtime.oddsLimits.mock.calls[0][1])
     expect(Object.keys(grid(root).props.catalog!)).toEqual(['ball_1_5', 'two_sided', 'dragon_tiger', 'sum'])
     expect(grid(root).props.items).toEqual(limitsFor(racing).items)
     expect(chips(root)).toContain('运行中')
@@ -262,8 +290,8 @@ describe('per-game platform odds lifecycle', () => {
 
   it('switches the guide and grid to SSC independent tie and three shape windows, never retired sums', async () => {
     let root = await select(await ready(), digits.id)
-    expect(runtime.oddsLimits).toHaveBeenLastCalledWith(digits.id)
-    expect(runtime.playCatalog).toHaveBeenLastCalledWith(digits.id)
+    expect(runtime.oddsLimits).toHaveBeenLastCalledWith(digits.id, expect.any(AbortSignal))
+    expect(runtime.playCatalog).toHaveBeenLastCalledWith(digits.id, runtime.oddsLimits.mock.calls.at(-1)![1])
     expect(grid(root).props.catalog!.dragon_tiger_tie).toMatchObject({ play_name: '龙虎和', description: '第1球与第5球相等' })
     expect(grid(root).props.items).toHaveLength(9)
     button(root, '玩法说明').props.onClick!()
@@ -322,9 +350,14 @@ describe('per-game platform odds lifecycle', () => {
     const oldCatalog = deferred<PlayCatalogItem[]>()
     runtime.playCatalog.mockImplementation((id: string) => id === racing.id ? oldCatalog.promise : Promise.resolve(digitsCatalog))
     let root = await ready()
+    const oldSignal = runtime.oddsLimits.mock.calls[0][1] as AbortSignal
     expect(grid(root)).toBeUndefined()
+    expect(chips(root)).toContain('正在读取配置')
+    expect(chips(root)).not.toContain('0 个玩法 · 0 项已启用')
     expect(button(root, '保存设置').props.disabled).toBe(true)
     root = await select(root, digits.id)
+    expect(oldSignal.aborted).toBe(true)
+    expect(runtime.playCatalog.mock.calls[0][1]).toBe(oldSignal)
     expect(grid(root).props.items).toEqual(limitsFor(digits).items)
     oldCatalog.resolve(racingCatalog)
     root = await settle()
@@ -332,6 +365,146 @@ describe('per-game platform odds lifecycle', () => {
     expect(grid(root).props.items).toEqual(limitsFor(digits).items)
     expect(grid(root).props.catalog!.dragon_tiger_tie.play_name).toBe('龙虎和')
     expect(alerts(root, 'error')).toEqual([])
+  })
+
+  it('cancels a pending read pair and retries the same game without accepting its late results', async () => {
+    const oldOdds = deferred<GameOddsLimits>()
+    const oldCatalog = deferred<PlayCatalogItem[]>()
+    runtime.oddsLimits.mockReturnValueOnce(oldOdds.promise)
+    runtime.playCatalog.mockReturnValueOnce(oldCatalog.promise)
+    let root = await ready()
+    const oldSignal = runtime.oddsLimits.mock.calls[0][1] as AbortSignal
+    expect(runtime.playCatalog.mock.calls[0][1]).toBe(oldSignal)
+    expect(oldSignal.aborted).toBe(false)
+    expect(button(root, '取消并重试').props.disabled).toBe(false)
+    expect(chips(root)).toContain('正在读取配置')
+    expect(button(root, '保存设置').props.disabled).toBe(true)
+    expect(button(root, '清空当前').props.disabled).toBe(true)
+
+    const latest = { ...limitsFor(racing), config_revision: 'retried-revision', items: limitsFor(racing).items.map(item => ({ ...item, max_bet: 2222 })) }
+    runtime.oddsLimits.mockResolvedValueOnce(latest)
+    button(root, '取消并重试').props.onClick!()
+    expect(oldSignal.aborted).toBe(true)
+    root = await settle()
+    const newSignal = runtime.oddsLimits.mock.calls[1][1] as AbortSignal
+    expect(newSignal).not.toBe(oldSignal)
+    expect(newSignal.aborted).toBe(false)
+    expect(grid(root).props.items).toEqual(latest.items)
+    expect(button(root, '刷新配置').props.disabled).toBe(false)
+
+    // These mocks deliberately ignore AbortSignal, exercising the generation guard.
+    oldOdds.resolve(limitsFor(racing))
+    oldCatalog.resolve([])
+    root = await settle()
+    expect(grid(root).props.items).toEqual(latest.items)
+    expect(Object.keys(grid(root).props.catalog!)).toHaveLength(racingCatalog.length)
+    expect(alerts(root, 'error')).toEqual([])
+    expect(runtime.showMessage).toHaveBeenCalledExactlyOnceWith('极速赛车 赔率限额已刷新')
+  })
+
+  it.each(['odds', 'catalog'] as const)('cancels the sibling after a %s failure and leaves a working retry action', async failedEndpoint => {
+    const pendingOdds = deferred<GameOddsLimits>()
+    const pendingCatalog = deferred<PlayCatalogItem[]>()
+    runtime.oddsLimits.mockReturnValueOnce(pendingOdds.promise)
+    runtime.playCatalog.mockReturnValueOnce(pendingCatalog.promise)
+    let root = await ready()
+    const signal = runtime.oddsLimits.mock.calls[0][1] as AbortSignal
+    expect(runtime.playCatalog.mock.calls[0][1]).toBe(signal)
+    const timeout = new Error('请求超时，请稍后重试')
+    if (failedEndpoint === 'odds') pendingOdds.reject(timeout)
+    else pendingCatalog.reject(timeout)
+    root = await settle()
+    expect(signal.aborted).toBe(true)
+    expect(alerts(root, 'error')).toEqual([timeout.message])
+    expect(grid(root)).toBeUndefined()
+    expect(button(root, '保存设置').props.disabled).toBe(true)
+    expect(button(root, '清空当前').props.disabled).toBe(true)
+    expect(button(root, '刷新配置').props.disabled).toBe(false)
+
+    button(root, '刷新配置').props.onClick!()
+    root = await settle()
+    expect(grid(root).props.items).toEqual(limitsFor(racing).items)
+    expect(alerts(root, 'error')).toEqual([])
+    if (failedEndpoint === 'odds') pendingCatalog.resolve([])
+    else pendingOdds.resolve({ ...limitsFor(racing), items: [] })
+    root = await settle()
+    expect(grid(root).props.items).toEqual(limitsFor(racing).items)
+  })
+
+  it('silences AbortError from an old pair when switching to a new game', async () => {
+    const oldOdds = deferred<GameOddsLimits>()
+    const oldCatalog = deferred<PlayCatalogItem[]>()
+    runtime.oddsLimits.mockImplementationOnce((_id: string, signal: AbortSignal) => {
+      signal.addEventListener('abort', () => oldOdds.reject(new DOMException('已取消', 'AbortError')), { once: true })
+      return oldOdds.promise
+    })
+    runtime.playCatalog.mockImplementationOnce((_id: string, signal: AbortSignal) => {
+      signal.addEventListener('abort', () => oldCatalog.reject(new DOMException('已取消', 'AbortError')), { once: true })
+      return oldCatalog.promise
+    })
+    const root = await select(await ready(), digits.id)
+    expect(grid(root).props.items).toEqual(limitsFor(digits).items)
+    expect(alerts(root, 'error')).toEqual([])
+    expect(runtime.showMessage).not.toHaveBeenCalled()
+  })
+
+  it('aborts both reads on unmount and ignores completion even if a transport does not honor cancellation', async () => {
+    const pendingOdds = deferred<GameOddsLimits>()
+    const pendingCatalog = deferred<PlayCatalogItem[]>()
+    runtime.oddsLimits.mockReturnValueOnce(pendingOdds.promise)
+    runtime.playCatalog.mockReturnValueOnce(pendingCatalog.promise)
+    await ready()
+    const signal = runtime.oddsLimits.mock.calls[0][1] as AbortSignal
+    expect(runtime.playCatalog.mock.calls[0][1]).toBe(signal)
+    runtime.hooks!.unmount()
+    expect(signal.aborted).toBe(true)
+    const updatesAtUnmount = runtime.hooks!.stateUpdates
+    pendingOdds.resolve(limitsFor(racing))
+    pendingCatalog.resolve(racingCatalog)
+    for (let index = 0; index < 16; index++) await Promise.resolve()
+    expect(runtime.hooks!.stateUpdates).toBe(updatesAtUnmount)
+    expect(runtime.showMessage).not.toHaveBeenCalled()
+  })
+
+  it('retains all 77 Mark Six rows for saving regardless of the visible editor subset', async () => {
+    const markSix = game('bingo-mark-six', '宾果六合彩')
+    const fullCatalog = Array.from({ length: 77 }, (_, index) => catalogItem(
+      index === 76 ? 'marksix_special_half' : `marksix_fixture_${index}`,
+      index === 76 ? '特码半特' : `六合彩玩法${index + 1}`, '六合彩', '测试完整目录', '',
+    ))
+    const initial: GameOddsLimits = {
+      game_id: markSix.id, game_name: markSix.name, items: itemsFor(fullCatalog),
+      rules_ready: true, rule_version: 'mark6-v2', config_revision: 'marksix-revision-1',
+    }
+    runtime.games.mockResolvedValue([markSix])
+    runtime.oddsLimits.mockResolvedValue(initial)
+    runtime.playCatalog.mockResolvedValue(fullCatalog)
+    runtime.updateOddsLimits.mockImplementation(async (_id: string, input: UpdateOddsLimitsInput) => ({ ...initial, items: persisted(input.items), config_revision: 'marksix-revision-2' }))
+    let root = await ready()
+    expect(grid(root).props.items).toHaveLength(77)
+    const edit = grid(root).props.onChange!
+    const edited = initial.items.map((item, index) => index === 76 ? { ...item, odds: 3.72 } : item)
+    edit(edited)
+    root = render()
+    expect(grid(root).props.onChange).toBe(edit)
+    expect(chips(root)).toContain('1 项未保存')
+    // A lazy grid must never submit only its mounted rows. Keep the full-catalog guard.
+    edit(edited.slice(0, 12))
+    root = render()
+    button(root, '保存设置').props.onClick!()
+    root = render()
+    expect(runtime.updateOddsLimits).not.toHaveBeenCalled()
+    expect(alerts(root, 'error')).toContain('必须提交当前彩种的完整玩法目录，请刷新后重试')
+    edit(edited)
+    root = render()
+    button(root, '保存设置').props.onClick!()
+    root = await settle()
+    expect(runtime.updateOddsLimits).toHaveBeenCalledExactlyOnceWith(markSix.id, {
+      expected_rule_version: 'mark6-v2', expected_revision: 'marksix-revision-1',
+      items: oddsDraftItems(edited, initial.items),
+    })
+    expect(runtime.updateOddsLimits.mock.calls[0][1].items).toHaveLength(77)
+    expect(grid(root).props.items).toEqual(persisted(edited))
   })
 
   it('ignores an old odds rejection after the new game has loaded', async () => {
@@ -410,7 +583,7 @@ describe('per-game platform odds lifecycle', () => {
     expect(text(gameNavigation)).toContain(racing.name)
     expect(text(gameNavigation)).not.toContain(digits.name)
     expect(grid(root).props.items).toEqual(oddsDraftItems(edited, limitsFor(racing).items))
-    expect(runtime.oddsLimits).toHaveBeenCalledExactlyOnceWith(racing.id)
+    expect(runtime.oddsLimits).toHaveBeenCalledExactlyOnceWith(racing.id, expect.any(AbortSignal))
 
     runtime.confirm.mockReturnValue(true)
     button(gameNavigation, '168').props.onClick!()
@@ -473,7 +646,7 @@ describe('per-game platform odds lifecycle', () => {
     expect(text(gameNavigation)).toContain(racing.name)
     expect(text(gameNavigation)).not.toContain(digits.name)
     expect(runtime.confirm).toHaveBeenCalledTimes(confirmCount)
-    expect(runtime.oddsLimits).toHaveBeenCalledExactlyOnceWith(racing.id)
+    expect(runtime.oddsLimits).toHaveBeenCalledExactlyOnceWith(racing.id, expect.any(AbortSignal))
     expect(operationMock).toHaveBeenCalledTimes(1)
 
     pending.resolve(limitsFor(racing))
@@ -668,7 +841,11 @@ describe('per-game platform odds lifecycle', () => {
   it('wires selected-row batch editing without writing to the API or changing unselected rows', () => {
     const onChange = vi.fn()
     const props = { items: limitsFor(racing).items, catalog: Object.fromEntries(racingCatalog.map(item => [item.play_code, item])), onChange }
-    const renderGrid = () => runtime.hooks!.render(() => PlatformOddsGrid(props))
+    const renderGrid = () => {
+      const root = runtime.hooks!.render(() => PlatformOddsGrid(props))
+      runtime.hooks!.flushEffects()
+      return root
+    }
     let root = renderGrid()
     ofType(root, Checkbox).find(item => item.props.inputProps?.['aria-label'] === '选择指定名次号码')!.props.onChange!({ target: { value: '' } }, true)
     root = renderGrid()

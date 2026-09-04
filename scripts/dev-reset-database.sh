@@ -11,7 +11,9 @@ usage() {
 
 此工具会删除并重新创建本地开发数据库的 public schema。全部业务数据、
 账号、配置、旧迁移记录及孤立旧表都会清空；后端下次启动时重新建表、
-执行全部版本化迁移并生成本地初始账号。工具不会删除数据库本身。
+执行全部版本化迁移并生成本地初始账号。必须显式设置
+BACKEND_SEED_EXPERIENCE_ACCOUNTS=true，并让重建后首次后端启动沿用同一环境。
+工具不会删除数据库本身。
 不传 ENV_FILE 时，必须由当前进程环境显式提供全部 BACKEND_* 变量。
 USAGE
 }
@@ -44,6 +46,7 @@ if [[ -n "$env_file" ]]; then
   unset BACKEND_DATABASE_USER BACKEND_DATABASE_PASSWORD BACKEND_DATABASE_DBNAME
   unset BACKEND_DATABASE_SSLMODE BACKEND_SERVER_PORT BACKEND_ALLOW_DEVELOPMENT_RESET
   unset BACKEND_DEVELOPMENT_RESET_DATABASE BACKEND_DEVELOPMENT_RESET_SENTINEL_TOKEN
+  unset BACKEND_SEED_EXPERIENCE_ACCOUNTS
   load_backend_env "$env_file"
 fi
 
@@ -74,6 +77,10 @@ case "$BACKEND_DATABASE_SSLMODE" in
   disable|allow|prefer|require|verify-ca|verify-full) ;;
   *) echo "BACKEND_DATABASE_SSLMODE 不正确" >&2; exit 1 ;;
 esac
+[[ "${BACKEND_SEED_EXPERIENCE_ACCOUNTS:-}" == "true" ]] || {
+  echo "完整重建必须显式设置 BACKEND_SEED_EXPERIENCE_ACCOUNTS=true" >&2
+  exit 1
+}
 
 echo "目标数据库：$BACKEND_DATABASE_HOST:$BACKEND_DATABASE_PORT/$BACKEND_DATABASE_DBNAME"
 echo "动作：完整备份后 DROP SCHEMA public CASCADE，再创建空 public schema。"
@@ -289,5 +296,5 @@ write_external_receipt "bootstrap_pending"
 echo "本地开发数据库 public schema 已重建为空。"
 echo "备份：$backup_file"
 echo "外部凭证：$receipt_file"
-echo "下一步：启动后端，等待全部版本化 SQL 迁移和本地数据初始化完成。"
+echo "下一步：沿用 BACKEND_SEED_EXPERIENCE_ACCOUNTS=true 的同一环境启动后端，等待迁移和本地数据初始化完成。"
 echo "完成后运行 dev-reset-complete-receipt.sh；只有严格只读验收通过后凭证才会变为 complete。"

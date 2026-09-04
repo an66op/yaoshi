@@ -53,6 +53,12 @@ describe('interface test menu boundary', () => {
     expect(DEFAULT_AGENT_MENU.some(item => item.path === '/interface-test')).toBe(false)
   })
 
+  it('upgrades the old audit entry to the dedicated system log page', () => {
+    expect(normalizeAdminMenu([]).find(item => item.path === '/logs')).toMatchObject({ label: '日志', group: '系统管理', visible: true })
+    expect(normalizeAdminMenu([{ path: '/audit', label: '操作审计', order: 188, visible: false }]).find(item => item.path === '/logs')).toMatchObject({ label: '日志', order: 188, visible: true })
+    expect(normalizeAdminMenu([]).some(item => item.path === '/audit')).toBe(false)
+  })
+
   it('keeps the retired lottery-network entry hidden even if legacy settings enabled it', () => {
     const platform = normalizeAdminMenu([{ path: '/lottery-network', visible: true }])
     expect(platform.find(item => item.path === '/lottery-network')?.visible).toBe(false)

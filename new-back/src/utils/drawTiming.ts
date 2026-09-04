@@ -67,11 +67,27 @@ export function describeGameSchedule(game: GameSchedule | undefined): { interval
   }
 }
 
-/** Respect error/settlement states; wall time only refines an active period. */
-export function describeIssueState(game: Pick<AdminGame, 'issue_status' | 'accept_at' | 'seal_at' | 'next_draw_at'> | undefined, now: number): string {
+/** A missing current issue must never be filled with a historical draw. */
+export function currentIssueLabel(game: Pick<AdminGame, 'current_issue'> | undefined): string {
+  return game?.current_issue || '—'
+}
+
+export function gameSourceLabel(game: Pick<AdminGame, 'source_name' | 'source_kind'> | undefined): string {
+  return game?.source_name || (game?.source_kind === 'official' || game?.source_kind === 'external' ? '外部开奖源' : '平台开奖')
+}
+
+type IssueStateGame = Pick<AdminGame, 'issue_status' | 'accept_at' | 'seal_at' | 'next_draw_at'>
+  & Partial<Pick<AdminGame, 'enabled' | 'source_healthy' | 'rules_ready'>>
+
+/** Respect availability/error states; wall time only refines an active period. */
+export function describeIssueState(game: IssueStateGame | undefined, now: number): string {
   if (!game) return '等待期号'
+  if (game.enabled === false) return '彩种已关闭'
+  if (game.source_healthy === false) return '开奖源异常 · 已停盘'
+  if (game.rules_ready === false) return '玩法待配置'
   switch (game.issue_status) {
     case 'error': return '开奖异常'
+    case 'abnormal': return '开奖异常'
     case 'settling': return '结算中'
     case 'settled': return '已结算'
   }

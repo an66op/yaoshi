@@ -21,11 +21,19 @@ type Bet struct {
 	// Stakes freeze their exact rule contract. Empty or unknown versions are
 	// invalid for settlement and are never inferred from the draw shape.
 	RuleVersion string `gorm:"size:32;not null;default:'';uniqueIndex:idx_bet_dedupe" json:"rule_version,omitempty"`
+	// DrawSourceRevision freezes the verified draw contract at placement. Empty
+	// legacy values are never inferred from a game's current source settings.
+	DrawSourceRevision string `gorm:"size:64;not null;default:''" json:"draw_source_revision,omitempty"`
 	// RequestReference links an idempotent debit ledger to the exact bet rows
 	// committed by that request. Empty references retain legacy aggregation.
 	RequestReference string  `gorm:"size:180;not null;default:'';index:idx_bet_request_evidence,priority:3;uniqueIndex:idx_bet_dedupe" json:"-"`
 	AmountCents      int64   `gorm:"not null" json:"-"`
 	Odds             float64 `gorm:"not null;default:1.993" json:"odds"`
+	// OddsTerms is an immutable, versioned JSON object for a single ticket
+	// whose mutually exclusive winning tiers have different prices. Odds keeps
+	// the primary quote; this snapshot prevents settlement from reading live
+	// administrator odds for the alternate tier.
+	OddsTerms string `gorm:"type:jsonb;not null;default:'{}'" json:"-"`
 	// ValidTurnoverCents is separate from the actual stake. New tickets freeze
 	// the stake here; settlement may set it to zero for a push or pc28-v1
 	// 13/14 without changing actual GGR. NULL preserves legacy rows so reports

@@ -22,6 +22,7 @@ export type LotteryGame = {
   accept_at?: string | null
   source_kind: string
   source_name: string
+  source_url?: string
   sync_status: string
   last_sync_at?: string | null
   last_sync_error?: string

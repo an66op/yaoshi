@@ -72,6 +72,22 @@ var api168MarkSixBindings = []api168Binding{
 	{GameID: "old-macau-mark-six", LotCode: "10093", Series: api168LHC},
 }
 
+func api168MarkSixBindingForGame(gameID string) (api168Binding, bool) {
+	for _, binding := range api168MarkSixBindings {
+		if binding.GameID == strings.TrimSpace(gameID) {
+			return binding, true
+		}
+	}
+	return api168Binding{}, false
+}
+
+func api168MarkSixSourceBound(game *lottery.Game, binding api168Binding) bool {
+	return game != nil && game.ID == binding.GameID && strings.EqualFold(strings.TrimSpace(game.SourceKind), "external") &&
+		strings.TrimSpace(game.SourceName) == legacy168HighFreqName && strings.TrimSpace(game.SourceURL) == legacy168HighFreqURL
+}
+
+var err168MarkSixBindingChanged = errors.New("168六合彩来源绑定已变化")
+
 type api168BingoBinding struct {
 	GameID                string
 	Transform             func([]int) []int
@@ -1047,40 +1063,25 @@ func bingoMarkSixNumbers(raw []int) []int {
 }
 
 func Ensure168SourceGames(db *gorm.DB) error {
-	ids := make([]string, 0, 32)
-	for _, item := range api168HighFreqBindings {
-		ids = append(ids, item.GameID)
-	}
+	ids := make([]string, 0, len(api168MarkSixBindings))
 	for _, item := range api168MarkSixBindings {
 		ids = append(ids, item.GameID)
 	}
-	for _, item := range api168BingoBindings {
-		ids = append(ids, item.GameID)
-	}
 	for _, id := range ids {
-		if binding, ok := api168BingoBindingForGame(id); ok && binding.RequiresOrderedSource {
-			// This path is also used by an administrator-triggered catalog sync.
-			// Do not downgrade an already verified source to stale on every call;
-			// the revision gate below handles only legacy/unverified rows.
+		if _, registered := source163MarkSixBindingForGame(id); registered {
 			continue
-		}
-		sourceName := "168开奖网"
-		sourceURL := "https://kj138138.com/view/api/index.html"
-		syncStatus := "idle"
-		if binding, ok := api168BingoBindingForGame(id); ok {
-			sourceName, sourceURL, syncStatus, _ = bingoBindingSourceDefaults(binding)
 		}
 		updates := map[string]any{
 			// These feeds are public third-party aggregation sources, not issuing
 			// authorities. Keep that distinction explicit for the API/UI and audits.
 			"source_kind": "external",
-			"source_name": sourceName,
-			"source_url":  sourceURL,
-			"sync_status": syncStatus,
+			"source_name": "168开奖网",
+			"source_url":  "https://kj138138.com/view/api/index.html",
+			"sync_status": "idle",
 		}
 		if err := db.Model(&lottery.Game{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 			return err
 		}
 	}
-	return EnsureBingoOrderedSourceRevision(db)
+	return nil
 }

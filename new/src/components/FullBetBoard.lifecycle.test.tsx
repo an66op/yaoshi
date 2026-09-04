@@ -283,8 +283,11 @@ describe('bet board click feedback and generated commands', () => {
     expect(choice('大').props['aria-pressed']).toBe(true)
   })
 
-  it('uses selection-level crown-sum prices for Bingo Racing A', () => {
-    props.game = { ...game, id: 'bingo-racing-a', title: '宾果赛车(A)', rulesReady: true, ruleVersion: 'racing-v2' }
+  it.each([
+    ['bingo-racing-a', '宾果赛车(A)'],
+    ['bingo-racing-b', '宾果赛车(B)'],
+  ])('uses selection-level crown-sum prices for %s', (gameId, title) => {
+    props.game = { ...game, id: gameId, title, rulesReady: true, ruleVersion: 'racing-v2' }
     props.odds = { sum_big: 2.18, sum_11: 8.5 }
     tab('冠亚和')
     expect(choice('大').props.disabled).toBe(false)
@@ -300,12 +303,15 @@ describe('bet board click feedback and generated commands', () => {
     expect(props.onConfirm).toHaveBeenCalledWith('冠亚/大/20#冠亚/11/20')
   })
 
-  it('keeps an unconfigured A crown-sum option disabled when the room hides numeric odds', () => {
-    props.game = { ...game, id: 'bingo-racing-a', title: '宾果赛车(A)', rulesReady: true, ruleVersion: 'racing-v2' }
+  it.each([
+    ['bingo-racing-a', '宾果赛车(A)'],
+    ['bingo-racing-b', '宾果赛车(B)'],
+  ])('keeps an unconfigured crown-sum option disabled for %s when the room hides numeric odds', (gameId, title) => {
+    props.game = { ...game, id: gameId, title, rulesReady: true, ruleVersion: 'racing-v2' }
     props.odds = {}
     props.oddsHidden = true
     props.oddsInfo = {
-      game_id: 'bingo-racing-a', game_name: '宾果赛车(A)', show_odds: false,
+      game_id: gameId, game_name: title, show_odds: false,
       items: [{ play_code: 'sum_big', play_name: '冠亚和大', odds: 0, min_bet: 1, max_bet: 1000, max_user_period: 5000 }],
     }
     tab('冠亚和')

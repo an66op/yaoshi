@@ -63,25 +63,55 @@ type Status struct {
 	Jobs         []JobStatus `json:"jobs"`
 }
 
+// Event is a durable-worthy scheduler transition. Healthy polling is not an
+// event: only failures, recoveries, leadership changes and scheduler lifecycle
+// transitions are emitted so the operational log remains concise.
+type Event struct {
+	Category          string
+	Type              string
+	Level             string
+	Status            string
+	SourceGroup       string
+	GameID            string
+	JobID             string
+	Message           string
+	Imported          int
+	LatestIssue       string
+	ConsecutiveErrors int
+	OccurredAt        time.Time
+}
+
+type EventSink func(context.Context, Event)
+
+type sourceEventState struct {
+	Known  bool
+	Failed bool
+}
+
 type Scheduler struct {
-	mu        sync.RWMutex
-	jobs      []JobConfig
-	statuses  map[string]JobStatus
-	sync      SyncFunc
-	running   bool
-	startedAt time.Time
-	startOnce sync.Once
+	mu           sync.RWMutex
+	jobs         []JobConfig
+	statuses     map[string]JobStatus
+	sourceStates map[string]sourceEventState
+	standbyState map[string]bool
+	sync         SyncFunc
+	eventSink    EventSink
+	running      bool
+	startedAt    time.Time
+	startOnce    sync.Once
 }
 
 func DefaultJobs() []JobConfig {
 	return []JobConfig{
+		{ID: "sg-ssc-verified", Name: "SG时时彩双站核对", Group: "sg-ssc-verified", GameIDs: []string{"sg-ssc"}, Timezone: "Asia/Shanghai", FastStart: "00:00", FastEnd: "23:59", FastInterval: 15 * time.Second, NormalInterval: 15 * time.Second, Timeout: 15 * time.Second},
+		{ID: "163-highfreq", Name: "163高频彩开奖", Group: "163-highfreq", GameIDs: []string{"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "speed-ssc", "au-lucky-5"}, Timezone: "Asia/Shanghai", FastStart: "00:00", FastEnd: "23:59", FastInterval: 15 * time.Second, NormalInterval: 15 * time.Second, Timeout: 15 * time.Second},
+		{ID: "163-pc28", Name: "163加拿大28开奖", Group: "163-pc28", GameIDs: []string{"pc-canada", "canada-28", "canada-20"}, Timezone: "Asia/Shanghai", FastStart: "00:00", FastEnd: "23:59", FastInterval: 15 * time.Second, NormalInterval: 15 * time.Second, Timeout: 20 * time.Second},
 		{ID: "taiwan-bingo", Name: "台湾宾果即时开奖", Group: "taiwan-bingo", GameIDs: []string{"official-tw-bingo"}, Timezone: "Asia/Taipei", FastStart: "00:00", FastEnd: "23:59", FastInterval: 15 * time.Second, NormalInterval: 15 * time.Second, Timeout: 12 * time.Second},
 		{ID: "china-welfare", Name: "中国福利彩票开奖", Group: "china-welfare", GameIDs: []string{"official-fc3d", "official-kl8"}, Timezone: "Asia/Shanghai", FastStart: "20:45", FastEnd: "22:30", FastInterval: 20 * time.Second, NormalInterval: 15 * time.Minute, Timeout: 40 * time.Second},
 		{ID: "china-sport", Name: "中国体育彩票开奖", Group: "china-sport", GameIDs: []string{"official-pl3", "official-qxc"}, Timezone: "Asia/Shanghai", FastStart: "21:00", FastEnd: "22:30", FastInterval: 20 * time.Second, NormalInterval: 15 * time.Minute, Timeout: 40 * time.Second},
 		{ID: "taiwan-lottery", Name: "台湾彩券晚间开奖", Group: "taiwan-lottery", GameIDs: []string{"official-tw-super-lotto", "official-tw-daily539", "official-tw-lotto649"}, Timezone: "Asia/Taipei", FastStart: "20:15", FastEnd: "22:15", FastInterval: 20 * time.Second, NormalInterval: 15 * time.Minute, Timeout: 20 * time.Second},
-		{ID: "168-highfreq", Name: "168高频彩开奖", Group: "168-highfreq", GameIDs: []string{"speed-racing", "au-lucky-10", "au-lucky-5", "fly-racing", "speed-fly", "sg-fly", "speed-ssc"}, Timezone: "Asia/Shanghai", FastStart: "00:00", FastEnd: "23:59", FastInterval: 15 * time.Second, NormalInterval: 15 * time.Second, Timeout: 15 * time.Second},
-		{ID: "168-bingo", Name: "168宾果映射开奖", Group: "168-bingo", GameIDs: []string{"bingo-ssc-1", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4", "bingo-racing-a", "bingo-racing-b", "bingo-mark-six"}, Timezone: "Asia/Taipei", FastStart: "00:00", FastEnd: "23:59", FastInterval: 20 * time.Second, NormalInterval: 20 * time.Second, Timeout: 15 * time.Second},
-		{ID: "168-marksix", Name: "168六合彩开奖", Group: "168-marksix", GameIDs: []string{"hong-kong-mark-six", "new-macau-mark-six", "old-macau-mark-six"}, Timezone: "Asia/Shanghai", FastStart: "21:00", FastEnd: "22:30", FastInterval: 30 * time.Second, NormalInterval: 10 * time.Minute, Timeout: 20 * time.Second},
+		{ID: "163-bingo", Name: "163宾果母源映射开奖", Group: "163-bingo", GameIDs: []string{"bingo-ssc-1", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4", "bingo-racing-a", "bingo-racing-b", "bingo-mark-six"}, Timezone: "Asia/Taipei", FastStart: "00:00", FastEnd: "23:59", FastInterval: 20 * time.Second, NormalInterval: 20 * time.Second, Timeout: 15 * time.Second},
+		{ID: "163-marksix", Name: "163六合彩开奖", Group: "163-marksix", GameIDs: []string{"hong-kong-mark-six", "happy8-mark-six", "new-macau-mark-six", "old-macau-mark-six"}, Timezone: "Asia/Shanghai", FastStart: "21:00", FastEnd: "22:30", FastInterval: 30 * time.Second, NormalInterval: 10 * time.Minute, Timeout: 20 * time.Second},
 	}
 }
 
@@ -90,23 +120,38 @@ func NewScheduler(jobs []JobConfig, syncFn SyncFunc) *Scheduler {
 	for _, job := range jobs {
 		statuses[job.ID] = JobStatus{ID: job.ID, Name: job.Name, Group: job.Group, GameIDs: append([]string(nil), job.GameIDs...), Timezone: job.Timezone, Mode: "waiting"}
 	}
-	return &Scheduler{jobs: append([]JobConfig(nil), jobs...), statuses: statuses, sync: syncFn}
+	return &Scheduler{
+		jobs: append([]JobConfig(nil), jobs...), statuses: statuses,
+		sourceStates: make(map[string]sourceEventState), standbyState: make(map[string]bool), sync: syncFn,
+	}
+}
+
+// SetEventSink attaches operational persistence before Start. Replacing the
+// sink later is safe and is useful to standalone draw-feed deployments.
+func (s *Scheduler) SetEventSink(sink EventSink) {
+	s.mu.Lock()
+	s.eventSink = sink
+	s.mu.Unlock()
 }
 
 func (s *Scheduler) Start(ctx context.Context) {
 	s.startOnce.Do(func() {
+		startedAt := time.Now().UTC()
 		s.mu.Lock()
 		s.running = true
-		s.startedAt = time.Now().UTC()
+		s.startedAt = startedAt
 		s.mu.Unlock()
+		s.emit(ctx, Event{Category: "scheduler", Type: "scheduler_started", Level: "info", Status: "started", Message: "开奖同步调度器已启动", OccurredAt: startedAt})
 		for _, job := range s.jobs {
 			go s.run(ctx, job)
 		}
 		go func() {
 			<-ctx.Done()
+			stoppedAt := time.Now().UTC()
 			s.mu.Lock()
 			s.running = false
 			s.mu.Unlock()
+			s.emit(context.Background(), Event{Category: "scheduler", Type: "scheduler_stopped", Level: "warning", Status: "stopped", Message: "开奖同步调度器已停止", OccurredAt: stoppedAt})
 		}()
 	})
 }
@@ -168,7 +213,7 @@ func (s *Scheduler) runOnce(parent context.Context, job JobConfig) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	lease, acquired, leaseErr := cluster.AcquireLease(parent, "lottery-sync:"+job.ID, timeout+30*time.Second)
+	lease, acquired, leaseErr := cluster.AcquireLease(parent, "lottery-sync:"+schedulerLeaseID(job.ID), timeout+30*time.Second)
 	if leaseErr != nil && cluster.Required() {
 		s.recordRuntimeError(job, "无法获取开奖同步分布式锁: "+leaseErr.Error())
 		return
@@ -184,6 +229,9 @@ func (s *Scheduler) runOnce(parent context.Context, job JobConfig) {
 			_ = lease.Release(releaseContext)
 		}()
 	}
+	s.mu.Lock()
+	s.standbyState[job.ID] = false
+	s.mu.Unlock()
 
 	started := time.Now().UTC()
 	s.mu.Lock()
@@ -219,8 +267,10 @@ func (s *Scheduler) runOnce(parent context.Context, job JobConfig) {
 	}
 
 	finished := time.Now().UTC()
+	events := make([]Event, 0, len(results)+1)
 	s.mu.Lock()
 	status = s.statuses[job.ID]
+	previousFailures := status.ConsecutiveErr
 	status.Running = false
 	status.LastFinishedAt = finished
 	status.Imported = imported
@@ -233,24 +283,73 @@ func (s *Scheduler) runOnce(parent context.Context, job JobConfig) {
 		status.ConsecutiveErr++
 		status.LastError = truncate(strings.Join(errors, "; "), 500)
 	}
+	for _, result := range results {
+		gameID := strings.TrimSpace(result.GameID)
+		if gameID == "" {
+			continue
+		}
+		key := job.ID + "\x00" + gameID
+		previous := s.sourceStates[key]
+		failed := result.Status != "ok"
+		message := strings.TrimSpace(result.Error)
+		if failed && message == "" {
+			message = gameID + " 同步失败"
+		}
+		if failed && (!previous.Known || !previous.Failed) {
+			events = append(events, Event{Category: "source", Type: "sync_error", Level: "error", Status: "error", SourceGroup: job.Group, GameID: gameID, JobID: job.ID, Message: truncate(message, 500), Imported: result.Imported, LatestIssue: result.LatestIssue, ConsecutiveErrors: status.ConsecutiveErr, OccurredAt: finished})
+		} else if !failed && previous.Known && previous.Failed {
+			events = append(events, Event{Category: "source", Type: "sync_recovered", Level: "info", Status: "ok", SourceGroup: job.Group, GameID: gameID, JobID: job.ID, Message: "开奖源同步已恢复", Imported: result.Imported, LatestIssue: result.LatestIssue, OccurredAt: finished})
+		}
+		s.sourceStates[key] = sourceEventState{Known: true, Failed: failed}
+	}
+	if len(errors) > 0 && previousFailures == 0 {
+		events = append(events, Event{Category: "scheduler", Type: "scheduler_error", Level: "error", Status: "error", SourceGroup: job.Group, JobID: job.ID, Message: status.LastError, Imported: imported, LatestIssue: latest, ConsecutiveErrors: status.ConsecutiveErr, OccurredAt: finished})
+	} else if len(errors) == 0 && previousFailures > 0 {
+		events = append(events, Event{Category: "scheduler", Type: "scheduler_recovered", Level: "info", Status: "ok", SourceGroup: job.Group, JobID: job.ID, Message: "开奖同步任务已恢复", Imported: imported, LatestIssue: latest, OccurredAt: finished})
+	}
 	s.statuses[job.ID] = status
 	s.mu.Unlock()
+	for _, event := range events {
+		s.emit(parent, event)
+	}
+}
+
+// Keep the previous writer's lease key during a provider cutover. A rolling
+// deployment can briefly run old and new binaries together; sharing this key
+// prevents the retired 168 job and the new 163 job from writing the same game
+// family concurrently while their visible job IDs remain distinct.
+func schedulerLeaseID(jobID string) string {
+	switch jobID {
+	case "163-highfreq":
+		return "168-highfreq"
+	case "163-bingo":
+		return "168-bingo"
+	default:
+		return jobID
+	}
 }
 
 func (s *Scheduler) markStandby(job JobConfig) {
+	now := time.Now().UTC()
 	s.mu.Lock()
 	status := s.statuses[job.ID]
+	wasStandby := s.standbyState[job.ID]
+	s.standbyState[job.ID] = true
 	status.Running = false
 	status.Mode = "standby"
 	status.LastError = ""
 	s.statuses[job.ID] = status
 	s.mu.Unlock()
+	if !wasStandby {
+		s.emit(context.Background(), Event{Category: "scheduler", Type: "standby", Level: "info", Status: "standby", SourceGroup: job.Group, JobID: job.ID, Message: "其他实例持有开奖同步任务，本实例进入待命", OccurredAt: now})
+	}
 }
 
 func (s *Scheduler) recordRuntimeError(job JobConfig, message string) {
 	now := time.Now().UTC()
 	s.mu.Lock()
 	status := s.statuses[job.ID]
+	previousFailures := status.ConsecutiveErr
 	status.Running = false
 	status.LastStartedAt = now
 	status.LastFinishedAt = now
@@ -258,6 +357,22 @@ func (s *Scheduler) recordRuntimeError(job JobConfig, message string) {
 	status.LastError = truncate(message, 500)
 	s.statuses[job.ID] = status
 	s.mu.Unlock()
+	if previousFailures == 0 {
+		s.emit(context.Background(), Event{Category: "scheduler", Type: "scheduler_error", Level: "error", Status: "error", SourceGroup: job.Group, JobID: job.ID, Message: status.LastError, ConsecutiveErrors: status.ConsecutiveErr, OccurredAt: now})
+	}
+}
+
+func (s *Scheduler) emit(ctx context.Context, event Event) {
+	s.mu.RLock()
+	sink := s.eventSink
+	s.mu.RUnlock()
+	if sink == nil {
+		return
+	}
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+	sink(ctx, event)
 }
 
 func jobInterval(job JobConfig, now time.Time) (time.Duration, string) {

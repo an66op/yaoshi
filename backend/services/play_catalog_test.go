@@ -6,7 +6,7 @@ import (
 )
 
 func TestInferPlayForGameKeepsSixthRacingRankSeparateFromCrownSum(t *testing.T) {
-	for _, gameID := range []string{"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a"} {
+	for _, gameID := range []string{"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a", "bingo-racing-b"} {
 		t.Run(gameID, func(t *testing.T) {
 			game := &lottery.Game{ID: gameID}
 			for _, test := range []struct{ code, name, selection, want string }{
@@ -30,7 +30,7 @@ func TestInferPlayForGameKeepsSixthRacingRankSeparateFromCrownSum(t *testing.T) 
 }
 
 func TestInferPlayForGameDigitTotalsRequireExplicitMeaning(t *testing.T) {
-	for _, gameID := range []string{"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1", "official-fc3d", "official-pl3"} {
+	for _, gameID := range []string{"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4", "official-fc3d", "official-pl3"} {
 		t.Run(gameID, func(t *testing.T) {
 			game := &lottery.Game{ID: gameID}
 			profile, _ := rulesForGame(game)
@@ -75,7 +75,7 @@ func TestInferPlayForGameDigitTotalsRequireExplicitMeaning(t *testing.T) {
 }
 
 func TestInferPlayForGameUnknownRulesFailClosed(t *testing.T) {
-	for _, game := range []*lottery.Game{nil, {ID: "hong-kong-mark-six"}, {ID: "bingo-racing-b"}, {ID: "bingo-ssc-2"}, {ID: "bingo-ssc-3"}, {ID: "bingo-ssc-4"}, {ID: "truly-unknown"}, {Name: "极速赛车", Category: "赛车"}} {
+	for _, game := range []*lottery.Game{nil, {ID: "hong-kong-mark-six"}, {ID: "truly-unknown"}, {Name: "极速赛车", Category: "赛车"}} {
 		if _, _, err := InferPlayForGame(game, "ball_1_5", "", 1, "1"); err == nil {
 			t.Fatalf("unknown profile must not infer: %+v", game)
 		}

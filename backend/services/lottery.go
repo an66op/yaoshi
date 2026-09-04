@@ -228,6 +228,18 @@ func sourceHealthyForGame(game *lottery.Game) bool {
 	if game == nil {
 		return false
 	}
+	if game.ID == "sg-ssc" {
+		return sgSSCSourceHealthyAt(game, time.Now().UTC())
+	}
+	if binding, ok := source163MirrorBindingForGame(game.ID); ok && !source163MirrorBound(game, binding) {
+		return false
+	}
+	if binding, ok := source163PC28BindingForGame(game.ID); ok && !source163PC28Bound(game, binding) {
+		return false
+	}
+	if binding, ok := bingo163BindingForGame(game.ID); ok && !bingo163SourceBound(game, binding) {
+		return false
+	}
 	switch strings.ToLower(strings.TrimSpace(game.SourceKind)) {
 	case "external", "official":
 		status := strings.ToLower(strings.TrimSpace(game.SyncStatus))
@@ -525,10 +537,10 @@ var defaultGames = []seedGame{
 	{"speed-ssc", "SPEED_SSC", "极速时时彩", "时时彩", "时时彩", "orange", 180, 26},
 	{"sg-fly", "SG_FLY", "SG飞艇", "飞艇", "飞艇", "blue", 300, 27},
 	{"sg-ssc", "SG_SSC", "SG时时彩", "时时彩", "时时彩", "orange", 300, 28},
-	// PC 系列暂由平台自动开奖；接入稳定数据源后可在后台切换。
+	// 三个入口是同一加拿大28开奖的三套玩法与赔率版本。
 	{"pc-canada", "PC_CANADA", "PC加拿大", "PC", "PC", "teal", 210, 31},
 	{"canada-28", "CANADA_28", "加拿大28", "PC", "28", "purple", 210, 32},
-	{"canada-20", "CANADA_20", "加拿大2.0", "PC", "2.0", "blue", 120, 33},
+	{"canada-20", "CANADA_20", "加拿大2.0", "PC", "2.0", "blue", 210, 33},
 }
 
 var officialGames = []lottery.Game{
@@ -613,14 +625,22 @@ func SeedLotteryCatalog(db *gorm.DB, options LotterySeedOptions) error {
 				return err
 			}
 		}
-		// Upgrade only the Bingo products whose settlement depends on actual
-		// draw order. Existing ordinary source/operator configuration remains
-		// untouched; a legacy single-source "ok" row must become stale before
-		// this process can expose the newly enabled financial rules.
-		if err := EnsureBingoOrderedSourceRevision(tx); err != nil {
+		// Move only exact legacy Bingo bindings onto the 163 mother-source
+		// contract. Operator-selected sources and all historic financial rows
+		// remain untouched; the first verified import reopens each product.
+		if err := Ensure163BingoSources(tx); err != nil {
 			return err
 		}
-		return nil
+		if err := Ensure163MirrorSources(tx); err != nil {
+			return err
+		}
+		if err := Ensure163PC28Sources(tx); err != nil {
+			return err
+		}
+		if err := Ensure163MarkSixSources(tx); err != nil {
+			return err
+		}
+		return EnsureSGSSCVerifiedSource(tx)
 	})
 }
 
@@ -663,20 +683,25 @@ func missingDefaultLobbyCategories(existing []lottery.LobbyCategory) []lottery.L
 }
 
 func defaultLotterySource(gameID string) (kind, name, sourceURL, status string) {
-	for _, item := range api168HighFreqBindings {
-		if item.GameID == gameID {
-			return "external", "168开奖网", "https://kj138138.com/view/api/index.html", "idle"
-		}
+	if gameID == "sg-ssc" {
+		return "external", sgSSCVerifiedSourceName, sgSSCVerifiedSourceURL, "stale"
+	}
+	if _, ok := source163MirrorBindingForGame(gameID); ok {
+		return "external", source163MirrorName, source163MirrorURL, "stale"
+	}
+	if _, ok := source163PC28BindingForGame(gameID); ok {
+		return "external", source163MirrorName, source163MirrorURL, "stale"
+	}
+	if binding, ok := bingo163BindingForGame(gameID); ok {
+		name, sourceURL, syncStatus, _ := bingo163BindingSourceDefaults(binding)
+		return "external", name, sourceURL, syncStatus
+	}
+	if _, ok := source163MarkSixBindingForGame(gameID); ok {
+		return "external", source163MirrorName, source163MirrorURL, "stale"
 	}
 	for _, item := range api168MarkSixBindings {
 		if item.GameID == gameID {
 			return "external", "168开奖网", "https://kj138138.com/view/api/index.html", "idle"
-		}
-	}
-	for _, item := range api168BingoBindings {
-		if item.GameID == gameID {
-			name, sourceURL, syncStatus, _ := bingoBindingSourceDefaults(item)
-			return "external", name, sourceURL, syncStatus
 		}
 	}
 	return "platform", "王者开奖", "", "ok"
@@ -697,13 +722,27 @@ func defaultGameCatalogRow(item seedGame, index int, now time.Time) lottery.Game
 		SourceKind: sourceKind, SourceName: sourceName, SourceURL: sourceURL, SyncStatus: syncStatus,
 		CreatedAt: now.UTC(),
 	}
-	if binding, ok := api168BingoBindingForGame(item.ID); ok && binding.RequiresOrderedSource {
-		game.LastSyncError = bingoOrderPendingMessage
+	if _, ok := bingo163BindingForGame(item.ID); ok {
+		game.LastSyncError = bingo163PendingMessage
+	}
+	if _, ok := source163MirrorBindingForGame(item.ID); ok {
+		game.LastSyncError = source163MirrorPendingMessage
+	}
+	if _, ok := source163PC28BindingForGame(item.ID); ok {
+		game.LastSyncError = source163MirrorPendingMessage
+	}
+	if item.ID == "sg-ssc" {
+		game.NextDrawAt = time.Time{}
+		game.TimingSource = "pending"
+		game.LastSyncError = sgSSCPendingMessage
 	}
 	return game
 }
 
 func seedDeterministicHistory(tx *gorm.DB, game lottery.Game, item seedGame, seed int, fallback time.Time) error {
+	if game.ID == "sg-ssc" {
+		return nil // SG has no platform fixture or random-result fallback, even in debug mode.
+	}
 	var candidates []lottery.Draw
 	codeToken := deterministicFixtureCode(item.Code)
 	if err := tx.Where("game_id = ? AND issue LIKE ?", game.ID, "%"+codeToken+"%").
@@ -820,6 +859,12 @@ func SyncTargetGames(db *gorm.DB) (*SyncTargetResult, error) {
 		result.Missing = append(result.Missing, id)
 	}
 	if err := Ensure168SourceGames(db); err != nil {
+		return nil, err
+	}
+	if err := Ensure163BingoSources(db); err != nil {
+		return nil, err
+	}
+	if err := Ensure163MarkSixSources(db); err != nil {
 		return nil, err
 	}
 	return result, nil

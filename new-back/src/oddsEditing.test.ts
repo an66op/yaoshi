@@ -28,6 +28,37 @@ describe('explicit odds draft editing', () => {
     expect(oddsDirtyCodes([], saved)).toEqual(saved.map(item => item.play_code))
   })
 
+  it('preserves pending row identity across repeated normalization and edits to another row', () => {
+    const firstDraft = oddsDraftItems(applyOddsBatch(saved, ['ball_1_5'], 'odds', '3.72'), saved)
+    const pending = firstDraft[0]
+    expect(pending).not.toBe(saved[0])
+    expect(pending).toMatchObject({ configured: false, configuration_source: 'pending_admin_save', configured_at: null })
+    const repeated = oddsDraftItems(firstDraft, saved)
+    expect(repeated[0]).toBe(pending)
+    expect(repeated[1]).toBe(saved[1])
+    expect(repeated[2]).toBe(saved[2])
+    const otherEdited = oddsDraftItems(applyOddsBatch(repeated, ['two_sided'], 'max_bet', '125'), saved)
+    expect(otherEdited[0]).toBe(pending)
+    expect(otherEdited[1]).not.toBe(saved[1])
+    expect(otherEdited[2]).toBe(saved[2])
+
+    const reverted = oddsDraftItems(applyOddsBatch(otherEdited, ['ball_1_5'], 'odds', '1.99'), saved)
+    expect(reverted[0]).toBe(saved[0])
+    expect(reverted[1]).toBe(otherEdited[1])
+    expect(reverted[2]).toBe(saved[2])
+    expect(oddsDirtyCodes(reverted, saved)).toEqual(['two_sided'])
+  })
+
+  it('normalizes an unconfirmed added row once and retains its pending identity afterward', () => {
+    const added = { ...saved[0], play_code: 'new_play', play_name: '新增玩法' }
+    const normalized = oddsDraftItems([...saved, added], saved)
+    expect(normalized[3]).not.toBe(added)
+    expect(normalized[3]).toMatchObject({ configured: false, configuration_source: 'pending_admin_save', configured_at: null })
+    const repeated = oddsDraftItems(normalized, saved)
+    expect(repeated[3]).toBe(normalized[3])
+    expect(repeated.slice(0, 3).every((item, index) => item === saved[index])).toBe(true)
+  })
+
   it('allows explicit zero to close plays and never substitutes default prices', () => {
     const draft = oddsDraftItems(applyOddsBatch(saved, saved.map(item => item.play_code), 'odds', '0'), saved)
     expect(draft.every(item => item.odds === 0 && !item.configured && item.configuration_source === 'pending_admin_save')).toBe(true)

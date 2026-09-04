@@ -46,6 +46,16 @@ describe('scratch draw dialog content', () => {
     expect(html).toContain('mark-six-ball wave-green')
     expect(html).toContain('mark-six-ball wave-blue')
     expect(html).toContain('mark-six-ball wave-green mark-six-special-ball')
-    expect(html).toContain('<small>特</small>')
+    expect(html).toContain('<small>正1</small>')
+    expect(html).toContain('<small>特码</small>')
+  })
+
+  it.each(['hong-kong-mark-six', 'happy8-mark-six', 'new-macau-mark-six', 'old-macau-mark-six'])('uses the same seven-ball reveal labels for results-only %s', id => {
+    const marksix = { ...game, id, balls: [5, 9, 40, 47, 29, 2, 49] }
+    const html = renderToStaticMarkup(<ScratchDrawDialog game={marksix} draw={{ ...draw, game_id: id, numbers: marksix.balls }} onClose={() => {}} />)
+    expect(html).toContain('mark-six-ball wave-green mark-six-special-ball')
+    expect(html).toContain('<small>正1</small>')
+    expect(html).toContain('<small>特码</small>')
+    expect(html).not.toContain('scratch-draw-total')
   })
 })

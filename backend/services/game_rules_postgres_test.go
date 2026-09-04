@@ -118,12 +118,12 @@ func TestGameRulesPostgresEffectiveOddsPreserveSavedConfiguration(t *testing.T) 
 		t.Fatal(err)
 	}
 	markSix, err := service.Get("bingo-mark-six")
-	if err != nil || !markSix.RulesReady || markSix.RuleVersion != markSixRuleVersion || len(markSix.Items) != len(markSixV2Specs) {
+	if err != nil || !markSix.RulesReady || markSix.RuleVersion != markSixRuleVersion || len(markSix.Items) != len(markSixPlayCatalog()) {
 		t.Fatalf("Bingo Mark Six missing read-only catalog after stale row: %+v / %v", markSix, err)
 	}
-	for index, item := range markSix.Items {
-		spec := markSixV2Specs[index]
-		if item.PlayCode != spec.Play.Code || item.Odds != 0 || item.Configured {
+	for _, item := range markSix.Items {
+		spec, exists := markSixSpecByCode(markSixRuleVersion, item.PlayCode)
+		if !exists || spec.HiddenFromCatalog || item.Odds != 0 || item.Configured {
 			t.Fatalf("unexpected Mark Six odds item: %+v", item)
 		}
 	}
@@ -133,7 +133,7 @@ func TestGameRulesPostgresEffectiveOddsPreserveSavedConfiguration(t *testing.T) 
 	}
 	configuredInput := oddsUpdateInput(markSix)
 	configuredInput.Items = append([]PlayLimitItem(nil), markSix.Items...)
-	configuredCode := "marksix_special_zodiac"
+	configuredCode := "marksix_special_zodiac_horse"
 	for index := range configuredInput.Items {
 		if configuredInput.Items[index].PlayCode == configuredCode {
 			configuredInput.Items[index].Odds = 2.8
@@ -185,12 +185,16 @@ func TestGameRulesPostgresEffectiveOddsPreserveSavedConfiguration(t *testing.T) 
 	}
 	for _, id := range []string{"bingo-racing-b", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
 		view, err := service.Get(id)
-		if err != nil || view.RulesReady || view.RuleVersion != "" || len(view.Items) != 0 {
-			t.Fatalf("unverified game exposed a modeled odds catalog for %s: %+v / %v", id, view, err)
+		wantVersion, wantItems := "digits5-v3", 9
+		if id == "bingo-racing-b" {
+			wantVersion, wantItems = "racing-v2", 4
+		}
+		if err != nil || !view.RulesReady || view.RuleVersion != wantVersion || len(view.Items) != wantItems {
+			t.Fatalf("verified game did not expose its modeled odds catalog for %s: %+v / %v", id, view, err)
 		}
 		var rows int64
 		if err := db.Model(&odds.PlayLimit{}).Where("game_id = ?", id).Count(&rows).Error; err != nil || rows != 0 {
-			t.Fatalf("reading unverified game manufactured odds for %s: %d / %v", id, rows, err)
+			t.Fatalf("reading verified game manufactured odds for %s: %d / %v", id, rows, err)
 		}
 	}
 	var official lottery.Game

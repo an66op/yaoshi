@@ -33,9 +33,9 @@ function boardForFamily(family: LotteryRuleFamily): DetailBoardKind | null {
  * here without changing the chat/drawer lifecycle.
  */
 export function roomBettingAssembly(gameId: string): RoomBettingAssembly {
-  // Bingo Mark Six is a web-only product. It enters the dedicated board
-  // directly and deliberately has no chat surface or edge mode switch.
-  if (gameId === 'bingo-mark-six') {
+  // Mark Six products are web-only. They enter the dedicated board directly
+  // and deliberately have no chat surface or edge mode switch.
+  if (lotteryRuleProfile(gameId).family === 'mark-six') {
     return { modes: [detailMode('mark-six')], defaultMode: 'mode2' }
   }
 

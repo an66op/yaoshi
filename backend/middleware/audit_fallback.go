@@ -93,6 +93,13 @@ func replayAuditFallback(db *gorm.DB) error {
 	path := auditFallbackPath()
 	payload, err := os.ReadFile(path)
 	if err != nil {
+		// The spool is created only after PostgreSQL audit persistence fails.
+		// A healthy installation therefore normally has no file to replay.
+		// Treat that state as an empty queue before RunWithLease can wrap the
+		// error together with a lease-release result.
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
 	lines := strings.Split(string(payload), "\n")

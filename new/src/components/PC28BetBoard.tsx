@@ -8,6 +8,7 @@ import { boardAmountCents } from '../utils/fullBetSelection'
 import { oddsLabel } from '../utils/gameRoomSafety'
 import { isPC28RuleVersion, pc28RuleVersionForGame } from '../utils/lotteryRules'
 import {
+  PC28_PRICED_PLAY_CODE_COUNT,
   pc28BatchError,
   pc28BatchItems,
   pc28Categories,
@@ -15,6 +16,7 @@ import {
   pc28OddsItem,
   pc28OptionPlayCode,
   pc28PackageTicket,
+  pc28PricedPlayCodes,
   pc28SingleTicket,
   pc28TicketGroups,
   pc28TicketAddError,
@@ -83,14 +85,18 @@ export function PC28BetBoard({ game, ruleVersion, oddsInfo, rulesReady, rulesMes
   const draftValues = packageDraft.marketId === activeMarket?.id ? packageDraft.values : []
   const busy = Boolean(submitting) || confirming
   const versionReady = isPC28RuleVersion(game.id, ruleVersion)
-    && isPC28RuleVersion(game.id, oddsInfo?.rule_version)
-  const boardReady = rulesReady && versionReady && !busy
+    && oddsInfo?.game_id === game.id
+    && oddsInfo.rules_ready === true
+    && isPC28RuleVersion(game.id, oddsInfo.rule_version)
+  const boardContractReady = game.sourceHealthy && rulesReady && versionReady
+  const boardReady = boardContractReady && !busy
   const groups = pc28TicketGroups(tickets)
   const cents = boardAmountCents(amount)
   const totalCents = cents === null ? null : cents * tickets.length
   const total = totalCents !== null && Number.isSafeInteger(totalCents) ? formatBetAmount(totalCents / 100) : '—'
   const batchItems = pc28BatchItems(tickets, amount)
   const batchError = pc28BatchError(game.id, tickets, amount, oddsInfo)
+  const configuredOddsCount = pc28PricedPlayCodes.filter(playCode => pc28OddsItem(game.id, playCode, oddsInfo)).length
   const canSubmit = boardReady && bettingTarget.timing.accepting && tickets.length > 0 && batchItems.length === tickets.length && !batchError
   const configuredOptions = activeMarket?.options.filter(option => {
     const playCode = pc28OptionPlayCode(activeMarket, option.value)
@@ -172,15 +178,15 @@ export function PC28BetBoard({ game, ruleVersion, oddsInfo, rulesReady, rulesMes
       <div className="full-bet-workspace">
         <aside aria-label="PC28投注玩法">{pc28Categories.map(item => <button type="button" key={item.id} aria-pressed={category === item.id} className={category === item.id ? 'active' : ''} disabled={busy} onClick={() => chooseCategory(item.id)}>{item.label}</button>)}</aside>
         <section className="full-bet-content">
-          <header><div><b>{pc28Categories.find(item => item.id === category)?.label}</b><small>{versionLabel} · {selectionHint}</small></div><button type="button" className="detail-panel-collapse" aria-label="收起详细投注，返回聊天" disabled={busy} onClick={onClose}><Icon name="arrow" /></button></header>
-          {(!rulesReady || !versionReady) && <p className="pc28-rule-notice" role="status">{!rulesReady ? rulesMessage : `规则版本不匹配：${game.title}必须绑定 ${expectedVersion ?? 'PC28专用版本'}。`}</p>}
+          <header><div><b>{pc28Categories.find(item => item.id === category)?.label}</b><small>{versionLabel} · {selectionHint} · 赔率目录 {configuredOddsCount}/{PC28_PRICED_PLAY_CODE_COUNT}</small></div><button type="button" className="detail-panel-collapse" aria-label="收起详细投注，返回聊天" disabled={busy} onClick={onClose}><Icon name="arrow" /></button></header>
+          {!boardContractReady && <p className="pc28-rule-notice" role="status">{!game.sourceHealthy ? (rulesMessage || '开奖同步暂时暂停，投注已暂停。') : !rulesReady ? rulesMessage : `赔率目录身份或规则版本不匹配：${game.title}必须绑定 ${expectedVersion ?? 'PC28专用版本'}。`}</p>}
           {categoryMarkets.length > 1 && <nav className="pc28-market-tabs" aria-label={`${pc28Categories.find(item => item.id === category)?.label}子玩法`}>{categoryMarkets.map(item => <button type="button" key={item.id} aria-pressed={activeMarket?.id === item.id} className={activeMarket?.id === item.id ? 'active' : ''} disabled={busy} onClick={() => chooseMarket(item)}>{item.label}</button>)}</nav>}
           {activeMarket?.positionMode === 'ball' && <div className="rank-selector pc28-position-selector" aria-label="切换球位（独立编辑）">{positionLabels.map((label, index) => {
             const value = index + 1
             const count = tickets.filter(ticket => ticket.position === value && ticket.marketId.startsWith('position_')).length
             return <button type="button" key={value} aria-label={`编辑${label}`} aria-pressed={position === value} className={position === value ? 'active' : ''} disabled={busy} onClick={() => { if (!busy) setPosition(value) }}>{label}{count > 0 && <small className="rank-count">{count}</small>}</button>
           })}</div>}
-          {activeMarket?.id === 'shape' && <p className="pc28-market-note">890、901及019均不算顺子。</p>}
+          {activeMarket?.id === 'shape' && <p className="pc28-market-note">按原版规则，890、901及同组不同排列均算顺子。</p>}
           {activeMarket?.id === 'color' && <p className="pc28-market-note">0、13、14、27的灰波返本由服务端房间配置执行。</p>}
           {activeMarket?.id === 'sum_exact' && <p className="pc28-market-note">每期最多投注10个不同单点；当前清单已选 {new Set(tickets.filter(ticket => ticket.marketId === 'sum_exact').map(ticket => ticket.selection)).size}/10。</p>}
           {(activeMarket?.id === 'sum_size' || activeMarket?.id === 'sum_parity') && (ruleVersion === 'pc28-v1' || ruleVersion === 'pc28-v2') && <p className="pc28-market-note">玩法一、二仅禁止同期在和值大小或和值单双市场反向下注；球位定位两面不在此限制内。</p>}
@@ -204,12 +210,12 @@ export function PC28BetBoard({ game, ruleVersion, oddsInfo, rulesReady, rulesMes
       </div>
       <footer className="full-bet-footer">
         {accepted && <p className="pc28-accepted" role="status">第 {accepted.issue} 期已受理 {accepted.bet_count} 注，合计 ¥ {formatBetAmount(accepted.total)}</p>}
-        {(batchError || ((!rulesReady || !versionReady) && tickets.length > 0)) && <p className="board-command-error" role="alert">{!rulesReady ? rulesMessage : !versionReady ? '规则版本不匹配，尚未下注。' : batchError}</p>}
+        {(batchError || (!boardContractReady && tickets.length > 0)) && <p className="board-command-error" role="alert">{!game.sourceHealthy ? (rulesMessage || '开奖同步暂时暂停，尚未下注。') : !rulesReady ? rulesMessage : !versionReady ? '赔率目录身份或规则版本不匹配，尚未下注。' : batchError}</p>}
         <div className="full-bet-summary"><button type="button" disabled={busy || !tickets.length} onClick={() => updateTickets(() => [])}>清空选择</button><button type="button" className="full-bet-selection-toggle" aria-expanded={selectionOpen} onClick={() => setSelectionOpen(previous => !previous)}><span aria-live="polite">已选 <b>{groups.length}</b> 组 · <b>{tickets.length}</b> 注</span><i>{selectionOpen ? '收起' : '查看清单'}</i></button></div>
         {tickets.length > 0 && <div className="board-selected-preview" aria-label="已选投注">{groups.map(group => <span key={group.key}>{group.label} <b>{group.choices.map(item => item.selectionLabel).join('、')}</b></span>)}</div>}
         {selectionOpen && <div className="full-bet-selection-list"><header><b>本次PC28网投清单</b><span>合计 ¥ {total}</span></header>{groups.length ? groups.map(group => <article key={group.key}><div><b>{group.label}</b><div className="board-selection-chips">{group.choices.map(ticket => <button type="button" key={pc28TicketKey(ticket)} disabled={busy} aria-label={`移除${group.label}${ticket.selectionLabel}`} onClick={() => updateTickets(previous => previous.filter(item => pc28TicketKey(item) !== pc28TicketKey(ticket)))}>{ticket.selectionLabel}<span aria-hidden="true"> ×</span></button>)}</div></div></article>) : <p>暂未选择玩法或号码</p>}</div>}
         <div className="amount-pills pc28-amount-pills" aria-label="单注金额">{[10, 20, 50, 100, 200].map(value => <button type="button" key={value} aria-pressed={cents === value * 100} className={cents === value * 100 ? 'active' : ''} disabled={busy} onClick={() => { if (!busy) setAmount(String(value)) }}>{value}</button>)}</div>
-        <div className="board-submit-row"><label className="board-custom-amount">单注<input aria-label="自定义单注金额" aria-invalid={cents === null} inputMode="decimal" autoComplete="off" placeholder="金额" disabled={busy} value={amount} onChange={event => { if (!busy) setAmount(event.target.value) }} /></label><button type="button" className="full-bet-confirm" disabled={!canSubmit} onClick={() => void submit()}>{busy ? '提交中…' : !rulesReady || !versionReady ? '规则待配置' : !bettingTarget.timing.accepting ? bettingTarget.timing.statusLabel : batchError ? '请检查投注清单' : '立即投注'} <small>¥ {total}</small></button></div>
+        <div className="board-submit-row"><label className="board-custom-amount">单注<input aria-label="自定义单注金额" aria-invalid={cents === null} inputMode="decimal" autoComplete="off" placeholder="金额" disabled={busy} value={amount} onChange={event => { if (!busy) setAmount(event.target.value) }} /></label><button type="button" className="full-bet-confirm" disabled={!canSubmit} onClick={() => void submit()}>{busy ? '提交中…' : !game.sourceHealthy ? '开奖暂停' : !rulesReady || !versionReady ? '规则待配置' : !bettingTarget.timing.accepting ? bettingTarget.timing.statusLabel : batchError ? '请检查投注清单' : '立即投注'} <small>¥ {total}</small></button></div>
       </footer>
     </section>
   </div>

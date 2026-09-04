@@ -516,18 +516,12 @@ function EntertainmentPage() {
           </Stack>
           <Box mt={1.25} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,minmax(0,1fr))', xl: 'repeat(3,minmax(0,1fr))' }, gap: 1 }}>
             {visibleGames.map(game => {
-              const sourceLabel = game.source_kind === 'official' ? '官方源' : game.source_kind === 'external' ? '外部源' : '平台彩'
-              const sourceDetail = game.sync_status === 'error'
-                ? game.last_sync_error || '开奖源异常'
-                : game.last_sync_at
-                  ? new Date(game.last_sync_at).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-                  : '等待同步'
               return <Paper key={game.id} variant="outlined" sx={{ p: 1.2, borderRadius: 2.4, opacity: game.enabled ? 1 : .68, transition: '150ms ease', '&:hover': { borderColor: 'primary.light', boxShadow: '0 8px 22px rgba(17,91,122,.09)', transform: 'translateY(-1px)' } }}>
                 <Stack direction="row" alignItems="center" gap={1.1}>
                   <Box sx={{ '& > *': { width: 42, height: 42, flexBasis: 42 } }}><GameLogo gameId={game.id} name={game.name} enabled={game.enabled} /></Box>
                   <Box flex={1} minWidth={0}>
                     <Stack direction="row" alignItems="center" gap={.55} minWidth={0}><Typography fontSize={14} fontWeight={850} noWrap>{game.name}</Typography>{!game.enabled && <Chip label="停用" size="small" sx={{ height: 18, fontSize: 9 }} />}</Stack>
-                    <Typography fontSize={10.5} color="text.secondary" noWrap>{game.category} · {sourceLabel}</Typography>
+                    <Typography fontSize={10.5} color="text.secondary" noWrap>{game.lobby_category?.trim() || '未分类'}</Typography>
                   </Box>
                   <Stack alignItems="flex-end" gap={.2}>
                     <Switch size="small" checked={game.enabled} disabled={pendingGame === game.id} onChange={event => void toggleGame(game, event.target.checked)} inputProps={{ 'aria-label': `${game.name}状态` }} />
@@ -535,7 +529,7 @@ function EntertainmentPage() {
                   </Stack>
                 </Stack>
                 <Divider sx={{ my: .9 }} />
-                <Stack direction="row" justifyContent="space-between" gap={1}><Typography fontSize={10} color={game.sync_status === 'error' ? 'error.main' : 'text.secondary'} noWrap title={sourceDetail}>{sourceDetail}</Typography><Typography fontSize={10} color="text.secondary" noWrap>{game.lobby_category || '未分类'} · {game.lobby_sort_order || '—'}</Typography></Stack>
+                <Stack direction="row" justifyContent="space-between" gap={1}><Typography fontSize={10} color="text.secondary" noWrap>{game.enabled ? '已开放' : '已停用'}</Typography><Typography fontSize={10} color="text.secondary" noWrap>排序 {game.lobby_sort_order || '—'}</Typography></Stack>
               </Paper>
             })}
           </Box>

@@ -1,5 +1,6 @@
 import { broadcastAdminLogout, clearLegacyAdminSession } from './auth'
 import { createRequestId } from './utils/requestId'
+import type { SourceDiagnostics, SourceProbeResult } from './sourceDiagnostics'
 
 export type AdminGame = {
   id: string
@@ -76,6 +77,61 @@ export type OfficialSyncResponse = { results: SourceSyncResult[]; failed: number
 
 export type OfficialSourceTestResponse = OfficialSyncResponse & { group: string }
 
+export type SGSSCBackfillItem = {
+  issue: string
+  draw_at: string
+  status: 'pending' | 'running' | 'retry' | 'settlement_retry' | 'completed' | 'blocked' | string
+  reason: string
+  attempts: number
+  last_error: string
+  next_retry_at: string
+  completed_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export type SGSSCBackfillAttempt = {
+  id: number
+  issue: string
+  attempt: number
+  status: 'running' | 'recovered' | 'source_error' | 'conflict' | 'settlement_error' | 'interrupted' | 'blocked' | string
+  trigger: string
+  operator: string
+  request_id: string
+  started_at: string
+  finished_at?: string
+  numbers: string
+  imported: boolean
+  settled_bets: number
+  error: string
+  source_revision: string
+  conversion_revision: string
+}
+
+export type SGSSCBackfillStatus = {
+  game_id: 'sg-ssc'
+  enabled: boolean
+  source_bound: boolean
+  message: string
+  max_age_days: number
+  batch_limit: number
+  summary: {
+    pending_issues: number
+    running_issues: number
+    retry_issues: number
+    blocked_issues: number
+    completed_issues: number
+    untracked_pending_issues: number
+  }
+  gaps: SGSSCBackfillItem[]
+  has_more_gaps: boolean
+  records: SGSSCBackfillAttempt[]
+  next_before_id?: number
+  has_more_records: boolean
+}
+
+export type SGSSCBackfillQueued = { queued_issues: number; message: string }
+
 export type ServerClock = {
   server_time: string
   server_time_ms: number
@@ -124,6 +180,36 @@ export type AuditLog = {
 }
 
 export type AuditLogPage = { items: AuditLog[]; has_more: boolean; next_before_id?: number }
+
+export type SystemLogItem = {
+  id: number
+  category: 'source' | 'scheduler' | string
+  event_type: string
+  level: 'info' | 'warning' | 'error' | string
+  status: 'ok' | 'error' | 'standby' | 'started' | 'stopped' | string
+  source_group?: string
+  game_id?: string
+  job_id?: string
+  message: string
+  imported: number
+  latest_issue?: string
+  consecutive_errors: number
+  created_at: string
+}
+
+export type SystemLogPage = { items: SystemLogItem[]; has_more: boolean; next_before_id?: number }
+export type SystemLogParams = {
+  beforeId?: number
+  limit?: number
+  category?: string
+  type?: string
+  status?: string
+  gameId?: string
+  sourceGroup?: string
+  from?: string
+  to?: string
+  query?: string
+}
 
 export type ReconciliationSummary = {
   generated_at: string
@@ -1459,41 +1545,57 @@ function responseErrorMessage(response: Response, value: unknown, fallback: stri
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormData = init?.body instanceof FormData
-  const controller = init?.signal ? undefined : new AbortController()
-  const timeout = controller ? window.setTimeout(() => controller.abort(), 15_000) : undefined
-  let response: Response
+  const callerSignal = init?.signal
+  if (callerSignal?.aborted) throw new DOMException('请求已取消', 'AbortError')
+  const controller = new AbortController()
+  const cancel = () => controller.abort()
+  let timedOut = false
+  const timeout = window.setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, 15_000)
+  callerSignal?.addEventListener('abort', cancel, { once: true })
   try {
-    response = await fetch(`${apiBase}${path}`, {
-      ...init,
-	  credentials: 'include',
-      signal: init?.signal ?? controller?.signal,
-      headers: { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), ...init?.headers },
-    })
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw new Error('请求超时，请稍后重试')
-    throw new Error('无法连接服务器，请检查后端服务和网络')
-  } finally {
-    if (timeout !== undefined) window.clearTimeout(timeout)
-  }
-  const raw = await response.text()
-  let body: ApiResponse<T>
-  try {
-    body = JSON.parse(raw) as ApiResponse<T>
-  } catch {
-    if (response.status === 401) {
-	  broadcastAdminLogout()
-      window.dispatchEvent(new CustomEvent('yaotu-auth-expired'))
-      throw new AuthError('登录状态已失效，请重新登录')
+    let response: Response
+    let raw: string
+    try {
+      response = await fetch(`${apiBase}${path}`, {
+        ...init,
+        credentials: 'include',
+        signal: controller.signal,
+        headers: { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), ...init?.headers },
+      })
+      // fetch resolves at response headers; keep cancellation and the deadline
+      // active until the complete response body has been read as well.
+      raw = await response.text()
+    } catch (error) {
+      if (timedOut) throw new Error('请求超时，请稍后重试')
+      if (callerSignal?.aborted) throw new DOMException('请求已取消', 'AbortError')
+      if (error instanceof DOMException && error.name === 'AbortError') throw error
+      throw new Error('无法连接服务器，请检查后端服务和网络')
     }
-    throw new Error('服务返回了无效响应')
+    let body: ApiResponse<T>
+    try {
+      body = JSON.parse(raw) as ApiResponse<T>
+    } catch {
+      if (response.status === 401) {
+        broadcastAdminLogout()
+        window.dispatchEvent(new CustomEvent('yaotu-auth-expired'))
+        throw new AuthError('登录状态已失效，请重新登录')
+      }
+      throw new Error('服务返回了无效响应')
+    }
+    if (response.status === 401) {
+      broadcastAdminLogout()
+      window.dispatchEvent(new CustomEvent('yaotu-auth-expired'))
+      throw new AuthError(responseErrorMessage(response, body.message, '请先登录'))
+    }
+    if (!response.ok) throw new ApiError(responseErrorMessage(response, body.message, '服务暂时不可用'), response.status, typeof body.error_code === 'string' ? body.error_code : '')
+    return body.data
+  } finally {
+    window.clearTimeout(timeout)
+    callerSignal?.removeEventListener('abort', cancel)
   }
-  if (response.status === 401) {
-	broadcastAdminLogout()
-    window.dispatchEvent(new CustomEvent('yaotu-auth-expired'))
-    throw new AuthError(responseErrorMessage(response, body.message, '请先登录'))
-  }
-  if (!response.ok) throw new ApiError(responseErrorMessage(response, body.message, '服务暂时不可用'), response.status, typeof body.error_code === 'string' ? body.error_code : '')
-  return body.data
 }
 
 async function downloadAuthenticated(path: string, filename: string) {
@@ -1582,6 +1684,19 @@ export const adminApi = {
 	},
   dashboard: () => request<DashboardData>('/admin/dashboard'),
   auditLogs: (beforeId?: number, limit = 50) => request<AuditLogPage>(`/admin/audit-logs?limit=${limit}${beforeId ? `&before_id=${beforeId}` : ''}`),
+  systemLogs: (params: SystemLogParams = {}) => {
+    const query = new URLSearchParams({ limit: String(params.limit ?? 50) })
+    if (params.beforeId) query.set('before_id', String(params.beforeId))
+    if (params.category) query.set('category', params.category)
+    if (params.type) query.set('type', params.type)
+    if (params.status) query.set('status', params.status)
+    if (params.gameId) query.set('game_id', params.gameId)
+    if (params.sourceGroup) query.set('source_group', params.sourceGroup)
+    if (params.from) query.set('from', params.from)
+    if (params.to) query.set('to', params.to)
+    if (params.query) query.set('q', params.query)
+    return request<SystemLogPage>(`/admin/system-logs?${query}`)
+  },
   reconciliation: () => request<ReconciliationSummary>('/admin/reconciliation'),
   refundAbnormalBet: (betId: number) => request<ReconciliationRefundResult>(`/admin/reconciliation/bets/${encodeURIComponent(String(betId))}/refund`, { method: 'POST' }),
   retentionPolicies: (workspaceId = 0) => request<RetentionPolicyView[] | null>(`/admin/data-lifecycle/policies?workspace_id=${encodeURIComponent(String(workspaceId))}`),
@@ -1609,7 +1724,7 @@ export const adminApi = {
     request<LifecycleRestoreResult>(`/admin/data-lifecycle/runs/${encodeURIComponent(requestId)}/restore-soft-deleted`, { method: 'POST' }),
   restoreRobotArchive: (requestId: string) =>
     request<LifecycleRestoreResult>(`/admin/data-lifecycle/runs/${encodeURIComponent(requestId)}/restore-robot-archive`, { method: 'POST' }),
-  games: () => request<AdminGame[]>('/admin/games'),
+  games: (signal?: AbortSignal) => request<AdminGame[]>('/admin/games', { signal }),
   gameCategories: () => request<GameCategory[]>('/admin/game-categories'),
   createGameCategory: (payload: { name: string; sort_order: number }) => request<GameCategory>('/admin/game-categories', { method: 'POST', body: JSON.stringify(payload) }),
   updateGameCategory: (id: number, payload: { name: string; sort_order: number }) => request<GameCategory>(`/admin/game-categories/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
@@ -1618,7 +1733,11 @@ export const adminApi = {
   syncTargetGames: () => request<SyncTargetGamesResult>('/admin/games/sync-target', { method: 'POST' }),
   draws: (id: string) => request<DrawResult[]>(`/admin/games/${id}/draws?limit=30`),
   clock: () => request<ServerClock>('/public/clock'),
-  feedStatus: () => request<FeedStatus>('/public/lottery/status'),
+  feedStatus: (signal?: AbortSignal) => request<FeedStatus>('/public/lottery/status', { signal }),
+  sourceDiagnostics: (signal?: AbortSignal) => request<SourceDiagnostics>('/admin/source-diagnostics', { signal }),
+  probeSource: (sourceKey: string, signal?: AbortSignal) => request<SourceProbeResult>('/admin/source-diagnostics/probe', {
+    method: 'POST', body: JSON.stringify({ source_key: sourceKey }), signal,
+  }),
   users: (params: { query?: string; status?: string; role?: string; kind?: 'member' | 'account' | 'robot'; workspaceId?: number; page?: number; pageSize?: number }) => {
     const query = new URLSearchParams({
       query: params.query ?? '',
@@ -1686,15 +1805,19 @@ export const adminApi = {
   profitShares: (date = '') => request<ProfitShareStatement>(`/admin/reports/profit-shares${date ? `?date=${encodeURIComponent(date)}` : ''}`),
   runProfitShares: (date: string) => request<ProfitShareRunResult>('/admin/reports/profit-shares/run', { method: 'POST', body: JSON.stringify({ date }) }),
   syncOfficialSources: () => request<OfficialSyncResponse>('/admin/sources/sync', { method: 'POST' }),
+  sgSSCBackfillStatus: (beforeId = 0, limit = 20) => request<SGSSCBackfillStatus>(`/admin/sources/sg-ssc/backfill?${new URLSearchParams({ before_id: String(beforeId), limit: String(limit) })}`),
+  queueSGSSCBackfill: () => request<SGSSCBackfillQueued>('/admin/sources/sg-ssc/backfill', {
+    method: 'POST', body: JSON.stringify({}), headers: { 'X-Request-ID': createRequestId() },
+  }),
   testOfficialSource: (group: string) => request<OfficialSourceTestResponse>(`/admin/sources/${encodeURIComponent(group)}/test`, { method: 'POST' }),
   updateGameStatus: (id: string, enabled: boolean) => request<AdminGame>(`/admin/games/${id}/status`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
   settings: () => request<SystemSettings>('/admin/settings'),
   updateSettings: (payload: SystemSettings) => request<SystemSettings>('/admin/settings', { method: 'PUT', body: JSON.stringify(payload) }),
   roomActivityStatus: () => request<RoomActivityStatus>('/admin/room-activity/status'),
   runRoomActivityOnce: () => request<RoomActivityStatus>('/admin/room-activity/run-once', { method: 'POST' }),
-  oddsLimits: (gameId: string) => request<GameOddsLimits>(`/admin/games/${gameId}/odds-limits`),
+  oddsLimits: (gameId: string, signal?: AbortSignal) => request<GameOddsLimits>(`/admin/games/${gameId}/odds-limits`, { signal }),
   updateOddsLimits: (gameId: string, payload: UpdateOddsLimitsInput) => request<GameOddsLimits>(`/admin/games/${encodeURIComponent(gameId)}/odds-limits`, { method: 'PUT', body: JSON.stringify(payload) }),
-  playCatalog: (gameId?: string) => request<PlayCatalogItem[]>(`/admin/plays/catalog${gameId ? `?game_id=${encodeURIComponent(gameId)}` : ''}`),
+  playCatalog: (gameId?: string, signal?: AbortSignal) => request<PlayCatalogItem[]>(`/admin/plays/catalog${gameId ? `?game_id=${encodeURIComponent(gameId)}` : ''}`, { signal }),
   resetOddsLimits: (gameId: string, guard: OddsMutationGuard) => request<GameOddsLimits>(`/admin/games/${encodeURIComponent(gameId)}/odds-limits/reset`, { method: 'POST', body: JSON.stringify(guard) }),
   walletChannels: (params?: { query?: string; status?: string }) => {
     const query = new URLSearchParams({

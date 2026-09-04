@@ -2,9 +2,87 @@ package lotteryfeed
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestSGSSCVerifiedJobIsSeparateAndBounded(t *testing.T) {
+	count := 0
+	for _, job := range DefaultJobs() {
+		if job.Group != "sg-ssc-verified" {
+			continue
+		}
+		count++
+		if len(job.GameIDs) != 1 || job.GameIDs[0] != "sg-ssc" || job.Timeout != 15*time.Second || job.FastInterval != 15*time.Second || job.NormalInterval != 15*time.Second {
+			t.Fatalf("SG source shares the wrong product group or unbounded cadence: %+v", job)
+		}
+	}
+	if count != 1 {
+		t.Fatalf("SG source scheduled %d times, want exactly once", count)
+	}
+}
+
+func TestSchedulerEmitsOnlyFailureAndRecoveryTransitions(t *testing.T) {
+	job := JobConfig{ID: "163-pc28", Name: "PC", Group: "163-pc28", GameIDs: []string{"pc-canada"}, Timeout: time.Second}
+	results := [][]SyncResult{
+		{{GameID: "pc-canada", Status: "error", Error: "上游开奖过期"}},
+		{{GameID: "pc-canada", Status: "error", Error: "上游开奖过期"}},
+		{{GameID: "pc-canada", Status: "ok", Imported: 3, LatestIssue: "3477941"}},
+	}
+	call := 0
+	scheduler := NewScheduler([]JobConfig{job}, func(context.Context, string) []SyncResult {
+		result := results[call]
+		call++
+		return result
+	})
+	var mu sync.Mutex
+	events := make([]Event, 0)
+	scheduler.SetEventSink(func(_ context.Context, event Event) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	})
+	scheduler.runOnce(context.Background(), job)
+	scheduler.runOnce(context.Background(), job)
+	scheduler.runOnce(context.Background(), job)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 4 {
+		t.Fatalf("repeated polling generated noisy events: %+v", events)
+	}
+	want := []string{"sync_error", "scheduler_error", "sync_recovered", "scheduler_recovered"}
+	for index, eventType := range want {
+		if events[index].Type != eventType {
+			t.Fatalf("event %d type=%q want=%q; all=%+v", index, events[index].Type, eventType, events)
+		}
+	}
+	if events[2].Imported != 3 || events[2].LatestIssue != "3477941" || events[2].GameID != "pc-canada" {
+		t.Fatalf("recovery evidence missing: %+v", events[2])
+	}
+}
+
+func TestSchedulerStandbyEventIsEmittedOnlyOnTransition(t *testing.T) {
+	job := JobConfig{ID: "standby-job", Name: "standby", Group: "standby-group"}
+	scheduler := NewScheduler([]JobConfig{job}, func(context.Context, string) []SyncResult { return nil })
+	events := make([]Event, 0)
+	scheduler.SetEventSink(func(_ context.Context, event Event) { events = append(events, event) })
+
+	scheduler.markStandby(job)
+	// The run loop updates the visible mode after every pass. Event deduplication
+	// must not depend on that presentation field or every standby poll will log.
+	scheduler.mu.Lock()
+	status := scheduler.statuses[job.ID]
+	status.Mode = "normal"
+	scheduler.statuses[job.ID] = status
+	scheduler.mu.Unlock()
+	scheduler.markStandby(job)
+
+	if len(events) != 1 || events[0].Type != "standby" {
+		t.Fatalf("repeated standby polling emitted noisy events: %+v", events)
+	}
+}
 
 func TestJobIntervalUsesDrawWindow(t *testing.T) {
 	location, err := time.LoadLocation("Asia/Shanghai")

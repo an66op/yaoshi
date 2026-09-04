@@ -102,12 +102,11 @@ export function WorkspaceGamesPage() {
             <Avatar src={gameLogo(game.id)} alt={game.name} sx={{ width: 44, height: 44, bgcolor: 'action.hover', border: 1, borderColor: 'divider' }}>{game.name.slice(0, 2)}</Avatar>
             <Box flex={1} minWidth={0}>
               <Stack direction="row" alignItems="center" gap={.6}><Typography fontSize={14.5} fontWeight={850} noWrap>{game.name}</Typography>{globallyClosed && <Chip size="small" label="平台停用" sx={{ height: 19, fontSize: 9 }} />}</Stack>
-              <Typography fontSize={10.5} color="text.secondary" noWrap>{game.lobby_category?.trim() || '未分类'} · {game.source_kind === 'official' ? '官方源' : game.source_kind === 'external' ? '外部源' : '平台彩'}</Typography>
+              <Typography fontSize={10.5} color="text.secondary" noWrap>{game.lobby_category?.trim() || '未分类'}</Typography>
             </Box>
             <Tooltip title={availability.detail}><span><Switch checked={game.room_enabled} disabled={(!availability.canEnable && !game.room_enabled) || pending !== ''} onChange={event => void toggle(game, event.target.checked)} inputProps={{ 'aria-label': `${game.name}房间开关` }} /></span></Tooltip>
           </Stack>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" mt={1} pt={.9} borderTop={1} borderColor="divider">
-            <Typography fontSize={10} color="text.secondary">{game.id}</Typography>
+          <Stack direction="row" justifyContent="flex-end" alignItems="center" mt={1} pt={.9} borderTop={1} borderColor="divider">
             <Tooltip title={availability.detail}><Chip size="small" color={availability.color} variant={availability.available ? 'filled' : 'outlined'} icon={<SportsEsportsRounded />} label={availability.label} sx={{ height: 23, fontSize: 9.5 }} /></Tooltip>
           </Stack>
         </Paper>

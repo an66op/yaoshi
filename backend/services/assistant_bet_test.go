@@ -34,7 +34,7 @@ func TestParseAssistantBetCompactTicket(t *testing.T) {
 }
 
 func TestAssistantRulesStatusDoesNotConflateRulesAndSourceHealth(t *testing.T) {
-	for _, gameID := range []string{"hong-kong-mark-six", "unknown"} {
+	for _, gameID := range []string{"unknown"} {
 		status := &AssistantDrawStatus{Accepting: true, SourceHealthy: true, Issue: "123", IssueStatus: "accepting", NextDrawAt: time.Unix(123, 0), BettingWindow: &BettingWindow{}}
 		applyAssistantRulesStatus(&lottery.Game{ID: gameID}, status)
 		if status.Accepting || status.BettingWindow != nil || status.RulesReady || status.RuleVersion != "" || status.RulesMessage == "" {
@@ -43,6 +43,11 @@ func TestAssistantRulesStatusDoesNotConflateRulesAndSourceHealth(t *testing.T) {
 		if !status.SourceHealthy || status.Issue != "123" || status.IssueStatus != "accepting" || !status.NextDrawAt.Equal(time.Unix(123, 0)) {
 			t.Fatalf("rules gate changed draw/source lifecycle: %+v", status)
 		}
+	}
+	status := &AssistantDrawStatus{Accepting: true, SourceHealthy: true, Issue: "123", IssueStatus: "accepting", NextDrawAt: time.Unix(123, 0), BettingWindow: &BettingWindow{}}
+	applyAssistantRulesStatus(&lottery.Game{ID: "hong-kong-mark-six"}, status)
+	if !status.Accepting || !status.RulesReady || status.RuleVersion != hongKongMarkSixRuleVersion || status.RulesMessage != "" || status.BettingWindow == nil {
+		t.Fatalf("versioned Hong Kong rules changed healthy draw lifecycle: %+v", status)
 	}
 	for gameID, version := range map[string]string{"pc-canada": pc28RuleV1, "canada-28": pc28RuleV2, "canada-20": pc28RuleV3} {
 		status := &AssistantDrawStatus{Accepting: true, SourceHealthy: true}
@@ -512,7 +517,7 @@ func TestAssistantMoneyCentsRejectsExtraPrecisionAndNonDecimalForms(t *testing.T
 }
 
 func TestParseAssistantBetForEveryRacingGame(t *testing.T) {
-	for _, gameID := range []string{"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a"} {
+	for _, gameID := range []string{"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a", "bingo-racing-b"} {
 		t.Run(gameID, func(t *testing.T) {
 			game := &lottery.Game{ID: gameID}
 			lines, err := parseAssistantBetForGame(game, "0/0/1.25#6/大/20#冠亚/14/9#2/大小单双12/20")
@@ -532,7 +537,7 @@ func TestParseAssistantBetForEveryRacingGame(t *testing.T) {
 }
 
 func TestParseAssistantBetForEveryFiveDigitGame(t *testing.T) {
-	for _, gameID := range []string{"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1"} {
+	for _, gameID := range []string{"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
 		t.Run(gameID, func(t *testing.T) {
 			game := &lottery.Game{ID: gameID}
 			lines, err := parseAssistantBetForGame(game, "1/0/20#5/大小单双12/1.25#前三/豹子/20")
@@ -582,7 +587,7 @@ func TestParseAssistantBetThreeDigitTotalsAndFrontShapes(t *testing.T) {
 }
 
 func TestParseAssistantBetV3MiddleBackAndFirstLastTie(t *testing.T) {
-	for _, gameID := range []string{"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1"} {
+	for _, gameID := range []string{"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
 		game := &lottery.Game{ID: gameID}
 		lines, err := parseAssistantBetForGame(game, "中三顺子/5#后三/对子/5#1/龙虎和/5")
 		if err != nil || len(lines) != 5 {
@@ -604,14 +609,6 @@ func TestParseAssistantBetV3MiddleBackAndFirstLastTie(t *testing.T) {
 			t.Fatalf("%s compact tie: %+v %v", gameID, compact, compactErr)
 		}
 	}
-	for _, gameID := range []string{"bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
-		for _, input := range []string{"中三顺子/5", "后三/对子/5", "豹子/5", "1/和/5"} {
-			lines, err := parseAssistantBetForGame(&lottery.Game{ID: gameID}, input)
-			if err == nil {
-				t.Fatalf("%s accepted v3 syntax %q: %+v", gameID, input, lines)
-			}
-		}
-	}
 }
 
 func TestParseAssistantBetThreeDigitProfilesAndUnknownGames(t *testing.T) {
@@ -627,7 +624,7 @@ func TestParseAssistantBetThreeDigitProfilesAndUnknownGames(t *testing.T) {
 			}
 		}
 	}
-	for _, game := range []*lottery.Game{nil, {ID: "hong-kong-mark-six"}, {ID: "unknown", Name: "极速赛车", Category: "赛车"}, {Name: "极速赛车", Category: "赛车"}} {
+	for _, game := range []*lottery.Game{nil, {ID: "unknown", Name: "极速赛车", Category: "赛车"}, {Name: "极速赛车", Category: "赛车"}} {
 		if lines, err := parseAssistantBetForGame(game, "1/2/20"); err == nil || lines != nil || !strings.Contains(err.Error(), "尚未配置完整玩法") {
 			t.Fatalf("unknown game must fail closed: game=%+v lines=%+v err=%v", game, lines, err)
 		}

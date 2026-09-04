@@ -29,19 +29,20 @@
 .mark-six-market-notice { background: #fff3df; color: #825119; }
 .mark-six-accepted { margin: 0; background: #e7f8f2; color: #177b72; }
 .mark-six-market-tabs {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 5px;
-  overflow-x: auto;
-  margin: 0 -2px 10px;
-  padding: 2px;
-  scrollbar-width: none;
+  margin: 0 0 10px;
 }
-.mark-six-market-tabs::-webkit-scrollbar { display: none; }
+.mark-six-market-tabs[data-tab-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.mark-six-market-tabs[data-tab-count="3"],
+.mark-six-market-tabs[data-tab-count="6"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .mark-six-market-tabs button {
   display: grid;
-  flex: none;
+  place-content: center;
+  min-width: 0;
   min-height: 32px;
-  padding: 5px 8px;
+  padding: 5px 3px;
   border: 1px solid #dbe5e8;
   border-radius: 7px;
   background: #fff;
@@ -50,6 +51,27 @@
 }
 .mark-six-market-tabs button small { color: #b17a35; font-size: 7px; }
 .mark-six-market-tabs button.active { border-color: #249ba5; background: #e5f6f6; color: #197e88; font-weight: 800; }
+.mark-six-variant-tabs {
+  display: flex;
+  gap: 5px;
+  margin: -3px 0 10px;
+  padding: 1px 0 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mark-six-variant-tabs::-webkit-scrollbar { display: none; }
+.mark-six-variant-tabs button {
+  flex: 0 0 auto;
+  min-width: 52px;
+  min-height: 29px;
+  padding: 4px 8px;
+  border: 1px solid #dbe5e8;
+  border-radius: 999px;
+  background: #fff;
+  color: #647c86;
+  font-size: 9px;
+}
+.mark-six-variant-tabs button.active { border-color: #249ba5; background: #249ba5; color: #fff; font-weight: 800; }
 .mark-six-position-selector { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; margin-bottom: 10px; }
 .mark-six-number-filters {
   display: grid;
@@ -68,24 +90,58 @@
   color: #4e6873;
   font-size: 9px;
 }
+.mark-six-number-filters button.selected {
+  border-color: #158795;
+  background: #158795;
+  color: #fff;
+  font-weight: 800;
+}
+.mark-six-number-filters button:focus-visible { outline: 2px solid #158795; outline-offset: 2px; }
 .mark-six-number-filters button small { color: #a6783b; font-size: 7px; }
-.mark-six-number-grid { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 6px !important; }
+.mark-six-number-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 6px !important; }
+.mark-six-number-grid.mark-six-combo-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
 .mark-six-bet-board.full-bet-board .mark-six-number-grid button {
-  min-height: 58px;
-  padding: 5px 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 7px 5px;
 }
 .mark-six-number-grid .mark-six-ball {
   display: grid;
   place-items: center;
   width: 31px;
   height: 31px;
-  margin: auto;
+  margin: 0;
   border-radius: 50% !important;
   font-size: 13px;
 }
 .mark-six-value-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .mark-six-value-grid button { min-height: 44px; padding: 0 9px; border-radius: 7px; }
 .mark-six-value-grid button b { overflow-wrap: anywhere; }
+.mark-six-choice-heading { display: flex; align-items: center; justify-content: space-between; gap: 7px; width: 100%; min-width: 0; }
+.mark-six-number-grid .mark-six-choice-heading { justify-content: center; }
+.mark-six-bet-board .mark-six-choice-heading small { flex: none; color: #df5f50; font: 700 12px "DM Mono", monospace; }
+.mark-six-bet-board .mark-six-option-label { color: inherit; font-size: 13px; font-weight: 700; line-height: 1.4; }
+.mark-six-bet-board .mark-six-option-label.wave-red { color: #be324a; }
+.mark-six-bet-board .mark-six-option-label.wave-blue { color: #286599; }
+.mark-six-bet-board .mark-six-option-label.wave-green { color: #27753e; }
+.mark-six-bet-board.full-bet-board .mark-six-group-grid { grid-template-columns: minmax(0, 1fr); }
+.mark-six-bet-board.full-bet-board .mark-six-group-grid button {
+  display: grid;
+  gap: 9px;
+  min-height: 62px;
+  padding: 12px 8px;
+}
+.mark-six-group-choice .mark-six-choice-heading { justify-content: center; }
+.mark-six-option-numbers { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 5px; min-width: 0; }
+.mark-six-option-numbers .mark-six-ball { flex: 0 0 25px; width: 25px; height: 25px; margin: 0; font-size: 12px; }
+.mark-six-bet-board.full-bet-board .mark-six-compact-group { grid-template-columns: minmax(60px, .85fr) minmax(0, 2fr); }
+.mark-six-compact-group .mark-six-choice-heading { flex-wrap: wrap; gap: 5px; }
+.mark-six-number-hint { color: #8c9fa7; font-size: 9px; line-height: 1.5; }
+.mark-six-reference-note { margin: 0 0 10px; color: #7d8d98; font-size: 10px; line-height: 1.6; }
+.mark-six-combo-price { margin: 0 0 10px; color: #647c86; font-size: 11px; }
+.mark-six-combo-price b { color: #df5f50; }
 .mark-six-combo-bar {
   position: sticky;
   bottom: -16px;
@@ -120,8 +176,19 @@
 .theme-night.game-room .mark-six-market-notice { background: #51411f; color: #ffda91; }
 .theme-night.game-room .mark-six-accepted { background: #164b46; color: #9ce6d8; }
 .theme-night.game-room .mark-six-market-tabs button,
-.theme-night.game-room .mark-six-number-filters button { border-color: #477989; background: #143954; color: #bedce1; }
+.theme-night.game-room .mark-six-number-filters button,
+.theme-night.game-room .mark-six-variant-tabs button { border-color: #477989; background: #143954; color: #bedce1; }
 .theme-night.game-room .mark-six-market-tabs button.active { border-color: #6bd3d8; background: #155364; color: #e1f5f6; }
+.theme-night.game-room .mark-six-variant-tabs button.active { border-color: #6bd3d8; background: #207483; color: #fff; }
+.theme-night.game-room .mark-six-number-filters button.selected { border-color: #6bd3d8; background: #207483; color: #fff; }
+.theme-night.game-room .mark-six-number-filters button:focus-visible { outline-color: #6bd3d8; }
+.theme-night.game-room .mark-six-choice-heading small,
+.theme-night.game-room .mark-six-combo-price b { color: #ffa297; }
+.theme-night.game-room .mark-six-option-label.wave-red { color: #ff91a3; }
+.theme-night.game-room .mark-six-option-label.wave-blue { color: #8abef0; }
+.theme-night.game-room .mark-six-option-label.wave-green { color: #8adca3; }
+.theme-night.game-room .mark-six-reference-note,
+.theme-night.game-room .mark-six-combo-price { color: #a9c9d4; }
 .theme-night.game-room .mark-six-combo-bar { border-color: #376779; background: #10324aec; color: #b1d2d8; }
 
 @media (max-width: 350px) {

@@ -27,6 +27,7 @@ export function LimitsPage() {
   const [guard, setGuard] = useState<OddsMutationGuard>({ expected_rule_version: '', expected_revision: '' })
   const [riskWarnings, setRiskWarnings] = useState<OddsRiskWarning[]>([])
   const loadSequence = useRef(0)
+  const loadController = useRef<AbortController | null>(null)
   const writeLocked = useRef(false)
   const loadedGame = useRef('')
   const draftRef = useRef<PlayLimitItem[]>([])
@@ -55,31 +56,44 @@ export function LimitsPage() {
 
   const loadLimits = useCallback(async (id: string, notify = false) => {
     const sequence = ++loadSequence.current
+    loadController.current?.abort()
+    const controller = new AbortController()
+    loadController.current = controller
     loadedGame.current = ''
     setLoading(true)
     setError('')
     try {
-      const [result, catalogItems] = await Promise.all([adminApi.oddsLimits(id), adminApi.playCatalog(id)])
-      if (sequence !== loadSequence.current) return
+      const [result, catalogItems] = await Promise.all([
+        adminApi.oddsLimits(id, controller.signal),
+        adminApi.playCatalog(id, controller.signal),
+      ])
+      if (sequence !== loadSequence.current || controller.signal.aborted) return
       if (!result || result.game_id !== id) throw new Error('返回的彩种配置不匹配，请重新刷新')
       acceptSaved(result)
       setCatalog(catalogItems)
       if (notify) showMessage(`${result.game_name} 赔率限额已刷新`)
     } catch (reason) {
-      if (sequence !== loadSequence.current) return
+      const cancelled = controller.signal.aborted || (reason instanceof Error && reason.name === 'AbortError')
+      // One failed endpoint makes the pair unusable; stop its sibling too.
+      controller.abort()
+      if (sequence !== loadSequence.current || cancelled) return
       setError(reason instanceof Error ? reason.message : '读取赔率限额失败')
       setRulesReady(false)
       setRiskWarnings([])
       setGuard({ expected_rule_version: '', expected_revision: '' })
     } finally {
-      if (sequence === loadSequence.current) setLoading(false)
+      if (sequence === loadSequence.current) {
+        setLoading(false)
+        if (loadController.current === controller) loadController.current = null
+      }
     }
   }, [acceptSaved, showMessage])
 
   useEffect(() => {
     let cancelled = false
+    const controller = new AbortController()
     const timer = window.setTimeout(() => {
-      void adminApi.games().then(list => {
+      void adminApi.games(controller.signal).then(list => {
         if (cancelled) return
         setGames(list)
         setGameId(current => current || list[0]?.id || '')
@@ -90,7 +104,7 @@ export function LimitsPage() {
         setLoading(false)
       })
     }, 0)
-    return () => { cancelled = true; window.clearTimeout(timer) }
+    return () => { cancelled = true; window.clearTimeout(timer); controller.abort() }
   }, [])
 
   useEffect(() => {
@@ -101,6 +115,8 @@ export function LimitsPage() {
       // A request-generation counter, not a rendered DOM node.
       // eslint-disable-next-line react-hooks/exhaustive-deps
       loadSequence.current++
+      loadController.current?.abort()
+      loadController.current = null
     }
   }, [gameId, loadLimits])
 
@@ -167,7 +183,7 @@ export function LimitsPage() {
   }
 
   const refresh = async () => {
-    if (writeLocked.current || !gameId || loading) return
+    if (writeLocked.current || !gameId) return
     if (oddsDirtyCodes(draftRef.current, savedRef.current).length && !window.confirm('赔率有未保存修改，刷新将放弃这些修改。继续？')) return
     await loadLimits(gameId, true)
   }
@@ -176,6 +192,8 @@ export function LimitsPage() {
     if (writeLocked.current || saving || clearing || id === gameId) return
     if (oddsDirtyCodes(draftRef.current, savedRef.current).length && !window.confirm('赔率有未保存修改，切换彩种将放弃这些修改。继续？')) return
     loadSequence.current++
+    loadController.current?.abort()
+    loadController.current = null
     loadedGame.current = ''
     draftRef.current = []
     savedRef.current = []
@@ -192,13 +210,13 @@ export function LimitsPage() {
     setGameId(id)
   }
 
-  const editItems = (next: PlayLimitItem[]) => {
+  const editItems = useCallback((next: PlayLimitItem[]) => {
     if (writeLocked.current || unavailable || loadedGame.current !== gameId) return
     const draft = oddsDraftItems(next, savedRef.current)
     draftRef.current = draft
     setItems(draft)
     setError('')
-  }
+  }, [gameId, unavailable])
   const currentGame = games.find(game => game.id === gameId)
 
   return <Box p={{ xs: 1.5, lg: 2 }}>
@@ -213,16 +231,16 @@ export function LimitsPage() {
         </Box>
         <Stack direction="row" gap={.5} flexWrap="wrap" useFlexGap>
           <Button size="small" startIcon={<MenuBookRounded />} disabled={loading || !catalog.length} onClick={() => setGuideOpen(true)}>玩法说明</Button>
-          <Button size="small" variant="outlined" startIcon={<RefreshRounded />} disabled={!gameId || loading || saving || clearing} onClick={() => void refresh()}>刷新配置</Button>
+          <Button size="small" variant="outlined" startIcon={<RefreshRounded />} disabled={!gameId || saving || clearing} onClick={() => void refresh()}>{loading ? '取消并重试' : '刷新配置'}</Button>
           <Button size="small" color="error" variant="outlined" startIcon={<DeleteOutlineRounded />} disabled={unavailable} onClick={() => void clearCurrent()}>{clearing ? '清空中…' : '清空当前'}</Button>
         </Stack>
       </Stack>
       <GameOddsNavigation games={games.map(game => ({ ...game, enabled: true }))} gameId={gameId} onSelect={selectGame} />
       {currentGame && <Stack direction="row" gap={.6} flexWrap="wrap" mt={.75}>
         <Chip size="small" color="primary" label={currentGame.name} sx={{ height: 22 }} />
-        <Chip size="small" variant="outlined" label={`${items.length} 个玩法 · ${confirmedCount} 项已启用`} sx={{ height: 22 }} />
+        <Chip size="small" variant="outlined" label={loading ? '正在读取配置' : `${items.length} 个玩法 · ${confirmedCount} 项已启用`} sx={{ height: 22 }} />
         <Chip size="small" variant="outlined" color={rulesReady && currentGame.enabled && confirmedCount > 0 ? 'success' : 'default'} label={loading ? '加载中' : !rulesReady ? '玩法待配置' : !currentGame.enabled ? '已停用' : confirmedCount > 0 ? '运行中' : '赔率待配置'} sx={{ height: 22 }} />
-        {guard.expected_rule_version && <Chip size="small" variant="outlined" label={guard.expected_rule_version} sx={{ height: 22 }} />}
+        {!loading && guard.expected_rule_version && <Chip size="small" variant="outlined" label={guard.expected_rule_version} sx={{ height: 22 }} />}
         {dirtyCount > 0 && <Chip size="small" color="warning" label={`${dirtyCount} 项未保存`} sx={{ height: 22 }} />}
       </Stack>}
     </Paper>
@@ -235,7 +253,7 @@ export function LimitsPage() {
     </Alert>)}
 
     <Paper variant="outlined" sx={{ mt: 1, p: { xs: .75, md: 1 }, borderRadius: 1.25 }}>
-      {loading ? <Box minHeight={220} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={24} /></Box>
+      {loading ? <Stack minHeight={220} alignItems="center" justifyContent="center" gap={1} role="status"><CircularProgress size={24} /><Typography fontSize={12} color="text.secondary">正在读取配置，可切换彩种或取消并重试</Typography></Stack>
         : items.length ? <PlatformOddsGrid key={gameId} items={items} catalog={catalogMap} onChange={editItems} disabled={unavailable} />
           : <Stack minHeight={180} alignItems="center" justifyContent="center" color="text.secondary">{rulesMessage ? '此彩种的专属玩法待核对，当前不提供投注赔率' : '暂无玩法目录，请选择其他彩种或刷新配置'}</Stack>}
     </Paper>

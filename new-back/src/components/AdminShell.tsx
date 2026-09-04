@@ -63,7 +63,7 @@ const adminIcons: Record<string, ReactNode> = {
   '/announcements': <CampaignRounded />, '/plans': <FactCheckRounded />, '/activities': <CampaignRounded />, '/monitor': <MonitorHeartRounded />, '/bets': <ListAltRounded />, '/results': <ReceiptLongRounded />,
   '/limits': <TuneRounded />, '/board-report': <FlightTakeoffRounded />, '/lottery-network': <PublicRounded />, '/interface-test': <PublicRounded />, '/entertainment': <SportsEsportsRounded />,
   '/special-numbers': <StarsRounded />, '/menu-management': <ViewListRounded />, '/system': <SettingsRounded />,
-	'/audit': <ReceiptLongRounded />,
+	'/logs': <ReceiptLongRounded />,
   '/data-maintenance': <StorageRounded />,
   '/game-guide': <MenuBookRounded />,
 }

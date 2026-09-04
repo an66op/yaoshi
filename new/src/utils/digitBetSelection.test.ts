@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { digitChoice, digitCommandLengthError, digitDragonPositions, digitDragonSelections, digitNumbers, digitPatterns, digitSelectionCommand, digitSelectionGroups, digitSelectionKey, digitSides, toggleDigitChoice, type DigitBetKind, type DigitSelection } from './digitBetSelection'
 import { parseBetInput } from './betParser'
 
-const fiveIDs = ['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1']
+const fiveIDs = ['speed-ssc', 'sg-ssc', 'au-lucky-5', 'bingo-ssc-1', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4']
 const fiveChoice = (kind: DigitBetKind, selection: string, position = 1) => digitChoice(kind, selection, position, 'speed-ssc', 'digits5-v3')
 const threeChoice = (kind: DigitBetKind, selection: string, position = 1) => digitChoice(kind, selection, position, 'official-fc3d', 'digits3-v2')
 const fiveCommand = (items: DigitSelection[], amount: string) => digitSelectionCommand(items, amount, 5, 'speed-ssc', 'digits5-v3')
@@ -63,7 +63,7 @@ describe('digit lottery selection contract', () => {
     }
   })
 
-  it.each(['', 'bingo-racing-b', 'bingo-ssc-2', 'bingo-ssc-3', 'bingo-ssc-4'])('never borrows a five-ball selection contract for unverified %j', gameId => {
+  it.each(['', 'bingo-racing-b', 'official-tw-bingo'])('never borrows a five-ball selection contract for non-digit %j', gameId => {
     for (const ruleVersion of ['', 'digits5-v2', 'digits5-v3']) {
       expect(digitChoice('ball', '0', 1, gameId, ruleVersion)).toBeNull()
       expect(digitChoice('pattern', '顺子', 1, gameId, ruleVersion)).toBeNull()

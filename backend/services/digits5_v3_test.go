@@ -7,7 +7,7 @@ import (
 )
 
 func TestDigits5V3UsesOnlyCurrentGameContracts(t *testing.T) {
-	for _, gameID := range []string{"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1"} {
+	for _, gameID := range []string{"speed-ssc", "sg-ssc", "au-lucky-5", "bingo-ssc-1", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
 		game := &lottery.Game{ID: gameID}
 		profile, ok := rulesForGame(game)
 		if !ok || profile.Version != "digits5-v3" || !profile.ThreeShapeWindows || !profile.FirstLastDragonTiger || !profile.DragonTigerTie || profile.SumMarket {
@@ -28,27 +28,36 @@ func TestDigits5V3UsesOnlyCurrentGameContracts(t *testing.T) {
 	}
 }
 
-func TestUnverifiedBingoVariantsHaveNoBettingContract(t *testing.T) {
-	for _, gameID := range []string{"bingo-racing-b", "bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
+func TestVerifiedBingoVariantsUseTheirVersionedBettingContracts(t *testing.T) {
+	for _, gameID := range []string{"bingo-ssc-2", "bingo-ssc-3", "bingo-ssc-4"} {
 		game := &lottery.Game{ID: gameID}
-		if profile, ok := rulesForGame(game); ok || profile.Version != "" {
-			t.Fatalf("%s inferred a rule from an unverified conversion: %+v/%v", gameID, profile, ok)
+		profile, ok := rulesForGame(game)
+		if !ok || profile.Version != "digits5-v3" || !profile.ThreeShapeWindows || !profile.DragonTigerTie {
+			t.Fatalf("%s did not bind the verified five-ball contract: %+v/%v", gameID, profile, ok)
 		}
-		if _, err := parseAssistantBetForGame(game, "1/1/5"); apperrors.GetErrorCode(err) != "RULES_NOT_READY" {
-			t.Fatalf("%s accepted chat betting: %v", gameID, err)
+		lines, err := parseAssistantBetForGame(game, "中三顺子/5#后三/对子/5#1/龙虎和/5")
+		if err != nil || len(lines) != 5 {
+			t.Fatalf("%s rejected the verified v3 syntax: %+v %v", gameID, lines, err)
 		}
-		for _, version := range []string{"racing-v2", "digits5-v3"} {
-			if _, _, err := evaluateBetForRuleVersion(game, version, []int{1, 2, 3, 4, 5}, "ball_1_5", 1, "1"); apperrors.GetErrorCode(err) != "RULES_NOT_READY" {
-				t.Fatalf("%s accepted unbound version %s: %v", gameID, version, err)
-			}
+		won, _, err := evaluateBetForRuleVersion(game, "digits5-v3", []int{9, 1, 2, 3, 9}, "dragon_tiger_tie", 1, "和")
+		if err != nil || !won {
+			t.Fatalf("%s could not settle the verified v3 contract: won=%v err=%v", gameID, won, err)
 		}
+	}
+	racing := &lottery.Game{ID: "bingo-racing-b"}
+	profile, ok := rulesForGame(racing)
+	if !ok || profile.Version != "racing-v2" || !profile.Racing || !profile.Unique {
+		t.Fatalf("bingo-racing-b did not bind the verified racing contract: %+v/%v", profile, ok)
+	}
+	if lines, err := parseAssistantBetForGame(racing, "0/0/5#冠亚/14/5"); err != nil || len(lines) != 2 {
+		t.Fatalf("bingo-racing-b rejected racing syntax: %+v %v", lines, err)
 	}
 }
 
-func TestSGSSCUpgradesRulesWithoutChangingPlatformSource(t *testing.T) {
+func TestSGSSCVerifiedSourcePreservesFiveBallRules(t *testing.T) {
 	kind, name, sourceURL, status := defaultLotterySource("sg-ssc")
-	if kind != "platform" || name != "王者开奖" || sourceURL != "" || status != "ok" {
-		t.Fatalf("SG时时彩 product identity changed without a confirmed source: %q/%q/%q/%q", kind, name, sourceURL, status)
+	if kind != "external" || name != sgSSCVerifiedSourceName || sourceURL != sgSSCVerifiedSourceURL || status != "stale" {
+		t.Fatalf("SG时时彩 did not wait for verified external data: %q/%q/%q/%q", kind, name, sourceURL, status)
 	}
 	for _, binding := range api168HighFreqBindings {
 		if binding.GameID == "sg-ssc" {
@@ -184,8 +193,5 @@ func TestDigits5V3TieHasIndependentBackendOddsCode(t *testing.T) {
 	tie, ok := defaultPlayByCode("dragon_tiger_tie")
 	if !ok || tie.Code == "dragon_tiger" {
 		t.Fatalf("tie is not an independent configurable market: %+v/%v", tie, ok)
-	}
-	if _, _, err := InferPlayForGame(&lottery.Game{ID: "bingo-ssc-2"}, "", "", 1, "和"); err == nil {
-		t.Fatal("unverified digit game inferred the v3 tie market")
 	}
 }

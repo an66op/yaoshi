@@ -37,6 +37,19 @@ func (s *BetAdminService) EnsureCurrentIssue(game *lottery.Game) (*lottery.Issue
 	if readErr != nil && readErr != gorm.ErrRecordNotFound {
 		return nil, apperrors.NewSystemError("ISSUE_READ_FAILED", "读取期号状态失败", readErr)
 	}
+	if game.ID == "sg-ssc" {
+		if err := sgSSCIssueEvidenceError(s.db, issueNo, &row); err != nil {
+			if apperrors.GetErrorCode(err) == "DRAW_SOURCE_UNVERIFIED" {
+				// Keep the rest of the catalog usable and the historical row intact.
+				// Placement/import have their own hard gate; this is a read view.
+				row.GameID, row.Issue, row.Status = game.ID, issueNo, lottery.IssueStatusError
+				row.LastError = err.Error()
+				row.ScheduledDrawAt = nil // Do not materialize/refresh a legacy room window from this view.
+				return &row, nil
+			}
+			return nil, err
+		}
+	}
 	drawAt := game.NextDrawAt.UTC()
 	if row.ScheduledDrawAt != nil && row.ScheduledDrawAt.Before(drawAt) {
 		drawAt = row.ScheduledDrawAt.UTC()

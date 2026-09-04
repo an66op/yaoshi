@@ -32,7 +32,7 @@ export const DEFAULT_ADMIN_MENU: AdminMenuItemConfig[] = [
   { path: '/activities', label: '活动管理', group: '内容与服务', order: 160, visible: false },
   { path: '/special-numbers', label: '房间靓号', group: '内容与服务', order: 170, visible: false },
   { path: '/menu-management', label: '菜单管理', group: '系统管理', order: 180, visible: true },
-  { path: '/audit', label: '操作审计', group: '系统管理', order: 190, visible: true },
+  { path: '/logs', label: '日志', group: '系统管理', order: 190, visible: true },
   { path: '/data-maintenance', label: '数据维护', group: '系统管理', order: 195, visible: true },
   { path: '/game-guide', label: '游戏说明', group: '系统管理', order: 196, visible: true },
   { path: '/interface-test', label: '接口测试', group: '系统管理', order: 197, visible: true },
@@ -110,6 +110,9 @@ export function normalizeAdminMenu(value: unknown): AdminMenuItemConfig[] {
     const candidate = item as Partial<AdminMenuItemConfig>
     if (typeof candidate.path === 'string') byPath.set(candidate.path, candidate)
   }
+  // `/audit` was the old generic report entry. Keep its saved placement when
+  // upgrading menus, while the required canonical destination is now `/logs`.
+  if (!byPath.has('/logs') && byPath.has('/audit')) byPath.set('/logs', byPath.get('/audit')!)
   return DEFAULT_ADMIN_MENU.map((fallback) => {
     const candidate = byPath.get(fallback.path)
     const requiredMemberEntry = fallback.path === '/members'
@@ -121,8 +124,9 @@ export function normalizeAdminMenu(value: unknown): AdminMenuItemConfig[] {
     const legacyWalletLabel = fallback.path === '/wallet' && savedLabel === '钱包与支付'
     const legacyReportLabel = fallback.path === '/reports' && savedLabel === '经营报表'
     const legacyEntertainmentLabel = fallback.path === '/entertainment' && savedLabel === '游戏与彩种'
+    const legacyAuditLabel = fallback.path === '/logs' && savedLabel === '操作审计'
     const retiredPath = ['/board-report', '/lottery-network', '/monitor', '/activities', '/special-numbers'].includes(fallback.path)
-    const label = savedLabel && !requiredMemberEntry && !legacyChatLabel && !legacyLotteryLabel && !legacyApplicationLabel && !legacyResultsLabel && !legacyWalletLabel && !legacyReportLabel && !legacyEntertainmentLabel && !retiredPath
+    const label = savedLabel && !requiredMemberEntry && !legacyChatLabel && !legacyLotteryLabel && !legacyApplicationLabel && !legacyResultsLabel && !legacyWalletLabel && !legacyReportLabel && !legacyEntertainmentLabel && !legacyAuditLabel && !retiredPath
       ? savedLabel.slice(0, 18)
       : fallback.label
     const group = requiredMemberEntry
@@ -131,7 +135,7 @@ export function normalizeAdminMenu(value: unknown): AdminMenuItemConfig[] {
     const order = requiredMemberEntry
       ? fallback.order
       : typeof candidate?.order === 'number' && Number.isFinite(candidate.order) ? candidate.order : fallback.order
-    const visible = fallback.path === '/menu-management' || requiredMemberEntry
+    const visible = fallback.path === '/menu-management' || fallback.path === '/logs' || requiredMemberEntry
       ? true
       : retiredPath
         ? false

@@ -6,7 +6,7 @@ import (
 )
 
 func TestReleaseBootstrapExcludesLocalFixtures(t *testing.T) {
-	steps, err := bootstrapSteps("release")
+	steps, err := bootstrapSteps(BootstrapOptions{Mode: "release"})
 	if err != nil {
 		t.Fatalf("bootstrapSteps() error = %v", err)
 	}
@@ -16,14 +16,71 @@ func TestReleaseBootstrapExcludesLocalFixtures(t *testing.T) {
 	}
 }
 
-func TestDebugBootstrapNeverSeedsPlanRecommendations(t *testing.T) {
-	steps, err := bootstrapSteps("debug")
+func TestDebugBootstrapExcludesOptionalFixturesByDefault(t *testing.T) {
+	steps, err := bootstrapSteps(BootstrapOptions{Mode: "debug"})
+	if err != nil {
+		t.Fatalf("bootstrapSteps() error = %v", err)
+	}
+	want := []bootstrapStep{bootstrapAdmin, bootstrapLotteryCatalog, bootstrapWorkspaces, bootstrapBaseCatalogs}
+	if !reflect.DeepEqual(steps, want) {
+		t.Fatalf("debug bootstrap = %#v, want %#v", steps, want)
+	}
+}
+
+func TestDebugBootstrapIncludesExperienceAccountsOnlyWhenExplicitlyEnabled(t *testing.T) {
+	steps, err := bootstrapSteps(BootstrapOptions{Mode: "debug", SeedExperienceAccounts: true})
+	if err != nil {
+		t.Fatalf("bootstrapSteps() error = %v", err)
+	}
+	want := []bootstrapStep{bootstrapAdmin, bootstrapLotteryCatalog, bootstrapExperienceAccount, bootstrapWorkspaces, bootstrapBaseCatalogs}
+	if !reflect.DeepEqual(steps, want) {
+		t.Fatalf("explicit debug bootstrap = %#v, want %#v", steps, want)
+	}
+}
+
+func TestDebugBootstrapIncludesDeterministicLotteryHistoryOnlyWhenExplicitlyEnabled(t *testing.T) {
+	steps, err := bootstrapSteps(BootstrapOptions{Mode: "debug", SeedDeterministicLotteryHistory: true})
+	if err != nil {
+		t.Fatalf("bootstrapSteps() error = %v", err)
+	}
+	want := []bootstrapStep{bootstrapAdmin, bootstrapLotteryDebug, bootstrapWorkspaces, bootstrapBaseCatalogs}
+	if !reflect.DeepEqual(steps, want) {
+		t.Fatalf("explicit deterministic-history bootstrap = %#v, want %#v", steps, want)
+	}
+}
+
+func TestDebugBootstrapFixtureFlagsAreIndependent(t *testing.T) {
+	steps, err := bootstrapSteps(BootstrapOptions{
+		Mode:                            "debug",
+		SeedExperienceAccounts:          true,
+		SeedDeterministicLotteryHistory: true,
+	})
 	if err != nil {
 		t.Fatalf("bootstrapSteps() error = %v", err)
 	}
 	want := []bootstrapStep{bootstrapAdmin, bootstrapLotteryDebug, bootstrapExperienceAccount, bootstrapWorkspaces, bootstrapBaseCatalogs}
 	if !reflect.DeepEqual(steps, want) {
-		t.Fatalf("debug bootstrap = %#v, want %#v", steps, want)
+		t.Fatalf("combined explicit debug bootstrap = %#v, want %#v", steps, want)
+	}
+}
+
+func TestNonDebugBootstrapRejectsDebugOnlyFixtures(t *testing.T) {
+	tests := []struct {
+		name    string
+		options BootstrapOptions
+	}{
+		{name: "experience accounts", options: BootstrapOptions{SeedExperienceAccounts: true}},
+		{name: "deterministic lottery history", options: BootstrapOptions{SeedDeterministicLotteryHistory: true}},
+	}
+	for _, mode := range []string{"test", "release"} {
+		for _, tt := range tests {
+			t.Run(mode+"/"+tt.name, func(t *testing.T) {
+				tt.options.Mode = mode
+				if _, err := bootstrapSteps(tt.options); err == nil {
+					t.Fatalf("%s bootstrap accepted debug-only %s", mode, tt.name)
+				}
+			})
+		}
 	}
 }
 

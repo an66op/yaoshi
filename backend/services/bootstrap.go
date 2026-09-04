@@ -17,7 +17,9 @@ import (
 // BootstrapOptions contains only process-mode policy. Credentials and other
 // secrets are never accepted by the normal server bootstrap path.
 type BootstrapOptions struct {
-	Mode string
+	Mode                            string
+	SeedExperienceAccounts          bool
+	SeedDeterministicLotteryHistory bool
 }
 
 type bootstrapStep string
@@ -31,13 +33,25 @@ const (
 	bootstrapBaseCatalogs      bootstrapStep = "base_catalogs"
 )
 
-func bootstrapSteps(mode string) ([]bootstrapStep, error) {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
+func bootstrapSteps(options BootstrapOptions) ([]bootstrapStep, error) {
+	mode := strings.ToLower(strings.TrimSpace(options.Mode))
+	if options.SeedExperienceAccounts && mode != "debug" {
+		return nil, fmt.Errorf("体验账号种子仅允许在 debug 模式显式启用")
+	}
+	if options.SeedDeterministicLotteryHistory && mode != "debug" {
+		return nil, fmt.Errorf("确定性开奖历史种子仅允许在 debug 模式显式启用")
+	}
+	switch mode {
 	case "debug":
-		return []bootstrapStep{
-			bootstrapAdmin, bootstrapLotteryDebug, bootstrapExperienceAccount,
-			bootstrapWorkspaces, bootstrapBaseCatalogs,
-		}, nil
+		lotteryStep := bootstrapLotteryCatalog
+		if options.SeedDeterministicLotteryHistory {
+			lotteryStep = bootstrapLotteryDebug
+		}
+		steps := []bootstrapStep{bootstrapAdmin, lotteryStep}
+		if options.SeedExperienceAccounts {
+			steps = append(steps, bootstrapExperienceAccount)
+		}
+		return append(steps, bootstrapWorkspaces, bootstrapBaseCatalogs), nil
 	case "release", "test":
 		return []bootstrapStep{
 			bootstrapAdmin, bootstrapLotteryCatalog,
@@ -49,14 +63,16 @@ func bootstrapSteps(mode string) ([]bootstrapStep, error) {
 }
 
 // Bootstrap is the single authoritative initialization entry point. Every
-// step is additive and idempotent; release mode deliberately excludes local
-// accounts, deterministic draw history and editorial plan fixtures.
+// step is additive and idempotent. Experience accounts and deterministic draw
+// history require independent, explicit debug-only opt-ins; normal starts do
+// not create either fixture.
 func Bootstrap(db *gorm.DB, options BootstrapOptions) error {
 	if db == nil {
 		return fmt.Errorf("数据库连接不可用")
 	}
 	mode := strings.ToLower(strings.TrimSpace(options.Mode))
-	steps, err := bootstrapSteps(mode)
+	options.Mode = mode
+	steps, err := bootstrapSteps(options)
 	if err != nil {
 		return err
 	}

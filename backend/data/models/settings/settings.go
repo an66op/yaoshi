@@ -11,7 +11,7 @@ type SystemConfig struct {
 	RoomName     string `gorm:"size:80;not null;default:王者" json:"room_name"`
 	RoomLogo     string `gorm:"type:text" json:"room_logo"`
 	RoomCode     string `gorm:"size:40;not null;default:''" json:"room_code"`
-	ChatNickname string `gorm:"size:80;not null;default:群主" json:"chat_nickname"`
+	ChatNickname string `gorm:"size:80;not null;default:客服" json:"chat_nickname"`
 	// ChatAvatar is the public operator/draw-assistant avatar for this room.
 	// An empty value means clients may fall back to the configured room logo.
 	ChatAvatar            string  `gorm:"type:text;not null;default:''" json:"chat_avatar"`

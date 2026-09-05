@@ -416,10 +416,6 @@ func (s *ChatAdminService) SetLotteryRoomEnabledForWorkspace(workspace workspace
 	return &LotteryRoomStatus{AgentID: workspace.OwnerUserID, GameID: gameID, Enabled: enabled}, nil
 }
 
-func (s *ChatAdminService) LotteryRoomEnabled(agentID uint64, gameID string) bool {
-	return s.lotteryRoomEnabled("agent:"+strconv.FormatUint(agentID, 10), strings.TrimSpace(gameID))
-}
-
 func (s *ChatAdminService) Messages(scope, roomType, roomScope, gameID string, limit int, beforeID uint64) (*AdminChatMessageList, error) {
 	if err := validAdminScope(scope, roomType); err != nil {
 		return nil, err

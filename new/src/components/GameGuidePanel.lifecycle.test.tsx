@@ -120,4 +120,11 @@ describe('GameGuidePanel odds switching', () => {
     expect(elements(switched).some(node => node.props.role === 'dialog')).toBe(false)
     expect(renderToStaticMarkup(switched)).toContain('极速时时彩')
   })
+
+  it('keeps internal rule-audit notes out of the member guide', () => {
+    const bingoGames = [game('bingo-racing-a', '宾果赛车(A)')]
+    const html = renderToStaticMarkup(runtime.hooks!.render(() => GameGuidePanel({ games: bingoGames, initialTab: 'rules' })))
+    expect(html).not.toContain('校对提示')
+    expect(html).not.toContain('任一侧缺期、重号、越界或不一致')
+  })
 })

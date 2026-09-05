@@ -229,11 +229,6 @@ func developmentDatabaseCompleteMarker(clusterID, nonce string) (string, error) 
 	return fmt.Sprintf("%s:complete:%s:%s:%s:%x", developmentDatabaseMarkerNamespace, clusterID, nonce, profileIdentity, hash.Sum(nil)), nil
 }
 
-func validCompletedDevelopmentDatabaseMarker(marker string) bool {
-	parsed, err := parseDevelopmentDatabaseMarker(marker)
-	return err == nil && parsed.Phase == "complete"
-}
-
 func parseDevelopmentDatabaseMarker(raw string) (developmentDatabaseMarker, error) {
 	parts := strings.Split(raw, ":")
 	if len(parts) < 4 || parts[0] != developmentDatabaseMarkerNamespace {

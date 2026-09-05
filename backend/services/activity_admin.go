@@ -146,46 +146,6 @@ func (s *ActivityAdminService) DeleteForWorkspace(workspaceID, id uint64) error 
 	return nil
 }
 
-func (s *ActivityAdminService) legacyWorkspaceID() (uint64, error) {
-	var row struct{ ID uint64 }
-	if err := s.db.Table("workspaces").Select("id").Where("type = ?", "platform").First(&row).Error; err != nil {
-		return 0, err
-	}
-	return row.ID, nil
-}
-
-func (s *ActivityAdminService) Create(input ActivityPayload) (*ActivityView, error) {
-	workspaceID, err := s.legacyWorkspaceID()
-	if err != nil {
-		return nil, err
-	}
-	return s.CreateForWorkspace(workspaceID, input)
-}
-
-func (s *ActivityAdminService) Update(id uint64, input ActivityPayload) (*ActivityView, error) {
-	workspaceID, err := s.legacyWorkspaceID()
-	if err != nil {
-		return nil, err
-	}
-	return s.UpdateForWorkspace(workspaceID, id, input)
-}
-
-func (s *ActivityAdminService) SetStatus(id uint64, status string) (*ActivityView, error) {
-	workspaceID, err := s.legacyWorkspaceID()
-	if err != nil {
-		return nil, err
-	}
-	return s.SetStatusForWorkspace(workspaceID, id, status)
-}
-
-func (s *ActivityAdminService) Delete(id uint64) error {
-	workspaceID, err := s.legacyWorkspaceID()
-	if err != nil {
-		return err
-	}
-	return s.DeleteForWorkspace(workspaceID, id)
-}
-
 // EnsureDefaultsForWorkspace materializes the room-owned activity catalog.
 // It is exported for the centralized bootstrap; API reads no longer need to be
 // the first operation which happens to create required base records.

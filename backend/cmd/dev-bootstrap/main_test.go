@@ -20,7 +20,8 @@ func TestCompletedDevelopmentDatabaseMarkerContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !validCompletedDevelopmentDatabaseMarker(marker) {
+	parsedComplete, parseErr := parseDevelopmentDatabaseMarker(marker)
+	if parseErr != nil || parsedComplete.Phase != "complete" {
 		t.Fatalf("generated marker is invalid: %q", marker)
 	}
 	if !strings.HasPrefix(marker, developmentDatabaseMarkerNamespace+":complete:"+clusterID+":"+nonce+":development-acceptance-odds-v1:") {
@@ -36,7 +37,8 @@ func TestCompletedDevelopmentDatabaseMarkerContract(t *testing.T) {
 		developmentDatabaseMarkerNamespace + ":complete:" + clusterID + ":" + nonce + ":profile:not-a-hash:not-a-hash",
 		"another-project:complete:" + clusterID + ":" + nonce + ":profile:" + strings.Repeat("0", 64) + ":" + strings.Repeat("0", 64),
 	} {
-		if validCompletedDevelopmentDatabaseMarker(invalid) {
+		parsed, err := parseDevelopmentDatabaseMarker(invalid)
+		if err == nil && parsed.Phase == "complete" {
 			t.Fatalf("invalid marker accepted: %q", invalid)
 		}
 	}

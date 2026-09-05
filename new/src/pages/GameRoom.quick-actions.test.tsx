@@ -26,6 +26,8 @@ describe('game room quick actions', () => {
     expect(html).toContain('href="https://draw.example/mobile"')
     expect(html).toContain('target="_blank"')
     expect(html).toContain('rel="noopener noreferrer"')
+    expect(html).toContain('class="quick-source-163"')
+    expect(html).toContain('>163</text>')
   })
 
   it('uses one linear icon system and never emits an unsafe configured destination', () => {

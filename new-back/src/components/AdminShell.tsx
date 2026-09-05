@@ -36,7 +36,7 @@ import VolumeUpRounded from '@mui/icons-material/VolumeUpRounded'
 import VolumeOffRounded from '@mui/icons-material/VolumeOffRounded'
 import ArrowForwardRounded from '@mui/icons-material/ArrowForwardRounded'
 import type { ReactNode } from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { adminApi, agentApi, tenantApi, type AdminChatConversation, type AdminChatUnreadSummary, type AdminNotification, type ApplicationStats, type ManagementWsEvent } from '../api'
 import { DEFAULT_ADMIN_MENU, DEFAULT_AGENT_MENU, DEFAULT_TENANT_MENU, normalizeAdminMenu, normalizeRoleMenu, type AdminMenuItemConfig } from '../adminMenu'
 import { MANAGEMENT_WS_EVENT, MANAGEMENT_WS_STATUS_EVENT, type ManagementWsStatus } from '../hooks/useManagementWebSocket'
@@ -51,6 +51,7 @@ import {
   managementAlertFromEvent, mergeManagementAlertQueue, shouldPlayManagementAlertSound,
   type ManagementAlert,
 } from '../utils/managementAlerts'
+import { keepMenuItemVisible } from '../utils/menuVisibility'
 
 const drawerWidth = 208
 type ShellMenuItem = { path: string; label: string; icon: ReactNode }
@@ -109,6 +110,8 @@ export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogou
   const [loggingOut, setLoggingOut] = useState(false)
   const [adminMenu, setAdminMenu] = useState<AdminMenuItemConfig[]>(() => normalizeAdminMenu(DEFAULT_ADMIN_MENU))
 	const [roleMenu, setRoleMenu] = useState<AdminMenuItemConfig[]>(() => user.role === 'tenant' ? DEFAULT_TENANT_MENU : DEFAULT_AGENT_MENU)
+  const menuScrollRef = useRef<HTMLDivElement | null>(null)
+  const activeMenuItemRef = useRef<HTMLDivElement | null>(null)
   const { now: serverNow, synced: clockSynced, latency } = useServerClock()
   const { showMessage } = useFeedback()
   const requestLogout = async () => {
@@ -136,6 +139,14 @@ export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogou
   const userInteracted = useRef(Boolean(navigator.userActivation?.hasBeenActive))
   const audioContext = useRef<AudioContext | null>(null)
   const liveAlert = liveAlerts[0]
+
+  useLayoutEffect(() => {
+    if (!desktop && !mobileOpen) return
+    const frame = window.requestAnimationFrame(() => {
+      if (menuScrollRef.current && activeMenuItemRef.current) keepMenuItemVisible(menuScrollRef.current, activeMenuItemRef.current)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [desktop, mobileOpen, path, visibleGroups])
 
   const chatUnreadApi = useMemo(() => user.role === 'agent'
     ? agentApi.chatUnread
@@ -333,7 +344,7 @@ export function AdminShell({ path, onNavigate, mode, onToggleMode, user, onLogou
   }
   const drawer = <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: '#071f38', color: '#b9d1db' }}>
     <Toolbar sx={{ minHeight: '72px !important', px: 2.2, gap: 1.3 }}><Box sx={{ width: 40, height: 40, borderRadius: 2.5, display: 'grid', placeItems: 'center', color: 'white', fontWeight: 900, fontSize: 19, background: 'linear-gradient(145deg,#1684ad,#29bdb0)', boxShadow: '0 8px 18px rgba(25,159,168,.35)' }}>王</Box><Box><Typography fontWeight={850} color="white" letterSpacing={2}>王者</Typography><Typography fontSize={10} color="#6f94a5" letterSpacing={1.4}>管理中心</Typography></Box></Toolbar>
-    <Box sx={{ flex: 1, overflowY: 'auto', px: 1.2, pb: 1 }}>{visibleGroups.map(group => <Box key={group.label} mb={1}><Typography variant="overline" sx={{ display: 'block', px: 1.5, py: .6, color: '#64879a', fontSize: 9, fontWeight: 800, letterSpacing: 1.4 }}>{group.label}</Typography><List dense disablePadding>{group.items.map(item => <ListItemButton key={item.path} selected={path === item.path} onClick={() => navigate(item.path)} sx={{ minHeight: 42, mb: .4, px: 1.4, borderRadius: 2.2, color: '#a9c3ce', '& .MuiListItemIcon-root': { color: 'inherit' }, '&.Mui-selected': { color: 'white', background: 'linear-gradient(105deg,#1682aa,#24afa9)', boxShadow: '0 6px 16px rgba(5,55,75,.45)' }, '&.Mui-selected:hover': { background: 'linear-gradient(105deg,#1682aa,#24afa9)' }, '&:hover': { color: 'white', bgcolor: 'rgba(255,255,255,.06)' } }}><ListItemIcon sx={{ minWidth: 34 }}>{item.icon}</ListItemIcon><ListItemText primary={item.label} primaryTypographyProps={{ fontSize: 12, fontWeight: 650 }} />{item.path === '/applications' && pendingApplications > 0 ? <Chip size="small" color="error" label={pendingApplications > 99 ? '99+' : pendingApplications} sx={{ height: 19, minWidth: 27, '& .MuiChip-label': { px: .7, fontSize: 9 } }} /> : null}{item.path === '/chat' && chatUnread.total_unread > 0 ? <Chip size="small" color="error" label={chatUnread.total_unread > 99 ? '99+' : chatUnread.total_unread} sx={{ height: 19, minWidth: 27, '& .MuiChip-label': { px: .7, fontSize: 9 } }} /> : null}</ListItemButton>)}</List></Box>)}</Box>
+    <Box ref={menuScrollRef} sx={{ flex: 1, overflowY: 'auto', px: 1.2, pb: 1 }}>{visibleGroups.map(group => <Box key={group.label} mb={1}><Typography variant="overline" sx={{ display: 'block', px: 1.5, py: .6, color: '#64879a', fontSize: 9, fontWeight: 800, letterSpacing: 1.4 }}>{group.label}</Typography><List dense disablePadding>{group.items.map(item => <ListItemButton ref={path === item.path ? activeMenuItemRef : undefined} key={item.path} selected={path === item.path} onClick={() => navigate(item.path)} sx={{ minHeight: 42, mb: .4, px: 1.4, borderRadius: 2.2, color: '#a9c3ce', '& .MuiListItemIcon-root': { color: 'inherit' }, '&.Mui-selected': { color: 'white', background: 'linear-gradient(105deg,#1682aa,#24afa9)', boxShadow: '0 6px 16px rgba(5,55,75,.45)' }, '&.Mui-selected:hover': { background: 'linear-gradient(105deg,#1682aa,#24afa9)' }, '&:hover': { color: 'white', bgcolor: 'rgba(255,255,255,.06)' } }}><ListItemIcon sx={{ minWidth: 34 }}>{item.icon}</ListItemIcon><ListItemText primary={item.label} primaryTypographyProps={{ fontSize: 12, fontWeight: 650 }} />{item.path === '/applications' && pendingApplications > 0 ? <Chip size="small" color="error" label={pendingApplications > 99 ? '99+' : pendingApplications} sx={{ height: 19, minWidth: 27, '& .MuiChip-label': { px: .7, fontSize: 9 } }} /> : null}{item.path === '/chat' && chatUnread.total_unread > 0 ? <Chip size="small" color="error" label={chatUnread.total_unread > 99 ? '99+' : chatUnread.total_unread} sx={{ height: 19, minWidth: 27, '& .MuiChip-label': { px: .7, fontSize: 9 } }} /> : null}</ListItemButton>)}</List></Box>)}</Box>
   </Box>
 
   return (

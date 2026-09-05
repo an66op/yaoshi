@@ -127,7 +127,6 @@ function GuideHeader({ manual, odds }: { manual: GameManual; odds: GameOdds | nu
 
 function RulesContent({ manual }: { manual: GameManual }) {
   return <div className="game-guide-rules">
-    {manual.auditNotes?.length ? <aside><b>校对提示</b>{manual.auditNotes.map(note => <p key={note}>{note}</p>)}</aside> : null}
     {manual.sections.map((section, index) => <article key={`${section.title}-${index}`}>
       <header><span>{index + 1}</span><b>{section.title}</b></header>
       <p>{section.body}</p>

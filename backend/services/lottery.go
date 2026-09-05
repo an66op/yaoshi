@@ -861,9 +861,6 @@ func SyncTargetGames(db *gorm.DB) (*SyncTargetResult, error) {
 	for id := range targetSet {
 		result.Missing = append(result.Missing, id)
 	}
-	if err := Ensure168SourceGames(db); err != nil {
-		return nil, err
-	}
 	if err := Ensure163BingoSources(db); err != nil {
 		return nil, err
 	}

@@ -55,10 +55,6 @@ func (s *NotifyAdminService) ListForWorkspace(workspaceID uint64, limit int) ([]
 	return items, nil
 }
 
-func (s *NotifyAdminService) MarkRead(id uint64) error {
-	return s.MarkReadForWorkspace(0, id)
-}
-
 func (s *NotifyAdminService) MarkReadForWorkspace(workspaceID, id uint64) error {
 	now := time.Now().UTC()
 	query := s.db.Model(&notify.Notification{}).Where("id = ?", id)
@@ -75,10 +71,6 @@ func (s *NotifyAdminService) MarkReadForWorkspace(workspaceID, id uint64) error 
 		return apperrors.NewBusinessError("NOT_FOUND", "通知不存在")
 	}
 	return nil
-}
-
-func (s *NotifyAdminService) MarkAllRead() error {
-	return s.MarkAllReadForWorkspace(0)
 }
 
 func (s *NotifyAdminService) MarkAllReadForWorkspace(workspaceID uint64) error {

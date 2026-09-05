@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"backend/data/models/lottery"
-
-	"gorm.io/gorm"
 )
 
 func source163MarkSixTestRows(binding source163MarkSixBinding, latestAt time.Time, interval time.Duration) []map[string]any {
@@ -106,20 +104,6 @@ func Test163MarkSixCutoverOnlyAcceptsExactFormerDefaults(t *testing.T) {
 	happy, _ := source163MarkSixBindingForGame("happy8-mark-six")
 	if updates, ok := source163MarkSixBindingUpdates(lottery.Game{ID: happy.GameID, SourceKind: "platform", SourceName: "王者开奖"}, happy); !ok || updates["source_kind"] != "external" {
 		t.Fatalf("happy8 exact platform default not cut over: %+v %v", updates, ok)
-	}
-}
-
-func TestEnsure168CannotWriteAnyRegistered163MarkSixProduct(t *testing.T) {
-	db := robotDryRunDB(t)
-	writes := 0
-	if err := db.Callback().Update().Before("gorm:update").Register("test:no_168_marksix_write", func(*gorm.DB) { writes++ }); err != nil {
-		t.Fatal(err)
-	}
-	if err := Ensure168SourceGames(db); err != nil {
-		t.Fatal(err)
-	}
-	if writes != 0 {
-		t.Fatalf("retired Ensure168 attempted %d Mark Six metadata writes", writes)
 	}
 }
 

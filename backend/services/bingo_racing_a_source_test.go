@@ -1,10 +1,8 @@
 package services
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -44,18 +42,10 @@ func bingo168SortedSourceFixture(t *testing.T) sourceDraw {
 	return draws[0]
 }
 
-func TestBingoOrderedHistoryFetcherIsBoundedInjectableAndStrict(t *testing.T) {
-	calls := 0
-	draws, err := fetchBingoOrderedHistory(context.Background(), func(_ context.Context, endpoint string) ([]byte, error) {
-		calls++
-		parsed, parseErr := url.Parse(endpoint)
-		if parseErr != nil || parsed.Scheme != "https" || parsed.Host != "jyb.one" || parsed.Path != "/api/history" || parsed.Query().Get("limit") != "500" {
-			t.Fatalf("unexpected ordered-source endpoint: %s (%v)", endpoint, parseErr)
-		}
-		return bingoOrderedFixtureJSON(t, "115049561", bingoOrderedIssue115049561), nil
-	})
-	if err != nil || calls != 1 || len(draws) != 1 || draws[0].Issue != "115049561" || !reflect.DeepEqual(draws[0].Numbers, bingoOrderedIssue115049561) {
-		t.Fatalf("ordered source not parsed exactly: calls=%d rows=%+v err=%v", calls, draws, err)
+func TestBingoOrderedHistoryParserIsStrict(t *testing.T) {
+	draws, err := parseBingoOrderedHistory(bingoOrderedFixtureJSON(t, "115049561", bingoOrderedIssue115049561))
+	if err != nil || len(draws) != 1 || draws[0].Issue != "115049561" || !reflect.DeepEqual(draws[0].Numbers, bingoOrderedIssue115049561) {
+		t.Fatalf("ordered source not parsed exactly: rows=%+v err=%v", draws, err)
 	}
 	if draws[0].DrawAt != time.Date(2026, 9, 2, 1, 26, 13, 0, time.UTC) {
 		t.Fatalf("ordered draw time changed: %s", draws[0].DrawAt)
@@ -208,72 +198,6 @@ func TestBingoRacingAOnlyOpensOnExplicit163DualSourceAndRacingContracts(t *testi
 	if bKind != "external" || bName != bingo163OrderedSourceName || bURL != bingo163SourceURL || bStatus != "stale" ||
 		sourceHealthyForGame(&lottery.Game{SourceKind: bKind, SyncStatus: bStatus, LastSyncError: bingo163PendingMessage}) {
 		t.Fatalf("Bingo Racing B did not start fail-closed on the verified 163 ordered source: %q %q %q %q", bKind, bName, bURL, bStatus)
-	}
-}
-
-func TestBingoOrderedSourceRevisionUpgradeIsOneWayAndFailClosed(t *testing.T) {
-	legacy := lottery.Game{
-		ID: "bingo-racing-a", SourceKind: "external", SourceName: "168开奖网",
-		SourceURL: "https://kj138138.com/view/api/index.html", SyncStatus: "ok",
-	}
-	updates, required := bingoOrderedSourceRevisionUpdates(legacy)
-	if !required || updates["source_name"] != bingoVerifiedSourceName || updates["source_url"] != bingoVerifiedSourceURL ||
-		updates["sync_status"] != "stale" || updates["last_sync_error"] != bingoOrderPendingMessage {
-		t.Fatalf("legacy single-source row was not closed for revision upgrade: required=%v updates=%+v", required, updates)
-	}
-
-	fresh := lottery.Game{
-		ID: "bingo-racing-a", SourceKind: "external", SourceName: bingoVerifiedSourceName,
-		SourceURL: bingoVerifiedSourceURL, SyncStatus: "stale",
-	}
-	updates, required = bingoOrderedSourceRevisionUpdates(fresh)
-	if !required || updates["sync_status"] != "stale" || updates["last_sync_error"] != bingoOrderPendingMessage {
-		t.Fatalf("fresh dual-source row did not persist its pending gate: required=%v updates=%+v", required, updates)
-	}
-
-	for _, game := range []lottery.Game{
-		{SourceKind: "external", SourceName: bingoVerifiedSourceName, SourceURL: bingoVerifiedSourceURL, SyncStatus: "ok"},
-		{SourceKind: "external", SourceName: bingoVerifiedSourceName, SourceURL: bingoVerifiedSourceURL, SyncStatus: "error", LastSyncError: "ordered source timeout"},
-		{SourceKind: "external", SourceName: bingoVerifiedSourceName, SourceURL: bingoVerifiedSourceURL, SyncStatus: "stale", LastSyncError: bingoOrderPendingMessage},
-		{SourceKind: "external", SourceName: bingoVerifiedSourceName, SourceURL: bingoVerifiedSourceURL, SyncStatus: "paused", LastSyncError: "operator pause"},
-	} {
-		if updates, required := bingoOrderedSourceRevisionUpdates(game); required || updates != nil {
-			t.Fatalf("restart overwrote established dual-source state %+v with %+v", game, updates)
-		}
-	}
-}
-
-func TestBingoOrderedSourceFailureIsIsolatedByExplicitBinding(t *testing.T) {
-	raw := []sourceDraw{{Issue: "raw"}}
-	ordered := []sourceDraw{{Issue: "ordered", BingoOrderVerified: true}}
-	orderedFailure := errors.New("ordered feed unavailable")
-	wantOrdered := map[string]bool{
-		"bingo-ssc-1": true, "bingo-racing-a": true, "bingo-mark-six": true,
-	}
-	for _, binding := range api168BingoBindings {
-		t.Run(binding.GameID, func(t *testing.T) {
-			_, _, bootstrapStatus, bootstrapError := bingoBindingSourceDefaults(binding)
-			got, err := bingoSourceInputForBinding(binding, raw, ordered, orderedFailure)
-			if wantOrdered[binding.GameID] {
-				if bootstrapStatus != "stale" || bootstrapError != bingoOrderPendingMessage {
-					t.Fatalf("ordered game starts healthy before validation: status=%q error=%q", bootstrapStatus, bootstrapError)
-				}
-				if !errors.Is(err, orderedFailure) || got != nil || !binding.RequiresOrderedSource {
-					t.Fatalf("ordered-dependent game did not fail closed: input=%+v err=%v binding=%+v", got, err, binding)
-				}
-				got, err = bingoSourceInputForBinding(binding, raw, ordered, nil)
-				if err != nil || !reflect.DeepEqual(got, ordered) {
-					t.Fatalf("verified ordered input not selected: input=%+v err=%v", got, err)
-				}
-				return
-			}
-			if bootstrapStatus != "idle" || bootstrapError != "" {
-				t.Fatalf("independent game inherited the order gate: status=%q error=%q", bootstrapStatus, bootstrapError)
-			}
-			if err != nil || !reflect.DeepEqual(got, raw) || binding.RequiresOrderedSource {
-				t.Fatalf("independent game was coupled to ordered outage: input=%+v err=%v binding=%+v", got, err, binding)
-			}
-		})
 	}
 }
 

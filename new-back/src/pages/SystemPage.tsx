@@ -40,7 +40,7 @@ import { DEFAULT_LOTTERY_SOURCE_URL, isValidLotterySourceURL } from '../utils/lo
 const emptySettings = (): SystemSettings => ({
   room_name: '王者大厅',
   room_logo: '',
-  chat_nickname: '群主',
+  chat_nickname: '客服',
   lottery_source_url: DEFAULT_LOTTERY_SOURCE_URL,
   nickname_display_length: 0,
   min_chat_score: 0,

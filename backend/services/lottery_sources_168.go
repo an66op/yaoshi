@@ -2,23 +2,16 @@ package services
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
-	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"backend/data/models/lottery"
-
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const (
@@ -121,247 +114,6 @@ func bingoBindingSourceDefaults(binding api168BingoBinding) (name, sourceURL, sy
 	return "168开奖网", "https://kj138138.com/view/api/index.html", "idle", ""
 }
 
-// EnsureBingoOrderedSourceRevision is the durable startup gate for products
-// whose result cannot be derived safely from 168's sorted Taiwan Bingo set.
-// The schema has no dedicated source-revision column, so the exact dual-source
-// metadata is the persisted revision marker. A legacy/single-source row is
-// made stale once and keeps a non-empty error while the first verified request
-// is in flight; only syncOfficialGame's successful transaction may clear it.
-// Already verified "ok" rows and useful prior errors survive later restarts.
-func EnsureBingoOrderedSourceRevision(db *gorm.DB) error {
-	if db == nil {
-		return fmt.Errorf("台湾宾果双源来源版本数据库不可用")
-	}
-	for _, binding := range api168BingoBindings {
-		if !binding.RequiresOrderedSource {
-			continue
-		}
-		var game lottery.Game
-		err := db.Clauses(clause.Locking{Strength: "UPDATE"}).First(&game, "id = ?", binding.GameID).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		updates, required := bingoOrderedSourceRevisionUpdates(game)
-		if !required {
-			continue
-		}
-		if err := db.Model(&lottery.Game{}).Where("id = ?", binding.GameID).Updates(updates).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func bingoOrderedSourceRevisionUpdates(game lottery.Game) (map[string]any, bool) {
-	hasCurrentRevision := strings.EqualFold(strings.TrimSpace(game.SourceKind), "external") &&
-		strings.TrimSpace(game.SourceName) == bingoVerifiedSourceName &&
-		strings.TrimSpace(game.SourceURL) == bingoVerifiedSourceURL
-	if !hasCurrentRevision {
-		return map[string]any{
-			"source_kind":     "external",
-			"source_name":     bingoVerifiedSourceName,
-			"source_url":      bingoVerifiedSourceURL,
-			"sync_status":     "stale",
-			"last_sync_error": bingoOrderPendingMessage,
-		}, true
-	}
-
-	status := strings.ToLower(strings.TrimSpace(game.SyncStatus))
-	lastError := strings.TrimSpace(game.LastSyncError)
-	switch status {
-	case "ok", "error", "paused":
-		// "ok" is written only after a complete verified import; error/paused
-		// already fail closed and contain more useful operator state.
-		return nil, false
-	case "stale":
-		if lastError != "" {
-			return nil, false
-		}
-	}
-	// Fresh catalog rows have current metadata but no persisted verification.
-	// A process that died in "syncing" is equally unverified on startup. Keep
-	// both unavailable and preserve the pending error through the next retry.
-	return map[string]any{
-		"sync_status":     "stale",
-		"last_sync_error": bingoOrderPendingMessage,
-	}, true
-}
-
-func (s *LotteryService) sync168HighFreq(ctx context.Context) []SourceSyncResult {
-	gameIDs := make([]string, 0, len(api168HighFreqBindings))
-	for _, binding := range api168HighFreqBindings {
-		gameIDs = append(gameIDs, binding.GameID)
-	}
-	enabled, err := s.enabledOfficialGames(gameIDs)
-	if err != nil {
-		return []SourceSyncResult{{GameID: "168-highfreq", Status: "error", Error: err.Error()}}
-	}
-	results := make([]SourceSyncResult, 0, len(api168HighFreqBindings))
-	for _, item := range api168HighFreqBindings {
-		binding := item
-		if !enabled[binding.GameID] {
-			results = append(results, SourceSyncResult{GameID: binding.GameID, Status: "ok"})
-			continue
-		}
-		historyIncluded := false
-		result := sync168LatestThenHistory(ctx,
-			func(ctx context.Context) SourceSyncResult {
-				return s.syncOfficialGame(ctx, binding.GameID, func(ctx context.Context) ([]sourceDraw, error) {
-					draws, included, err := fetch168LiveDraws(ctx, binding, request168JSON)
-					historyIncluded = included
-					return draws, err
-				})
-			},
-			func(ctx context.Context) ([]sourceDraw, error) {
-				if historyIncluded {
-					return nil, nil
-				}
-				return fetch168History(ctx, binding.Series, binding.LotCode, nil, time.Now(), request168JSON)
-			},
-			func(ctx context.Context, draws []sourceDraw) (int, error) {
-				return s.importOfficialHistory(ctx, binding.GameID, draws)
-			})
-		results = append(results, result)
-	}
-	return results
-}
-
-func fetch168LiveDraws(ctx context.Context, binding api168Binding, request api168Request) ([]sourceDraw, bool, error) {
-	draws, err := fetch168Latest(ctx, binding.Series, binding.LotCode, nil, request)
-	if err != nil {
-		return nil, false, err
-	}
-	var latest sourceDraw
-	for _, draw := range draws {
-		if latest.DrawAt.IsZero() || draw.DrawAt.After(latest.DrawAt) {
-			latest = draw
-		}
-	}
-	if !latest.DrawAt.IsZero() && validNextSourceIssue(latest.Issue, latest.NextIssue) && latest.NextDrawAt.After(latest.DrawAt) {
-		return draws, false, nil
-	}
-	// If the provider omits its upcoming boundary, enough historic evidence is
-	// still required to infer cadence. A lone latest row must not resurrect an
-	// arbitrary seed interval (for example 180 seconds instead of 75 seconds).
-	history, historyErr := fetch168History(ctx, binding.Series, binding.LotCode, nil, time.Now(), request)
-	draws = mergeSourceDraws(draws, history)
-	if observedDrawInterval(draws) == 0 {
-		return nil, true, errors.Join(fmt.Errorf("尚未取得有效的下一期开奖时间或足够的历史周期"), historyErr)
-	}
-	return draws, true, nil
-}
-
-// Keep the existing bounded two-day recovery pass, but never make a fresh
-// result wait for those slower history requests before publishing its next
-// period. No extra requests, polling loops or detached goroutines are added.
-func sync168LatestThenHistory(ctx context.Context, syncLatest func(context.Context) SourceSyncResult, fetchHistory func(context.Context) ([]sourceDraw, error), importHistory func(context.Context, []sourceDraw) (int, error)) SourceSyncResult {
-	result := syncLatest(ctx)
-	if result.Status != "ok" {
-		return result
-	}
-	draws, fetchErr := fetchHistory(ctx)
-	if len(draws) > 0 {
-		imported, err := importHistory(ctx, draws)
-		if err != nil {
-			fetchErr = errors.Join(fetchErr, err)
-		} else {
-			result.Imported += imported
-		}
-	}
-	if fetchErr != nil {
-		// A backfill failure cannot erase a valid live result or clear an error
-		// written by a newer live sync. The same dates retry on the next pass.
-		log.Printf("历史开奖补采未完成，将在下轮重试: game=%s error=%v", result.GameID, fetchErr)
-	}
-	return result
-}
-
-func (s *LotteryService) sync168MarkSix(ctx context.Context) []SourceSyncResult {
-	results := make([]SourceSyncResult, 0, len(api168MarkSixBindings))
-	for _, item := range api168MarkSixBindings {
-		binding := item
-		results = append(results, s.syncOfficialGame(ctx, binding.GameID, func(ctx context.Context) ([]sourceDraw, error) {
-			return fetch168Recent(ctx, binding.Series, binding.LotCode, nil)
-		}))
-	}
-	return results
-}
-
-func (s *LotteryService) sync168Bingo(ctx context.Context) []SourceSyncResult {
-	gameIDs := make([]string, 0, len(api168BingoBindings))
-	for _, item := range api168BingoBindings {
-		gameIDs = append(gameIDs, item.GameID)
-	}
-	enabled, enabledErr := s.enabledOfficialGames(gameIDs)
-	if enabledErr != nil {
-		return []SourceSyncResult{{GameID: "168-bingo", Status: "error", Error: enabledErr.Error()}}
-	}
-	if len(enabled) == 0 {
-		return []SourceSyncResult{{GameID: "168-bingo", Status: "ok"}}
-	}
-
-	raw, err := fetch168Recent(ctx, api168KL8, "10047", nil)
-	results := make([]SourceSyncResult, 0, len(enabled))
-	if err != nil {
-		for _, item := range api168BingoBindings {
-			if !enabled[item.GameID] {
-				continue
-			}
-			results = append(results, s.recordSyncError(item.GameID, err))
-		}
-		return results
-	}
-	var orderedRaw []sourceDraw
-	var orderedErr error
-	for _, binding := range api168BingoBindings {
-		if enabled[binding.GameID] && binding.RequiresOrderedSource {
-			ordered, fetchErr := fetchBingoOrderedHistory(ctx, requestBingoOrderedHistory)
-			if fetchErr != nil {
-				orderedErr = fetchErr
-			} else {
-				orderedRaw, orderedErr = crossValidate168BingoOrder(raw, ordered)
-			}
-			break
-		}
-	}
-	for _, item := range api168BingoBindings {
-		if !enabled[item.GameID] {
-			continue
-		}
-		binding := item
-		input, inputErr := bingoSourceInputForBinding(binding, raw, orderedRaw, orderedErr)
-		if inputErr != nil {
-			results = append(results, s.recordSyncError(binding.GameID, inputErr))
-			continue
-		}
-		draws, transformErr := transform168BingoDraws(binding.GameID, input, binding.Transform)
-		results = append(results, s.syncOfficialGame(ctx, binding.GameID, func(context.Context) ([]sourceDraw, error) {
-			return draws, transformErr
-		}))
-	}
-	return results
-}
-
-// bingoSourceInputForBinding is kept pure so the outage boundary is
-// regression-testable: an ordered-feed failure must close only the products
-// that declare that dependency, while unrelated derived games keep consuming
-// the independently validated 168 set.
-func bingoSourceInputForBinding(binding api168BingoBinding, raw, ordered []sourceDraw, orderedErr error) ([]sourceDraw, error) {
-	if !binding.RequiresOrderedSource {
-		return raw, nil
-	}
-	if orderedErr != nil {
-		return nil, orderedErr
-	}
-	if len(ordered) == 0 {
-		return nil, fmt.Errorf("%w: 未取得已验证的有序记录", err168BingoOrderMismatch)
-	}
-	return ordered, nil
-}
-
 // transform168BingoDraws converts one already validated source batch for one
 // derived game. A single unconvertible issue rejects the whole game batch so
 // the sync cursor can never advance past a missing result.
@@ -399,42 +151,6 @@ func bingoGameRequiresOrderedSource(gameID string) bool {
 	return ok && binding.RequiresOrderedSource
 }
 
-func fetch168Recent(ctx context.Context, series api168Series, lotCode string, transform func([]int) []int) ([]sourceDraw, error) {
-	return fetch168RecentWithRequest(ctx, series, lotCode, transform, time.Now(), request168JSON)
-}
-
-func fetch168RecentWithRequest(ctx context.Context, series api168Series, lotCode string, transform func([]int) []int, now time.Time, request api168Request) ([]sourceDraw, error) {
-	latest, err := fetch168Latest(ctx, series, lotCode, transform, request)
-	if err != nil {
-		return nil, err
-	}
-	history, historyErr := fetch168History(ctx, series, lotCode, transform, now, request)
-	// A transport failure may still leave usable latest data, as before. An
-	// invalid Bingo row is different: reject the whole fetched batch before any
-	// of its seven derived games can import or settle a result.
-	if errors.Is(historyErr, err168BingoRawInvalid) {
-		return nil, historyErr
-	}
-	if is168BingoSource(series, lotCode) {
-		merged, mergeErr := merge168BingoSourceDraws(latest, history)
-		return merged, mergeErr
-	}
-	return mergeSourceDraws(latest, history), nil
-}
-
-type api168Request func(context.Context, string, *api168Envelope) error
-
-type bingoOrderedRequest func(context.Context, string) ([]byte, error)
-
-func request168JSON(ctx context.Context, endpoint string, payload *api168Envelope) error {
-	_, err := doJSONRequest(ctx, &http.Client{Timeout: 15 * time.Second}, endpoint, api168Referer, payload)
-	return err
-}
-
-func requestBingoOrderedHistory(ctx context.Context, endpoint string) ([]byte, error) {
-	return doJSONRequest(ctx, &http.Client{Timeout: 15 * time.Second}, endpoint, bingoVerifiedSourceURL, nil)
-}
-
 type bingoOrderedHistoryRow struct {
 	Period       string `json:"period"`
 	DrawTime     string `json:"drawTime"`
@@ -447,19 +163,6 @@ type bingoOrderedHistoryRow struct {
 	SuperParity  string `json:"superParity"`
 	PlateUpDown  string `json:"plateUpDown"`
 	PlateOddEven string `json:"plateOddEven"`
-}
-
-func fetchBingoOrderedHistory(ctx context.Context, request bingoOrderedRequest) ([]sourceDraw, error) {
-	if request == nil {
-		return nil, fmt.Errorf("台湾宾果有序开奖源缺少请求实现")
-	}
-	query := url.Values{"limit": {strconv.Itoa(bingoOrderedHistoryLimit)}}
-	endpoint := bingoOrderedHistoryURL + "?" + query.Encode()
-	body, err := request(ctx, endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("台湾宾果有序开奖源读取失败: %w", err)
-	}
-	return parseBingoOrderedHistory(body)
 }
 
 // parseBingoOrderedHistory is deliberately strict. This feed contributes the
@@ -589,80 +292,6 @@ func sameBingoNumberSet(first, second []int) bool {
 		}
 	}
 	return true
-}
-
-func fetch168Latest(ctx context.Context, series api168Series, lotCode string, transform func([]int) []int, request api168Request) ([]sourceDraw, error) {
-	latestPath, _ := api168Paths(series)
-	if latestPath == "" {
-		return nil, fmt.Errorf("未知 168 彩种系列")
-	}
-	var latestPayload api168Envelope
-	latestURL := api168Base + latestPath + "?lotCode=" + url.QueryEscape(lotCode)
-	if err := request(ctx, latestURL, &latestPayload); err != nil {
-		return nil, fmt.Errorf("168开奖网读取失败: %w", err)
-	}
-	if latestPayload.ErrorCode != 0 {
-		return nil, fmt.Errorf("168开奖网返回错误: %s", latestPayload.Message)
-	}
-	result, err := sourceDrawsFrom168Payload(latestPayload, series, lotCode, transform)
-	if err != nil {
-		return nil, err
-	}
-	if len(result) == 0 {
-		return nil, fmt.Errorf("168开奖网未返回开奖记录")
-	}
-
-	return result, nil
-}
-
-func fetch168History(ctx context.Context, series api168Series, lotCode string, transform func([]int) []int, now time.Time, request api168Request) ([]sourceDraw, error) {
-	_, historyPath := api168Paths(series)
-	if historyPath == "" {
-		return nil, fmt.Errorf("未知 168 彩种系列")
-	}
-	urls := make([]string, 0, 2)
-	historyURL := api168Base + historyPath + "?lotCode=" + url.QueryEscape(lotCode)
-	location, _ := time.LoadLocation("Asia/Shanghai")
-	if series == api168LHC {
-		urls = append(urls, historyURL)
-	} else {
-		for dayOffset := 0; dayOffset < 2; dayOffset++ {
-			date := now.In(location).AddDate(0, 0, -dayOffset).Format("2006-01-02")
-			urls = append(urls, historyURL+"&date="+url.QueryEscape(date))
-		}
-	}
-	var result []sourceDraw
-	var fetchErrors []error
-	for _, endpoint := range urls {
-		var historyPayload api168Envelope
-		if err := request(ctx, endpoint, &historyPayload); err != nil {
-			var syntaxErr *json.SyntaxError
-			var typeErr *json.UnmarshalTypeError
-			if is168BingoSource(series, lotCode) && (errors.As(err, &syntaxErr) || errors.As(err, &typeErr)) {
-				return nil, fmt.Errorf("%w: 历史响应格式错误: %v", err168BingoRawInvalid, err)
-			}
-			fetchErrors = append(fetchErrors, err)
-			continue
-		}
-		if historyPayload.ErrorCode != 0 {
-			fetchErrors = append(fetchErrors, fmt.Errorf("168历史开奖返回错误: %s", historyPayload.Message))
-			continue
-		}
-		draws, err := sourceDrawsFrom168Payload(historyPayload, series, lotCode, transform)
-		if err != nil {
-			return nil, errors.Join(append(fetchErrors, err)...)
-		}
-		if is168BingoSource(series, lotCode) {
-			merged, mergeErr := merge168BingoSourceDraws(result, draws)
-			if mergeErr != nil {
-				return nil, errors.Join(append(fetchErrors, mergeErr)...)
-			}
-			result = merged
-		} else {
-			result = mergeSourceDraws(result, draws)
-		}
-	}
-	return result, errors.Join(fetchErrors...)
 }
 
 var err168BingoRawInvalid = errors.New("168台湾宾果原始开奖数据无效")
@@ -828,26 +457,6 @@ func mergeSourceDraws(first, additional []sourceDraw) []sourceDraw {
 		}
 	}
 	return result
-}
-
-func merge168BingoSourceDraws(first, additional []sourceDraw) ([]sourceDraw, error) {
-	result := make([]sourceDraw, 0, len(first)+len(additional))
-	byIssue := make(map[string]int, len(first)+len(additional))
-	for _, group := range [][]sourceDraw{first, additional} {
-		for _, draw := range group {
-			if index, exists := byIssue[draw.Issue]; exists {
-				merged, err := mergeEquivalent168BingoDraw(result[index], draw)
-				if err != nil {
-					return nil, err
-				}
-				result[index] = merged
-				continue
-			}
-			byIssue[draw.Issue] = len(result)
-			result = append(result, draw)
-		}
-	}
-	return result, nil
 }
 
 func mergeEquivalent168BingoDraw(first, second sourceDraw) (sourceDraw, error) {
@@ -1060,28 +669,4 @@ func bingoMarkSixNumbers(raw []int) []int {
 		return nil
 	}
 	return out
-}
-
-func Ensure168SourceGames(db *gorm.DB) error {
-	ids := make([]string, 0, len(api168MarkSixBindings))
-	for _, item := range api168MarkSixBindings {
-		ids = append(ids, item.GameID)
-	}
-	for _, id := range ids {
-		if _, registered := source163MarkSixBindingForGame(id); registered {
-			continue
-		}
-		updates := map[string]any{
-			// These feeds are public third-party aggregation sources, not issuing
-			// authorities. Keep that distinction explicit for the API/UI and audits.
-			"source_kind": "external",
-			"source_name": "168开奖网",
-			"source_url":  "https://kj138138.com/view/api/index.html",
-			"sync_status": "idle",
-		}
-		if err := db.Model(&lottery.Game{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-			return err
-		}
-	}
-	return nil
 }

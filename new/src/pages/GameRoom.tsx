@@ -1109,13 +1109,18 @@ export const GameTimeline = memo(function GameTimeline({ gameId, gameTitle, rule
 type QuickActionIconName = 'source' | 'switch' | 'service' | 'bet' | 'check-in'
 
 function QuickActionIcon({ name }: { name: QuickActionIconName }) {
+  if (name === 'source') {
+    return <svg className="quick-source-163" viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M7.6 3.8c-3.1 0-5 2.7-4.2 5.7l3.7 15c.7 2.9 3.9 4.1 6.3 2.4l12.7-8.8c2.7-1.9 2.5-5.9-.4-7.5L10.6 4.4c-.9-.4-2-.6-3-.6Z" />
+      <text x="8.5" y="17.8" textLength="13.4" lengthAdjust="spacingAndGlyphs">163</text>
+    </svg>
+  }
   const paths = {
-    source: <><path d="M4 18V10m5 8V6m5 12v-5m5 5V4" /><path d="M3 21h18" /></>,
     switch: <><path d="M7 7h11l-3-3m3 3-3 3" /><path d="M17 17H6l3 3m-3-3 3-3" /></>,
     service: <><path d="M4 13a8 8 0 0 1 16 0" /><path d="M4 13v4a2 2 0 0 0 2 2h1v-7H6a2 2 0 0 0-2 1Zm16 0v4a2 2 0 0 1-2 2h-1v-7h1a2 2 0 0 1 2 1Z" /><path d="M17 19c-1 2-3 2-5 2" /></>,
     bet: <><rect x="4" y="4" width="6" height="6" rx="1.4" /><rect x="14" y="4" width="6" height="6" rx="1.4" /><rect x="4" y="14" width="6" height="6" rx="1.4" /><rect x="14" y="14" width="6" height="6" rx="1.4" /></>,
     'check-in': <><rect x="4" y="5" width="16" height="15" rx="3" /><path d="M8 3v4m8-4v4M4 10h16m-12 5 2 2 5-5" /></>,
-  } satisfies Record<QuickActionIconName, ReactNode>
+  } satisfies Record<Exclude<QuickActionIconName, 'source'>, ReactNode>
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>
 }
 

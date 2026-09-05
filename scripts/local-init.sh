@@ -25,6 +25,22 @@ for command_name in go node npm grep od lsof ps ln mkfifo; do
   }
 done
 
+require_init_frontends_stopped() {
+  local port listener_pids
+  for port in 5173 5174; do
+    listener_pids="$(lsof -nP -a -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)"
+    if [[ -n "$listener_pids" ]]; then
+      echo "本地前端端口 ${port} 正在使用；请先停止 make dev，再执行初始化。local-init 会重装锁定依赖，运行中的 Vite 不能安全复用旧缓存" >&2
+      return 1
+    fi
+  done
+}
+
+# Fail before acquiring a database lock or changing any local state. Running
+# npm ci underneath an active Vite process invalidates its optimized dependency
+# cache and leaves the browser returning 504 Outdated Optimize Dep responses.
+require_init_frontends_stopped
+
 node_version="$(node --version)"
 node_version="${node_version#v}"
 IFS=. read -r node_major node_minor _ <<<"${node_version%%-*}"

@@ -24,6 +24,7 @@ import {
   visibleNotificationsForRow,
 } from "../utils/notificationVisibility";
 import { resolveActivityAction } from "../utils/activityAction";
+import { memberFacingServiceName, serviceMessageIdentity } from "../utils/chatIdentity";
 
 type Room = "group" | "service";
 
@@ -625,7 +626,7 @@ function ChatRoom({
       </header>
       {roomSettingsError && <div className="chat-room-settings-error"><ChatRetryState compact message={roomSettingsError} onRetry={() => void loadRoomSettings()} /></div>}
       {room === "service" ? (
-        <ServiceConversation quickReplies={quickReplies} serviceName={roomChatTitle || "在线客服"} serviceAvatar={roomChatAvatar || roomLogo} onRefreshUnread={onRefreshUnread} />
+        <ServiceConversation quickReplies={quickReplies} serviceName={memberFacingServiceName(roomChatTitle)} serviceAvatar={roomChatAvatar || roomLogo} onRefreshUnread={onRefreshUnread} />
       ) : (
         <>
           {roomNotice && <div className="room-notice">{roomNotice}</div>}
@@ -774,9 +775,9 @@ function ServiceMessage({
   serviceAvatar: string;
 }) {
   const outgoing = message.mine;
-  const title = message.title?.trim() || message.user_title?.trim() || "";
-  const badge = message.badge?.trim() || "";
-  const inboundName = serviceName || message.nickname;
+  const identity = serviceMessageIdentity(message, serviceName);
+  const { title, badge } = identity;
+  const inboundName = identity.name;
   const inboundAvatar = message.avatar?.trim() || serviceAvatar.trim();
   return (
     <div className={`service-message chat-message-row ${outgoing ? "outgoing" : ""}`}>
@@ -786,7 +787,7 @@ function ServiceMessage({
           : <Avatar className="service-avatar" index={7} label={`${inboundName}头像`} />
       )}
       <div className="service-bubble">
-        <small className="chat-member-name"><span>{outgoing ? message.nickname : inboundName}</span>{title && <i>{title}</i>}{badge && <em>{badge}</em>}</small>
+        <small className="chat-member-name"><span>{identity.name}</span>{title && <i>{title}</i>}{badge && <em>{badge}</em>}</small>
         <span>{message.content}</span><time className="message-bubble-time">{messageTime(message.created_at)}</time>
       </div>
       {outgoing && (

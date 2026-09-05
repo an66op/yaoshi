@@ -374,7 +374,7 @@ func (s *SettingsAdminService) UpdateForWorkspace(workspaceID uint64, input Upda
 	}
 	row.RoomName = roomName
 	row.RoomLogo = roomLogo
-	row.ChatNickname = defaultString(strings.TrimSpace(input.ChatNickname), "群主")
+	row.ChatNickname = defaultString(strings.TrimSpace(input.ChatNickname), "客服")
 	row.ChatAvatar, err = normalizeMemberAvatar(input.ChatAvatar)
 	if err != nil {
 		return nil, err
@@ -566,7 +566,7 @@ func (s *SettingsAdminService) ensure(workspaceID uint64) (*settings.SystemConfi
 		ID:                 1,
 		RoomName:           "王者",
 		RoomCode:           "",
-		ChatNickname:       "群主",
+		ChatNickname:       "客服",
 		ChatAvatar:         "",
 		RoomEnabled:        true,
 		RequireJoinReview:  true,

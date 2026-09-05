@@ -44,7 +44,6 @@ const roomActivityPolicyLockID int64 = 0x57414e475a484552
 
 type RoomActivityService struct {
 	db       *gorm.DB
-	bets     *BetAdminService
 	mu       sync.Mutex
 	cycleMu  sync.Mutex
 	statusMu sync.RWMutex
@@ -125,7 +124,7 @@ func StartRoomActivityForMode(ctx context.Context, db *gorm.DB, serverMode strin
 	// of the server log, while the primary application DB retains its logger.
 	activityDB := db.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)})
 	service := &RoomActivityService{
-		db: activityDB, bets: NewBetAdminService(activityDB), random: rand.New(rand.NewSource(time.Now().UnixNano())),
+		db: activityDB, random: rand.New(rand.NewSource(time.Now().UnixNano())),
 		maxEnabledWorkspaces: policy.maxWorkspaces,
 	}
 	roomActivityRegistry.Lock()
@@ -217,10 +216,6 @@ func (s *RoomActivityService) runDueWorkspaces(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-func (s *RoomActivityService) validateEnabledWorkspaceCap() error {
-	return s.validateEnabledWorkspaceCapWithDB(s.db)
 }
 
 func (s *RoomActivityService) validateEnabledWorkspaceCapWithDB(db *gorm.DB) error {
@@ -380,112 +375,6 @@ func truncateRunMessage(value string, limit int) string {
 		return string(runes)
 	}
 	return string(runes[:limit])
-}
-
-func (s *RoomActivityService) warmup(config roomActivityConfig) error {
-	targets, err := s.targets()
-	if err != nil {
-		return err
-	}
-	for _, target := range targets {
-		games, err := s.enabledGames(target.workspaceID)
-		if err != nil {
-			return err
-		}
-		bots, err := s.ensureAccounts(target, config.BotsPerRoom)
-		if err != nil {
-			return err
-		}
-		bots = activeRobotAccounts(bots, time.Now())
-		for slot, bot := range bots {
-			for gameIndex, game := range allowedRobotGames(bot, games) {
-				issue, issueErr := s.bets.CurrentIssue(game.ID)
-				if issueErr != nil {
-					continue
-				}
-				if err := s.place(bot, game, issue, gameIndex+slot); err != nil {
-					// A just-closed issue is normal while the simulated draw loop rolls.
-					continue
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func (s *RoomActivityService) runCycle(config roomActivityConfig) error {
-	s.cycleMu.Lock()
-	defer s.cycleMu.Unlock()
-	started := time.Now().UTC()
-	betsPlaced, chatsPosted, botAccounts := 0, 0, 0
-	targets, err := s.targets()
-	if err != nil || len(targets) == 0 {
-		if err == nil {
-			err = fmt.Errorf("没有可用房间")
-		}
-		s.recordActivityRun(config, started, len(targets), 0, botAccounts, betsPlaced, chatsPosted, err)
-		return err
-	}
-	enabledGameIDs := map[string]struct{}{}
-	for _, target := range targets {
-		games, gameErr := s.enabledGames(target.workspaceID)
-		if gameErr != nil {
-			s.recordActivityRun(config, started, len(targets), len(enabledGameIDs), botAccounts, betsPlaced, chatsPosted, gameErr)
-			return gameErr
-		}
-		for _, game := range games {
-			enabledGameIDs[game.ID] = struct{}{}
-		}
-		if len(games) == 0 {
-			continue
-		}
-		bots, accountErr := s.ensureAccounts(target, config.BotsPerRoom)
-		if accountErr != nil {
-			s.recordActivityRun(config, started, len(targets), len(enabledGameIDs), botAccounts, betsPlaced, chatsPosted, accountErr)
-			return accountErr
-		}
-		bots = activeRobotAccounts(bots, time.Now())
-		botAccounts += len(bots)
-		if len(bots) == 0 {
-			continue
-		}
-		for index := 0; index < config.BetsPerCycle; index++ {
-			bot := bots[s.randomIndex(len(bots))]
-			availableGames := allowedRobotGames(bot, games)
-			if len(availableGames) == 0 {
-				continue
-			}
-			game := availableGames[s.randomIndex(len(availableGames))]
-			issue, issueErr := s.bets.CurrentIssue(game.ID)
-			if issueErr != nil {
-				continue
-			}
-			if placeErr := s.place(bot, game, issue, int(time.Now().UnixNano())+index); placeErr != nil {
-				// The official scheduler may close an issue between CurrentIssue and
-				// Place. Do not block the remaining rooms because of that normal race.
-				continue
-			}
-			betsPlaced++
-		}
-	}
-	if len(enabledGameIDs) == 0 {
-		err := fmt.Errorf("没有已启用的彩种")
-		s.recordActivityRun(config, started, len(targets), 0, botAccounts, betsPlaced, chatsPosted, err)
-		return err
-	}
-	s.recordActivityRun(config, started, len(targets), len(enabledGameIDs), botAccounts, betsPlaced, chatsPosted, nil)
-	return nil
-}
-
-func (s *RoomActivityService) setRuntimeConfig(config roomActivityConfig, running bool) {
-	s.statusMu.Lock()
-	s.status.Running = running
-	s.status.Enabled = config.Enabled
-	s.status.IntervalSecs = config.IntervalSecs
-	s.status.BotsPerRoom = config.BotsPerRoom
-	s.status.BetsPerCycle = config.BetsPerCycle
-	s.status.ChatChancePct = config.ChatChancePct
-	s.statusMu.Unlock()
 }
 
 func (s *RoomActivityService) recordActivityRun(config roomActivityConfig, at time.Time, rooms, games, bots, bets, chats int, runErr error) {
@@ -736,42 +625,11 @@ func RunRoomActivityOnceForWorkspace(workspaceID uint64) (RoomActivityStatus, er
 	return service.Status(), nil
 }
 
-func (s *RoomActivityService) config() roomActivityConfig {
-	config := roomActivityConfig{
-		Enabled: true, IntervalSecs: 10, BotsPerRoom: defaultWorkspaceRobotCount, BetsPerCycle: 2, ChatChancePct: 0,
-	}
-	config.IntervalSecs = clampRoomActivity(config.IntervalSecs, 5, 120, 10)
-	config.BotsPerRoom = clampRoomActivity(config.BotsPerRoom, 1, len(roomActivityAliases), defaultWorkspaceRobotCount)
-	config.BetsPerCycle = clampRoomActivity(config.BetsPerCycle, 1, 8, 2)
-	// Room activity is represented by persisted bets only. Ignore older saved
-	// chat probability values so synthetic chatter cannot return after restart.
-	config.ChatChancePct = 0
-	return config
-}
-
 func clampRoomActivity(value, minimum, maximum, fallback int) int {
 	if value < minimum || value > maximum {
 		return fallback
 	}
 	return value
-}
-
-func (s *RoomActivityService) targets() ([]roomActivityTarget, error) {
-	var workspaces []workspacemodel.Workspace
-	if err := s.db.Where("status = ? AND EXISTS (?)", 1,
-		s.db.Model(&workspacemodel.RobotProfile{}).Select("1").Where("workspace_robot_profiles.workspace_id = workspaces.id AND workspace_robot_profiles.enabled = ?", true),
-	).Order("id ASC").Find(&workspaces).Error; err != nil {
-		return nil, err
-	}
-	targets := make([]roomActivityTarget, 0, len(workspaces))
-	for _, workspace := range workspaces {
-		targets = append(targets, roomActivityTarget{workspaceID: workspace.ID, scope: workspace.Scope})
-	}
-	return targets, nil
-}
-
-func (s *RoomActivityService) enabledGames(workspaceID uint64) ([]lottery.Game, error) {
-	return s.enabledGamesWithDB(s.db, workspaceID)
 }
 
 func (s *RoomActivityService) enabledGamesWithDB(db *gorm.DB, workspaceID uint64) ([]lottery.Game, error) {
@@ -828,10 +686,6 @@ func robotAccountActiveAt(account user.User, now time.Time) bool {
 	return nowMinute >= startMinute || nowMinute <= endMinute
 }
 
-func (s *RoomActivityService) ensureAccounts(target roomActivityTarget, count int) ([]user.User, error) {
-	return s.ensureAccountsWithDB(s.db, target, count)
-}
-
 func (s *RoomActivityService) ensureAccountsWithDB(db *gorm.DB, target roomActivityTarget, count int) ([]user.User, error) {
 	// Robot identities are provisioned once and remain independent. Runtime
 	// execution only consumes profiles already owned by this workspace; it never
@@ -857,10 +711,6 @@ func (s *RoomActivityService) ensureAccountsWithDB(db *gorm.DB, target roomActiv
 		return nil, err
 	}
 	return bots, nil
-}
-
-func (s *RoomActivityService) place(account user.User, game lottery.Game, issue string, salt int) error {
-	return s.placeWithService(s.bets, account, game, issue, salt)
 }
 
 func (s *RoomActivityService) placeWithService(bets *BetAdminService, account user.User, game lottery.Game, issue string, salt int) error {
@@ -894,11 +744,4 @@ func (s *RoomActivityService) randomInt64(limit int64) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.random.Int63n(limit)
-}
-
-func sameParent(left, right *uint64) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
 }

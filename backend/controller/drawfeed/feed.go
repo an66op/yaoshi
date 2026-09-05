@@ -144,14 +144,3 @@ func (h *Handler) isEnabledGame(gameID string) bool {
 	}
 	return false
 }
-
-func (h *Handler) isPublicGame(gameID string) bool {
-	for _, job := range h.scheduler.Status().Jobs {
-		for _, allowed := range job.GameIDs {
-			if allowed == gameID {
-				return true
-			}
-		}
-	}
-	return false
-}

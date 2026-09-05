@@ -1313,6 +1313,14 @@ rg -Fq 'if grep -Fqx -- "$BACKEND_DATABASE_DBNAME"' "$ROOT_DIR/scripts/local-ini
 rg -Fq 'createdb_cmd' "$ROOT_DIR/scripts/local-init.sh"
 rg -Fq -- '--template template0' "$ROOT_DIR/scripts/local-init.sh"
 rg -Fq 'require_local_postgres_server "$psql_cmd"' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'require_init_frontends_stopped' "$ROOT_DIR/scripts/local-init.sh"
+rg -Fq 'lsof -nP -a -iTCP:"$port" -sTCP:LISTEN -t' "$ROOT_DIR/scripts/local-init.sh"
+frontend_stop_gate_line="$(rg -n '^require_init_frontends_stopped$' "$ROOT_DIR/scripts/local-init.sh" | head -n1 | cut -d: -f1)"
+dependency_install_line="$(rg -n 'npm ci --ignore-scripts' "$ROOT_DIR/scripts/local-init.sh" | head -n1 | cut -d: -f1)"
+[[ -n "$frontend_stop_gate_line" && -n "$dependency_install_line" && "$frontend_stop_gate_line" -lt "$dependency_install_line" ]] || {
+  echo "local-init 必须在 npm ci 前拒绝仍在运行的本地前端" >&2
+  exit 1
+}
 rg -Fq 'acquire_local_init_lock' "$ROOT_DIR/scripts/local-init.sh"
 rg -Fq 'pg_try_advisory_lock(hashtextextended' "$ROOT_DIR/scripts/local-init.sh"
 rg -Fq 'require_local_init_lock' "$ROOT_DIR/scripts/local-init.sh"

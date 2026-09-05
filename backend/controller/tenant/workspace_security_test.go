@@ -57,19 +57,6 @@ func TestTenantHandlerDoesNotExportSubordinateAgentBusiness(t *testing.T) {
 	}
 }
 
-func TestBlockedSubordinateRoomBusinessFailsClosed(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	response := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(response)
-
-	if _, _, ok := (&WorkspaceHandler{}).blockedSubordinateRoomBusiness(context); ok {
-		t.Fatal("subordinate agent business unexpectedly allowed")
-	}
-	if response.Code != 403 {
-		t.Fatalf("status = %d, want 403", response.Code)
-	}
-}
-
 func TestTenantIdentityRejectsMissingOrWrongContextType(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, value := range []any{nil, "52", uint64(0)} {

@@ -384,6 +384,48 @@ func TestTransform163BingoDrawsRejectsWrongSourceClass(t *testing.T) {
 	}
 }
 
+func TestTransform163BingoMarkSixSkipsValidNoResultPeriodAndKeepsMotherBoundary(t *testing.T) {
+	binding, ok := bingo163BindingForGame("bingo-mark-six")
+	if !ok {
+		t.Fatal("missing bingo mark-six binding")
+	}
+	previousAt := bingo163TestTime(12, 0).UTC()
+	latestAt := previousAt.Add(5 * time.Minute)
+	nextAt := latestAt.Add(5 * time.Minute)
+	valid := sourceDraw{
+		Issue: "115049938", Numbers: append([]int(nil), bingo163FixtureOrder...), DrawAt: previousAt,
+		SourceRevision: binding.SourceRevision, BingoOrderVerified: true,
+	}
+	// This is a structurally valid, unique 20-ball draw but only five values
+	// are within 01-49. It therefore has no seven-ball mark-six result.
+	noResult := sourceDraw{
+		Issue:   "115049939",
+		Numbers: []int{45, 6, 42, 58, 74, 54, 67, 80, 75, 76, 65, 37, 70, 78, 51, 66, 72, 73, 12, 50},
+		DrawAt:  latestAt, NextIssue: "115049940", NextDrawAt: nextAt,
+		SourceRevision: binding.SourceRevision, BingoOrderVerified: true,
+	}
+	draws, err := transform163BingoDraws(binding, []sourceDraw{noResult, valid})
+	if err != nil || len(draws) != 1 {
+		t.Fatalf("transform=%+v err=%v", draws, err)
+	}
+	if draws[0].Issue != valid.Issue || draws[0].NextIssue != noResult.NextIssue || !draws[0].NextDrawAt.Equal(nextAt) {
+		t.Fatalf("derived row did not retain authoritative next boundary: %+v", draws[0])
+	}
+	if !reflect.DeepEqual(draws[0].Numbers, []int{6, 43, 4, 32, 34, 30, 14}) {
+		t.Fatalf("unexpected retained result: %v", draws[0].Numbers)
+	}
+
+	malformed := noResult
+	malformed.Issue = "115049941"
+	malformed.Numbers = []int{45, 6, 42}
+	if _, err := transform163BingoDraws(binding, []sourceDraw{malformed}); err == nil {
+		t.Fatal("malformed mother row was mistaken for a legitimate no-result period")
+	}
+	if _, err := transform163BingoDraws(binding, []sourceDraw{noResult}); err == nil {
+		t.Fatal("batch containing no usable derived result was accepted")
+	}
+}
+
 func TestBingo163SourceRevisionUpdatesOnlyExactLegacyOrIncompleteCurrentBinding(t *testing.T) {
 	for _, gameID := range []string{"bingo-ssc-2", "bingo-racing-a"} {
 		binding, ok := bingo163BindingForGame(gameID)

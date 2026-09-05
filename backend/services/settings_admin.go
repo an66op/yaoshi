@@ -210,6 +210,67 @@ func (s *SettingsAdminService) GetForWorkspace(workspaceID uint64) (*SystemSetti
 	return toSettingsView(row), nil
 }
 
+// GetForWorkspaceWithInheritedAnnouncements returns the room's own operational
+// settings while resolving public announcements from its owning tenant. Agent
+// rows are deliberately not used as an announcement source: this keeps one
+// authoritative copy and makes tenant changes visible to every child room on
+// the next read. Platform-owned legacy agents fall back to the platform row.
+func (s *SettingsAdminService) GetForWorkspaceWithInheritedAnnouncements(workspaceID uint64) (*SystemSettingsView, error) {
+	view, err := s.GetForWorkspace(workspaceID)
+	if err != nil || workspaceID == 0 {
+		return view, err
+	}
+	sourceID, err := s.announcementSourceWorkspaceID(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if sourceID == 0 {
+		view.RoomNotice = ""
+		view.Announcements = []AnnouncementItem{}
+		return view, nil
+	}
+	if sourceID == workspaceID {
+		return view, nil
+	}
+	source, err := s.GetForWorkspace(sourceID)
+	if err != nil {
+		return nil, err
+	}
+	inheritAnnouncementSettings(view, source)
+	return view, nil
+}
+
+func inheritAnnouncementSettings(target, source *SystemSettingsView) {
+	if target == nil || source == nil {
+		return
+	}
+	target.RoomNotice = source.RoomNotice
+	target.Announcements = append([]AnnouncementItem(nil), source.Announcements...)
+}
+
+func (s *SettingsAdminService) announcementSourceWorkspaceID(workspaceID uint64) (uint64, error) {
+	seen := make(map[uint64]struct{}, 4)
+	currentID := workspaceID
+	for depth := 0; depth < 64; depth++ {
+		if _, exists := seen[currentID]; exists {
+			return 0, apperrors.NewSystemError("INVALID_WORKSPACE_HIERARCHY", "房间归属关系存在循环", nil)
+		}
+		seen[currentID] = struct{}{}
+		var workspace workspacemodel.Workspace
+		if err := s.db.Select("id", "type", "parent_id").First(&workspace, currentID).Error; err != nil {
+			return 0, apperrors.NewBusinessError("WORKSPACE_NOT_FOUND", "房间不存在")
+		}
+		if workspace.Type == workspacemodel.TypeTenant || workspace.Type == workspacemodel.TypePlatform {
+			return workspace.ID, nil
+		}
+		if workspace.ParentID == nil || *workspace.ParentID == 0 {
+			return 0, nil
+		}
+		currentID = *workspace.ParentID
+	}
+	return 0, apperrors.NewSystemError("INVALID_WORKSPACE_HIERARCHY", "房间归属层级过深", nil)
+}
+
 // MenuTemplate returns the platform-owned visual menu template for a
 // privileged room role. It never carries authorization rules: tenant and
 // agent API middleware remains the only source of access control.
@@ -384,6 +445,34 @@ func (s *SettingsAdminService) UpdateForWorkspace(workspaceID uint64, input Upda
 	}
 	notifyRoomTimingSettingsChanged(notificationWorkspace, previousGameSettings, row.GameSettingsJSON, ws.NotifyGameCatalogChanged)
 	return toSettingsView(row), nil
+}
+
+// UpdateForAgentWorkspace saves the settings an agent is allowed to own while
+// ignoring announcement fields echoed by older or forged clients. The agent's
+// effective response still contains the tenant-owned announcement snapshot so
+// other room-setting screens can round-trip safely.
+func (s *SettingsAdminService) UpdateForAgentWorkspace(workspaceID uint64, input UpdateSystemSettingsInput) (*SystemSettingsView, error) {
+	var workspace workspacemodel.Workspace
+	if err := s.db.Select("id", "type").First(&workspace, workspaceID).Error; err != nil || workspace.Type != workspacemodel.TypeAgent {
+		return nil, apperrors.NewBusinessError("WORKSPACE_NOT_FOUND", "代理房间不存在")
+	}
+	row, err := s.ensure(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	input = agentOwnedSettingsInput(input, row)
+	if _, err := s.UpdateForWorkspace(workspaceID, input); err != nil {
+		return nil, err
+	}
+	return s.GetForWorkspaceWithInheritedAnnouncements(workspaceID)
+}
+
+func agentOwnedSettingsInput(input UpdateSystemSettingsInput, row *settings.SystemConfig) UpdateSystemSettingsInput {
+	input.Announcements = nil
+	if row != nil {
+		input.RoomNotice = row.RoomNotice
+	}
+	return input
 }
 
 func (s *SettingsAdminService) ensure(workspaceID uint64) (*settings.SystemConfig, error) {

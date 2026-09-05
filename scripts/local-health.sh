@@ -29,6 +29,18 @@ PGPASSWORD="$BACKEND_DATABASE_PASSWORD" PGSSLMODE="$BACKEND_DATABASE_SSLMODE" \
   "$postgres_ready_cmd" -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" >/dev/null
 
 curl -fsS "$BACKEND_URL/health" >/dev/null
+for captcha_path in /api/login/captcha /api/member/login/captcha; do
+  captcha_payload="$(curl -fsS -H "Origin: $ADMIN_URL" "$BACKEND_URL$captcha_path")"
+  jq -e '
+    (.data // .) as $captcha |
+    ($captcha.id | type == "string" and length == 32) and
+    ($captcha.image | type == "string" and startswith("data:image/png;base64,")) and
+    ($captcha.expires_in | type == "number" and . > 0)
+  ' <<<"$captcha_payload" >/dev/null || {
+    echo "验证码接口异常：$captcha_path" >&2
+    exit 1
+  }
+done
 enabled_count="$(curl -fsS "$BACKEND_URL/api/public/lottery/games/enabled" | jq '.data | length')"
 if [[ "$enabled_count" != "22" ]]; then
   echo "启用彩种数量异常：期望 22，实际 $enabled_count" >&2
@@ -36,4 +48,4 @@ if [[ "$enabled_count" != "22" ]]; then
 fi
 curl -fsS "$MEMBER_URL" >/dev/null
 curl -fsS "$ADMIN_URL" >/dev/null
-echo "健康检查通过：PostgreSQL、后端 ${BACKEND_SERVER_PORT}、用户端 5173、后台 5174；启用彩种 22 个"
+echo "健康检查通过：PostgreSQL、后端 ${BACKEND_SERVER_PORT}、双端验证码、用户端 5173、后台 5174；启用彩种 22 个"

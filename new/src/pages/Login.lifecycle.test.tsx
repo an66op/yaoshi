@@ -71,7 +71,7 @@ describe('sign-in during startup verification', () => {
     await settle()
     const imageLoaded = render(props)
     captchaImage(imageLoaded).props.onLoad!()
-    captchaInput(imageLoaded).props.onChange!({ target: { value: '123456' } })
+    captchaInput(imageLoaded).props.onChange!({ target: { value: '1234' } })
     return render(props)
   }
   beforeEach(() => {
@@ -163,7 +163,7 @@ describe('sign-in during startup verification', () => {
     expect(button.props.disabled).toBe(false)
     button.props.onClick!()
     await Promise.resolve()
-    expect(runtime.login).toHaveBeenCalledWith('testmember', 'valid-password', { captcha_id: 'challenge-1', captcha_code: '123456' })
+    expect(runtime.login).toHaveBeenCalledWith('testmember', 'valid-password', { captcha_id: 'challenge-1', captcha_code: '1234' })
     expect(onContinue).toHaveBeenCalledWith('testmember', '会员')
   })
 
@@ -172,7 +172,7 @@ describe('sign-in during startup verification', () => {
     runtime.loginCaptcha.mockImplementation(() => new Promise(done => { resolve = done }))
     const props = { onContinue: vi.fn() }
     fillCredentials(render(props))
-    captchaInput(render(props)).props.onChange!({ target: { value: '123456' } })
+    captchaInput(render(props)).props.onChange!({ target: { value: '1234' } })
     const pending = render(props)
     expect(submitButton(pending).props.disabled).toBe(true)
     submitButton(pending).props.onClick!()
@@ -188,18 +188,18 @@ describe('sign-in during startup verification', () => {
     expect(submitButton(render(props)).props.disabled).toBe(false)
   })
 
-  it('accepts only six digits and never exposes an answer in the image alt text', async () => {
+  it('accepts only four digits and never exposes an answer in the image alt text', async () => {
     const props = { onContinue: vi.fn() }
     fillCredentials(render(props))
     await completeCaptcha(props)
     captchaInput(render(props)).props.onChange!({ target: { value: '12a 345678' } })
     const ready = render(props)
-    expect(captchaInput(ready).props).toMatchObject({ value: '123456', inputMode: 'numeric', maxLength: 6 })
+    expect(captchaInput(ready).props).toMatchObject({ value: '1234', inputMode: 'numeric', maxLength: 4 })
     expect(captchaImage(ready).props.alt).toBe('登录图片验证码')
-    captchaInput(ready).props.onChange!({ target: { value: '12345' } })
+    captchaInput(ready).props.onChange!({ target: { value: '123' } })
     submitButton(render(props)).props.onClick!()
     expect(runtime.login).not.toHaveBeenCalled()
-    expect(text(render(props))).toContain('请输入图片中的 6 位数字验证码')
+    expect(text(render(props))).toContain('请输入图片中的 4 位数字验证码')
     expect(runtime.loginCaptcha).toHaveBeenCalledTimes(1)
   })
 
@@ -317,10 +317,10 @@ describe('sign-in during startup verification', () => {
     const props = { onContinue: vi.fn() }
     render(props)
     await completeCaptcha(props)
-    vi.advanceTimersByTime(120_000)
-    expect(text(render(props))).toContain('验证码已过期，请点击图片换一张')
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(text(render(props))).not.toContain('验证码已过期')
     expect(submitButton(render(props)).props.disabled).toBe(true)
-    expect(runtime.loginCaptcha).toHaveBeenCalledTimes(1)
+    expect(runtime.loginCaptcha).toHaveBeenCalledTimes(2)
   })
 
   it('times out a stalled captcha request after 15 seconds and allows manual retry', async () => {
@@ -358,19 +358,19 @@ describe('sign-in during startup verification', () => {
     expect(submitButton(render(props)).props.disabled).toBe(false)
   })
 
-  it('expires after 120 seconds, clears the answer, and waits for the user to change the image', async () => {
+  it('automatically replaces the captcha after 120 seconds and clears the old answer', async () => {
     const props = { onContinue: vi.fn() }
     fillCredentials(render(props))
     await completeCaptcha(props)
-    vi.advanceTimersByTime(119_999)
+    await vi.advanceTimersByTimeAsync(119_999)
     expect(submitButton(render(props)).props.disabled).toBe(false)
-    vi.advanceTimersByTime(1)
+    await vi.advanceTimersByTimeAsync(1)
     const expired = render(props)
     expect(submitButton(expired).props.disabled).toBe(true)
     expect(captchaInput(expired).props.value).toBe('')
-    expect(text(expired)).toContain('验证码已过期，请点击图片换一张')
-    expect(runtime.loginCaptcha).toHaveBeenCalledTimes(1)
-    expect(vi.getTimerCount()).toBe(0)
+    expect(text(expired)).not.toContain('验证码已过期')
+    expect(runtime.loginCaptcha).toHaveBeenCalledTimes(2)
+    expect(vi.getTimerCount()).toBe(1)
     submitButton(expired).props.onClick!()
     expect(runtime.login).not.toHaveBeenCalled()
   })
@@ -382,7 +382,8 @@ describe('sign-in during startup verification', () => {
     vi.setSystemTime(Date.now() + 120_001)
     submitButton(ready).props.onClick!()
     expect(runtime.login).not.toHaveBeenCalled()
-    expect(text(render(props))).toContain('验证码已过期，请点击图片换一张')
+    expect(text(render(props))).not.toContain('验证码已过期')
+    expect(runtime.loginCaptcha).toHaveBeenCalledTimes(2)
   })
 
   it('refreshes once after failed login while preserving credentials and clearing only the answer', async () => {

@@ -3,10 +3,12 @@ import { adminApi } from '../api'
 
 type Challenge = { id: string; image: string; expiresAt: number; requestID: number }
 type CaptchaState = {
-  status: 'loading' | 'image' | 'ready' | 'expired' | 'error' | 'used'
+  status: 'loading' | 'image' | 'ready' | 'error' | 'used'
   challenge: Challenge | null
   message: string
 }
+
+export const LOGIN_CAPTCHA_LENGTH = 4
 
 /** A challenge belongs to one mounted login form, never to a stored test profile. */
 export function useLoginCaptcha() {
@@ -18,14 +20,15 @@ export function useLoginCaptcha() {
   const requestTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const sequence = useRef(0)
   const expiryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const refreshCurrent = useRef<() => void>(() => undefined)
 
   const update = useCallback((next: CaptchaState) => { current.current = next; setCaptcha(next) }, [])
   const clearExpiry = useCallback(() => { clearTimeout(expiryTimer.current); expiryTimer.current = undefined }, [])
   const expire = useCallback(() => {
     clearExpiry()
     setCode('')
-    update({ ...current.current, status: 'expired', message: '验证码已过期，请换一张' })
-  }, [clearExpiry, update])
+    refreshCurrent.current()
+  }, [clearExpiry])
 
   const refresh = useCallback(async () => {
     if (!mounted.current) return
@@ -67,6 +70,10 @@ export function useLoginCaptcha() {
       if (request.current === controller) request.current = null
     }
   }, [clearExpiry, expire, update])
+  useEffect(() => {
+    refreshCurrent.current = () => { void refresh() }
+    return () => { refreshCurrent.current = () => undefined }
+  }, [refresh])
 
   useEffect(() => {
     mounted.current = true
@@ -93,9 +100,9 @@ export function useLoginCaptcha() {
   }
   const takeSubmission = () => {
     const challenge = current.current.challenge
-    if (challenge && Date.now() >= challenge.expiresAt) { expire(); throw new Error('验证码已过期，请换一张') }
+    if (challenge && Date.now() >= challenge.expiresAt) { expire(); throw new Error('验证码已过期，已自动刷新') }
     if (current.current.status !== 'ready' || !challenge) throw new Error('请先加载验证码图片')
-    if (!/^\d{6}$/.test(code)) throw new Error('请输入图中6位数字验证码')
+    if (!new RegExp(`^\\d{${LOGIN_CAPTCHA_LENGTH}}$`).test(code)) throw new Error(`请输入图中${LOGIN_CAPTCHA_LENGTH}位数字验证码`)
     clearExpiry()
     update({ ...current.current, status: 'used' })
     setCode('')

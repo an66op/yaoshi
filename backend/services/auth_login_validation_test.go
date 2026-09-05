@@ -27,7 +27,7 @@ func TestLoginRejectsOversizedInputBeforeDatabaseLookup(t *testing.T) {
 				name string
 				call func() error
 			}{
-				{name: "management", call: func() error { _, _, err := service.Login(test.username, test.password, test.workspace); return err }},
+				{name: "management", call: func() error { _, _, err := service.Login(test.username, test.password, test.workspace, "admin"); return err }},
 				{name: "member", call: func() error {
 					_, _, err := service.LoginMember(test.username, test.password, test.workspace)
 					return err
@@ -49,6 +49,15 @@ func TestLoginRejectsOversizedInputBeforeDatabaseLookup(t *testing.T) {
 func TestValidateLoginInputUsesRunesAndPasswordBytes(t *testing.T) {
 	if err := validateLoginInput(strings.Repeat("王", maxLoginUsernameRunes), strings.Repeat("王", 24), strings.Repeat("室", maxLoginWorkspaceRunes)); err != nil {
 		t.Fatalf("valid boundary rejected: %v", err)
+	}
+}
+
+func TestManagementLoginRequiresPersistedRoleNameBeforeDatabaseLookup(t *testing.T) {
+	service := NewAuthService(nil)
+	for _, role := range []string{"", "platform", "member", "ADMIN"} {
+		if _, _, err := service.Login("admin", "Password#2026", "", role); apperrors.GetErrorCode(err) != "INVALID_ROLE" {
+			t.Fatalf("role %q error = %v, want INVALID_ROLE", role, err)
+		}
 	}
 }
 

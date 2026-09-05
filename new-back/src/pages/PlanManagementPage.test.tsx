@@ -16,7 +16,7 @@ describe('plan management role and workspace boundaries', () => {
   it('describes bounded visitor-only generation without an administrative publish action', () => {
     const config = { stream_ttl_seconds: 60, history_default_periods: 6, history_max_periods: 10, history_retention_periods: 20 } as PlanAutomationConfig
     const html = renderToStaticMarkup(<PlanGenerationPolicy config={config} />)
-    for (const text of ['无人浏览不推进', '每 15 秒', '隐藏或离开即暂停', '默认冠军计划也不常驻', '访问租期 60 秒', '最近 6 期', '最多 10 期', '最近 20 期', '不补造历史推荐']) expect(html).toContain(text)
+    for (const text of ['无人浏览不推进', '每 15 秒', '隐藏或离开即暂停', '默认冠军计划也不常驻', '访问租期 60 秒', '最近 6 期', '最多 10 期', '最近 20 期']) expect(html).toContain(text)
     expect(html).not.toContain('生成本期')
     expect(html).not.toContain('30 分钟')
     expect(html).not.toContain('演示')

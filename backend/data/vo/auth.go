@@ -12,6 +12,7 @@ type RegisterRequest struct {
 type LoginRequest struct {
 	Username    string `json:"username" binding:"required,max=50"`
 	Password    string `json:"password" binding:"required"`
+	Role        string `json:"role" binding:"omitempty,max=20"`
 	Workspace   string `json:"workspace" binding:"omitempty,max=80"`
 	CaptchaID   string `json:"captcha_id"`
 	CaptchaCode string `json:"captcha_code"`

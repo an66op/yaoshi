@@ -5,6 +5,19 @@ import (
 	"testing"
 )
 
+func TestLoadFromEnvAllowsExplicitRedisDisable(t *testing.T) {
+	previous := Config
+	t.Cleanup(func() { Config = previous })
+	Config = &Configuration{Redis: RedisConfig{Addr: "127.0.0.1:6379"}}
+	t.Setenv("BACKEND_REDIS_ADDR", "")
+	if err := loadFromEnv(); err != nil {
+		t.Fatalf("loadFromEnv() error = %v", err)
+	}
+	if Config.Redis.Addr != "" {
+		t.Fatalf("explicit empty BACKEND_REDIS_ADDR did not disable Redis: %q", Config.Redis.Addr)
+	}
+}
+
 func TestBuildPostgresDSNPinsPublicSearchPath(t *testing.T) {
 	dsn, err := BuildPostgresDSN(DatabaseConfig{
 		Host: "127.0.0.1", Port: 5432, User: "lottery user",

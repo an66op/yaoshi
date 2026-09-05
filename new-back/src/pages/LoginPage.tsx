@@ -7,15 +7,10 @@ import {
   CircularProgress,
   Stack,
   TextField,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from '@mui/material'
-import AccountBalanceRounded from '@mui/icons-material/AccountBalanceRounded'
-import BusinessRounded from '@mui/icons-material/BusinessRounded'
-import StorefrontRounded from '@mui/icons-material/StorefrontRounded'
 import { useEffect, useRef, useState } from 'react'
-import { adminApi } from '../api'
+import { adminApi, type ManagementLoginRole } from '../api'
 import { clearLegacyAdminSession, type AuthUser } from '../auth'
 import { createDevLoginPresets, type DevLoginPreset, type LoginIdentity } from '../devLoginPresets'
 import {
@@ -25,18 +20,28 @@ import {
   validateManagementLoginInput,
 } from '../loginLimits'
 import { loadTestLogin, type ManagementTestLogins } from '../utils/testLogin'
-import { useLoginCaptcha } from '../hooks/useLoginCaptcha'
+import { LOGIN_CAPTCHA_LENGTH, useLoginCaptcha } from '../hooks/useLoginCaptcha'
 
 const identityOptions: Array<{
   id: LoginIdentity
+  code: string
   label: string
-  caption: string
-  icon: typeof AccountBalanceRounded
 }> = [
-  { id: 'platform', label: '平台管理员', caption: '管理全平台', icon: AccountBalanceRounded },
-  { id: 'tenant', label: '租户', caption: '开通并管理房间', icon: BusinessRounded },
-  { id: 'agent', label: '代理', caption: '管理所属房间', icon: StorefrontRounded },
+  { id: 'platform', code: 'admin', label: '平台管理员' },
+  { id: 'tenant', code: 'tenant', label: '租户' },
+  { id: 'agent', code: 'agent', label: '代理' },
 ]
+
+const identityFromCode = (value: string): LoginIdentity | null => {
+  const code = value.trim().toLowerCase()
+  if (code === 'admin' || code === 'platform') return 'platform'
+  if (code === 'tenant') return 'tenant'
+  if (code === 'agent') return 'agent'
+  return null
+}
+
+const codeForIdentity = (identity: LoginIdentity) => identityOptions.find(item => item.id === identity)?.code ?? ''
+const roleForIdentity = (identity: LoginIdentity): ManagementLoginRole => identity === 'platform' ? 'admin' : identity
 
 const localPresets: Partial<Record<LoginIdentity, DevLoginPreset>> = import.meta.env.DEV
   ? createDevLoginPresets(true, import.meta.env)
@@ -48,6 +53,7 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
   const [username, setUsername] = useState(() => import.meta.env.DEV ? localPreset('platform')?.username ?? '' : '')
   const [password, setPassword] = useState(() => import.meta.env.DEV ? localPreset('platform')?.password ?? '' : '')
   const [identity, setIdentity] = useState<LoginIdentity>('platform')
+  const [identityCode, setIdentityCode] = useState(() => codeForIdentity('platform'))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [testPresets, setTestPresets] = useState<ManagementTestLogins>({})
@@ -85,6 +91,7 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
     selectedIdentity.current = next
     edited.current = false
     setIdentity(next)
+    setIdentityCode(codeForIdentity(next))
     const preset = import.meta.env.DEV ? localPreset(next) : testPresets[next]
     setUsername(preset?.username ?? '')
     setPassword(preset?.password ?? '')
@@ -101,6 +108,11 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     if (submitting.current) return
+    const requestedIdentity = identityFromCode(identityCode)
+    if (!requestedIdentity) {
+      setError('登录身份必须是 admin、tenant 或 agent')
+      return
+    }
     const validationError = validateManagementLoginInput(username, password)
     if (validationError) {
       setError(validationError)
@@ -108,14 +120,18 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
     }
     let proof: { captcha_id: string; captcha_code: string }
     try { proof = takeSubmission() }
-    catch (reason) { setError(reason instanceof Error ? reason.message : '请填写验证码'); return }
+    catch (reason) {
+      const message = reason instanceof Error ? reason.message : '请填写验证码'
+      setError(message === '验证码已过期，已自动刷新' ? '' : message)
+      return
+    }
     submitting.current = true
     setLoading(true)
     setError('')
     try {
-      // Identity buttons select a test profile/presentation only. The server
-      // resolves the real role and ownership from the authenticated account.
-      const result = await adminApi.login(username.trim(), password, proof)
+      // The server matches this role against the authenticated account. Local
+      // shortcuts only fill credentials; they never bypass that role check.
+      const result = await adminApi.login(roleForIdentity(requestedIdentity), username.trim(), password, proof)
 	  if (!mounted.current) return
 	  clearLegacyAdminSession()
       onSuccess(result.user)
@@ -149,57 +165,57 @@ export function LoginPage({ onSuccess }: { onSuccess: (user: AuthUser) => void }
           <Stack alignItems="center" gap={1} mb={3}>
             <Box sx={{ width: 52, height: 52, borderRadius: 2.5, display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 900, fontSize: 22, background: 'linear-gradient(145deg,#1684ad,#29bdb0)' }}>王</Box>
             <Typography variant="h5" fontWeight={850}>王者管理中心</Typography>
-            <Typography variant="body2" color="text.secondary">{import.meta.env.DEV ? '选择身份后自动填充本地体验账号' : '请选择身份并输入管理账号'}</Typography>
+            <Typography variant="body2" color="text.secondary">输入身份代号后填写管理账号</Typography>
           </Stack>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           {testPrefilled && <Alert severity="info" sx={{ mb: 2 }}>测试环境 · 已填充体验账号<Typography component="span" display="block" variant="caption">体验账号公开，仅用于测试，请勿录入真实业务资料。</Typography></Alert>}
           <Stack component="form" gap={2} onSubmit={event => void submit(event)}>
-            <Box>
-              <Typography component="label" fontSize={13} fontWeight={800} color="text.secondary" display="block" mb={1}>登录身份</Typography>
-              <ToggleButtonGroup
-                exclusive
+            <TextField
+              label="登录身份"
+              value={identityCode}
+              disabled={loading}
+              onChange={event => {
+                const nextCode = event.target.value.replace(/\s/g, '').toLowerCase().slice(0, 16)
+                setIdentityCode(nextCode)
+                const nextIdentity = identityFromCode(nextCode)
+                if (nextIdentity) chooseIdentity(nextIdentity)
+                else setError('')
+              }}
+              autoComplete="off"
+              required
+              slotProps={{ htmlInput: { inputMode: 'text', spellCheck: false } }}
+            />
+            {import.meta.env.DEV && <Stack direction="row" gap={1}>
+              {identityOptions.map(option => <Button
+                key={option.id}
+                type="button"
+                size="small"
                 fullWidth
                 disabled={loading}
-                value={identity}
-                onChange={(_, next: LoginIdentity | null) => { if (next) chooseIdentity(next) }}
-                aria-label="选择登录身份"
-                sx={{
-                  gap: 1,
-                  '& .MuiToggleButtonGroup-grouped': { border: '1px solid', borderColor: 'divider', borderRadius: '12px !important', m: 0 },
-                }}
-              >
-                {identityOptions.map(option => {
-                  const IdentityIcon = option.icon
-                  return <ToggleButton key={option.id} value={option.id} aria-label={option.label} sx={{ py: 1.2, px: .75, textTransform: 'none' }}>
-                    <Stack alignItems="center" gap={.4} minWidth={0}>
-                      <IdentityIcon fontSize="small" />
-                      <Typography fontSize={12.5} fontWeight={850} noWrap>{option.label}</Typography>
-                      <Typography fontSize={10.5} color="text.secondary" noWrap>{option.caption}</Typography>
-                    </Stack>
-                  </ToggleButton>
-                })}
-              </ToggleButtonGroup>
-            </Box>
+                variant={identity === option.id && identityCode === option.code ? 'contained' : 'outlined'}
+                aria-label={`快捷切换 ${option.code}`}
+                onClick={() => chooseIdentity(option.id)}
+              >{option.code}</Button>)}
+            </Stack>}
             <TextField label="登录帐号" value={username} disabled={loading} onChange={event => { markEdited(); setUsername(truncateCodePoints(event.target.value, MANAGEMENT_LOGIN_USERNAME_MAX_RUNES)) }} autoComplete="username" required />
             <TextField label="密码" type="password" value={password} disabled={loading} onChange={event => { markEdited(); setPassword(event.target.value) }} autoComplete="current-password" slotProps={{ htmlInput: { maxLength: MANAGEMENT_LOGIN_PASSWORD_MAX_BYTES } }} required />
             <Box>
               <Stack direction="row" alignItems="center" gap={1}>
-                <TextField label="验证码" size="small" autoComplete="off" value={captchaCode} disabled={loading || captcha.status !== 'ready'} onChange={event => setCaptchaCode(event.target.value.replace(/\D/g, '').slice(0, 6))} slotProps={{ htmlInput: { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6, 'aria-describedby': 'management-captcha-hint' } }} required sx={{ flex: 1, minWidth: 0 }} />
+                <TextField label="验证码" size="small" autoComplete="off" value={captchaCode} disabled={loading || captcha.status !== 'ready'} onChange={event => setCaptchaCode(event.target.value.replace(/\D/g, '').slice(0, LOGIN_CAPTCHA_LENGTH))} slotProps={{ htmlInput: { inputMode: 'numeric', pattern: `[0-9]{${LOGIN_CAPTCHA_LENGTH}}`, maxLength: LOGIN_CAPTCHA_LENGTH, 'aria-describedby': 'management-captcha-hint' } }} required sx={{ flex: 1, minWidth: 0 }} />
                 <Button type="button" variant="outlined" aria-label="更换登录验证码" aria-busy={captcha.status === 'loading' || captcha.status === 'image'} disabled={loading} onClick={changeCaptcha} sx={{ width: 132, minWidth: 132, height: 44, p: 0, overflow: 'hidden', bgcolor: 'background.paper' }}>
-                  {captcha.challenge ? <Box component="img" key={captcha.challenge.requestID} src={captcha.challenge.image} alt="登录验证码" draggable={false} onLoad={() => imageLoaded(captcha.challenge!.requestID)} onError={() => imageFailed(captcha.challenge!.requestID)} sx={{ width: '100%', height: '100%', objectFit: 'contain', opacity: captcha.status === 'expired' || captcha.status === 'used' ? .45 : 1 }} />
+                  {captcha.challenge ? <Box component="img" key={captcha.challenge.requestID} src={captcha.challenge.image} alt="登录验证码" draggable={false} onLoad={() => imageLoaded(captcha.challenge!.requestID)} onError={() => imageFailed(captcha.challenge!.requestID)} sx={{ width: '100%', height: '100%', objectFit: 'contain', opacity: captcha.status === 'used' ? .45 : 1 }} />
                     : captcha.status === 'loading' ? <CircularProgress size={20} /> : '点击重试'}
                 </Button>
               </Stack>
               <Stack direction="row" alignItems="center" justifyContent="space-between" gap={.75} mt={.25}>
-                <Typography id="management-captcha-hint" variant="caption" aria-live="polite" color={captcha.status === 'error' ? 'error.main' : captcha.status === 'expired' ? 'warning.main' : 'text.secondary'}>{captcha.message || '请输入图中6位数字'}</Typography>
+                <Typography id="management-captcha-hint" variant="caption" aria-live="polite" color={captcha.status === 'error' ? 'error.main' : 'text.secondary'}>{captcha.message || `请输入图中${LOGIN_CAPTCHA_LENGTH}位数字`}</Typography>
                 <Button type="button" size="small" disabled={loading} onClick={changeCaptcha} sx={{ px: 0, whiteSpace: 'nowrap', flexShrink: 0 }}>看不清？换一张</Button>
               </Stack>
             </Box>
-            <Button type="submit" variant="contained" size="large" disabled={loading || !username.trim() || !password || captcha.status !== 'ready' || !/^\d{6}$/.test(captchaCode)}>
-              {loading ? <CircularProgress size={22} color="inherit" /> : `登录${identityOptions.find(item => item.id === identity)?.label ?? ''}`}
+            <Button type="submit" variant="contained" size="large" disabled={loading || !identityFromCode(identityCode) || !username.trim() || !password || captcha.status !== 'ready' || !new RegExp(`^\\d{${LOGIN_CAPTCHA_LENGTH}}$`).test(captchaCode)}>
+              {loading ? <CircularProgress size={22} color="inherit" /> : `登录${identityOptions.find(item => item.id === identity)?.label ?? '管理后台'}`}
             </Button>
           </Stack>
-          {import.meta.env.DEV && <Typography mt={2} display="block" textAlign="center" variant="caption" color="text.secondary">身份按钮仅填充本地体验账号，不影响正式账号登录</Typography>}
         </CardContent>
       </Card>
     </Box>

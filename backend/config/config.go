@@ -208,8 +208,11 @@ func loadFromEnv() error {
 	}
 
 	// Redis配置
-	if addr := os.Getenv("BACKEND_REDIS_ADDR"); addr != "" {
-		Config.Redis.Addr = addr
+	// An explicitly empty address disables Redis. This matters for the supported
+	// single-instance debug workflow: a stale local config file must not make the
+	// captcha service fail closed after `make dev` deliberately selects memory.
+	if addr, exists := os.LookupEnv("BACKEND_REDIS_ADDR"); exists {
+		Config.Redis.Addr = strings.TrimSpace(addr)
 	}
 	if username := os.Getenv("BACKEND_REDIS_USERNAME"); username != "" {
 		Config.Redis.Username = strings.TrimSpace(username)

@@ -91,7 +91,8 @@ const render = () => {
   return result
 }
 const field = (node: ReactNode, name: string) => find(node, element => element.props.autoComplete === name)!
-const choose = (node: ReactNode, identity: string) => find(node, element => element.props['aria-label'] === '选择登录身份')!.props.onChange!({ target: { value: '' } }, identity)
+const identityCodes = { platform: 'admin', tenant: 'tenant', agent: 'agent' } as const
+const choose = (node: ReactNode, identity: keyof typeof identityCodes) => find(node, element => element.props.label === '登录身份')!.props.onChange!({ target: { value: identityCodes[identity] } })
 const captchaField = (node: ReactNode) => find(node, element => element.props.label === '验证码')!
 const captchaImage = (node: ReactNode) => find(node, element => element.props.component === 'img')
 const refreshButton = (node: ReactNode) => find(node, element => element.props['aria-label'] === '更换登录验证码')!
@@ -100,7 +101,7 @@ const submitForm = (node: ReactNode) => find(node, element => element.props.comp
 const challenge = (id = 'captcha-id') => ({ id, image: `data:image/png;base64,aW1hZ2U=`, expires_in: 120 })
 const settle = async () => { for (let index = 0; index < 6; index++) await Promise.resolve(); return render() }
 const loadImage = async () => { const ready = await settle(); captchaImage(ready)!.props.onLoad!(); return render() }
-const answer = (node: ReactNode, code = '123456') => { captchaField(node).props.onChange!({ target: { value: code } }); return render() }
+const answer = (node: ReactNode, code = '1234') => { captchaField(node).props.onChange!({ target: { value: code } }); return render() }
 const credentials = (node: ReactNode) => {
   field(node, 'username').props.onChange!({ target: { value: 'test-account' } })
   field(node, 'current-password').props.onChange!({ target: { value: 'test-password' } })
@@ -198,6 +199,12 @@ describe('management runtime test login lifecycle', () => {
     const initial = render()
     expect(field(initial, 'username').props.value).toBe('admin')
     expect(runtime.loadTestLogin).not.toHaveBeenCalled()
+    expect(find(initial, node => node.props['aria-label'] === '快捷切换 tenant')).toBeDefined()
+  })
+
+  it('does not expose test-account shortcut buttons outside local development', () => {
+    vi.stubEnv('DEV', false)
+    expect(find(render(), node => node.props['aria-label'] === '快捷切换 admin')).toBeUndefined()
   })
 
   it.each(['platform', 'tenant', 'agent'] as const)('authenticates %s with credentials and a manual captcha, and trusts the server role', async identity => {
@@ -209,8 +216,8 @@ describe('management runtime test login lifecycle', () => {
     const ready = answer(await loadImage())
     submitForm(ready)
     await Promise.resolve(); await Promise.resolve()
-    expect(runtime.login).toHaveBeenCalledWith(presets[identity].username, presets[identity].password, { captcha_id: 'captcha-id', captcha_code: '123456' })
-    expect(runtime.login.mock.calls[0]).toHaveLength(3)
+    expect(runtime.login).toHaveBeenCalledWith(identity === 'platform' ? 'admin' : identity, presets[identity].username, presets[identity].password, { captcha_id: 'captcha-id', captcha_code: '1234' })
+    expect(runtime.login.mock.calls[0]).toHaveLength(4)
     expect(props.onSuccess).toHaveBeenCalledWith(user)
     expect(field(ready, 'organization')).toBeUndefined()
   })
@@ -229,7 +236,7 @@ describe('management login captcha lifecycle', () => {
     expect(submitButton(ready).props.disabled).toBe(true)
     submitForm(ready)
     expect(runtime.login).not.toHaveBeenCalled()
-    expect(contents(render())).toContain('请输入图中6位数字验证码')
+    expect(contents(render())).toContain('请输入图中4位数字验证码')
   })
 
   it('does not enable captcha submission until its PNG image actually loads', async () => {
@@ -243,19 +250,19 @@ describe('management login captcha lifecycle', () => {
     captchaImage(pendingImage)!.props.onLoad!()
     const ready = render()
     expect(captchaField(ready).props.disabled).toBe(false)
-    expect(captchaField(ready).props).toMatchObject({ autoComplete: 'off', slotProps: { htmlInput: { inputMode: 'numeric', maxLength: 6, pattern: '[0-9]{6}' } } })
+    expect(captchaField(ready).props).toMatchObject({ autoComplete: 'off', slotProps: { htmlInput: { inputMode: 'numeric', maxLength: 4, pattern: '[0-9]{4}' } } })
     expect(submitButton(answer(ready)).props.disabled).toBe(false)
   })
 
-  it('keeps only six digits and refuses incomplete answers without consuming the challenge', async () => {
+  it('keeps only four digits and refuses incomplete answers without consuming the challenge', async () => {
     credentials(render())
-    let ready = answer(await loadImage(), 'a12 b34')
-    expect(captchaField(ready).props.value).toBe('1234')
+    let ready = answer(await loadImage(), 'a12 b3')
+    expect(captchaField(ready).props.value).toBe('123')
     submitForm(ready)
     expect(runtime.login).not.toHaveBeenCalled()
     expect(runtime.loginCaptcha).toHaveBeenCalledTimes(1)
     ready = answer(render(), 'ab123456789')
-    expect(captchaField(ready).props.value).toBe('123456')
+    expect(captchaField(ready).props.value).toBe('1234')
     expect(submitButton(ready).props.disabled).toBe(false)
   })
 
@@ -266,7 +273,7 @@ describe('management login captcha lifecycle', () => {
     const ready = answer(await loadImage())
     submitForm(ready)
     const rejected = await settle()
-    expect(runtime.login).toHaveBeenCalledWith('test-account', 'test-password', { captcha_id: 'first', captcha_code: '123456' })
+    expect(runtime.login).toHaveBeenCalledWith('admin', 'test-account', 'test-password', { captcha_id: 'first', captcha_code: '1234' })
     expect(runtime.loginCaptcha).toHaveBeenCalledTimes(2)
     expect(field(rejected, 'username').props.value).toBe('test-account')
     expect(field(rejected, 'current-password').props.value).toBe('test-password')
@@ -276,9 +283,9 @@ describe('management login captcha lifecycle', () => {
     expect(props.onSuccess).not.toHaveBeenCalled()
     runtime.login.mockResolvedValueOnce({ user: { id: 7, role: 'tenant', username: 'real-account' } })
     captchaImage(rejected)!.props.onLoad!()
-    submitForm(answer(render(), '654321'))
+    submitForm(answer(render(), '6543'))
     await settle()
-    expect(runtime.login).toHaveBeenLastCalledWith('test-account', 'test-password', { captcha_id: 'second', captcha_code: '654321' })
+    expect(runtime.login).toHaveBeenLastCalledWith('admin', 'test-account', 'test-password', { captcha_id: 'second', captcha_code: '6543' })
     expect(props.onSuccess).toHaveBeenCalledTimes(1)
   })
 
@@ -345,21 +352,19 @@ describe('management login captcha lifecycle', () => {
     runtime.login.mockResolvedValueOnce({ user: { id: 9, role: 'admin', username: 'test-account' } })
     submitForm(answer(render()))
     await settle()
-    expect(runtime.login).toHaveBeenCalledWith('test-account', 'test-password', { captcha_id: 'retry-after-timeout', captcha_code: '123456' })
+    expect(runtime.login).toHaveBeenCalledWith('admin', 'test-account', 'test-password', { captcha_id: 'retry-after-timeout', captcha_code: '1234' })
   })
 
-  it('expires after two minutes, clears the answer, and requires a new image', async () => {
+  it('automatically replaces an expired captcha and clears the old answer', async () => {
     credentials(render())
     answer(await loadImage())
     await vi.advanceTimersByTimeAsync(120_000)
-    const expired = render()
-    expect(contents(expired)).toContain('验证码已过期，请换一张')
-    expect(captchaField(expired).props.value).toBe('')
-    expect(submitButton(expired).props.disabled).toBe(true)
-    submitForm(expired)
+    const refreshing = await settle()
+    expect(contents(refreshing)).not.toContain('验证码已过期，请换一张')
+    expect(captchaField(refreshing).props.value).toBe('')
+    expect(submitButton(refreshing).props.disabled).toBe(true)
     expect(runtime.login).not.toHaveBeenCalled()
-    expect(runtime.loginCaptcha).toHaveBeenCalledTimes(1)
-    refreshButton(render()).props.onClick!()
+    expect(runtime.loginCaptcha).toHaveBeenCalledTimes(2)
     const refreshed = answer(await loadImage())
     expect(submitButton(refreshed).props.disabled).toBe(false)
   })
@@ -370,7 +375,8 @@ describe('management login captcha lifecycle', () => {
     vi.setSystemTime(Date.now() + 120_001)
     submitForm(ready)
     expect(runtime.login).not.toHaveBeenCalled()
-    expect(contents(render())).toContain('验证码已过期，请换一张')
+    expect(contents(render())).not.toContain('验证码已过期，请换一张')
+    expect(runtime.loginCaptcha).toHaveBeenCalledTimes(2)
   })
 
   it('does not extend validity by the time spent waiting for a slow challenge response', async () => {
@@ -379,9 +385,10 @@ describe('management login captcha lifecycle', () => {
     credentials(render())
     vi.setSystemTime(Date.now() + 121_000)
     resolve(challenge())
-    const expired = await settle()
-    expect(contents(expired)).toContain('验证码已过期，请换一张')
-    captchaImage(expired)!.props.onLoad!()
+    const refreshed = await settle()
+    expect(contents(refreshed)).not.toContain('验证码已过期，请换一张')
+    expect(runtime.loginCaptcha).toHaveBeenCalledTimes(2)
+    captchaImage(refreshed)!.props.onLoad!()
     expect(submitButton(render()).props.disabled).toBe(true)
   })
 
@@ -409,7 +416,7 @@ describe('management login captcha lifecycle', () => {
     expect(submitButton(latest).props.disabled).toBe(false)
     submitForm(latest)
     await settle()
-    expect(runtime.login).toHaveBeenCalledWith('test-account', 'test-password', { captcha_id: 'third', captcha_code: '123456' })
+    expect(runtime.login).toHaveBeenCalledWith('admin', 'test-account', 'test-password', { captcha_id: 'third', captcha_code: '1234' })
   })
 
   it('guards same-frame duplicate submission and blocks manual refresh and identity changes while submitting', async () => {

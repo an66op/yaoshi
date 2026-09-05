@@ -197,7 +197,6 @@ function messageTime(value?: string | Date) {
 export function Chats({
   view,
   unreadCount,
-  onMarkAllRead,
   onNavigate,
   onServiceBack,
   onRefreshUnread,
@@ -207,7 +206,6 @@ export function Chats({
 }: {
   view: ChatView;
   unreadCount: number;
-  onMarkAllRead: () => void;
   onNavigate: (view: ChatView) => void;
   onServiceBack?: () => void;
   onRefreshUnread?: () => void;
@@ -226,6 +224,8 @@ export function Chats({
   const [pinnedRows, setPinnedRows] = useState<string[]>(["service", "group"]);
   const [hiddenRows, setHiddenRows] = useState<string[]>(["winning"]);
   const [listError, setListError] = useState("");
+  const [readActionError, setReadActionError] = useState("");
+  const [markingAllRead, setMarkingAllRead] = useState(false);
   const previewRequestRef = useRef(0);
 
   useEffect(() => {
@@ -298,10 +298,20 @@ export function Chats({
   const systemNotice = noticeFor("system");
   const activityNotice = noticeFor("activity");
   const winningNotice = noticeFor("winning");
-  const allRead = (["system", "activity", "winning"] as const)
-    .filter((category) => !hiddenRows.includes(category))
-    .every((category) => unreadFor(category) === 0);
-
+  const markAllRead = useCallback(async () => {
+    if (markingAllRead) return;
+    setMarkingAllRead(true);
+    setReadActionError("");
+    try {
+      await portalApi.markAllRead();
+      setNotifications((current) => current.map((item) => item.read ? item : { ...item, read: true }));
+      await onRefreshUnread?.();
+    } catch (reason) {
+      setReadActionError(friendlyChatError(reason, "标记已读失败，请重试"));
+    } finally {
+      setMarkingAllRead(false);
+    }
+  }, [markingAllRead, onRefreshUnread]);
   if (view === "system")
     return (
       <NotificationThread
@@ -334,11 +344,6 @@ export function Chats({
         onRefreshUnread={onRefreshUnread}
       />
     );
-  const markAll = () => {
-    setNotifications((current) => current.map((item) => ({ ...item, read: true })));
-    void Promise.resolve(onMarkAllRead()).finally(() => onRefreshUnread?.());
-  };
-
   const pinned = new Set(pinnedRows);
   const messageRows = [
     {
@@ -376,15 +381,18 @@ export function Chats({
   return (
     <section className="chat-list">
       <header className="blue-header">
-        <b>聊天</b>
         <MessageSoundToggle />
+        <b>聊天</b>
+        <button
+          className="message-read-all"
+          type="button"
+          aria-label="全部标为已读"
+          disabled={markingAllRead}
+          title="全部标为已读"
+          onClick={() => void markAllRead()}
+        >已读</button>
       </header>
-      <div className="chat-subhead">
-        <span>消息</span>
-        <button onClick={markAll}>
-          {allRead ? "已全部读" : "全部已读"}
-        </button>
-      </div>
+      {readActionError && <button type="button" className="chat-inline-retry" onClick={() => void markAllRead()}>{readActionError}，点击重试</button>}
       {listError && <button type="button" className="chat-inline-retry" onClick={() => void loadPreview()}>消息更新失败，点击重试</button>}
       {messageRows.map((row) => <ChatRow key={row.key} kind={row.kind} image={row.key === "group" ? roomLogo : undefined} pinned={pinned.has(row.key)} name={row.name} message={row.message} time={row.time} badge={row.badge} onClick={row.onClick} />)}
     </section>

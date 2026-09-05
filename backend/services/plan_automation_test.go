@@ -49,6 +49,7 @@ func TestPlanAutomationNumbersAreDeterministicUniqueAndGameBounded(t *testing.T)
 	}{
 		{"speed-racing", "赛车", 1, 10, 5}, {"speed-fly", "飞艇", 1, 10, 3},
 		{"speed-ssc", "时时彩", 0, 9, 3}, {"canada-28", "PC", 0, 27, 3},
+		{"hong-kong-mark-six", "六合彩", 1, 49, 3},
 	} {
 		t.Run(test.id, func(t *testing.T) {
 			game := lottery.Game{ID: test.id, Category: test.category}
@@ -107,8 +108,12 @@ func TestPlanAutomationNeverUsesGuessedClosedOrDrawnIssues(t *testing.T) {
 	if !planAutomationIssueEligible(game, issue, now) {
 		t.Fatal("confirmed open upstream issue rejected")
 	}
+	observed := game
+	observed.TimingSource = "observed"
+	if !planAutomationIssueEligible(observed, issue, now) {
+		t.Fatal("open external issue with observed feed timing rejected")
+	}
 	for name, change := range map[string]func(*lottery.Game, *lottery.Issue){
-		"inferred schedule":     func(g *lottery.Game, _ *lottery.Issue) { g.TimingSource = "observed" },
 		"configured schedule":   func(g *lottery.Game, _ *lottery.Issue) { g.TimingSource = "configured" },
 		"simulated source":      func(g *lottery.Game, _ *lottery.Issue) { g.SourceKind = "platform" },
 		"missing issue":         func(g *lottery.Game, _ *lottery.Issue) { g.NextIssue = "" },

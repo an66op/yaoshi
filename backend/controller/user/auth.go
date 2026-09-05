@@ -58,7 +58,7 @@ func (h *authHandler) Login(c *gin.Context) {
 	if !verifyLoginCaptcha(c, captcha.Management, req.CaptchaID, req.CaptchaCode) {
 		return
 	}
-	account, token, err := h.authService.Login(req.Username, req.Password, req.Workspace)
+	account, token, err := h.authService.Login(req.Username, req.Password, req.Workspace, req.Role)
 	if err != nil {
 		constants.SendError(c, http.StatusUnauthorized, constants.ErrInvalidCredentials, err)
 		return

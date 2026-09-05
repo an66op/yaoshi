@@ -124,7 +124,8 @@ func TestDevelopmentAcceptanceProfilePostgresFreshIdempotentAndNonOverwriting(t 
 	}
 	if first.HumanAccounts != 4 || first.RobotAccounts != 30 || first.Workspaces != 3 ||
 		first.ActiveAccounts != 34 || first.ActiveMemberships != 34 || first.ConfiguredGames != 22 || first.ConfiguredPlayQuotes != 1437 ||
-		first.AgentRoomCode != demoRoomCode || first.AgentRoomOpenGames != 22 {
+		first.AgentRoomCode != demoRoomCode || first.AgentRoomOpenGames != 22 ||
+		first.AgentRoomRobotQuota != MaxWorkspaceRobotQuota || first.AgentRoomRobots != MaxWorkspaceRobotQuota {
 		t.Fatalf("unexpected fresh profile report: %+v", first)
 	}
 

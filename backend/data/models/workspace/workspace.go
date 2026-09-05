@@ -18,16 +18,20 @@ type Workspace struct {
 	// an internal organisation identifier and must never be exposed as a room
 	// number. Platform workspaces and tenants waiting for allocation keep it
 	// empty; PostgreSQL enforces uniqueness only for non-empty values.
-	RoomCode    string    `gorm:"size:40;not null;default:'';index" json:"room_code,omitempty"`
-	Type        string    `gorm:"size:20;not null;index" json:"type"`
-	OwnerUserID uint64    `gorm:"not null;uniqueIndex" json:"owner_user_id"`
-	ParentID    *uint64   `gorm:"index" json:"parent_id,omitempty"`
-	Scope       string    `gorm:"size:64;not null;uniqueIndex" json:"scope"`
-	Name        string    `gorm:"size:80;not null" json:"name"`
-	Logo        string    `gorm:"type:text" json:"logo,omitempty"`
-	Status      int       `gorm:"not null;default:1;index" json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	RoomCode    string  `gorm:"size:40;not null;default:'';index" json:"room_code,omitempty"`
+	Type        string  `gorm:"size:20;not null;index" json:"type"`
+	OwnerUserID uint64  `gorm:"not null;uniqueIndex" json:"owner_user_id"`
+	ParentID    *uint64 `gorm:"index" json:"parent_id,omitempty"`
+	Scope       string  `gorm:"size:64;not null;uniqueIndex" json:"scope"`
+	Name        string  `gorm:"size:80;not null" json:"name"`
+	Logo        string  `gorm:"type:text" json:"logo,omitempty"`
+	Status      int     `gorm:"not null;default:1;index" json:"status"`
+	// RobotQuota is the number of pre-provisioned robot identities the room
+	// owner may manage and run. The platform keeps ten physical identities per
+	// workspace, while an upper-level account allocates only 0-10 of them.
+	RobotQuota int       `gorm:"not null;default:10" json:"robot_quota"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 func (Workspace) TableName() string { return "workspaces" }
@@ -91,6 +95,7 @@ type RobotSetting struct {
 	LastError      string     `gorm:"size:500" json:"last_error,omitempty"`
 	TodayBets      int64      `gorm:"-" json:"today_bets"`
 	PendingBets    int64      `gorm:"-" json:"pending_bets"`
+	RobotQuota     int        `gorm:"-" json:"robot_quota"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }

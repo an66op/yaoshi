@@ -102,7 +102,7 @@ const deferred = <T,>() => {
 const agent: AgentItem = {
   id: 42, public_id: 600321, username: 'agent-river', nickname: '江河代理', email: 'river@example.test', phone: '13800000000',
   room_code: '778899', room_name: '江河客厅', room_logo: 'data:image/png;base64,existing-logo', workspace_id: 120,
-  balance: 500, status: 1, member_count: 18, rebate_rate: 1.5, profit_share_rate: 12.5, remark: '重点联系',
+  balance: 500, status: 1, member_count: 18, rebate_rate: 1.5, profit_share_rate: 12.5, robot_quota: 4, remark: '重点联系',
   created_at: '2026-08-20 11:00:00', last_login_at: '2026-08-30 20:30:00', login_count: 7,
 }
 
@@ -141,16 +141,17 @@ describe('tenant agent account management', () => {
 
   it('puts account identity, contact details, status, login and share before secondary room information', async () => {
     const root = await ready()
-    expect(ofType(ofType(root, TableHead)[0], TableCell).map(text)).toEqual(['代理账号', '联系方式', '账号状态', '上次登录', '分成率', '关联房间', '账号操作'])
+    expect(ofType(ofType(root, TableHead)[0], TableCell).map(text)).toEqual(['代理账号', '联系方式', '账号状态', '上次登录', '分成率', '机器人名额', '关联房间', '账号操作'])
     const cells = ofType(rows(root)[0], TableCell)
     expect(text(cells[0])).toBe('江河代理@agent-river公开 ID 600321')
     expect(text(cells[1])).toContain('13800000000river@example.test')
     expect(ofType(cells[2], Chip)[0].props.label).toBe('正常')
     expect(text(cells[3])).toBe('2026-08-30 20:30:00累计登录 7 次')
     expect(text(cells[4])).toBe('12.5%')
-    expect(text(cells[5])).toContain('江河客厅房间号 77889918 位会员 · 返水 1.5%')
-    expect(ofType(cells[5], Avatar)[0].props.src).toBe(agent.room_logo)
-    expect(text(cells[6])).toBe('编辑账号重置密码')
+    expect(ofType(cells[5], Chip)[0].props.label).toBe('4/10')
+    expect(text(cells[6])).toContain('江河客厅房间号 77889918 位会员 · 返水 1.5%')
+    expect(ofType(cells[6], Avatar)[0].props.src).toBe(agent.room_logo)
+    expect(text(cells[7])).toBe('编辑账号重置密码')
     expect(button(root, '开通代理账号')).toBeDefined()
     expect(text(root)).not.toMatch(/开通代理房间及管理员账号|房间管理员/)
   })
@@ -170,7 +171,7 @@ describe('tenant agent account management', () => {
     expect(text(ofType(dialog, DialogTitle)[0])).toBe('编辑代理账号 · @agent-river')
     expect(accountFields(dialog).props).toMatchObject({ editing: true, username: agent.username, password: '' })
     expect(text(dialog).indexOf('账号资料')).toBeLessThan(text(dialog).indexOf('关联房间资料'))
-    for (const [label, value] of Object.entries({ '代理昵称': agent.nickname, '手机号': agent.phone, '邮箱': agent.email, '备注': agent.remark, '代理分成 %': agent.profit_share_rate, '房间号': agent.room_code, '房间名称': agent.room_name, '房间返水 %': agent.rebate_rate })) {
+    for (const [label, value] of Object.entries({ '代理昵称': agent.nickname, '手机号': agent.phone, '邮箱': agent.email, '备注': agent.remark, '代理分成 %': agent.profit_share_rate, '机器人名额': agent.robot_quota, '房间号': agent.room_code, '房间名称': agent.room_name, '房间返水 %': agent.rebate_rate })) {
       expect(field(dialog, label).props.value).toBe(value)
     }
     expect(ofType(dialog, Switch)[0].props.checked).toBe(true)
@@ -185,7 +186,7 @@ describe('tenant agent account management', () => {
     const finished = await settle()
     expect(runtime.updateAgent).toHaveBeenCalledExactlyOnceWith(agent.id, {
       username: agent.username, password: '', nickname: '新昵称', phone: '13900000000', email: 'updated@example.test',
-      remark: agent.remark, profit_share_rate: 15, rebate_rate: agent.rebate_rate, status: 0,
+      remark: agent.remark, profit_share_rate: 15, rebate_rate: agent.rebate_rate, robot_quota: agent.robot_quota, status: 0,
       room_code: agent.room_code, room_name: agent.room_name, room_logo: agent.room_logo,
     })
     expect(runtime.createAgent).not.toHaveBeenCalled()

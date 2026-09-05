@@ -547,8 +547,12 @@ func transform163BingoDraws(binding bingo163Binding, raw []sourceDraw) ([]source
 	if len(raw) == 0 || binding.GameID == "" || binding.Transform == nil || binding.SourceRevision == "" || binding.ConversionVersion == "" {
 		return nil, errors.New("163台湾宾果转换绑定或开奖记录无效")
 	}
+	var upstreamLatest sourceDraw
 	draws := make([]sourceDraw, 0, len(raw))
 	for _, row := range raw {
+		if upstreamLatest.DrawAt.IsZero() || row.DrawAt.After(upstreamLatest.DrawAt) {
+			upstreamLatest = row
+		}
 		if row.SourceRevision != binding.SourceRevision {
 			return nil, fmt.Errorf("163台湾宾果游戏 %s 第 %s 期来源版本不匹配", binding.GameID, row.Issue)
 		}
@@ -560,13 +564,50 @@ func transform163BingoDraws(binding bingo163Binding, raw []sourceDraw) ([]source
 		}
 		numbers := binding.Transform(row.Numbers)
 		if len(numbers) == 0 {
+			// A 20-ball draw can legitimately contain fewer than seven values in
+			// 01-49. The upstream derived product (ID186) omits exactly that
+			// period, while later periods continue normally. Do not let one such
+			// historical no-result row poison every subsequent batch.
+			if binding.GameID == "bingo-mark-six" && validBingoMarkSixNoResult(row.Numbers) {
+				continue
+			}
 			return nil, fmt.Errorf("163台湾宾果游戏 %s 第 %s 期转换结果为空", binding.GameID, row.Issue)
 		}
 		row.Numbers = numbers
 		row.ConversionRevision = binding.ConversionVersion
 		draws = append(draws, row)
 	}
+	if len(draws) == 0 {
+		return nil, fmt.Errorf("163台湾宾果游戏 %s 当前批次没有可用派生结果", binding.GameID)
+	}
+	if binding.GameID == "bingo-mark-six" && !upstreamLatest.DrawAt.IsZero() {
+		// If the latest mother-source period is a legitimate no-result, carry
+		// its authoritative next boundary onto the newest usable derived row.
+		// This advances betting to the following mother-source period without
+		// inventing a seven-ball result for the omitted one.
+		latestIndex := 0
+		for index := 1; index < len(draws); index++ {
+			if draws[index].DrawAt.After(draws[latestIndex].DrawAt) {
+				latestIndex = index
+			}
+		}
+		draws[latestIndex].NextIssue = upstreamLatest.NextIssue
+		draws[latestIndex].NextDrawAt = upstreamLatest.NextDrawAt
+	}
 	return draws, nil
+}
+
+func validBingoMarkSixNoResult(raw []int) bool {
+	if validate168BingoNumbers(raw) != nil {
+		return false
+	}
+	qualifying := 0
+	for _, number := range raw {
+		if number >= 1 && number <= 49 {
+			qualifying++
+		}
+	}
+	return qualifying < 7
 }
 
 var (

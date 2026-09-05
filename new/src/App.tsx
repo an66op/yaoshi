@@ -22,6 +22,8 @@ import './typography.css'
 import './startup.css'
 import './control-surface.css'
 import './game-guide.css'
+// Shared result-ball styling must load after the generic `.lottery-ball` rules.
+import './components/mark-six-ball.css'
 import { BottomNav } from './components/BottomNav'
 import { SessionStartup } from './components/SessionStartup'
 import { RouteChunkBoundary } from './components/RouteChunkBoundary'
@@ -512,7 +514,7 @@ function App() {
   const walletReturnGameId = route.kind === 'tab' && route.tab === 'shop' ? route.returnGameId : undefined
   const showBottomNav = (route.kind !== 'chat' || route.view === 'list') && !walletAction
   const content = route.kind === 'chat'
-    ? <Chats key={`${activeSession.room}:${route.view}:${route.planGameId ?? ''}`} view={route.view} unreadCount={chatUnread} onMarkAllRead={async () => { await portalApi.markAllRead(); await refreshUnread() }} onNavigate={(view) => navigate(pathForChat(view))} onServiceBack={route.returnGameId ? () => navigate(pathForGame(route.returnGameId!, false, route.returnLobbyFilter)) : undefined} onRefreshUnread={refreshUnread} games={liveGames} planGameId={route.planGameId} onOpenPlanGame={(gameId) => navigate(pathForPlanGame(gameId))} />
+    ? <Chats key={`${activeSession.room}:${route.view}:${route.planGameId ?? ''}`} view={route.view} unreadCount={chatUnread} onNavigate={(view) => navigate(pathForChat(view))} onServiceBack={route.returnGameId ? () => navigate(pathForGame(route.returnGameId!, false, route.returnLobbyFilter)) : undefined} onRefreshUnread={refreshUnread} games={liveGames} planGameId={route.planGameId} onOpenPlanGame={(gameId) => navigate(pathForPlanGame(gameId))} />
     : activeTab === 'lobby'
       ? <Lobby room={activeSession.room} roomName={activeSession.roomName} roomLogo={activeSession.roomLogo} roomHistory={roomHistory} games={liveGames} theme={demo.theme} gamesLive={gamesLive} gamesError={gamesError} initialFilter={route.kind === 'tab' ? route.lobbyFilter ?? lastLobbyFilter : lastLobbyFilter} onFilterChange={(filter) => { setLastLobbyFilter(filter); replace(pathForLobby(filter)) }} onToggleTheme={toggleTheme} onOpenGame={(gameId, sourceFilter) => { setLastLobbyFilter(sourceFilter); navigate(pathForGame(gameId, false, sourceFilter)) }} onSwitchRoom={switchRoom} />
       : activeTab === 'shop'

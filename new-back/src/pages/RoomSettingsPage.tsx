@@ -46,6 +46,7 @@ const newAnnouncement = (order: number): Announcement => ({
 
 export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
   const role = getStoredUser()?.role ?? 'agent'
+	const canManageAnnouncements = role === 'tenant'
   const api = useMemo(() => role === 'tenant' ? tenantApi : agentApi, [role])
   const [data, setData] = useState<SystemSettings | null>(null)
   const [error, setError] = useState('')
@@ -120,7 +121,7 @@ export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
       setError('开奖源地址必须是完整、无账号密码的 HTTPS 地址')
       return
     }
-    if (section === 'content' && data.announcements.some(item => !item.title.trim() || !item.content.trim())) {
+    if (section === 'content' && canManageAnnouncements && data.announcements.some(item => !item.title.trim() || !item.content.trim())) {
       setError('每条公告都需要填写标题和内容')
       return
     }
@@ -198,9 +199,10 @@ export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
 		} catch (reason) { setError(reason instanceof Error ? reason.message : '删除失败') }
 		finally { setSaving(false) }
 	}
-  const [eyebrow, title] = titles[section]
+  const [eyebrow, configuredTitle] = titles[section]
+	const title = section === 'content' && !canManageAnnouncements ? '活动管理' : configuredTitle
   return <Box p={{ xs: 1.5, md: section === 'limits' ? 2 : 2.5 }}>
-			<PageHeader eyebrow={eyebrow} title={title} description="" actions={<Stack direction="row" gap={1}>{section === 'content' && <Button variant="outlined" startIcon={<CampaignRounded />} onClick={addAnnouncement}>新增公告</Button>}{section === 'content' && <Button variant="outlined" startIcon={<AddRounded />} onClick={() => setActivityDraft({ ...emptyActivity })}>新增活动</Button>}{section === 'wallet' && <Button variant="outlined" startIcon={<AddRounded />} onClick={() => setChannelDraft({ ...emptyChannel })}>新增收款方式</Button>}<Button variant="contained" startIcon={<SaveRounded />} disabled={!data || saving} onClick={() => void save()}>{saving ? '保存中…' : '保存设置'}</Button></Stack>} />
+			<PageHeader eyebrow={eyebrow} title={title} description="" actions={<Stack direction="row" gap={1}>{section === 'content' && canManageAnnouncements && <Button variant="outlined" startIcon={<CampaignRounded />} onClick={addAnnouncement}>新增公告</Button>}{section === 'content' && <Button variant="outlined" startIcon={<AddRounded />} onClick={() => setActivityDraft({ ...emptyActivity })}>新增活动</Button>}{section === 'wallet' && <Button variant="outlined" startIcon={<AddRounded />} onClick={() => setChannelDraft({ ...emptyChannel })}>新增收款方式</Button>}<Button variant="contained" startIcon={<SaveRounded />} disabled={!data || saving} onClick={() => void save()}>{saving ? '保存中…' : '保存设置'}</Button></Stack>} />
     {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
 		    {data && <Card sx={{ mt: section === 'limits' ? 1.25 : 2, maxWidth: section === 'limits' ? 'none' : 1080, borderRadius: section === 'limits' ? 1.5 : undefined }}><CardContent sx={{ p: section === 'limits' ? { xs: 1, md: 1.25 } : { xs: 1.5, md: 2.5 } }}><Stack gap={section === 'limits' ? 1 : 2}>
       {section === 'room' && <>
@@ -229,8 +231,8 @@ export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
 	        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2,minmax(0,1fr))', md: 'repeat(5,minmax(0,1fr))' }, gap: 1 }}>
 	          {pinOptions.map(item => <Paper key={item.id} variant="outlined" sx={{ px: 1.2, py: .7, borderColor: pinnedRows.includes(item.id) ? 'primary.main' : 'divider', bgcolor: pinnedRows.includes(item.id) ? 'action.selected' : 'background.paper' }}><FormControlLabel sx={{ m: 0, width: '100%', justifyContent: 'space-between', '& .MuiFormControlLabel-label': { fontSize: 12, fontWeight: 750 } }} labelPlacement="start" label={item.label} control={<Switch size="small" checked={pinnedRows.includes(item.id)} onChange={event => togglePin(item.id, event.target.checked)} />} /></Paper>)}
 	        </Box>
-	        <Divider />
-	        <Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography fontWeight={850}>大厅公告</Typography><Typography fontSize={10.5} color="text.secondary">公告只推送到当前房间；按排序从小到大展示。</Typography></Box><Chip size="small" color="primary" variant="outlined" label={`${announcements.filter(item => item.enabled).length}/${announcements.length} 展示`} /></Stack>
+	        {canManageAnnouncements && <><Divider />
+	        <Stack direction="row" justifyContent="space-between" alignItems="center"><Box><Typography fontWeight={850}>大厅公告</Typography><Typography fontSize={10.5} color="text.secondary">租户公告同步展示给直属房间和所有下级代理房间；按排序从小到大展示。</Typography></Box><Chip size="small" color="primary" variant="outlined" label={`${announcements.filter(item => item.enabled).length}/${announcements.length} 展示`} /></Stack>
 	        <Stack gap={1.2}>
 	          {announcements.map((item, index) => <Paper key={item.id} variant="outlined" sx={{ p: { xs: 1.4, md: 1.7 }, borderColor: item.enabled ? 'primary.main' : 'divider', opacity: item.enabled ? 1 : .7 }}>
 	            <Stack direction="row" alignItems="center" gap={1} mb={1.2}>
@@ -246,7 +248,7 @@ export function RoomSettingsPage({ section = 'room' }: { section?: Section }) {
 	            </Box>
 	          </Paper>)}
 	          {!announcements.length && <Box textAlign="center" py={4}><CampaignRounded sx={{ fontSize: 36, color: 'text.disabled' }} /><Typography color="text.secondary" fontSize={12}>暂无公告，点击上方“新增公告”创建</Typography></Box>}
-	        </Stack>
+	        </Stack></>}
 	        <Stack direction={{ xs: 'column', sm: 'row' }} gap={2}><FormControlLabel control={<Switch checked={data.sound_enabled} onChange={event => patch('sound_enabled', event.target.checked)} />} label="通知声音" /><FormControlLabel control={<Switch checked={data.abnormal_login_alert} onChange={event => patch('abnormal_login_alert', event.target.checked)} />} label="异常登录提醒" /></Stack>
 				<Divider /><Stack direction="row" justifyContent="space-between" alignItems="center"><Typography fontWeight={850}>活动列表</Typography><Chip size="small" label={`${activities.length} 项`} /></Stack>
 				<Box display="grid" gridTemplateColumns={{ xs: '1fr', lg: 'repeat(2,minmax(0,1fr))' }} gap={1.2}>{activities.map(item => <Card key={item.id} variant="outlined" sx={{ borderRadius: 2.2 }}><CardContent sx={{ p: '14px !important' }}><Stack direction="row" gap={1.2} alignItems="center"><Box flex={1} minWidth={0}><Stack direction="row" gap={.8} alignItems="center"><Typography fontWeight={850} noWrap>{item.title}</Typography><Chip size="small" color={item.status === 'active' ? 'success' : 'default'} label={item.status === 'active' ? '启用' : item.status === 'ended' ? '已结束' : '草稿'} /></Stack><Typography fontSize={11} color="text.secondary" noWrap>{item.subtitle || '暂无副标题'} · 排序 {item.sort_order}</Typography></Box><Button size="small" onClick={() => setActivityDraft({ id: item.id, type: item.type, title: item.title, subtitle: item.subtitle, status: item.status, cover: item.cover, reward: item.reward, sort_order: item.sort_order, config: item.config })}>编辑</Button><Switch size="small" checked={item.status === 'active'} onChange={async event => { await api.setActivityStatus(item.id, event.target.checked ? 'active' : 'draft'); setActivities(await api.activities('all')) }} /><IconButton size="small" color="error" onClick={() => setPendingDelete({ kind: 'activity', id: item.id, label: item.title })}><DeleteOutlineRounded fontSize="small" /></IconButton></Stack></CardContent></Card>)}</Box>

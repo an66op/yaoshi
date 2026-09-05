@@ -921,6 +921,7 @@ type agentRequest struct {
 	Status          int     `json:"status"`
 	RebateRate      float64 `json:"rebate_rate"`
 	ProfitShareRate float64 `json:"profit_share_rate"`
+	RobotQuota      *int    `json:"robot_quota"`
 }
 
 func (h *WorkspaceHandler) CreateAgent(c *gin.Context) {
@@ -933,7 +934,7 @@ func (h *WorkspaceHandler) CreateAgent(c *gin.Context) {
 		constants.SendError(c, http.StatusBadRequest, "房间管理员资料不正确", err)
 		return
 	}
-	result, err := h.agents.CreateForTenant(id, services.CreateAgentInput{Username: request.Username, Password: request.Password, Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, RoomName: request.RoomName, RoomLogo: request.RoomLogo, Remark: request.Remark, Status: request.Status, RebateRate: request.RebateRate, ProfitShareRate: request.ProfitShareRate})
+	result, err := h.agents.CreateForTenant(id, services.CreateAgentInput{Username: request.Username, Password: request.Password, Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, RoomName: request.RoomName, RoomLogo: request.RoomLogo, Remark: request.Remark, Status: request.Status, RebateRate: request.RebateRate, ProfitShareRate: request.ProfitShareRate, RobotQuota: request.RobotQuota})
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "开通房间失败", err)
 		return
@@ -956,7 +957,7 @@ func (h *WorkspaceHandler) UpdateAgent(c *gin.Context) {
 		constants.SendError(c, http.StatusBadRequest, "房间资料不正确", err)
 		return
 	}
-	result, err := h.agents.UpdateForTenant(tid, aid, services.UpdateAgentInput{Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, RoomName: request.RoomName, RoomLogo: request.RoomLogo, Remark: request.Remark, Status: request.Status, RebateRate: request.RebateRate, ProfitShareRate: request.ProfitShareRate})
+	result, err := h.agents.UpdateForTenant(tid, aid, services.UpdateAgentInput{Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, RoomName: request.RoomName, RoomLogo: request.RoomLogo, Remark: request.Remark, Status: request.Status, RebateRate: request.RebateRate, ProfitShareRate: request.ProfitShareRate, RobotQuota: request.RobotQuota})
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "保存房间失败", err)
 		return

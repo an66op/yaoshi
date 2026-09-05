@@ -467,6 +467,7 @@ export type RobotSetting = {
   max_pending_bets: number
   today_bets: number
   pending_bets: number
+  robot_quota: number
   pause_reason?: string
   last_run_at?: string | null
   last_error?: string
@@ -497,6 +498,7 @@ export type RobotWorkspaceOption = {
   room_code: string
   status: number
   robot_count: number
+  robot_quota: number
 }
 
 export type AgentItem = {
@@ -515,6 +517,7 @@ export type AgentItem = {
   member_count: number
   rebate_rate: number
   profit_share_rate: number
+  robot_quota: number
   remark: string
   created_at: string
   last_login_at: string
@@ -1656,6 +1659,7 @@ export type LoginResult = {
 
 export type LoginCaptcha = { id: string; image: string; expires_in: number }
 export type LoginCaptchaInput = { captcha_id: string; captcha_code: string }
+export type ManagementLoginRole = 'admin' | 'tenant' | 'agent'
 
 export type AgentDashboard = {
   agent_id: number
@@ -1679,9 +1683,9 @@ export const adminApi = {
     return true
   },
   loginCaptcha: (signal?: AbortSignal) => request<LoginCaptcha>('/login/captcha', { cache: 'no-store', signal }),
-  login: (username: string, password: string, captcha: LoginCaptchaInput) => request<LoginResult>('/login', {
+  login: (role: ManagementLoginRole, username: string, password: string, captcha: LoginCaptchaInput) => request<LoginResult>('/login', {
     method: 'POST',
-    body: JSON.stringify({ username, password, captcha_id: captcha.captcha_id, captcha_code: captcha.captcha_code }),
+    body: JSON.stringify({ role, username, password, captcha_id: captcha.captcha_id, captcha_code: captcha.captcha_code }),
   }),
 	me: () => request<LoginResult['user']>('/session'),
 	refreshSession: () => request<{ expires_in: number }>('/session/refresh', { method: 'POST' }),
@@ -1915,8 +1919,8 @@ export const adminApi = {
   updateTenantRoomSettings: (id: number, payload: SystemSettings) => request<SystemSettings>(`/admin/tenants/${id}/settings`, { method: 'PUT', body: JSON.stringify(payload) }),
   tenantRoomGames: (id: number) => request<WorkspaceGame[]>(`/admin/tenants/${id}/games`),
   setTenantRoomGameStatus: (id: number, gameId: string, enabled: boolean) => request<LotteryRoomStatus>(`/admin/tenants/${id}/games/${encodeURIComponent(gameId)}/status`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
-  createAgent: (payload: { username: string; password: string; email?: string; nickname?: string; phone?: string; room_code: string; room_name?: string; room_logo?: string; rebate_rate?: number; profit_share_rate?: number; remark?: string; status: number; tenant_id?: number }) => request<AgentItem>('/admin/agents', { method: 'POST', body: JSON.stringify(payload) }),
-  updateAgent: (id: number, payload: { email?: string; nickname?: string; phone?: string; room_code: string; room_name?: string; room_logo?: string; rebate_rate?: number; profit_share_rate?: number; remark?: string; status: number; tenant_id?: number }) => request<AgentItem>(`/admin/agents/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  createAgent: (payload: { username: string; password: string; email?: string; nickname?: string; phone?: string; room_code: string; room_name?: string; room_logo?: string; rebate_rate?: number; profit_share_rate?: number; robot_quota?: number; remark?: string; status: number; tenant_id?: number }) => request<AgentItem>('/admin/agents', { method: 'POST', body: JSON.stringify(payload) }),
+  updateAgent: (id: number, payload: { email?: string; nickname?: string; phone?: string; room_code: string; room_name?: string; room_logo?: string; rebate_rate?: number; profit_share_rate?: number; robot_quota?: number; remark?: string; status: number; tenant_id?: number }) => request<AgentItem>(`/admin/agents/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   roomTrading: (id: number, gameId?: string) => request<RoomTradingConfig>(`/admin/agents/${id}/trading${gameId ? `?game_id=${encodeURIComponent(gameId)}` : ''}`),
   updateRoomTrading: (id: number, payload: { rebate_rate: number; game_id: string; odds: Array<{ play_code: string; override: number | null }> }) => request<RoomTradingConfig>(`/admin/agents/${id}/trading`, { method: 'PUT', body: JSON.stringify(payload) }),
   agentRoomSettings: (id: number) => request<SystemSettings>(`/admin/agents/${id}/settings`),
@@ -1966,8 +1970,8 @@ export const tenantApi = {
     const query = new URLSearchParams({ query: params?.query ?? '', page: String(params?.page ?? 1), page_size: String(params?.pageSize ?? 20) })
     return request<AgentListResponse>(`/tenant/agents?${query}`)
   },
-  createAgent: (payload: { username: string; password: string; email?: string; nickname?: string; phone?: string; room_code: string; room_name?: string; room_logo?: string; rebate_rate?: number; profit_share_rate?: number; remark?: string; status: number }) => request<AgentItem>('/tenant/agents', { method: 'POST', body: JSON.stringify(payload) }),
-  updateAgent: (id: number, payload: { email?: string; nickname?: string; phone?: string; room_code: string; room_name?: string; room_logo?: string; rebate_rate?: number; profit_share_rate?: number; remark?: string; status: number }) => request<AgentItem>(`/tenant/agents/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  createAgent: (payload: { username: string; password: string; email?: string; nickname?: string; phone?: string; room_code: string; room_name?: string; room_logo?: string; rebate_rate?: number; profit_share_rate?: number; robot_quota?: number; remark?: string; status: number }) => request<AgentItem>('/tenant/agents', { method: 'POST', body: JSON.stringify(payload) }),
+  updateAgent: (id: number, payload: { email?: string; nickname?: string; phone?: string; room_code: string; room_name?: string; room_logo?: string; rebate_rate?: number; profit_share_rate?: number; robot_quota?: number; remark?: string; status: number }) => request<AgentItem>(`/tenant/agents/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   resetAgentPassword: (id: number, password: string) => request<{ id: number }>(`/tenant/agents/${id}/reset-password`, { method: 'POST', body: JSON.stringify({ password }) }),
 	users: (params?: { query?: string; status?: string; userId?: number; page?: number; pageSize?: number }) => {
 		const query = new URLSearchParams({ query: params?.query ?? '', status: params?.status ?? 'all', page: String(params?.page ?? 1), page_size: String(params?.pageSize ?? 20) })

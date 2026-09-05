@@ -85,15 +85,15 @@ func TestChallengeOnlyExposesPNGAndOpaqueID(t *testing.T) {
 
 func TestCaptchaConsumesEveryAttemptAndBindsPurposeAndIP(t *testing.T) {
 	server := redisTest(t)
-	const id, ip, code = "0123456789abcdef0123456789abcdef", "192.0.2.1", "012345"
+	const id, ip, code = "0123456789abcdef0123456789abcdef", "192.0.2.1", "0123"
 	for _, tc := range []struct {
 		name, purpose, ip, code string
 		success                 bool
 	}{
 		{"correct", Management, ip, code, true},
-		{"wrong answer", Management, ip, "999999", false},
+		{"wrong answer", Management, ip, "9999", false},
 		{"missing answer", Management, ip, "", false},
-		{"malformed answer", Management, ip, "abcdef", false},
+		{"malformed answer", Management, ip, "abcd", false},
 		{"different purpose", Member, ip, code, false},
 		{"different IP", Management, "192.0.2.2", code, false},
 	} {
@@ -122,7 +122,7 @@ func TestCaptchaConsumesEveryAttemptAndBindsPurposeAndIP(t *testing.T) {
 
 func TestCaptchaConcurrentRedisVerificationHasOneWinner(t *testing.T) {
 	server := redisTest(t)
-	const id, ip, code = "abcdef0123456789abcdef0123456789", "192.0.2.3", "654321"
+	const id, ip, code = "abcdef0123456789abcdef0123456789", "192.0.2.3", "6543"
 	server.Set(cluster.Key("captcha", id), boundDigest(id, Member, ip, code))
 	server.SetTTL(cluster.Key("captcha", id), Lifetime)
 	var successes atomic.Int32
@@ -180,7 +180,7 @@ func TestCaptchaFailsClosedForConfiguredOrRequiredRedisAndRelease(t *testing.T) 
 			if _, err := Create(context.Background(), Member, "192.0.2.4"); !errors.Is(err, ErrUnavailable) {
 				t.Fatalf("create did not fail closed: %v", err)
 			}
-			if err := Verify(context.Background(), Member, "192.0.2.4", "0123456789abcdef0123456789abcdef", "123456"); !errors.Is(err, ErrUnavailable) {
+			if err := Verify(context.Background(), Member, "192.0.2.4", "0123456789abcdef0123456789abcdef", "1234"); !errors.Is(err, ErrUnavailable) {
 				t.Fatalf("verify did not fail closed: %v", err)
 			}
 			local.mu.Lock()
@@ -212,7 +212,7 @@ func TestLocalCaptchaMemoryIsBoundedExpiresAndConsumes(t *testing.T) {
 	if _, err := store.consume("three", now.Add(2*Lifetime)); !errors.Is(err, ErrInvalid) {
 		t.Fatal("expired local captcha accepted")
 	}
-	const id, ip, code = "abcdef0123456789abcdef0123456789", "192.0.2.3", "654321"
+	const id, ip, code = "abcdef0123456789abcdef0123456789", "192.0.2.3", "6543"
 	if err := local.put(id, boundDigest(id, Member, ip, code), time.Now()); err != nil {
 		t.Fatal(err)
 	}

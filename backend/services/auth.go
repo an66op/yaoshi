@@ -84,16 +84,19 @@ func (s *authService) Register(req *vo.RegisterRequest) (*user.User, error) {
 }
 
 // Login 登录
-func (s *authService) Login(username, password, workspace string) (*user.User, string, error) {
+func (s *authService) Login(username, password, workspace, role string) (*user.User, string, error) {
 	if err := validateLoginInput(username, password, workspace); err != nil {
 		return nil, "", err
+	}
+	if role != "admin" && role != "tenant" && role != "agent" {
+		return nil, "", errors.NewBusinessError("INVALID_ROLE", "登录身份必须是 admin、tenant 或 agent")
 	}
 	scope, err := loginScopeForWorkspace(s.db, username, workspace, false)
 	if err != nil {
 		return nil, "", err
 	}
 	var u user.User
-	err = s.db.Where("login_scope = ? AND LOWER(username) = LOWER(?)", scope, strings.TrimSpace(username)).First(&u).Error
+	err = s.db.Where("login_scope = ? AND LOWER(username) = LOWER(?) AND role = ?", scope, strings.TrimSpace(username), role).First(&u).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			utils.CheckMissingUserPassword(password)

@@ -79,7 +79,7 @@ func (h *WorkspaceHandler) SystemSettings(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := services.NewSettingsAdminService(h.db).GetForWorkspace(account.WorkspaceID)
+	result, err := services.NewSettingsAdminService(h.db).GetForWorkspaceWithInheritedAnnouncements(account.WorkspaceID)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取房间设置失败", err)
 		return
@@ -109,7 +109,7 @@ func (h *WorkspaceHandler) UpdateSystemSettings(c *gin.Context) {
 		constants.SendError(c, http.StatusBadRequest, "房间设置参数不正确", err)
 		return
 	}
-	result, err := services.NewSettingsAdminService(h.db).UpdateForWorkspace(account.WorkspaceID, request)
+	result, err := services.NewSettingsAdminService(h.db).UpdateForAgentWorkspace(account.WorkspaceID, request)
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "保存房间设置失败", err)
 		return

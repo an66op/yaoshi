@@ -417,8 +417,6 @@
 .theme-night.game-room .draw-announcement article > strong { color: #efffff; }
 .theme-night.game-room .draw-announcement-meta { color: #79dedb; }
 .theme-night.game-room .draw-announcement p { color: #afd0d7; }
-.game-room .ticket-selection .ticket-betting-issue { margin-right: 6px; color: #178793; font-size: 10px; font-weight: 700; white-space: nowrap; }
-.theme-night.game-room .ticket-selection .ticket-betting-issue { color: #8bdedb; }
 
 /* 游戏消息统一时间轴。首次数据尚未齐全时不渲染半份历史，避免先看到
    顶部旧消息再闪到末尾；定位完成前保留真实高度但隐藏内容。 */

@@ -26,7 +26,8 @@ database:
   conn_max_lifetime_seconds: 3600
 
 redis:
-  addr: 127.0.0.1:6379
+  # 单实例 debug 可留空并使用有界本机回退；release 必须通过环境变量配置 Redis。
+  addr: ""
   username: ""
   password: ""
   db: 0

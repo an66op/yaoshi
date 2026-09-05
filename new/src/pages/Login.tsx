@@ -16,6 +16,7 @@ import { loadTestLogin } from '../utils/testLogin'
 
 type Props = { onContinue: (account: string, nickname: string) => void; onRegister?: () => void; theme?: Theme; verificationPending?: boolean }
 type LoginCaptcha = { id: string; image: string; expiresAt: number }
+const CAPTCHA_LENGTH = 4
 
 /** 会员登录：调用后端 /api/member/login */
 export function Login({ onContinue, onRegister, theme = 'day', verificationPending = false }: Props) {
@@ -28,7 +29,6 @@ export function Login({ onContinue, onRegister, theme = 'day', verificationPendi
   const [captchaCode, setCaptchaCode] = useState('')
   const [captchaLoading, setCaptchaLoading] = useState(true)
   const [captchaReady, setCaptchaReady] = useState(false)
-  const [captchaExpired, setCaptchaExpired] = useState(false)
   const [captchaError, setCaptchaError] = useState('')
   const edited = useRef(false)
   const mounted = useRef(false)
@@ -39,6 +39,8 @@ export function Login({ onContinue, onRegister, theme = 'day', verificationPendi
   const captchaImageReady = useRef(false)
   const captchaTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const captchaRequestTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refreshCaptchaCurrent = useRef<() => void>(() => undefined)
+  const captchaStatusMessage = captchaError || (captchaLoading || !captchaReady ? '正在加载验证码…' : '')
 
   const clearCaptchaTimer = () => {
     if (captchaTimer.current !== null) clearTimeout(captchaTimer.current)
@@ -54,9 +56,10 @@ export function Login({ onContinue, onRegister, theme = 'day', verificationPendi
     activeCaptcha.current = null
     captchaImageReady.current = false
     clearCaptchaTimer()
+    setCaptcha(null)
     setCaptchaReady(false)
     setCaptchaCode('')
-    setCaptchaExpired(true)
+    refreshCaptchaCurrent.current()
   }
 
   const refreshCaptcha = async () => {
@@ -73,7 +76,6 @@ export function Login({ onContinue, onRegister, theme = 'day', verificationPendi
     setCaptcha(null)
     setCaptchaCode('')
     setCaptchaReady(false)
-    setCaptchaExpired(false)
     setCaptchaError('')
     setCaptchaLoading(true)
     // Supplying our own AbortSignal opts out of the API client's timeout.
@@ -114,6 +116,8 @@ export function Login({ onContinue, onRegister, theme = 'day', verificationPendi
       if (mounted.current && !request.signal.aborted && generation === captchaGeneration.current) setCaptchaLoading(false)
     }
   }
+
+  refreshCaptchaCurrent.current = () => { void refreshCaptcha() }
 
   useEffect(() => {
     mounted.current = true
@@ -158,7 +162,7 @@ export function Login({ onContinue, onRegister, theme = 'day', verificationPendi
       expireCaptcha()
       return
     }
-    if (!/^\d{6}$/.test(captchaCode)) return setError('请输入图片中的 6 位数字验证码')
+    if (!new RegExp(`^\\d{${CAPTCHA_LENGTH}}$`).test(captchaCode)) return setError(`请输入图片中的 ${CAPTCHA_LENGTH} 位数字验证码`)
     // React state updates are batched; the ref also locks a second keyboard
     // or button event in the same frame before disabled can repaint.
     submitting.current = true
@@ -191,9 +195,7 @@ export function Login({ onContinue, onRegister, theme = 'day', verificationPendi
           <em>安全入口</em>
         </header>
         <div className="login-copy">
-          <small>帐号登录</small>
           <h1>欢迎回来</h1>
-          <p>验证帐号后，继续进入你的专属彩种空间。</p>
         </div>
         <label className="login-field">
           <span>帐号</span>
@@ -229,20 +231,20 @@ export function Login({ onContinue, onRegister, theme = 'day', verificationPendi
           <div className="login-captcha-row">
             <input
               aria-labelledby="login-captcha-label"
-              aria-describedby="login-captcha-status"
+              aria-describedby={captchaStatusMessage ? 'login-captcha-status' : undefined}
               autoComplete="off"
               inputMode="numeric"
-              maxLength={6}
-              pattern="[0-9]{6}"
-              onChange={(event) => { setCaptchaCode(event.target.value.replace(/\D/g, '').slice(0, 6)); setError('') }}
+              maxLength={CAPTCHA_LENGTH}
+              pattern={`[0-9]{${CAPTCHA_LENGTH}}`}
+              onChange={(event) => { setCaptchaCode(event.target.value.replace(/\D/g, '').slice(0, CAPTCHA_LENGTH)); setError('') }}
               onKeyDown={(event) => event.key === 'Enter' && void submit()}
-              placeholder="输入 6 位数字"
+              placeholder={`输入 ${CAPTCHA_LENGTH} 位数字`}
               value={captchaCode}
             />
             <button
               aria-label={captchaError ? '重新加载验证码' : '换一张验证码'}
               aria-busy={captchaLoading}
-              className={`login-captcha-image${captchaExpired ? ' is-expired' : ''}`}
+              className="login-captcha-image"
               disabled={loading}
               onClick={() => void refreshCaptcha()}
               type="button"
@@ -268,21 +270,15 @@ export function Login({ onContinue, onRegister, theme = 'day', verificationPendi
               /> : <span>{captchaLoading ? '加载中…' : '点击重试'}</span>}
             </button>
           </div>
-          <small id="login-captcha-status" className={captchaError || captchaExpired ? 'login-captcha-status is-error' : 'login-captcha-status'} role="status">
-            {captchaError || (captchaExpired ? '验证码已过期，请点击图片换一张' : captchaLoading || !captchaReady ? '正在加载验证码…' : '2 分钟内有效 · 点击图片换一张')}
-          </small>
+          {captchaStatusMessage && <small id="login-captcha-status" className={captchaError ? 'login-captcha-status is-error' : 'login-captcha-status'} role="status">{captchaStatusMessage}</small>}
         </div>
         {testPrefilled && <p className="login-test-notice" role="status">测试环境 · 已填充体验账号<small>体验账号公开，仅用于测试，请勿存入真实资金或个人资料。</small></p>}
         {error && <p className="login-error" role="alert">{error}</p>}
-        <button className="login-primary" disabled={loading || verificationPending || captchaLoading || !captchaReady || captchaExpired} onClick={() => void submit()}>
+        <button className="login-primary" disabled={loading || verificationPending || captchaLoading || !captchaReady} onClick={() => void submit()}>
           {verificationPending ? '连接中…' : loading ? '登录中…' : '验证并继续'} <Icon name="arrow" />
         </button>
-        {verificationPending ? <SessionCheckNotice className="login-status login-session-status" /> : <div className="login-status">
-          <span>✓</span>
-          <p>登录后输入房间号 · 房间由上级配置并发放给代理</p>
-        </div>}
+        {verificationPending && <SessionCheckNotice className="login-status login-session-status" />}
         <footer className="login-foot">
-          <span>{BRAND_NAME}娱乐</span>
           {onRegister ? <button className="room-entry-back" onClick={onRegister}>没有帐号？注册</button> : <p>安全登录 · 账户信息已加密</p>}
         </footer>
       </section>

@@ -54,13 +54,13 @@ describe('management API cookie credentials', () => {
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' })
   })
 
-  it('sends credentials and captcha, never a client-chosen login owner or role', async () => {
+  it('sends the requested database role together with credentials and captcha', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, data: {} }) })
     vi.stubGlobal('fetch', fetchMock)
     const { adminApi } = await import('./api')
-    const captcha = { captcha_id: 'management-challenge', captcha_code: '123456', role: 'admin', workspace: 'untrusted' }
-    await adminApi.login('agent-account', 'test-password', captcha)
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ username: 'agent-account', password: 'test-password', captcha_id: captcha.captcha_id, captcha_code: captcha.captcha_code })
+    const captcha = { captcha_id: 'management-challenge', captcha_code: '1234' }
+    await adminApi.login('agent', 'agent-account', 'test-password', captcha)
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ role: 'agent', username: 'agent-account', password: 'test-password', captcha_id: captcha.captcha_id, captcha_code: captcha.captcha_code })
   })
 
   it('fetches a fresh management challenge with cookie credentials and cancellation', async () => {

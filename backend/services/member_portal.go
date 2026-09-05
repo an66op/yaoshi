@@ -134,7 +134,7 @@ func (s *MemberPortalService) RoomSettings(userID uint64) (*MemberRoomSettingsVi
 	if err := s.db.Select("workspace_id").First(&account, userID).Error; err != nil {
 		return nil, err
 	}
-	cfg, err := s.settings.GetForWorkspace(account.WorkspaceID)
+	cfg, err := s.settings.GetForWorkspaceWithInheritedAnnouncements(account.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}

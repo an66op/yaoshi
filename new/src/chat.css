@@ -256,6 +256,8 @@
 .plan-history-row > em.hit { background: #ddf8ef; color: #13866c; }
 .plan-history-row > em.miss { background: #fff0ec; color: #df6d55; }
 .plan-history-loading { margin: 0; padding: 22px; color: #8297a0; text-align: center; font-size: 9px; }
+.is-simple-plan .plan-history-head,
+.is-simple-plan .plan-history-row { grid-template-columns: minmax(64px, .95fr) minmax(0, 1.7fr) auto; }
 .is-five-code .plan-picks > .plan-number-pick { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; min-width: 0; }
 .is-five-code .plan-number-pick strong { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; }
 .is-five-code .plan-number-pick i { min-width: 0; height: 36px; padding: 0; font-size: 20px; }
@@ -531,4 +533,5 @@
   font-weight: 800;
   cursor: pointer;
 }
-.chat-list .message-sound-toggle{display:grid;place-items:center;width:34px;height:34px;padding:6px;border:1px solid color-mix(in srgb,currentColor 28%,transparent);border-radius:10px;background:color-mix(in srgb,currentColor 10%,transparent);color:inherit;box-shadow:inset 0 1px #ffffff24;transition:background .18s ease,border-color .18s ease,opacity .18s ease,transform .18s ease}.chat-list .message-sound-toggle:active{transform:scale(.94)}.chat-list .message-sound-toggle:focus-visible{outline:2px solid currentColor;outline-offset:2px}.chat-list .message-sound-toggle.muted{background:color-mix(in srgb,currentColor 5%,transparent);opacity:.56}.chat-list .message-sound-toggle svg{width:19px;height:19px}
+.chat-list .message-sound-toggle{display:grid;place-items:center;width:34px;height:34px;padding:6px;border:0;border-radius:10px;background:color-mix(in srgb,currentColor 10%,transparent);color:inherit;box-shadow:inset 0 1px #ffffff24;transition:background .18s ease,opacity .18s ease,transform .18s ease}.chat-list .message-sound-toggle:active{transform:scale(.94)}.chat-list .message-sound-toggle:focus-visible{outline:2px solid currentColor;outline-offset:2px}.chat-list .message-sound-toggle.muted{background:color-mix(in srgb,currentColor 5%,transparent);opacity:.56}.chat-list .message-sound-toggle svg{width:19px;height:19px}
+.chat-list .message-read-all{display:grid;place-items:center;width:34px;height:34px;padding:0;border:0;border-radius:10px;background:transparent;color:inherit;font:700 11px/1 system-ui,sans-serif;white-space:nowrap;box-shadow:none;transition:opacity .18s ease,transform .18s ease}.chat-list .message-read-all:active{transform:scale(.94)}.chat-list .message-read-all:focus-visible{outline:2px solid currentColor;outline-offset:2px}.chat-list .message-read-all:disabled{opacity:.56}

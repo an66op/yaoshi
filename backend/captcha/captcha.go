@@ -23,6 +23,7 @@ import (
 const (
 	Management    = "management"
 	Member        = "member"
+	CodeLength    = 4
 	Lifetime      = 120 * time.Second
 	localCapacity = 4096
 )
@@ -109,7 +110,7 @@ func Create(ctx context.Context, purpose, ip string) (*Challenge, error) {
 		return nil, ErrUnavailable
 	}
 	id := hex.EncodeToString(idBytes)
-	digits := make([]byte, 6)
+	digits := make([]byte, CodeLength)
 	for i := range digits {
 		n, err := rand.Int(rand.Reader, big.NewInt(10))
 		if err != nil {
@@ -172,7 +173,7 @@ func Verify(ctx context.Context, purpose, ip, id, code string) error {
 		}
 	}
 	code = strings.TrimSpace(code)
-	if ip == "" || len(code) != 6 {
+	if ip == "" || len(code) != CodeLength {
 		return ErrInvalid
 	}
 	for _, digit := range code {

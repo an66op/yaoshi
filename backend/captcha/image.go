@@ -41,8 +41,14 @@ func renderPNG(code string) (string, error) {
 			canvas.Set(x, y, color.RGBA{174, 207, 210, 255})
 		}
 	}
+	const glyphWidth, glyphSpacing = 20, 28
+	codeWidth := glyphWidth
+	if len(code) > 1 {
+		codeWidth += (len(code) - 1) * glyphSpacing
+	}
+	startX := (canvas.Bounds().Dx() - codeWidth) / 2
 	for index, digit := range []byte(code) {
-		x := 8 + index*28 + int(noise[220+index])%3
+		x := startX + index*glyphSpacing + int(noise[220+index])%3
 		y := 12 + int(noise[230+index])%7 - 3
 		ink := color.RGBA{uint8(28 + noise[240+index]%35), uint8(70 + noise[250+index]%35), uint8(92 + noise[260+index]%35), 255}
 		for row, cells := range glyphs[digit-'0'] {

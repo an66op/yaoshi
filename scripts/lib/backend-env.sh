@@ -109,6 +109,12 @@ apply_local_backend_defaults() {
   fi
   export BACKEND_DATABASE_DBNAME="${BACKEND_DATABASE_DBNAME:-wangzhe}"
   export BACKEND_DATABASE_SSLMODE="${BACKEND_DATABASE_SSLMODE:-disable}"
+  # Local development is a single backend process and safely uses the bounded
+  # in-memory captcha/rate-limit fallback. Redis remains opt-in through an
+  # explicit non-empty value; release configuration still requires it.
+  if [[ -z "${BACKEND_REDIS_ADDR+x}" ]]; then
+    export BACKEND_REDIS_ADDR=""
+  fi
   export BACKEND_JWT_SECRET="${BACKEND_JWT_SECRET:-backend_jwt_secret_key_2024}"
   export BACKEND_JWT_EXPIRE="${BACKEND_JWT_EXPIRE:-86400}"
   export BACKEND_SECURITY_DATA_ENCRYPTION_KEY="${BACKEND_SECURITY_DATA_ENCRYPTION_KEY:-local-data-encryption-key-7xlottery-dev-2026}"

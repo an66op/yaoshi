@@ -67,7 +67,7 @@ export const DEFAULT_AGENT_MENU: AdminMenuItemConfig[] = [
   { path: '/lottery-chat', label: '彩票室', group: '房间运营', order: 50, visible: true },
   { path: '/chat', label: '客服与群聊', group: '房间运营', order: 60, visible: true },
   { path: '/robots', label: '机器人管理', group: '房间运营', order: 70, visible: true },
-  { path: '/announcements', label: '公告与活动', group: '房间运营', order: 80, visible: true },
+  { path: '/announcements', label: '活动管理', group: '房间运营', order: 80, visible: true },
   { path: '/limits', label: '赔率与回水', group: '房间运营', order: 90, visible: true },
   { path: '/wallet', label: '收款方式', group: '房间运营', order: 100, visible: true },
   { path: '/reports', label: '报表中心', group: '数据与设置', order: 110, visible: true },

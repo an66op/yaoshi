@@ -46,7 +46,6 @@ import {
 import { markSixBallClass, markSixZodiac } from '../utils/lotteryRules'
 import { roomBettingTarget } from '../utils/gameRoomBetting'
 import { oddsLabel } from '../utils/gameRoomSafety'
-import './mark-six-ball.css'
 import './mark-six-bet-board.css'
 
 type Props = {

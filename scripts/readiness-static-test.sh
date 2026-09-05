@@ -1305,6 +1305,8 @@ rg -Fq 'export BACKEND_DATABASE_DBNAME="${BACKEND_DATABASE_DBNAME:-wangzhe}"' "$
 rg -Fq 'go run ./cmd/dev-bootstrap --confirm-local-development' "$ROOT_DIR/scripts/local-init.sh"
 rg -Fq 'go run ./cmd/dev-bootstrap --confirm-local-development --audit-only' "$ROOT_DIR/scripts/local-smoke.sh"
 rg -Fq '.agent_room_code == "88001"' "$ROOT_DIR/scripts/local-smoke.sh"
+rg -Fq '.agent_room_robot_quota == 10' "$ROOT_DIR/scripts/local-smoke.sh"
+rg -Fq '.agent_room_robots == 10' "$ROOT_DIR/scripts/local-smoke.sh"
 ! rg -Fq '/login' "$ROOT_DIR/scripts/local-smoke.sh"
 ! rg -Fq 'curl ' "$ROOT_DIR/scripts/local-smoke.sh"
 rg -Fq 'if grep -Fqx -- "$BACKEND_DATABASE_DBNAME"' "$ROOT_DIR/scripts/local-init.sh"

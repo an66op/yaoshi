@@ -1,5 +1,4 @@
 import { markSixDrawBallClass, markSixZodiacLabel } from '../utils/lotteryRules'
-import './mark-six-ball.css'
 
 type MarkSixDrawBallProps = {
   number: number

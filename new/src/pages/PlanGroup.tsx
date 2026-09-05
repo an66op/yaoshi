@@ -7,10 +7,9 @@ import { usePlanCatalog, usePlanDetail, useRacingPlanStream } from '../hooks/use
 import { displayedPlanMasters, planIsCurrent, planResultLabel, recentPlanHistory } from '../utils/planPresentation'
 import { PlanSelectionSheet } from '../components/PlanSelectionSheet'
 import { racingPlanResultLabel, racingPlanDirection, racingPlanHistory, racingPlanIsCurrent, racingPlanMasters, racingPlanPositionLabel, racingPlanProgress } from '../utils/racingPlans'
+import { markSixDrawBallClass, markSixBallClass, usesMarkSixDrawPresentation } from '../utils/lotteryRules'
 
-// Temporarily narrow the member entrypoints, without changing room switches,
-// deleting other games' publications, or their administration configuration.
-const MEMBER_PLAN_GAMES: readonly string[] = ['speed-racing']
+const PC_PLAN_GAMES = new Set(['pc-canada', 'canada-28', 'canada-20'])
 
 type PlanMode = 'combo' | 'numbers' | 'size' | 'parity'
 
@@ -29,7 +28,7 @@ function PlanResultBalls({ game }: { game: Game }) {
   if (!game.balls.length) {
     return <span className="plan-result-empty">等待开奖</span>
   }
-  if (game.id === 'canada-28') {
+  if (PC_PLAN_GAMES.has(game.id)) {
     const numbers = game.balls.slice(0, 3)
     const sum = numbers.reduce((total, number) => total + number, 0)
     return <div className="plan-result-balls plan-canada-result" aria-label={`上期号码 ${numbers.join('、')}，和值 ${sum}`}>
@@ -37,16 +36,25 @@ function PlanResultBalls({ game }: { game: Game }) {
       <i>=</i><strong>{sum}</strong>
     </div>
   }
+  if (usesMarkSixDrawPresentation(game.id)) {
+    return <div className="plan-result-balls" aria-label={`上期号码 ${game.balls.join('、')}`}>
+      {game.balls.map((number, ballIndex) => <b className={markSixDrawBallClass(number, ballIndex, game.balls.length)} key={`${game.id}-${ballIndex}`}>{String(number).padStart(2, '0')}</b>)}
+    </div>
+  }
   return <div className="plan-result-balls" aria-label={`上期号码 ${game.balls.join('、')}`}>
     {game.balls.map((number, ballIndex) => <b className={ballTone(number)} key={`${game.id}-${ballIndex}`}>{number}</b>)}
   </div>
+}
+
+function planPickNumberClass(gameId: string, number: number) {
+  return usesMarkSixDrawPresentation(gameId) ? markSixBallClass(number) : undefined
 }
 
 function PlanPickDisplay({ row, mode }: { row: PlanRecommendation; mode: PlanMode }) {
   const showSize = (mode === 'combo' || mode === 'size') && row.size
   const showParity = (mode === 'combo' || mode === 'parity') && row.parity
   return <span className="plan-history-pick has-numbers">
-    {(mode === 'combo' || mode === 'numbers') && <strong aria-label={`推荐号码 ${row.numbers.join('、')}`}>{row.numbers.map(number => <i key={number}>{number}</i>)}</strong>}
+    {(mode === 'combo' || mode === 'numbers') && <strong aria-label={`推荐号码 ${row.numbers.join('、')}`}>{row.numbers.map(number => <i className={planPickNumberClass(row.game_id, number)} key={number}>{usesMarkSixDrawPresentation(row.game_id) ? String(number).padStart(2, '0') : number}</i>)}</strong>}
     {(showSize || showParity) && <small>
       {showSize && <b>{row.size}</b>}
       {showSize && showParity && <em>·</em>}
@@ -59,7 +67,7 @@ export function PlanLobby({ games, onBack, onSelect }: { games: Game[]; onBack: 
   // Chats is keyed by the authenticated room, so room switches unmount this feed.
   const { data: catalog, loading, error } = usePlanCatalog()
 
-  const planGames = useMemo(() => (catalog ?? []).filter(summary => MEMBER_PLAN_GAMES.includes(summary.game_id)).map(summary => {
+  const planGames = useMemo(() => (catalog ?? []).map(summary => {
     const game = games.find(item => item.id === summary.game_id)
     return game ? { game, summary } : null
   }).filter((item): item is { game: Game; summary: PlanGameSummary } => Boolean(item)), [catalog, games])
@@ -89,7 +97,6 @@ export function PlanLobby({ games, onBack, onSelect }: { games: Game[]; onBack: 
 type PlanDetailProps = { games: Game[]; gameId?: string; onBack: () => void }
 
 export function PlanDetail(props: PlanDetailProps) {
-  if (!MEMBER_PLAN_GAMES.includes(props.gameId ?? '')) return <section className="plan-page"><header className="blue-header plan-header"><button aria-label="返回计划群" onClick={props.onBack}><Icon name="back" /></button><b>计划群</b><span /></header><p className="plan-empty">暂时仅开放极速赛车计划。</p></section>
   return props.gameId === 'speed-racing' ? <RacingPlanDetail {...props} /> : <LegacyPlanDetail {...props} />
 }
 
@@ -129,7 +136,7 @@ function RacingPlanDetail({ games, onBack }: PlanDetailProps) {
     {error && <p className="racing-plan-message" role="alert">{error}</p>}
     {data && !data.stream.allowed && <p className="racing-plan-message">当前名次或计划类型未开放，请切换其他已开放计划，或联系房间管理员。</p>}
     {!selectorOpen && activationError && <p className="racing-plan-message" role="alert">{activationError}</p>}
-    {!loading && !error && !masters.length && <p className="plan-empty">当前计划暂无实际发布记录；不补造历史推荐。{data?.automation_enabled && data.stream.allowed ? '浏览本页时，真实开放期内按需生成。' : ''}</p>}
+    {!loading && !error && !masters.length && <p className="plan-empty">当前计划正在准备中。{data?.automation_enabled && data.stream.allowed ? '浏览本页时，开放期内会自动更新。' : ''}</p>}
     {masters.length > 0 && <>
       <div className="plan-master-tabs" role="tablist" aria-label="选择计划专家">
         {masters.map((master, index) => <button type="button" aria-selected={activeMaster?.master_name === master.master_name} className={activeMaster?.master_name === master.master_name ? 'active' : ''} key={master.master_name} onClick={() => setSelectedMaster(master.master_name)} role="tab"><span style={{ background: master.master_color }}>{index + 1}</span><b>{master.master_name}</b><small>系统自动推荐</small></button>)}
@@ -161,9 +168,9 @@ function LegacyPlanDetail({ games, gameId, onBack }: PlanDetailProps) {
   const { data, loading, error } = usePlanDetail(gameId ?? '')
   const [selectedMaster, setSelectedMaster] = useState('')
   const [mode, setMode] = useState<PlanMode>('combo')
-  const numbersOnly = gameId === 'speed-racing'
-  const displayMode = numbersOnly ? 'numbers' : mode
   const masters = useMemo(() => displayedPlanMasters(data), [data])
+  const hasDirections = useMemo(() => [...masters, ...(data?.history ?? [])].some(row => Boolean(row.size || row.parity)), [data?.history, masters])
+  const displayMode = hasDirections ? mode : 'numbers'
   const activeMaster = masters.find(master => master.master_name === selectedMaster) ?? masters[0]
   const isCurrent = planIsCurrent(data, activeMaster)
   const isAutomatic = activeMaster?.source === 'demo'
@@ -171,7 +178,7 @@ function LegacyPlanDetail({ games, gameId, onBack }: PlanDetailProps) {
 
   if (!game) return <section className="plan-page"><header className="blue-header"><button aria-label="返回计划群" onClick={onBack}><Icon name="back" /></button><b>计划详情</b><span /></header><p className="plan-empty">该彩票计划暂未开放。</p></section>
 
-  return <section className={`plan-page plan-detail-page${numbersOnly ? ' is-five-code' : ''}`}>
+  return <section className="plan-page plan-detail-page is-simple-plan">
     <header className="blue-header plan-header"><button aria-label="返回计划群" onClick={onBack}><Icon name="back" /></button><b>{game.title}</b><span aria-hidden="true" /></header>
     <div className="plan-current">
       <span className="plan-current-logo">{game.logo ? <img alt={`${game.title} Logo`} src={game.logo} /> : game.tag.slice(0, 2)}</span>
@@ -179,28 +186,27 @@ function LegacyPlanDetail({ games, gameId, onBack }: PlanDetailProps) {
       <time>{activeMaster ? `更新 ${updateTime(activeMaster.updated_at)}` : ''}</time>
     </div>
     {error && <p className="plan-empty">{error}</p>}
-    {!loading && !error && masters.length === 0 && <p className="plan-empty">当前彩种暂无实际发布记录；不补造历史推荐。</p>}
+    {!loading && !error && masters.length === 0 && <p className="plan-empty">当前彩种计划正在准备中，请稍后刷新。</p>}
     {masters.length > 0 && <>
       <div className="plan-master-tabs" role="tablist" aria-label="选择计划专家">
         {masters.map((master, index) => <button aria-selected={activeMaster?.master_name === master.master_name} className={activeMaster?.master_name === master.master_name ? 'active' : ''} key={master.master_name} onClick={() => setSelectedMaster(master.master_name)} role="tab"><span style={{ background: master.master_color }}>{index + 1}</span><b>{master.master_name}</b><small>{master.source === 'demo' ? '自动推荐' : master.master_hit_rate === null ? (master.master_title || '暂无统计') : `历史 ${master.master_hit_rate.toFixed(0)}%`}</small></button>)}
       </div>
-      {!numbersOnly && <div className="plan-mode-tabs">{([['combo', '综合'], ['numbers', '号码'], ['size', '大小'], ['parity', '单双']] as const).map(([value, label]) => <button className={mode === value ? 'active' : ''} key={value} onClick={() => setMode(value)}>{label}</button>)}</div>}
+      {hasDirections && <div className="plan-mode-tabs">{([['combo', '综合'], ['numbers', '号码'], ['size', '大小'], ['parity', '单双']] as const).map(([value, label]) => <button className={mode === value ? 'active' : ''} key={value} onClick={() => setMode(value)}>{label}</button>)}</div>}
       {activeMaster && <article className="plan-recommendation">
         <header><div><small>{activeMaster.master_name}</small><b>第 {shortIssue(activeMaster.issue)} 期{isCurrent ? '推荐' : '历史计划'}</b></div><em>{updateTime(activeMaster.updated_at)} 更新</em></header>
         {!isCurrent && <p role="note">历史计划，非本期推荐；新一期发布后自动更新。</p>}
         <div className="plan-picks">
-          {(displayMode === 'combo' || displayMode === 'numbers') && <span className="plan-number-pick"><small>{numbersOnly && activeMaster.numbers.length === 5 ? '5码推荐' : '推荐号码'}</small><strong aria-label={`推荐号码 ${activeMaster.numbers.join('、')}`}>{activeMaster.numbers.map(number => <i key={number}>{number}</i>)}</strong></span>}
+          {(displayMode === 'combo' || displayMode === 'numbers') && <span className="plan-number-pick"><small>推荐号码</small><strong aria-label={`推荐号码 ${activeMaster.numbers.join('、')}`}>{activeMaster.numbers.map(number => <i className={planPickNumberClass(activeMaster.game_id, number)} key={number}>{usesMarkSixDrawPresentation(activeMaster.game_id) ? String(number).padStart(2, '0') : number}</i>)}</strong></span>}
           {(displayMode === 'combo' || displayMode === 'size') && activeMaster.size && <span className={activeMaster.size === '大' ? 'blue' : 'orange'}><small>大小</small><b>{activeMaster.size}</b></span>}
           {(displayMode === 'combo' || displayMode === 'parity') && activeMaster.parity && <span className={activeMaster.parity === '单' ? 'blue' : 'orange'}><small>单双</small><b>{activeMaster.parity}</b></span>}
         </div>
-        <p>{isAutomatic ? '系统自动生成，仅供娱乐参考，不保证命中。' : activeMaster.note || '本推荐由后台发布，仅供娱乐参考。'}</p>
+        <p>{isAutomatic ? (activeMaster.note || '系统自动生成，仅供娱乐参考，不保证命中。') : activeMaster.note || '本推荐由后台发布，仅供娱乐参考。'}</p>
       </article>}
       <section className="plan-history">
         <header><b>最近 6 期发布记录</b><span>{isAutomatic ? '不统计命中率' : activeMaster?.master_hit_rate === null ? '暂无已结算命中率' : `历史命中率 ${activeMaster?.master_hit_rate?.toFixed(0)}%`}</span></header>
-        <div className="plan-history-head"><span>期号/时间</span><span>推荐号码</span>{!numbersOnly && <span>方向</span>}<span>结果</span></div>
+        <div className="plan-history-head"><span>期号/时间</span><span>推荐内容</span><span>结果</span></div>
         {history.map(row => <div className="plan-history-row" key={row.id}>
           <span><b>{shortIssue(row.issue)}</b><small>{updateTime(row.updated_at)}</small></span>
-          {!numbersOnly && <span><b>{row.numbers.join('、')}</b><small>{row.master_title || row.master_name}</small></span>}
           <PlanPickDisplay row={row} mode={displayMode} />
           <em className={row.source !== 'demo' ? (row.result === 'hit' ? 'hit' : row.result === 'miss' ? 'miss' : '') : ''}>{planResultLabel(row)}</em>
         </div>)}

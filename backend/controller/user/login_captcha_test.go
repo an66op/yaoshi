@@ -24,7 +24,7 @@ type captchaAuthProbe struct {
 	calls int
 }
 
-func (s *captchaAuthProbe) Login(_, _, _ string) (*usermodel.User, string, error) {
+func (s *captchaAuthProbe) Login(_, _, _, _ string) (*usermodel.User, string, error) {
 	s.calls++
 	return &usermodel.User{UserID: 1, Role: "tenant", Status: 1}, "test-session", nil
 }
@@ -47,7 +47,7 @@ func TestLoginCaptchaRequiredBeforeAuthenticationInEveryEnvironment(t *testing.T
 				if purpose == captcha.Member {
 					handler = (&memberHandler{}).Login
 				}
-				for _, suffix := range []string{"", `,"captcha_id":"invalid","captcha_code":"123456"`} {
+				for _, suffix := range []string{"", `,"captcha_id":"invalid","captcha_code":"1234"`} {
 					engine := gin.New()
 					engine.POST("/login", handler)
 					request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(`{"username":"someone","password":"Password#2026"`+suffix+`}`))
@@ -76,7 +76,7 @@ func TestLoginCaptchaSuccessConsumedBeforeAuthAndErrorsFailClosed(t *testing.T) 
 	}
 	for _, purpose := range []string{captcha.Management, captcha.Member} {
 		t.Run(purpose, func(t *testing.T) {
-			const id, ip, code = "0123456789abcdef0123456789abcdef", "192.0.2.1", "012345"
+			const id, ip, code = "0123456789abcdef0123456789abcdef", "192.0.2.1", "0123"
 			seed := func() {
 				sum := sha256.Sum256([]byte(id + "\x00" + purpose + "\x00" + ip + "\x00" + code))
 				server.Set(cluster.Key("captcha", id), hex.EncodeToString(sum[:]))
@@ -90,7 +90,7 @@ func TestLoginCaptchaSuccessConsumedBeforeAuthAndErrorsFailClosed(t *testing.T) 
 			engine := gin.New()
 			engine.POST("/login", handler)
 			request := func(answer string) *httptest.ResponseRecorder {
-				payload, _ := json.Marshal(map[string]string{"username": "someone", "password": "Password#2026", "captcha_id": id, "captcha_code": answer})
+				payload, _ := json.Marshal(map[string]string{"username": "someone", "password": "Password#2026", "role": "tenant", "captcha_id": id, "captcha_code": answer})
 				r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(string(payload)))
 				r.RemoteAddr = ip + ":1234"
 				r.Header.Set("Content-Type", "application/json")
@@ -99,7 +99,7 @@ func TestLoginCaptchaSuccessConsumedBeforeAuthAndErrorsFailClosed(t *testing.T) 
 				return w
 			}
 			seed()
-			if response := request("999999"); response.Code != 400 || probe.calls != 0 {
+			if response := request("9999"); response.Code != 400 || probe.calls != 0 {
 				t.Fatal("wrong captcha reached password check")
 			}
 			if response := request(code); response.Code != 400 || probe.calls != 0 {

@@ -38,7 +38,9 @@ jq -e '
   .configured_games == 22 and
   .configured_play_quotes == 1437 and
   .agent_room_code == "88001" and
-  .agent_room_open_games == 22
+  .agent_room_open_games == 22 and
+  .agent_room_robot_quota == 10 and
+  .agent_room_robots == 10
 ' <<<"$bootstrap_report" >/dev/null
 
-echo "本地只读验收通过：四账号层级、工作区关系、账务链、1437 项赔率及 88001 房间均正常"
+echo "本地只读验收通过：四账号层级、工作区关系、账务链、1437 项赔率、88001 房间及 10 个机器人名额均正常"

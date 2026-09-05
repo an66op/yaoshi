@@ -86,15 +86,22 @@ func TestManagementAccountPostgresLoginWithoutOwner(t *testing.T) {
 	t.Cleanup(func() { utils.InitJWT("", 0) })
 	service := NewAuthService(db)
 	for _, tc := range []struct{ username, role string }{{"timing_platform", "admin"}, {"account_only_tenant", "tenant"}, {"account_only_agent", "agent"}} {
-		account, token, loginErr := service.Login(strings.ToUpper(tc.username), password, "")
+		account, token, loginErr := service.Login(strings.ToUpper(tc.username), password, "", tc.role)
 		if loginErr != nil || account.Role != tc.role || account.Username != tc.username || token == "" {
 			t.Fatalf("owner-free %s login: %+v %v", tc.role, account, loginErr)
 		}
 		if account.Password != "" {
 			t.Fatal("password hash exposed")
 		}
-		if _, _, loginErr := service.Login(tc.username, "incorrect-password", ""); apperrors.GetErrorCode(loginErr) != "INVALID_CREDENTIALS" {
+		if _, _, loginErr := service.Login(tc.username, "incorrect-password", "", tc.role); apperrors.GetErrorCode(loginErr) != "INVALID_CREDENTIALS" {
 			t.Fatalf("password bypass: %v", loginErr)
+		}
+		wrongRole := "admin"
+		if tc.role == "admin" {
+			wrongRole = "tenant"
+		}
+		if _, _, loginErr := service.Login(tc.username, password, "", wrongRole); apperrors.GetErrorCode(loginErr) != "INVALID_CREDENTIALS" {
+			t.Fatalf("role mismatch bypass for %s as %s: %v", tc.role, wrongRole, loginErr)
 		}
 	}
 	if err := ensureUsernameInScope(db, "other-scope", "ACCOUNT_ONLY_AGENT", 0); apperrors.GetErrorCode(err) != "USERNAME_EXISTS" {
@@ -103,7 +110,7 @@ func TestManagementAccountPostgresLoginWithoutOwner(t *testing.T) {
 	if err := db.Model(&user.User{}).Where("user_id = ?", room.OwnerUserID).Update("status", 0).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, _, loginErr := service.Login(agent.Username, password, ""); apperrors.GetErrorCode(loginErr) != "USER_DISABLED" {
+	if _, _, loginErr := service.Login(agent.Username, password, "", "agent"); apperrors.GetErrorCode(loginErr) != "USER_DISABLED" {
 		t.Fatalf("disabled parent bypassed without owner: %v", loginErr)
 	}
 }

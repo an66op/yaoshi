@@ -80,7 +80,7 @@ func TestPlanAutomationOtherGamesPostgresPersistenceAndRoomBoundaries(t *testing
 		field             string
 		blocked, restored any
 	}{
-		{"enabled", false, true}, {"timing_source", "observed", "upstream"}, {"source_kind", "platform", "external"},
+		{"enabled", false, true}, {"timing_source", "configured", "upstream"}, {"source_kind", "platform", "external"},
 	} {
 		if err := db.Model(&lottery.Game{}).Where("id = ?", "speed-fly").Update(change.field, change.blocked).Error; err != nil {
 			t.Fatal(err)

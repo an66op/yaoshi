@@ -5,6 +5,7 @@ import (
 	"backend/data/models/lottery"
 	"backend/data/models/user"
 	workspacemodel "backend/data/models/workspace"
+	apperrors "backend/errors"
 	"context"
 	"encoding/json"
 	"errors"
@@ -542,6 +543,11 @@ func RobotSettingForWorkspace(db *gorm.DB, workspaceID uint64) (workspacemodel.R
 	if result.MaxPendingBets <= 0 {
 		result.MaxPendingBets = 50
 	}
+	var workspace workspacemodel.Workspace
+	if err := db.Select("id", "robot_quota").First(&workspace, workspaceID).Error; err != nil {
+		return result, err
+	}
+	result.RobotQuota = workspace.RobotQuota
 	service := RoomActivityService{db: db}
 	result.TodayBets, result.PendingBets, err = service.robotBetCounts(workspaceID, time.Now().UTC())
 	return result, err
@@ -556,6 +562,9 @@ func UpdateRobotSettingForWorkspace(db *gorm.DB, workspaceID uint64, input Updat
 		}
 		updates := map[string]any{}
 		if input.Enabled != nil {
+			if *input.Enabled && current.RobotQuota == 0 {
+				return apperrors.NewBusinessError("ROBOT_QUOTA_REQUIRED", "上级尚未分配机器人名额")
+			}
 			updates["enabled"] = *input.Enabled
 			if *input.Enabled {
 				updates["last_run_at"] = nil
@@ -828,10 +837,18 @@ func (s *RoomActivityService) ensureAccountsWithDB(db *gorm.DB, target roomActiv
 	// execution only consumes profiles already owned by this workspace; it never
 	// clones accounts merely because another room exists.
 	var bots []user.User
+	var workspace workspacemodel.Workspace
+	if err := db.Select("id", "robot_quota").First(&workspace, target.workspaceID).Error; err != nil {
+		return nil, err
+	}
+	if workspace.RobotQuota == 0 {
+		return bots, nil
+	}
 	query := db.Model(&user.User{}).
 		Select(`"user".*`).
 		Joins("JOIN workspace_robot_profiles AS profile ON profile.user_id = \"user\".user_id").
 		Where(`"user".workspace_id = ? AND "user".status = ? AND profile.workspace_id = ? AND profile.enabled = ?`, target.workspaceID, 1, target.workspaceID, true).
+		Where("profile.id IN (?)", allocatedRobotProfileIDs(db, target.workspaceID, workspace.RobotQuota)).
 		Order(`"user".user_id ASC`)
 	if count > 0 {
 		query = query.Limit(count)

@@ -151,6 +151,7 @@ type RobotWorkspaceOption struct {
 	RoomCode    string `json:"room_code"`
 	Status      int    `json:"status"`
 	RobotCount  int64  `json:"robot_count"`
+	RobotQuota  int    `json:"robot_quota"`
 }
 
 type normalizedRobotReset struct {
@@ -222,9 +223,13 @@ func (s *UserAdminService) RobotWorkspaces() ([]RobotWorkspaceOption, error) {
 	}
 	result := make([]RobotWorkspaceOption, 0, len(workspaces))
 	for _, workspace := range workspaces {
+		allocatedCount := countsByWorkspace[workspace.ID]
+		if allocatedCount > int64(workspace.RobotQuota) {
+			allocatedCount = int64(workspace.RobotQuota)
+		}
 		result = append(result, RobotWorkspaceOption{
 			WorkspaceID: workspace.ID, Type: workspace.Type, Name: workspace.Name,
-			RoomCode: workspace.RoomCode, Status: workspace.Status, RobotCount: countsByWorkspace[workspace.ID],
+			RoomCode: workspace.RoomCode, Status: workspace.Status, RobotCount: allocatedCount, RobotQuota: workspace.RobotQuota,
 		})
 	}
 	return result, nil
@@ -261,8 +266,17 @@ func (s *UserAdminService) List(filter UserListFilter) (*UserList, error) {
 		if filter.WorkspaceID == 0 {
 			return nil, apperrors.NewBusinessError("WORKSPACE_REQUIRED", "请选择要查看的机器人工作区")
 		}
+		var workspace workspacemodel.Workspace
+		if err := s.db.Select("id", "robot_quota").First(&workspace, filter.WorkspaceID).Error; err != nil {
+			return nil, err
+		}
 		query = query.Select(`"user".*`).Joins(`JOIN workspace_robot_profiles AS robot_profile ON robot_profile.user_id = "user".user_id`).
 			Where(`"user".role = ? AND robot_profile.workspace_id = ?`, "member", filter.WorkspaceID)
+		if workspace.RobotQuota == 0 {
+			query = query.Where("1 = 0")
+		} else {
+			query = query.Where("robot_profile.id IN (?)", allocatedRobotProfileIDs(s.db, filter.WorkspaceID, workspace.RobotQuota))
+		}
 	case "account":
 		query = query.Where("role IN ?", []string{"admin", "tenant", "agent"})
 	}
@@ -377,7 +391,8 @@ func (s *UserAdminService) ResetRobotsForWorkspace(workspaceID uint64, input Res
 	duplicate := false
 	resetCount := 0
 	err = s.db.Transaction(func(tx *gorm.DB) error {
-		if _, err := EnabledRobotWorkspace(tx.Clauses(clause.Locking{Strength: "UPDATE"}), workspaceID); err != nil {
+		workspace, err := EnabledRobotWorkspace(tx.Clauses(clause.Locking{Strength: "UPDATE"}), workspaceID)
+		if err != nil {
 			return err
 		}
 		requestIDHash := robotResetRequestIDHash(config.requestID)
@@ -395,10 +410,14 @@ func (s *UserAdminService) ResetRobotsForWorkspace(workspaceID uint64, input Res
 			return receiptErr
 		}
 		var accounts []user.User
+		if workspace.RobotQuota == 0 {
+			return apperrors.NewBusinessError("ROBOT_QUOTA_REQUIRED", "上级尚未分配机器人名额")
+		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Model(&user.User{}).
 			Select(`"user".*`).
 			Joins(`JOIN workspace_robot_profiles AS robot_profile ON robot_profile.user_id = "user".user_id`).
 			Where(`"user".workspace_id = ? AND robot_profile.workspace_id = ? AND "user".role = ?`, workspaceID, workspaceID, "member").
+			Where("robot_profile.id IN (?)", allocatedRobotProfileIDs(tx, workspaceID, workspace.RobotQuota)).
 			Order(`"user".user_id ASC`).Find(&accounts).Error; err != nil {
 			return err
 		}
@@ -652,6 +671,24 @@ func (s *UserAdminService) updateRobot(id uint64, ownerWorkspaceID *uint64, inpu
 		}
 		if account.Role != "member" {
 			return apperrors.NewBusinessError("NOT_ROBOT", "该账号不是房间机器人")
+		}
+		if ownerWorkspaceID != nil {
+			var workspace workspacemodel.Workspace
+			if err := tx.Select("id", "robot_quota").First(&workspace, profile.WorkspaceID).Error; err != nil {
+				return err
+			}
+			if workspace.RobotQuota == 0 {
+				return apperrors.NewBusinessError("ROBOT_QUOTA_REQUIRED", "上级尚未分配机器人名额")
+			}
+			var allocated int64
+			if err := tx.Model(&workspacemodel.RobotProfile{}).
+				Where("id = ? AND id IN (?)", profile.ID, allocatedRobotProfileIDs(tx, profile.WorkspaceID, workspace.RobotQuota)).
+				Count(&allocated).Error; err != nil {
+				return err
+			}
+			if allocated != 1 {
+				return apperrors.NewBusinessError("ROBOT_QUOTA_EXCEEDED", "该机器人不在上级分配的名额内")
+			}
 		}
 		if err := validateRobotGameIDsForWorkspace(tx, profile.WorkspaceID, cleanIDs); err != nil {
 			return err

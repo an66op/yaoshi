@@ -44,6 +44,7 @@ describe('interface test menu boundary', () => {
     const menu = normalizeRoleMenu(role, [{ path: '/plans', label: '计划管理', visible: true }])
     expect(menu.some(item => item.path === '/plans')).toBe(false)
     expect(menu.find(item => item.path === '/announcements')?.visible).toBe(true)
+		if (role === 'agent') expect(menu.find(item => item.path === '/announcements')?.label).toBe('活动管理')
   })
 
   it('exposes interface testing by default only on the platform menu', () => {

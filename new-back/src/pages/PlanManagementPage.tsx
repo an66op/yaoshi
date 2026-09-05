@@ -23,7 +23,7 @@ export function PlanGenerationPolicy({ config }: { config: PlanAutomationConfig 
   return <Paper variant="outlined" sx={{ p: 1.3 }}>
     <Typography fontSize={12} fontWeight={800}>按访问生成 · 无人浏览不推进</Typography>
     <Typography color="text.secondary" fontSize={11} mt={.5}>仅会员计划页可见时每 15 秒请求当前所选计划；多个会员共享同一计划，隐藏或离开即暂停请求。默认冠军计划也不常驻，访问租期 {config.stream_ttl_seconds ?? 60} 秒。</Typography>
-    <Typography color="text.secondary" fontSize={11} mt={.5}>会员默认展示最近 {config.history_default_periods ?? 6} 期，接口最多 {config.history_max_periods ?? 10} 期；每组自动计划仅保留最近 {config.history_retention_periods ?? 20} 期，不补造历史推荐。</Typography>
+    <Typography color="text.secondary" fontSize={11} mt={.5}>会员默认展示最近 {config.history_default_periods ?? 6} 期，接口最多 {config.history_max_periods ?? 10} 期；每组自动计划保留最近 {config.history_retention_periods ?? 20} 期。</Typography>
   </Paper>
 }
 
@@ -65,7 +65,7 @@ function WorkspacePlanManagement({ workspace }: { workspace: PlanWorkspaceOption
     return () => { cancelled = true }
   }, [workspace, loadKey])
 
-  const candidates = useMemo(() => games.filter(game => config?.supported_categories?.includes(game.category)), [config, games])
+  const candidates = useMemo(() => games.filter(game => config?.supported_categories?.includes(game.category) && game.rules_ready !== false), [config, games])
   const missingGameIds = gameIds.filter(id => !candidates.some(game => game.id === id))
   const gameNames = new Map(games.map(game => [game.id, game.name]))
   const racingSelection = { positions, plan_keys: planKeys }

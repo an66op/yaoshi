@@ -645,13 +645,14 @@ describe('room keyboard and issue lifecycle', () => {
     expect(history).toHaveLength(count)
   })
 
-  it('labels and submits the server-confirmed next issue, never the old drawing issue', async () => {
+  it('submits the server-confirmed next issue without exposing a next-issue prompt in the composer', async () => {
     const drawing = { ...game, timing: { ...timing, phase: 'awaiting_draw' as const, accepting: false, phaseLabel: '开奖中', statusLabel: '开奖中' }, betting: { issue: '34137154', timing } }
     render({ game: drawing }); await settle()
     input(render({ game: drawing })).props.onClick!()
     keyboard(render({ game: drawing })).onSelectOption('6/9')
     const tree = render({ game: drawing })
-    expect(visibleText(input(tree))).toContain('下期 34137154')
+    expect(visibleText(input(tree)).trim()).toBe('6/9')
+    expect(visibleText(input(tree))).not.toContain('下期')
     keyboard(tree).onConfirm()
     await settle()
     expect(runtime.command).toHaveBeenCalledWith('6/9', 'speed-racing', expect.objectContaining({ issue: '34137154' }))

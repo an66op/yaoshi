@@ -6,6 +6,8 @@ import (
 	"backend/data/models/chat"
 	"backend/data/models/lottery"
 	"backend/data/models/odds"
+	"backend/data/models/plan"
+	settingsmodel "backend/data/models/settings"
 	"backend/data/models/user"
 	workspacemodel "backend/data/models/workspace"
 	"backend/utils"
@@ -27,6 +29,8 @@ const (
 	DevelopmentDatabaseMarkerNamespace  = config.LocalDevelopmentDatabaseMarkerNamespace
 	developmentAcceptanceProfileVersion = "development-acceptance-odds-v1"
 	developmentAcceptanceProfileLock    = int64(0x575A44455650524F)
+	developmentWelcomeNotice            = "欢迎来到王者，祝您游戏愉快。"
+	developmentWelcomeAnnouncements     = `[{"id":"welcome","title":"欢迎公告","content":"欢迎来到王者，祝您游戏愉快。","enabled":true,"popup_on_login":true,"sort_order":10}]`
 )
 
 // developmentOddsProfileJSON is a reviewed snapshot of the local acceptance
@@ -68,6 +72,9 @@ type DevelopmentBootstrapReport struct {
 	ConfiguredPlayQuotes int    `json:"configured_play_quotes"`
 	AgentRoomCode        string `json:"agent_room_code"`
 	AgentRoomOpenGames   int64  `json:"agent_room_open_games"`
+	AgentRoomPlanGames   int    `json:"agent_room_plan_games"`
+	AgentRoomRobotQuota  int    `json:"agent_room_robot_quota"`
+	AgentRoomRobots      int64  `json:"agent_room_robots"`
 	LedgerRows           int64  `json:"ledger_rows"`
 	LedgerBalanceCents   int64  `json:"ledger_balance_cents"`
 }
@@ -384,6 +391,20 @@ func configureDevelopmentAgentRoom(tx *gorm.DB, profile developmentOddsProfile, 
 	if room.RoomCode != demoRoomCode {
 		return fmt.Errorf("本地体验代理房间号异常: %s", room.RoomCode)
 	}
+	if write && room.ParentID != nil {
+		var tenant workspacemodel.Workspace
+		if err := tx.Where("id = ? AND type = ?", *room.ParentID, workspacemodel.TypeTenant).First(&tenant).Error; err != nil {
+			return fmt.Errorf("本地体验代理所属租户不存在: %w", err)
+		}
+		// Seed the tenant-owned welcome announcement only during the first
+		// explicit local initialization. Later runs remain read-only and never
+		// overwrite a tenant's own announcement edits.
+		if err := tx.Model(&settingsmodel.SystemConfig{}).
+			Where("workspace_id = ? AND (announcements_json IS NULL OR BTRIM(announcements_json) IN ('', '[]'))", tenant.ID).
+			Updates(map[string]any{"room_notice": developmentWelcomeNotice, "announcements_json": developmentWelcomeAnnouncements}).Error; err != nil {
+			return fmt.Errorf("初始化本地体验租户公告失败: %w", err)
+		}
+	}
 	gameIDs := developmentProfileGameIDs(profile)
 	if write {
 		result := tx.Model(&chat.RoomGameSetting{}).
@@ -404,6 +425,32 @@ func configureDevelopmentAgentRoom(tx *gorm.DB, profile developmentOddsProfile, 
 	}
 	if enabled != int64(len(gameIDs)) {
 		return fmt.Errorf("本地体验房间已有开关与验收配置不一致；不会自动覆盖: %d/%d", enabled, len(gameIDs))
+	}
+	positionsRaw, _ := json.Marshal(defaultPlanPositions())
+	keysRaw, _ := json.Marshal(defaultPlanKeys())
+	gameIDsRaw, _ := json.Marshal(gameIDs)
+	if write {
+		automation := plan.Automation{WorkspaceID: room.ID}
+		if err := tx.Where("workspace_id = ?", room.ID).Assign(map[string]any{
+			"enabled": true, "mode": "demo", "game_ids_json": string(gameIDsRaw),
+			"positions_json": string(positionsRaw), "plan_keys_json": string(keysRaw), "last_error": "",
+		}).FirstOrCreate(&automation).Error; err != nil {
+			return err
+		}
+	}
+	var automation plan.Automation
+	if err := tx.First(&automation, "workspace_id = ?", room.ID).Error; err != nil {
+		return fmt.Errorf("本地体验房间计划配置不存在: %w", err)
+	}
+	configured, err := planAutomationView(automation)
+	if err != nil {
+		return err
+	}
+	if !configured.Enabled || configured.Mode != "demo" ||
+		strings.Join(configured.GameIDs, ",") != strings.Join(gameIDs, ",") ||
+		strings.Join(configured.PlanKeys, ",") != strings.Join(defaultPlanKeys(), ",") ||
+		fmt.Sprint(configured.Positions) != fmt.Sprint(defaultPlanPositions()) {
+		return fmt.Errorf("本地体验房间计划配置与验收配置不一致；不会自动覆盖")
 	}
 	return nil
 }
@@ -534,7 +581,11 @@ func verifyDevelopmentBootstrap(tx *gorm.DB, profile developmentOddsProfile) (*D
 	if strings.Join(visibleGameIDs, ",") != strings.Join(gameIDs, ",") {
 		return nil, fmt.Errorf("88001 验收房间实际可下注彩种与配置不一致: %d/%d", len(visibleGameIDs), len(gameIDs))
 	}
-	report := &DevelopmentBootstrapReport{ProfileVersion: profile.Version, AgentRoomCode: agentRoom.RoomCode, ConfiguredGames: len(developmentProfileGameIDs(profile))}
+	report := &DevelopmentBootstrapReport{
+		ProfileVersion: profile.Version, AgentRoomCode: agentRoom.RoomCode,
+		ConfiguredGames: len(developmentProfileGameIDs(profile)), AgentRoomPlanGames: len(gameIDs),
+		AgentRoomRobotQuota: agentRoom.RobotQuota,
+	}
 	if err := tx.Model(&user.User{}).Where("deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM workspace_robot_profiles robot WHERE robot.user_id = \"user\".user_id)").Count(&report.HumanAccounts).Error; err != nil {
 		return nil, err
 	}
@@ -558,6 +609,13 @@ func verifyDevelopmentBootstrap(tx *gorm.DB, profile developmentOddsProfile) (*D
 	if err := tx.Model(&chat.RoomGameSetting{}).Where("workspace_id = ? AND game_id IN ? AND enabled = ?", agentRoom.ID, gameIDs, true).Count(&report.AgentRoomOpenGames).Error; err != nil {
 		return nil, err
 	}
+	if agentRoom.RobotQuota > 0 {
+		if err := validWorkspaceRobotProfilesQuery(tx, agentRoom.ID).
+			Where("profile.id IN (?)", allocatedRobotProfileIDs(tx, agentRoom.ID, agentRoom.RobotQuota)).
+			Count(&report.AgentRoomRobots).Error; err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Model(&user.BalanceTransaction{}).Count(&report.LedgerRows).Error; err != nil {
 		return nil, err
 	}
@@ -565,8 +623,9 @@ func verifyDevelopmentBootstrap(tx *gorm.DB, profile developmentOddsProfile) (*D
 		return nil, err
 	}
 	if report.HumanAccounts < 4 || report.RobotAccounts < 30 || report.Workspaces < 3 ||
-		report.ActiveAccounts != report.ActiveMemberships || report.AgentRoomOpenGames != int64(len(gameIDs)) {
-		return nil, fmt.Errorf("本地验收账号、工作区、成员关系或房间开关数量不正确")
+		report.ActiveAccounts != report.ActiveMemberships || report.AgentRoomOpenGames != int64(len(gameIDs)) ||
+		report.AgentRoomRobotQuota != MaxWorkspaceRobotQuota || report.AgentRoomRobots != int64(MaxWorkspaceRobotQuota) {
+		return nil, fmt.Errorf("本地验收账号、工作区、成员关系、房间开关或机器人名额数量不正确")
 	}
 	return report, nil
 }

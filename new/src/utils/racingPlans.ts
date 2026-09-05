@@ -47,7 +47,7 @@ export function racingPlanProgress(row: RacingPlanRecommendation) {
 
 // Publication progress and draw outcome are independent. Even a completed
 // cycle remains pending until the server can grade its actual draw.
-export const racingPlanResultLabel = (row: RacingPlanRecommendation) => row.result === 'hit' ? '中' : row.result === 'miss' ? '不中' : '待开奖'
+export const racingPlanResultLabel = (row: RacingPlanRecommendation) => row.result === 'hit' ? '中' : row.result === 'miss' ? '不中' : row.note === '系统补充的历史展示记录，不计入命中率。' ? '未统计' : '待开奖'
 
 export function racingPlanDirection(row: RacingPlanRecommendation) {
   return row.kind === 'size' ? row.size : row.kind === 'parity' ? row.parity : row.kind === 'dragon_tiger' ? row.dragon_tiger : ''

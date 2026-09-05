@@ -646,23 +646,6 @@ button:active {
   left: 12px;
   right: auto;
 }
-.chat-subhead {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 14px 18px 7px;
-  color: #647384;
-}
-.chat-subhead span {
-  font-size: 15px;
-  font-weight: 700;
-}
-.chat-subhead button {
-  border: 0;
-  background: none;
-  color: #8d9aa6;
-  font-size: 11px;
-}
 .chat-row {
   width: 100%;
   display: flex;

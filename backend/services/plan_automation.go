@@ -20,6 +20,7 @@ import (
 )
 
 const PlanDemoNotice = "系统自动生成，仅供娱乐参考，不保证命中。"
+const PlanHistoryBackfillNotice = "系统补充的历史展示记录，不计入命中率。"
 
 type PlanDemoMaster struct {
 	Key       string `json:"key"`
@@ -35,7 +36,7 @@ var planDemoMasters = []PlanDemoMaster{
 	{Key: "demo-jinli", Name: "3号专家", Title: "系统自动推荐", Color: "#e58b45", SortOrder: 30},
 }
 
-var planDemoCategories = []string{"赛车", "飞艇", "幸运10", "时时彩", "幸运5", "PC"}
+var planDemoCategories = []string{"赛车", "飞艇", "幸运10", "时时彩", "幸运5", "PC", "六合彩", "全国彩"}
 
 type PlanAutomationInput struct {
 	WorkspaceID uint64   `json:"workspace_id"`
@@ -221,19 +222,16 @@ func (s *PlanAutomationService) Save(workspaceID uint64, input PlanAutomationInp
 }
 
 func planDemoNumberRange(game lottery.Game) (int, int, bool) {
-	if game.ID == "speed-racing" {
-		return 1, 10, true
-	}
-	switch strings.TrimSpace(game.Category) {
-	case "赛车", "飞艇", "幸运10":
-		return 1, 10, true
-	case "时时彩", "幸运5":
-		return 0, 9, true
-	case "PC":
-		return 0, 27, true
-	default:
+	profile, supported := rulesForGame(&game)
+	if !supported {
 		return 0, 0, false
 	}
+	if profile.PC28 > 0 {
+		// PC recommendations target the settled sum, not one of the three
+		// upstream digits used to calculate it.
+		return 0, 27, true
+	}
+	return profile.MinNumber, profile.MaxNumber, true
 }
 
 // Keys and the plan-demo-v1 salt are compatibility identities: changing labels
@@ -264,7 +262,8 @@ func planDemoNumbers(workspaceID uint64, game lottery.Game, issue, masterKey str
 }
 
 func planAutomationIssueEligible(game lottery.Game, issue lottery.Issue, now time.Time) bool {
-	return (game.SourceKind == "external" || game.SourceKind == "official") && game.TimingSource == "upstream" &&
+	confirmedFeedTiming := game.TimingSource == "upstream" || game.TimingSource == "observed"
+	return (game.SourceKind == "external" || game.SourceKind == "official") && confirmedFeedTiming &&
 		game.SyncStatus != "error" && !(game.SyncStatus == "syncing" && game.LastSyncError != "") &&
 		strings.TrimSpace(game.NextIssue) != "" && game.NextIssue == issue.Issue && game.ID == issue.GameID &&
 		issue.SourceMode == "external" && issue.Status == lottery.IssueStatusAccepting && issue.DrawAt == nil &&

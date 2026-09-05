@@ -30,7 +30,7 @@ describe('member API cookie credentials', () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, data: {} }) })
     vi.stubGlobal('fetch', fetchMock)
     const { memberApi } = await import('./member')
-    const captcha = { captcha_id: 'member-challenge', captcha_code: '654321', role: 'admin', workspace: 'untrusted' }
+    const captcha = { captcha_id: 'member-challenge', captcha_code: '6543', role: 'admin', workspace: 'untrusted' }
     await memberApi.login('member-account', 'test-password', captcha)
     expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/api\/member\/login$/)
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ username: 'member-account', password: 'test-password', captcha_id: captcha.captcha_id, captcha_code: captcha.captcha_code })

@@ -50,7 +50,7 @@ func (h *AgentHandler) GetSettings(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := services.NewSettingsAdminService(h.db).GetForWorkspace(workspace.ID)
+	result, err := services.NewSettingsAdminService(h.db).GetForWorkspaceWithInheritedAnnouncements(workspace.ID)
 	if err != nil {
 		constants.SendError(c, http.StatusInternalServerError, "读取代理房间设置失败", err)
 		return
@@ -68,7 +68,7 @@ func (h *AgentHandler) UpdateSettings(c *gin.Context) {
 		constants.SendError(c, http.StatusBadRequest, "房间设置参数不正确", err)
 		return
 	}
-	result, err := services.NewSettingsAdminService(h.db).UpdateForWorkspace(workspace.ID, request)
+	result, err := services.NewSettingsAdminService(h.db).UpdateForAgentWorkspace(workspace.ID, request)
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "保存代理房间设置失败", err)
 		return
@@ -155,13 +155,14 @@ func (h *AgentHandler) Create(c *gin.Context) {
 		Status          int     `json:"status"`
 		RebateRate      float64 `json:"rebate_rate"`
 		ProfitShareRate float64 `json:"profit_share_rate"`
+		RobotQuota      *int    `json:"robot_quota"`
 		TenantID        *uint64 `json:"tenant_id"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		constants.SendError(c, http.StatusBadRequest, "代理资料不正确", err)
 		return
 	}
-	result, err := h.agents.Create(services.CreateAgentInput{Username: request.Username, Password: request.Password, Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, RoomName: request.RoomName, RoomLogo: request.RoomLogo, Remark: request.Remark, Status: request.Status, RebateRate: request.RebateRate, ProfitShareRate: request.ProfitShareRate, TenantID: request.TenantID})
+	result, err := h.agents.Create(services.CreateAgentInput{Username: request.Username, Password: request.Password, Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, RoomName: request.RoomName, RoomLogo: request.RoomLogo, Remark: request.Remark, Status: request.Status, RebateRate: request.RebateRate, ProfitShareRate: request.ProfitShareRate, RobotQuota: request.RobotQuota, TenantID: request.TenantID})
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "创建代理失败", err)
 		return
@@ -186,13 +187,14 @@ func (h *AgentHandler) Update(c *gin.Context) {
 		Status          int     `json:"status"`
 		RebateRate      float64 `json:"rebate_rate"`
 		ProfitShareRate float64 `json:"profit_share_rate"`
+		RobotQuota      *int    `json:"robot_quota"`
 		TenantID        *uint64 `json:"tenant_id"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		constants.SendError(c, http.StatusBadRequest, "代理资料不正确", err)
 		return
 	}
-	result, err := h.agents.Update(id, services.UpdateAgentInput{Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, RoomName: request.RoomName, RoomLogo: request.RoomLogo, Remark: request.Remark, Status: request.Status, RebateRate: request.RebateRate, ProfitShareRate: request.ProfitShareRate, TenantID: request.TenantID})
+	result, err := h.agents.Update(id, services.UpdateAgentInput{Email: request.Email, Nickname: request.Nickname, Phone: request.Phone, RoomCode: request.RoomCode, RoomName: request.RoomName, RoomLogo: request.RoomLogo, Remark: request.Remark, Status: request.Status, RebateRate: request.RebateRate, ProfitShareRate: request.ProfitShareRate, RobotQuota: request.RobotQuota, TenantID: request.TenantID})
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "保存代理失败", err)
 		return

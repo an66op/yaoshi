@@ -31,6 +31,7 @@ type AgentView struct {
 	MemberCount     int64   `json:"member_count"`
 	RebateRate      float64 `json:"rebate_rate"`
 	ProfitShareRate float64 `json:"profit_share_rate"`
+	RobotQuota      int     `json:"robot_quota"`
 	Remark          string  `json:"remark"`
 	CreatedAt       string  `json:"created_at"`
 	LastLoginAt     string  `json:"last_login_at"`
@@ -67,6 +68,7 @@ type CreateAgentInput struct {
 	Status          int
 	RebateRate      float64
 	ProfitShareRate float64
+	RobotQuota      *int
 	TenantID        *uint64
 }
 
@@ -81,6 +83,7 @@ type UpdateAgentInput struct {
 	Status          int
 	RebateRate      float64
 	ProfitShareRate float64
+	RobotQuota      *int
 	TenantID        *uint64
 }
 
@@ -120,9 +123,10 @@ func (s *AgentAdminService) list(query string, page, pageSize int, tenantID *uin
 	items := make([]AgentView, 0, len(rows))
 	for _, row := range rows {
 		var members int64
-		roomCode, roomName, roomLogo, workspaceID := row.AgentRoomCode, agentRoomDisplayName(row), row.AgentRoomLogo, row.WorkspaceID
+		roomCode, roomName, roomLogo, workspaceID, robotQuota := row.AgentRoomCode, agentRoomDisplayName(row), row.AgentRoomLogo, row.WorkspaceID, MaxWorkspaceRobotQuota
 		if workspace, err := WorkspaceForAccount(s.db, row); err == nil {
 			roomCode, roomName, roomLogo, workspaceID = workspace.RoomCode, workspace.Name, workspace.Logo, workspace.ID
+			robotQuota = workspace.RobotQuota
 		}
 		if err := WorkspaceHumanMemberQuery(s.db, workspaceID).Count(&members).Error; err != nil {
 			return nil, apperrors.NewSystemError("AGENT_READ_FAILED", "读取房间会员数量失败", err)
@@ -130,7 +134,7 @@ func (s *AgentAdminService) list(query string, page, pageSize int, tenantID *uin
 		view := AgentView{
 			ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone,
 			RoomCode: roomCode, RoomName: roomName, RoomLogo: roomLogo, WorkspaceID: workspaceID, Balance: centsToAmount(row.BalanceCents), Status: row.Status,
-			MemberCount: members, RebateRate: row.RoomRebateRate, ProfitShareRate: row.RoomProfitShareRate, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount, TenantID: row.ParentTenantID,
+			MemberCount: members, RebateRate: row.RoomRebateRate, ProfitShareRate: row.RoomProfitShareRate, RobotQuota: robotQuota, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount, TenantID: row.ParentTenantID,
 		}
 		if row.ParentTenantID != nil {
 			var tenant user.User
@@ -191,6 +195,11 @@ func (s *AgentAdminService) Create(input CreateAgentInput) (*AgentView, error) {
 	if input.ProfitShareRate < 0 || input.ProfitShareRate > 100 {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "代理分成比例需在 0-100 之间")
 	}
+	if input.RobotQuota != nil {
+		if err := validateWorkspaceRobotQuota(*input.RobotQuota); err != nil {
+			return nil, err
+		}
+	}
 	hash, err := utils.HashPassword(input.Password)
 	if err != nil {
 		return nil, err
@@ -233,7 +242,17 @@ func (s *AgentAdminService) Create(input CreateAgentInput) (*AgentView, error) {
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
-		return EnsureWorkspaceHierarchy(tx)
+		if err := EnsureWorkspaceHierarchy(tx); err != nil {
+			return err
+		}
+		if input.RobotQuota != nil {
+			workspace, err := WorkspaceForAccount(tx, row)
+			if err != nil {
+				return err
+			}
+			return applyWorkspaceRobotQuota(tx, workspace.ID, *input.RobotQuota)
+		}
+		return nil
 	}); err != nil {
 		return nil, err
 	}
@@ -264,6 +283,11 @@ func (s *AgentAdminService) update(id uint64, input UpdateAgentInput, ownerTenan
 	}
 	if input.ProfitShareRate < 0 || input.ProfitShareRate > 100 {
 		return nil, apperrors.NewBusinessError("INVALID_REQUEST", "代理分成比例需在 0-100 之间")
+	}
+	if input.RobotQuota != nil {
+		if err := validateWorkspaceRobotQuota(*input.RobotQuota); err != nil {
+			return nil, err
+		}
 	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := lockPublicRoomCodeRegistry(tx); err != nil {
@@ -316,6 +340,11 @@ func (s *AgentAdminService) update(id uint64, input UpdateAgentInput, ownerTenan
 		workspace, err := WorkspaceForAccount(tx, row)
 		if err != nil {
 			return err
+		}
+		if input.RobotQuota != nil {
+			if err := applyWorkspaceRobotQuota(tx, workspace.ID, *input.RobotQuota); err != nil {
+				return err
+			}
 		}
 		_, err = NewSettingsAdminService(tx).UpdateRoomIdentityForWorkspace(workspace.ID, input.RoomCode, input.RoomName, input.RoomLogo)
 		return err
@@ -371,14 +400,15 @@ func (s *AgentAdminService) view(id uint64) (*AgentView, error) {
 		return nil, apperrors.NewBusinessError("USER_NOT_FOUND", "代理不存在")
 	}
 	var members int64
-	roomCode, roomName, roomLogo, workspaceID := row.AgentRoomCode, agentRoomDisplayName(row), row.AgentRoomLogo, row.WorkspaceID
+	roomCode, roomName, roomLogo, workspaceID, robotQuota := row.AgentRoomCode, agentRoomDisplayName(row), row.AgentRoomLogo, row.WorkspaceID, MaxWorkspaceRobotQuota
 	if workspace, err := WorkspaceForAccount(s.db, row); err == nil {
 		roomCode, roomName, roomLogo, workspaceID = workspace.RoomCode, workspace.Name, workspace.Logo, workspace.ID
+		robotQuota = workspace.RobotQuota
 	}
 	if err := WorkspaceHumanMemberQuery(s.db, workspaceID).Count(&members).Error; err != nil {
 		return nil, err
 	}
-	view := AgentView{ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone, RoomCode: roomCode, RoomName: roomName, RoomLogo: roomLogo, WorkspaceID: workspaceID, Balance: centsToAmount(row.BalanceCents), Status: row.Status, MemberCount: members, RebateRate: row.RoomRebateRate, ProfitShareRate: row.RoomProfitShareRate, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount, TenantID: row.ParentTenantID}
+	view := AgentView{ID: row.UserID, PublicID: row.PublicID, Username: row.Username, Email: row.Email, Nickname: row.Nickname, Phone: row.Phone, RoomCode: roomCode, RoomName: roomName, RoomLogo: roomLogo, WorkspaceID: workspaceID, Balance: centsToAmount(row.BalanceCents), Status: row.Status, MemberCount: members, RebateRate: row.RoomRebateRate, ProfitShareRate: row.RoomProfitShareRate, RobotQuota: robotQuota, Remark: row.Remark, CreatedAt: row.CreatedAt.Format("2006-01-02 15:04:05"), LoginCount: row.LoginCount, TenantID: row.ParentTenantID}
 	if row.ParentTenantID != nil {
 		var tenant user.User
 		if s.db.Select("username", "nickname").First(&tenant, *row.ParentTenantID).Error == nil {

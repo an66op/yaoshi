@@ -325,7 +325,9 @@ func planView(row plan.Recommendation, rates map[string]*float64) PlanRecommenda
 			}
 		}
 		row.MasterTitle = "系统自动推荐"
-		row.Note = PlanDemoNotice
+		if row.Note != PlanHistoryBackfillNotice {
+			row.Note = PlanDemoNotice
+		}
 	}
 	if row.GameID == "speed-racing" {
 		row.Size, row.Parity = "", ""
@@ -348,8 +350,9 @@ func (s *PlanContentService) ListAdmin(workspaceID uint64) ([]PlanRecommendation
 	}
 	var rows []plan.Recommendation
 	if err := s.db.Joins("LEFT JOIN lottery_issues AS published_issue ON published_issue.game_id = plan_recommendations.game_id AND published_issue.issue = plan_recommendations.issue").
+		Joins("LEFT JOIN lottery_draws AS published_draw ON published_draw.game_id = plan_recommendations.game_id AND published_draw.issue = plan_recommendations.issue").
 		Where("plan_recommendations.workspace_id = ?", workspaceID).
-		Order("published_issue.scheduled_draw_at DESC NULLS LAST, published_issue.id DESC NULLS LAST, plan_recommendations.sort_order, plan_recommendations.id DESC").Limit(300).Find(&rows).Error; err != nil {
+		Order("COALESCE(published_issue.scheduled_draw_at, published_draw.draw_at) DESC NULLS LAST, plan_recommendations.sort_order, plan_recommendations.id DESC").Limit(300).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	rates := planHitRates(rows)
@@ -370,9 +373,10 @@ func (s *PlanContentService) Catalog(workspaceID uint64) ([]PlanGameSummary, err
 	if err := s.db.Raw(`WITH latest AS (
 		SELECT DISTINCT ON (recommendation.game_id) recommendation.game_id, recommendation.issue
 		FROM plan_recommendations AS recommendation
-		JOIN lottery_issues AS published_issue ON published_issue.game_id = recommendation.game_id AND published_issue.issue = recommendation.issue
+		LEFT JOIN lottery_issues AS published_issue ON published_issue.game_id = recommendation.game_id AND published_issue.issue = recommendation.issue
+		LEFT JOIN lottery_draws AS published_draw ON published_draw.game_id = recommendation.game_id AND published_draw.issue = recommendation.issue
 		WHERE recommendation.workspace_id = ? AND recommendation.enabled = true AND recommendation.deleted_at IS NULL
-		ORDER BY recommendation.game_id, published_issue.scheduled_draw_at DESC NULLS LAST, published_issue.id DESC, recommendation.id DESC
+		ORDER BY recommendation.game_id, COALESCE(published_issue.scheduled_draw_at, published_draw.draw_at) DESC NULLS LAST, recommendation.id DESC
 	) SELECT latest.game_id, latest.issue AS latest_issue, COUNT(DISTINCT recommendation.master_name) AS master_count, MAX(recommendation.updated_at) AS updated_at
 	FROM latest JOIN plan_recommendations AS recommendation ON recommendation.game_id = latest.game_id AND recommendation.issue = latest.issue
 	WHERE recommendation.workspace_id = ? AND recommendation.enabled = true AND recommendation.deleted_at IS NULL
@@ -418,14 +422,16 @@ func (s *PlanContentService) Detail(workspaceID uint64, gameID string, historyLi
 	}
 	var rows []plan.Recommendation
 	recentIssues := s.db.Model(&plan.Recommendation{}).Select("plan_recommendations.issue").
-		Joins("JOIN lottery_issues AS published_issue ON published_issue.game_id = plan_recommendations.game_id AND published_issue.issue = plan_recommendations.issue").
+		Joins("LEFT JOIN lottery_issues AS published_issue ON published_issue.game_id = plan_recommendations.game_id AND published_issue.issue = plan_recommendations.issue").
+		Joins("LEFT JOIN lottery_draws AS published_draw ON published_draw.game_id = plan_recommendations.game_id AND published_draw.issue = plan_recommendations.issue").
 		Where("plan_recommendations.workspace_id = ? AND plan_recommendations.game_id = ? AND plan_recommendations.enabled = ?", workspaceID, result.GameID, true).
-		Group("plan_recommendations.issue, published_issue.scheduled_draw_at, published_issue.id").
-		Order("published_issue.scheduled_draw_at DESC NULLS LAST, published_issue.id DESC").Limit(result.HistoryLimit)
-	if err := s.db.Joins("JOIN lottery_issues AS published_issue ON published_issue.game_id = plan_recommendations.game_id AND published_issue.issue = plan_recommendations.issue").
+		Group("plan_recommendations.issue, published_issue.scheduled_draw_at, published_draw.draw_at").
+		Order("COALESCE(published_issue.scheduled_draw_at, published_draw.draw_at) DESC NULLS LAST").Limit(result.HistoryLimit)
+	if err := s.db.Joins("LEFT JOIN lottery_issues AS published_issue ON published_issue.game_id = plan_recommendations.game_id AND published_issue.issue = plan_recommendations.issue").
+		Joins("LEFT JOIN lottery_draws AS published_draw ON published_draw.game_id = plan_recommendations.game_id AND published_draw.issue = plan_recommendations.issue").
 		Where("plan_recommendations.workspace_id = ? AND plan_recommendations.game_id = ? AND plan_recommendations.enabled = ?", workspaceID, result.GameID, true).
 		Where("plan_recommendations.issue IN (?)", recentIssues).
-		Order("published_issue.scheduled_draw_at DESC NULLS LAST, published_issue.id DESC, plan_recommendations.sort_order, plan_recommendations.id").Limit(300).Find(&rows).Error; err != nil {
+		Order("COALESCE(published_issue.scheduled_draw_at, published_draw.draw_at) DESC NULLS LAST, plan_recommendations.sort_order, plan_recommendations.id").Limit(300).Find(&rows).Error; err != nil {
 		return result, err
 	}
 	if len(rows) == 0 {

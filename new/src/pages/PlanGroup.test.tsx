@@ -101,8 +101,7 @@ describe('plan group publications', () => {
     const html = renderToStaticMarkup(<PlanDetail games={[game]} gameId={game.id} onBack={() => {}} />)
     expect(html).not.toContain('aria-label="推荐号码 1、5、9"')
     expect(html).not.toContain('5码推荐')
-    expect(html).toContain('当前计划暂无实际发布记录')
-    expect(html).toContain('不补造历史推荐')
+    expect(html).toContain('当前计划正在准备中')
   })
   it.each([['four-period-six-codes', 6], ['four-period-seven-codes', 7], ['two-period-eight-codes', 8]] as const)('renders every number in %s without extra direction columns', (plan_key, count) => {
     feed.selection = { position: 10, plan_key }
@@ -127,14 +126,14 @@ describe('plan group publications', () => {
     expect(html).not.toContain('aria-label="推荐号码')
     expect(html).not.toContain('本期计划</em>')
   })
-  it('hides other game entrypoints without rendering or activating their data', () => {
+  it('opens a configured non-racing plan with its actual publication', () => {
     const otherGame = { ...game, id: 'au-lucky-10', title: '澳洲幸运10' }
     const otherRow = { ...master, game_id: otherGame.id, numbers: [1, 3, 10] }
     feed.detail = { game_id: otherGame.id, current_issue: '100', recommendations: [otherRow], latest_recommendations: [otherRow], history: [otherRow] }
     const html = renderToStaticMarkup(<PlanDetail games={[otherGame]} gameId={otherGame.id} onBack={() => {}} />)
-    expect(html).toContain('暂时仅开放极速赛车计划')
+    expect(html).toContain('澳洲幸运10')
     expect(html).not.toContain('plan-mode-tabs')
-    expect(html).not.toContain('aria-label="推荐号码')
+    expect(html).toContain('aria-label="推荐号码 1、3、10"')
   })
   it('shows only six actual racing periods and never mixes another selection into history', () => {
     const detail = racingPlanDetail()
@@ -149,7 +148,7 @@ describe('plan group publications', () => {
     expect(html).not.toContain('wrong-position')
     expect((html.match(/class="plan-history-row"/g) || []).length).toBe(6)
   })
-  it('does not expose another game history through a saved deep link', () => {
+  it('filters a generic plan history by game and source through a saved deep link', () => {
     const otherGame = { ...game, id: 'speed-fly', title: '极速飞艇' }
     const row = { ...master, game_id: otherGame.id }
     const history = Array.from({ length: 12 }, (_, index) => ({ ...row, id: 100 + index, issue: `saved-${20 - index}` }))
@@ -157,19 +156,20 @@ describe('plan group publications', () => {
     history.unshift({ ...row, id: 998, source: 'manual', issue: 'wrong-source' })
     feed.detail = { game_id: otherGame.id, current_issue: '100', recommendations: [row], latest_recommendations: [row], history }
     const html = renderToStaticMarkup(<PlanDetail games={[otherGame]} gameId={otherGame.id} onBack={() => {}} />)
-    expect(html).toContain('暂时仅开放极速赛车计划')
+    expect(html).toContain('极速飞艇')
+    expect(html).toContain('saved-15')
     expect(html).not.toContain('saved-14')
     expect(html).not.toContain('wrong-game')
     expect(html).not.toContain('wrong-source')
-    expect((html.match(/class="plan-history-row"/g) || []).length).toBe(0)
+    expect((html.match(/class="plan-history-row"/g) || []).length).toBe(6)
   })
-  it('lists only speed racing even when the server retains other configured games', () => {
+  it('lists every configured game returned by the room catalog', () => {
     const otherGame = { ...game, id: 'speed-fly', title: '极速飞艇' }
     feed.catalog.push({ ...feed.catalog[0], game_id: otherGame.id })
     const html = renderToStaticMarkup(<PlanLobby games={[game, otherGame]} onBack={() => {}} onSelect={() => {}} />)
     expect(html).toContain('极速赛车')
-    expect(html).not.toContain('极速飞艇')
-    expect((html.match(/class="plan-game-card"/g) || []).length).toBe(1)
+    expect(html).toContain('极速飞艇')
+    expect((html.match(/class="plan-game-card"/g) || []).length).toBe(2)
   })
   it('uses draw ball colors and real hit/miss states independently from cycle progress', () => {
     const detail = racingPlanDetail()

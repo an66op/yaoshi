@@ -100,7 +100,7 @@ func TestOwnerAccountsFreshPostgresCreateAndLogin(t *testing.T) {
 
 			// A test-only Redis fixture exercises the real production verifier;
 			// there is no test-mode bypass or answer-disclosing endpoint.
-			const captchaID, captchaCode = "0123456789abcdef0123456789abcdef", "012345"
+			const captchaID, captchaCode = "0123456789abcdef0123456789abcdef", "0123"
 			sum := sha256.Sum256([]byte(captchaID + "\x00" + captcha.Management + "\x00192.0.2.1\x00" + captchaCode))
 			redisServer.Set(cluster.Key("captcha", captchaID), hex.EncodeToString(sum[:]))
 			redisServer.SetTTL(cluster.Key("captcha", captchaID), captcha.Lifetime)

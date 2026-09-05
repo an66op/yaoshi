@@ -104,3 +104,41 @@ func TestLotterySourceURLTopLevelAndGameRoundTripStaySynchronized(t *testing.T) 
 		t.Fatalf("source URL drifted: top-level=%q game=%#v", view.LotterySourceURL, values["lottery_source_url"])
 	}
 }
+
+func TestInheritedAnnouncementsReplaceOnlyPublicAnnouncementFields(t *testing.T) {
+	target := &SystemSettingsView{
+		RoomName: "代理房间", RoomNotice: "代理旧公告",
+		Announcements: []AnnouncementItem{{ID: "agent", Title: "旧", Content: "不应展示"}},
+		ShowOdds:      false,
+	}
+	source := &SystemSettingsView{
+		RoomName: "租户直属房间", RoomNotice: "租户公告",
+		Announcements: []AnnouncementItem{{ID: "tenant", Title: "通知", Content: "统一展示", Enabled: true}},
+		ShowOdds:      true,
+	}
+	inheritAnnouncementSettings(target, source)
+	if target.RoomName != "代理房间" || target.ShowOdds {
+		t.Fatalf("inheritance changed agent-owned settings: %+v", target)
+	}
+	if target.RoomNotice != "租户公告" || len(target.Announcements) != 1 || target.Announcements[0].ID != "tenant" {
+		t.Fatalf("tenant announcement was not inherited: %+v", target)
+	}
+	target.Announcements[0].Title = "changed"
+	if source.Announcements[0].Title != "通知" {
+		t.Fatal("inherited announcement slice aliases the tenant response")
+	}
+}
+
+func TestAgentOwnedSettingsInputCannotWriteAnnouncements(t *testing.T) {
+	input := UpdateSystemSettingsInput{
+		RoomName: "代理房间", RoomNotice: "伪造公告",
+		Announcements: []AnnouncementItem{{ID: "forged", Title: "伪造", Content: "不应保存"}},
+	}
+	protected := agentOwnedSettingsInput(input, &settingsmodel.SystemConfig{RoomNotice: "代理历史值"})
+	if protected.Announcements != nil || protected.RoomNotice != "代理历史值" {
+		t.Fatalf("agent announcement fields were not protected: %+v", protected)
+	}
+	if protected.RoomName != input.RoomName {
+		t.Fatal("protecting announcements changed an unrelated agent setting")
+	}
+}

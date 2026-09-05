@@ -11,7 +11,7 @@ import { WorkspaceAdminAccountFields, WorkspaceAdminCreatedDialog } from '../com
 import { createdWorkspaceAdmin, validateWorkspaceAdminAccount, type CreatedWorkspaceAdmin } from '../utils/workspaceAdminAccount'
 import { utf8ByteLength } from '../loginLimits'
 
-const blank = { username: '', password: '', email: '', nickname: '', phone: '', room_code: '', room_name: '', room_logo: '', rebate_rate: 0, profit_share_rate: 0, remark: '', status: 1 }
+const blank = { username: '', password: '', email: '', nickname: '', phone: '', room_code: '', room_name: '', room_logo: '', rebate_rate: 0, profit_share_rate: 0, robot_quota: 0, remark: '', status: 1 }
 const validRoomCode = (value: string) => /^\d{5,12}$/.test(value.trim())
 
 type TenantSection = 'dashboard' | 'agents'
@@ -69,7 +69,7 @@ export function TenantWorkspacePage({ section }: { section: TenantSection }) {
     setForm(row ? {
       username: row.username, password: '', email: row.email, nickname: row.nickname, phone: row.phone,
       room_code: row.room_code, room_name: row.room_name ?? '', room_logo: row.room_logo ?? '', rebate_rate: row.rebate_rate,
-      profit_share_rate: row.profit_share_rate, remark: row.remark, status: row.status,
+      profit_share_rate: row.profit_share_rate, robot_quota: row.robot_quota ?? 0, remark: row.remark, status: row.status,
     } : blank)
   }
   const closeForm = () => {
@@ -158,7 +158,7 @@ export function TenantWorkspacePage({ section }: { section: TenantSection }) {
     {section === 'agents' && <Card>
       <Box p={1.5}><TextField fullWidth size="small" placeholder="搜索代理账号、昵称、手机号或房间号" value={query} onChange={event => { setQuery(event.target.value); setPage(0); setLoading(true) }} /></Box>
       <TableContainer><Table size="small" sx={{ minWidth: 1100 }} aria-label="代理账号列表"><TableHead><TableRow>
-        <TableCell>代理账号</TableCell><TableCell>联系方式</TableCell><TableCell>账号状态</TableCell><TableCell>上次登录</TableCell><TableCell>分成率</TableCell><TableCell>关联房间</TableCell><TableCell align="right">账号操作</TableCell>
+        <TableCell>代理账号</TableCell><TableCell>联系方式</TableCell><TableCell>账号状态</TableCell><TableCell>上次登录</TableCell><TableCell>分成率</TableCell><TableCell>机器人名额</TableCell><TableCell>关联房间</TableCell><TableCell align="right">账号操作</TableCell>
       </TableRow></TableHead><TableBody>
         {agents.map(row => <TableRow key={row.id} hover>
           <TableCell sx={{ minWidth: 170 }}><Typography fontWeight={850}>{row.nickname || row.username}</Typography><Typography variant="body2">@{row.username}</Typography><Typography variant="caption" color="text.secondary">公开 ID {row.public_id || '未分配'}</Typography></TableCell>
@@ -166,10 +166,11 @@ export function TenantWorkspacePage({ section }: { section: TenantSection }) {
           <TableCell><Chip size="small" color={row.status === 1 ? 'success' : 'default'} label={row.status === 1 ? '正常' : '停用'} /></TableCell>
           <TableCell><Typography variant="body2" sx={{ whiteSpace: 'nowrap' }}>{row.last_login_at || '尚未登录'}</Typography><Typography variant="caption" color="text.secondary">累计登录 {row.login_count ?? 0} 次</Typography></TableCell>
           <TableCell><Typography fontWeight={750}>{row.profit_share_rate}%</Typography></TableCell>
+          <TableCell><Chip size="small" color={row.robot_quota ? 'primary' : 'default'} variant="outlined" label={`${row.robot_quota ?? 0}/10`} /></TableCell>
           <TableCell><Stack direction="row" alignItems="center" gap={1}><Avatar src={row.room_logo || undefined} variant="rounded" sx={{ width: 30, height: 30, fontSize: 12 }}>{(row.room_name || '房').slice(0, 1)}</Avatar><Box><Typography variant="body2" color="text.secondary">{row.room_name || '未命名房间'}</Typography><Typography variant="caption" color="text.secondary">房间号 {row.room_code || '未分配'}</Typography></Box></Stack><Typography variant="caption" color="text.secondary">{row.member_count} 位会员 · 返水 {row.rebate_rate}%</Typography></TableCell>
           <TableCell align="right"><Stack direction="row" justifyContent="flex-end" gap={.5} sx={{ whiteSpace: 'nowrap' }}><Button size="small" variant="outlined" startIcon={<EditRounded />} onClick={() => open(row)}>编辑账号</Button><Button size="small" startIcon={<KeyRounded />} onClick={() => openPasswordReset(row)}>重置密码</Button></Stack></TableCell>
         </TableRow>)}
-        {!agents.length && <TableRow><TableCell colSpan={7} align="center" sx={{ py: 6, color: 'text.secondary' }}>{loading ? '正在读取代理账号…' : query.trim() ? '没有找到匹配的代理账号' : '还没有代理账号，点击“开通代理账号”开始。'}</TableCell></TableRow>}
+        {!agents.length && <TableRow><TableCell colSpan={8} align="center" sx={{ py: 6, color: 'text.secondary' }}>{loading ? '正在读取代理账号…' : query.trim() ? '没有找到匹配的代理账号' : '还没有代理账号，点击“开通代理账号”开始。'}</TableCell></TableRow>}
       </TableBody></Table></TableContainer>
       <TablePagination component="div" count={total} page={page} onPageChange={(_, next) => { setPage(next); setLoading(true) }} rowsPerPage={pageSize} onRowsPerPageChange={event => { setPageSize(Number(event.target.value)); setPage(0); setLoading(true) }} rowsPerPageOptions={[20, 50, 100]} labelRowsPerPage="每页账号" />
     </Card>}
@@ -188,8 +189,9 @@ export function TenantWorkspacePage({ section }: { section: TenantSection }) {
         <TextField label="备注" value={form.remark} disabled={saving} onChange={event => setForm(current => ({ ...current, remark: event.target.value }))} />
         <Stack direction="row" justifyContent="space-between" alignItems="center"><Typography>启用代理账号及关联房间</Typography><Switch checked={form.status === 1} disabled={saving} inputProps={{ 'aria-label': '启用代理账号及关联房间' }} onChange={event => setForm(current => ({ ...current, status: event.target.checked ? 1 : 0 }))} /></Stack>
         <Divider />
-        <Typography fontWeight={800}>分成设置</Typography>
+        <Typography fontWeight={800}>分成与机器人</Typography>
         <TextField fullWidth type="number" label="代理分成 %" value={form.profit_share_rate} disabled={saving} onChange={event => setForm(current => ({ ...current, profit_share_rate: Number(event.target.value) }))} helperText="逐注正毛利 × 比例，亏损注不抵扣；手动结算" />
+        <TextField fullWidth type="number" label="机器人名额" value={form.robot_quota} disabled={saving} onChange={event => setForm(current => ({ ...current, robot_quota: Math.max(0, Math.min(10, Number(event.target.value))) }))} slotProps={{ htmlInput: { min: 0, max: 10, step: 1 } }} helperText="由租户分配给该代理，可设 0–10 个；减少名额会自动停用超出部分" />
         <Divider />
         <Box><Typography fontWeight={800}>关联房间资料</Typography><Typography variant="body2" color="text.secondary">房间号用于进入房间，与代理登录账号不同。</Typography></Box>
         <Stack direction={{ xs: 'column', sm: 'row' }} gap={1.2}>

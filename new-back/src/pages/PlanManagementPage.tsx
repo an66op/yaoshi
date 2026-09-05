@@ -9,7 +9,7 @@ import { useFeedback } from '../components/feedback'
 import { PlanManagementPanel } from '../components/PlanManagementPanel'
 import { PlanAutomationExperts } from '../components/PlanAutomationExperts'
 import { PlanVariantSettings } from '../components/PlanVariantSettings'
-import { buildPlanAutomationPayload, canManagePlanAutomation, hasPlanAutomationChanges } from '../utils/planAutomation'
+import { buildPlanAutomationPayload, canManagePlanAutomation, hasPlanAutomationChanges, hasRacingPlanGame } from '../utils/planAutomation'
 import { loadPlanWorkspaces, loadPlanWorkspaceGames, type PlanWorkspaceOption } from '../utils/planWorkspaces'
 import { workspaceGameAvailability } from '../utils/workspaceGameAvailability'
 
@@ -72,7 +72,8 @@ function WorkspacePlanManagement({ workspace }: { workspace: PlanWorkspaceOption
   const dirty = config ? hasPlanAutomationChanges(config, enabled, gameIds, racingSelection) : false
   const busy = saving
   const noSelectedGame = enabled && gameIds.length === 0
-  const noSelectedPlan = enabled && gameIds.includes('speed-racing') && (!positions.length || !planKeys.length)
+  const hasRacingPlans = hasRacingPlanGame(gameIds)
+  const noSelectedPlan = enabled && hasRacingPlans && (!positions.length || !planKeys.length)
 
   const save = async () => {
     if (!config || busy) return
@@ -107,7 +108,7 @@ function WorkspacePlanManagement({ workspace }: { workspace: PlanWorkspaceOption
         <FormControlLabel label="开启自动推荐" control={<Switch checked={enabled} disabled={loading || busy || !config} onChange={event => setEnabled(event.target.checked)} />} />
       </Stack>
       <Alert severity="warning" sx={{ mb: 1.5 }}>
-        {config?.notice || '系统自动生成，仅供娱乐参考，不保证命中。'}不展示虚构命中率。
+        {config?.notice || '系统自动生成，仅供娱乐参考，不保证命中。'}页面仅展示真实发布与开奖统计。
       </Alert>
       {error && <Alert severity="error" sx={{ mb: 1.5 }} action={!config && !loading ? <Button color="inherit" size="small" onClick={() => setLoadKey(current => current + 1)}>重试</Button> : undefined}>{error}</Alert>}
       {loading ? <Box textAlign="center" py={3}><CircularProgress size={24} /><Typography color="text.secondary" mt={1}>正在读取当前房间配置…</Typography></Box> : config && <Stack gap={1.5}>
@@ -129,9 +130,9 @@ function WorkspacePlanManagement({ workspace }: { workspace: PlanWorkspaceOption
           </Alert>}
           {noSelectedGame && <Typography color="error" fontSize={12} mt={1}>开启自动推荐前，请至少选择一个彩种。</Typography>}
         </Box>
-        {gameIds.includes('speed-racing') && <>
+        {hasRacingPlans && <>
           <PlanVariantSettings positions={positions} planKeys={planKeys} availablePositions={config.available_positions} options={config.options} maxActiveStreams={config.max_active_streams} disabled={busy} onPositionsChange={setPositions} onPlanKeysChange={setPlanKeys} />
-          {noSelectedPlan && <Alert severity="error">极速赛车至少选择一个名次和一种计划。</Alert>}
+          {noSelectedPlan && <Alert severity="error">赛车类彩种至少选择一个名次和一种计划。</Alert>}
         </>}
         <Divider />
         <PlanAutomationExperts masters={config.masters} />

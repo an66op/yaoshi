@@ -20,7 +20,6 @@ import (
 )
 
 const PlanDemoNotice = "系统自动生成，仅供娱乐参考，不保证命中。"
-const PlanHistoryBackfillNotice = "系统补充的历史展示记录，不计入命中率。"
 
 type PlanDemoMaster struct {
 	Key       string `json:"key"`
@@ -248,6 +247,9 @@ func planDemoNumbers(workspaceID uint64, game lottery.Game, issue, masterKey str
 		pool[i] = minimum + i
 	}
 	count := 3
+	// Keep the legacy generic helper byte-for-byte compatible. The seven
+	// racing-v2 products use planCyclePicksForGame for their rich streams;
+	// only the original speed-racing legacy fixture historically returned five.
 	if game.ID == "speed-racing" {
 		count = 5
 	}
@@ -313,36 +315,105 @@ func generatePlanDemoGame(tx *gorm.DB, workspaceID uint64, game lottery.Game, ra
 	if windowStatus(window, time.Now().UTC()) != lottery.IssueStatusAccepting {
 		return 0, false, nil
 	}
-	if gameID == "speed-racing" {
+	if racingPlanGameID(gameID) {
 		created, err := advancePlanStream(tx, workspaceID, game, issue, window, stream)
 		return created, true, err
 	}
-	var created int64
+	var viewed int64
+	if err := tx.Model(&plan.PublicationView{}).
+		Where("workspace_id = ? AND game_id = ? AND issue = ? AND position = 0", workspaceID, gameID, issue.Issue).
+		Count(&viewed).Error; err != nil {
+		return 0, false, err
+	}
+	if viewed > 0 {
+		// The first successful view freezes the complete publication set. A
+		// later configuration change may enable automation, but it cannot add
+		// experts to that already observed issue.
+		return 0, true, nil
+	}
+	type publicationCandidate struct {
+		MasterKey   string `json:"master_key"`
+		MasterName  string `json:"master_name"`
+		MasterTitle string `json:"master_title"`
+		MasterColor string `json:"master_color"`
+		Numbers     string `json:"numbers"`
+		SortOrder   int    `json:"sort_order"`
+	}
+	candidates := make([]publicationCandidate, 0, len(planDemoMasters))
 	for _, master := range planDemoMasters {
 		numbers, err := planDemoNumbers(workspaceID, game, issue.Issue, master.Key)
 		if err != nil {
 			return 0, false, err
 		}
 		rawNumbers, _ := canonicalPlanNumbers(numbers)
-		// clock_timestamp (not transaction-start CURRENT_TIMESTAMP) prevents a
-		// transaction delayed by locks from publishing after either cutoff.
-		insert := tx.Exec(`WITH claimed AS (
-			INSERT INTO plan_generation_receipts (workspace_id, game_id, issue, master_key, created_at)
-			SELECT ?, ?, ?, ?, clock_timestamp()
-			WHERE clock_timestamp() >= ? AND clock_timestamp() < ? AND clock_timestamp() < ?
+		candidates = append(candidates, publicationCandidate{
+			MasterKey: master.Key, MasterName: master.Name, MasterTitle: master.Title,
+			MasterColor: master.Color, Numbers: rawNumbers, SortOrder: master.SortOrder,
+		})
+	}
+	if len(candidates) != 3 {
+		return 0, false, fmt.Errorf("自动推荐发布模板不完整：需要 3 位专家，实际 %d 位", len(candidates))
+	}
+	payload, err := json.Marshal(candidates)
+	if err != nil {
+		return 0, false, err
+	}
+	var created int64
+	err = tx.Transaction(func(publication *gorm.DB) error {
+		// One materialized database timestamp qualifies the whole three-expert
+		// publication. The receipt claims and recommendation rows are one SQL
+		// statement, while this savepoint rolls back any unexpected partial
+		// conflict. A visit can therefore publish exactly zero or three rows;
+		// it can never freeze a one/two-expert issue when the cutoff arrives.
+		insert := publication.Exec(`WITH checked AS MATERIALIZED (
+			SELECT clock_timestamp() AS checked_at
+		), eligible AS MATERIALIZED (
+			SELECT checked_at FROM checked
+			WHERE checked_at >= ? AND checked_at < ? AND checked_at < ?
 			  AND NOT EXISTS (SELECT 1 FROM lottery_draws WHERE game_id = ? AND issue = ?)
-			ON CONFLICT DO NOTHING RETURNING id
+		), candidates AS MATERIALIZED (
+			SELECT * FROM jsonb_to_recordset(?::jsonb) AS item(
+				master_key text, master_name text, master_title text,
+				master_color text, numbers text, sort_order integer
+			)
+		), claimed AS (
+			INSERT INTO plan_generation_receipts (workspace_id, game_id, issue, master_key, created_at)
+			SELECT ?, ?, ?, candidates.master_key, eligible.checked_at
+			FROM candidates CROSS JOIN eligible
+			ON CONFLICT DO NOTHING RETURNING master_key
 		) INSERT INTO plan_recommendations
 			(workspace_id, game_id, issue, master_name, master_title, master_color, numbers,
 			 size, parity, result, source, note, enabled, sort_order, created_at, updated_at)
-		SELECT ?, ?, ?, ?, ?, ?, ?, '', '', 'pending', 'demo', ?, true, ?, clock_timestamp(), clock_timestamp()
-		FROM claimed WHERE clock_timestamp() < ? AND clock_timestamp() < ? ON CONFLICT DO NOTHING`,
-			workspaceID, gameID, issue.Issue, master.Key, window.AcceptAt, window.SealAt, issue.SealAt, gameID, issue.Issue,
-			workspaceID, gameID, issue.Issue, master.Name, master.Title, master.Color, rawNumbers, PlanDemoNotice, master.SortOrder, window.SealAt, issue.SealAt)
+		SELECT ?, ?, ?, candidates.master_name, candidates.master_title, candidates.master_color,
+			candidates.numbers, '', '', 'pending', 'demo', ?, true, candidates.sort_order,
+			eligible.checked_at, eligible.checked_at
+		FROM candidates
+		JOIN claimed USING (master_key)
+		CROSS JOIN eligible
+		ON CONFLICT DO NOTHING`,
+			window.AcceptAt, window.SealAt, issue.SealAt, gameID, issue.Issue, string(payload),
+			workspaceID, gameID, issue.Issue,
+			workspaceID, gameID, issue.Issue, PlanDemoNotice)
 		if insert.Error != nil {
-			return 0, false, insert.Error
+			return insert.Error
 		}
-		created += insert.RowsAffected
+		if insert.RowsAffected != 0 && insert.RowsAffected != int64(len(candidates)) {
+			return fmt.Errorf("自动推荐发布不完整：需要 %d 条，实际新增 %d 条", len(candidates), insert.RowsAffected)
+		}
+		var published int64
+		if err := publication.Model(&plan.Recommendation{}).
+			Where("workspace_id = ? AND game_id = ? AND issue = ? AND source = ?", workspaceID, gameID, issue.Issue, "demo").
+			Count(&published).Error; err != nil {
+			return err
+		}
+		if published != 0 && published != int64(len(candidates)) {
+			return fmt.Errorf("自动推荐发布集合不完整：需要 %d 条，实际 %d 条", len(candidates), published)
+		}
+		created = insert.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, false, err
 	}
 	return created, true, nil
 }

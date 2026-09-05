@@ -35,6 +35,18 @@ func TestRacingPlanDrawResultUsesActualPositionAndDirection(t *testing.T) {
 	}
 }
 
+func TestRacingPlanDrawResultSupportsEveryVerifiedRacingProduct(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	for _, gameID := range racingPlanGameIDs {
+		period := plan.StreamPeriod{Issue: "verified-100", CreatedAt: now.Add(-2 * time.Minute), ScheduledDrawAt: now.Add(-time.Minute)}
+		draw := lottery.Draw{GameID: gameID, Issue: period.Issue, Numbers: "1,2,3,4,5,6,7,8,9,10", DrawAt: now.Add(-time.Minute)}
+		pick := PlanRecommendationView{GameID: gameID, Issue: period.Issue, Kind: "numbers", Position: 10, Numbers: []int{10}, Result: "pending"}
+		if result, numbers, at := racingPlanDrawResult(pick, period, draw, now); result != "hit" || len(numbers) != 10 || at == nil {
+			t.Fatalf("%s did not settle from its own verified ten-ball draw: result=%s numbers=%v at=%v", gameID, result, numbers, at)
+		}
+	}
+}
+
 func TestRacingPlanDrawResultFailsClosedWithoutTimelyValidEvidence(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	for _, test := range []struct {

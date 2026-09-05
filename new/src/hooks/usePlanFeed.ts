@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { planApi, type RacingPlanDetail, type RacingPlanSelection } from '../api/plans'
+import { planApi, type PlanDetail, type RacingPlanDetail, type RacingPlanSelection } from '../api/plans'
 import { createRefreshLoop } from '../utils/refreshLoop'
 import { DEFAULT_RACING_PLAN, racingPlanKey, sameRacingPlan } from '../utils/racingPlans'
 import { WS_EVENT, type WsEvent } from './useWebSocket'
@@ -8,7 +8,18 @@ type FeedResult<T> = { data: T; error?: string }
 const message = (reason: unknown) => reason instanceof Error ? reason.message : '读取计划失败，正在重试'
 const visible = () => document.visibilityState === 'visible'
 
-/** GET stays read-only; a failed touch preserves the publications just read. */
+const planMetadataOnly = <T extends PlanDetail>(data: T): T => ({
+  ...data,
+  recommendations: [],
+  latest_recommendations: [],
+  history: [],
+})
+const racingPlanMetadataOnly = (data: RacingPlanDetail): RacingPlanDetail => ({
+  ...planMetadataOnly(data),
+  legacy_history: [],
+})
+
+/** GET is metadata-only; only a successful audited POST may supply publications. */
 async function visit<T>(data: T, enabled: boolean, signal: AbortSignal, touch: () => Promise<T>): Promise<FeedResult<T>> {
   signal.throwIfAborted()
   if (!enabled || !visible()) return { data }
@@ -18,7 +29,7 @@ async function visit<T>(data: T, enabled: boolean, signal: AbortSignal, touch: (
     return { data: generated }
   } catch (reason) {
     // Hidden/old-page loops are already disposed and ignore this fallback.
-    // For a visible timeout, retain the successful GET snapshot as well.
+    // The fallback is metadata, never an unaudited recommendation snapshot.
     return { data, error: signal.aborted ? '更新计划超时，请稍后重试' : message(reason) }
   }
 }
@@ -72,32 +83,36 @@ export function usePlanCatalog(room = '') {
 export function usePlanDetail(gameId: string, room = '') {
   const load = useMemo(() => async (signal: AbortSignal) => {
     if (!gameId) return { data: null }
-    const data = await planApi.detail(gameId, signal)
-    return visit(data, data.automation_enabled === true, signal, () => planApi.activate(gameId, signal))
+    const data = planMetadataOnly(await planApi.detail(gameId, signal))
+    // POST is also the idempotent member-view receipt. The backend returns the
+    // same snapshot when generation is disabled, so a genuine manual
+    // publication cannot be edited after a member has actually seen it.
+    return visit(data, true, signal, () => planApi.activate(gameId, signal))
   }, [gameId])
   return usePlanFeed(`detail:${room}:${gameId}`, load, gameId)
 }
 
 /** Confirmation changes this page's selection, never a room-wide preference.
  * The default and other streams generate only while the page is visible. */
-export function useRacingPlanStream(room = '') {
-  const [chosen, setChosen] = useState({ room, selection: DEFAULT_RACING_PLAN })
-  const selection = chosen.room === room ? chosen.selection : DEFAULT_RACING_PLAN
-  const scope = `racing:${room}:${racingPlanKey(selection)}`
-  const [activation, setActivation] = useState<{ room: string; loading: boolean; error: string }>({ room, loading: false, error: '' })
+export function useRacingPlanStream(room = '', gameId = 'speed-racing') {
+  const identity = `${room}\u0000${gameId}`
+  const [chosen, setChosen] = useState({ identity, selection: DEFAULT_RACING_PLAN })
+  const selection = chosen.identity === identity ? chosen.selection : DEFAULT_RACING_PLAN
+  const scope = `racing:${room}:${gameId}:${racingPlanKey(selection)}`
+  const [activation, setActivation] = useState<{ identity: string; loading: boolean; error: string }>({ identity, loading: false, error: '' })
   const [revision, setRevision] = useState(0)
   const [confirmed, setConfirmed] = useState<{ scope: string; data: RacingPlanDetail } | null>(null)
   const pending = useRef<{ sequence: number; controller: AbortController | null; timeout: ReturnType<typeof setTimeout> | null }>({ sequence: 0, controller: null, timeout: null })
   const load = useMemo(() => async (signal: AbortSignal) => {
     const validate = (data: RacingPlanDetail) => {
-      if (data.game_id !== 'speed-racing' || !sameRacingPlan(data.selection, selection)) throw new Error('计划数据与当前选择不一致，请重试')
+      if (data.game_id !== gameId || !sameRacingPlan(data.selection, selection)) throw new Error('计划数据与当前选择不一致，请重试')
       return data
     }
-    const data = validate(await planApi.racingDetail(selection, signal))
-    return visit(data, data.automation_enabled === true && data.stream.allowed, signal,
-      async () => validate(await planApi.activateRacing(selection, signal)))
-  }, [selection])
-  const feed = usePlanFeed(scope, load, 'speed-racing', activation.room === room && activation.loading, revision)
+    const data = racingPlanMetadataOnly(validate(await planApi.racingDetail(selection, signal, gameId)))
+    return visit(data, data.stream.allowed, signal,
+      async () => validate(await planApi.activateRacing(selection, signal, gameId)))
+  }, [gameId, selection])
+  const feed = usePlanFeed(scope, load, gameId, activation.identity === identity && activation.loading, revision)
 
   useEffect(() => {
     const cancelPending = () => {
@@ -110,13 +125,13 @@ export function useRacingPlanStream(room = '') {
     const onVisibility = () => {
       if (!visible() && pending.current.controller) {
         cancelPending()
-        setActivation({ room, loading: false, error: '' })
+        setActivation({ identity, loading: false, error: '' })
         setRevision(value => value + 1)
       }
     }
     document.addEventListener('visibilitychange', onVisibility)
     return () => { cancelPending(); document.removeEventListener('visibilitychange', onVisibility) }
-  }, [room])
+  }, [identity])
 
   const activate = async (next: RacingPlanSelection) => {
     if (!visible()) return false
@@ -126,32 +141,31 @@ export function useRacingPlanStream(room = '') {
     if (pending.current.timeout !== null) clearTimeout(pending.current.timeout)
     const controller = new AbortController()
     pending.current.controller = controller
-    setActivation({ room, loading: true, error: '' })
+    setActivation({ identity, loading: true, error: '' })
     const timeout = setTimeout(() => {
       controller.abort()
       if (sequence === pending.current.sequence) {
         pending.current.sequence += 1
         pending.current.controller = null
         pending.current.timeout = null
-        setActivation({ room, loading: false, error: '切换计划超时，请稍后重试' })
+        setActivation({ identity, loading: false, error: '切换计划超时，请稍后重试' })
         setRevision(value => value + 1)
       }
     }, 15_000)
     pending.current.timeout = timeout
     try {
-      // Closed automation still permits browsing actual saved publications.
-      const data = feed.data?.automation_enabled === false
-        ? await planApi.racingDetail(next, controller.signal)
-        : await planApi.activateRacing(next, controller.signal)
+      // The activation endpoint also records a view. With generation disabled
+      // it returns only existing publications and never creates a new period.
+      const data = await planApi.activateRacing(next, controller.signal, gameId)
       if (sequence !== pending.current.sequence) return false
       controller.signal.throwIfAborted()
-      if (data.game_id !== 'speed-racing' || !sameRacingPlan(data.selection, next)) throw new Error('计划数据与当前选择不一致，请重试')
-      setConfirmed({ scope: `racing:${room}:${racingPlanKey(next)}`, data })
-      setChosen({ room, selection: { ...next } })
-      setActivation({ room, loading: false, error: '' })
+      if (data.game_id !== gameId || !sameRacingPlan(data.selection, next)) throw new Error('计划数据与当前选择不一致，请重试')
+      setConfirmed({ scope: `racing:${room}:${gameId}:${racingPlanKey(next)}`, data })
+      setChosen({ identity, selection: { ...next } })
+      setActivation({ identity, loading: false, error: '' })
       return true
     } catch (reason) {
-      if (sequence === pending.current.sequence) setActivation({ room, loading: false, error: message(reason) })
+      if (sequence === pending.current.sequence) setActivation({ identity, loading: false, error: message(reason) })
       return false
     } finally {
       clearTimeout(timeout)
@@ -166,8 +180,8 @@ export function useRacingPlanStream(room = '') {
   const data = feed.data ?? (confirmed?.scope === scope ? confirmed.data : null)
   return {
     ...feed, data, loading: feed.loading && !data, selection, activate,
-    activating: activation.room === room && activation.loading,
-    activationError: activation.room === room ? activation.error : '',
+    activating: activation.identity === identity && activation.loading,
+    activationError: activation.identity === identity ? activation.error : '',
     clearActivationError: () => setActivation(current => ({ ...current, error: '' })),
   }
 }

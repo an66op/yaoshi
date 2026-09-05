@@ -50,3 +50,13 @@ export function roomBettingMode(assembly: RoomBettingAssembly, modeId: RoomBetti
     ?? assembly.modes[0]
     ?? CHAT_MODE
 }
+
+/** Resolve a member's preferred room surface against the modes the current
+ * game actually supports. Web-only and chat-only games therefore remain
+ * usable even when the stored preference points at the other surface. */
+export function preferredRoomBettingMode(assembly: RoomBettingAssembly, surface: RoomBettingSurface): RoomBettingModeID {
+  return assembly.modes.find(mode => mode.surface === surface)?.id
+    ?? assembly.modes.find(mode => mode.id === assembly.defaultMode)?.id
+    ?? assembly.modes[0]?.id
+    ?? CHAT_MODE.id
+}

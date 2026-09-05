@@ -21,7 +21,7 @@ const game: Game = {
 const master: PlanRecommendation = {
   id: 1, workspace_id: 2, game_id: game.id, issue: '100', master_name: '1号专家', master_title: '系统自动推荐', master_color: '#2aa9b3',
   numbers: [1, 3, 5, 9, 10], size: '', parity: '', result: 'pending', source: 'demo', note: '系统自动生成，仅供娱乐参考，不保证命中。', enabled: true, sort_order: 10,
-  master_hit_rate: null, created_at: '2026-08-30T08:00:00Z', updated_at: '2026-08-30T08:00:00Z',
+  master_hit_rate: null, master_sample_count: 0, created_at: '2026-08-30T08:00:00Z', updated_at: '2026-08-30T08:00:00Z',
 }
 const masters = [master, { ...master, id: 2, master_name: '2号专家', sort_order: 20 }, { ...master, id: 3, master_name: '3号专家', sort_order: 30 }]
 
@@ -54,7 +54,7 @@ describe('plan group publications', () => {
     for (const row of masters) expect(html).toContain(row.master_name)
     expect(html).toContain('历史计划，非本期推荐')
     expect(html).not.toContain('系统自动生成，仅供娱乐参考，不保证命中。')
-    expect(html).toContain('系统自动推荐')
+    expect(html).toContain('暂无开奖样本')
     expect(html).not.toContain('历史命中率 100%')
     expect(html).toContain('冠军 · 四期五码')
     expect(html).not.toContain('演示')
@@ -127,13 +127,23 @@ describe('plan group publications', () => {
     expect(html).not.toContain('本期计划</em>')
   })
   it('opens a configured non-racing plan with its actual publication', () => {
-    const otherGame = { ...game, id: 'au-lucky-10', title: '澳洲幸运10' }
+		const otherGame = { ...game, id: 'speed-ssc', title: '极速时时彩' }
     const otherRow = { ...master, game_id: otherGame.id, numbers: [1, 3, 10] }
     feed.detail = { game_id: otherGame.id, current_issue: '100', recommendations: [otherRow], latest_recommendations: [otherRow], history: [otherRow] }
     const html = renderToStaticMarkup(<PlanDetail games={[otherGame]} gameId={otherGame.id} onBack={() => {}} />)
-    expect(html).toContain('澳洲幸运10')
+		expect(html).toContain('极速时时彩')
     expect(html).not.toContain('plan-mode-tabs')
     expect(html).toContain('aria-label="推荐号码 1、3、10"')
+  })
+  it('keeps same-named manual and automatic experts as separate tabs and statistics', () => {
+    const otherGame = { ...game, id: 'speed-ssc', title: '极速时时彩' }
+    const automatic = { ...master, game_id: otherGame.id, master_hit_rate: 100, master_sample_count: 1 }
+    const manual = { ...automatic, id: 77, source: 'manual' as const, master_hit_rate: 0 }
+    feed.detail = { game_id: otherGame.id, current_issue: '100', recommendations: [automatic, manual], latest_recommendations: [automatic, manual], history: [automatic, manual] }
+    const html = renderToStaticMarkup(<PlanDetail games={[otherGame]} gameId={otherGame.id} onBack={() => {}} />)
+    expect((html.match(/<b>1号专家<\/b>/g) || []).length).toBe(2)
+    expect(html).toContain('命中 100% · 1期')
+    expect(html).toContain('命中 0% · 1期')
   })
   it('shows only six actual racing periods and never mixes another selection into history', () => {
     const detail = racingPlanDetail()
@@ -148,21 +158,33 @@ describe('plan group publications', () => {
     expect(html).not.toContain('wrong-position')
     expect((html.match(/class="plan-history-row"/g) || []).length).toBe(6)
   })
-  it('filters a generic plan history by game and source through a saved deep link', () => {
-    const otherGame = { ...game, id: 'speed-fly', title: '极速飞艇' }
-    const row = { ...master, game_id: otherGame.id }
-    const history = Array.from({ length: 12 }, (_, index) => ({ ...row, id: 100 + index, issue: `saved-${20 - index}` }))
-    history.unshift({ ...row, id: 999, game_id: 'canada-28', issue: 'wrong-game' })
-    history.unshift({ ...row, id: 998, source: 'manual', issue: 'wrong-source' })
-    feed.detail = { game_id: otherGame.id, current_issue: '100', recommendations: [row], latest_recommendations: [row], history }
-    const html = renderToStaticMarkup(<PlanDetail games={[otherGame]} gameId={otherGame.id} onBack={() => {}} />)
+	it('opens another racing-v2 product through its rich deep link and keeps only its saved stream', () => {
+		const otherGame = { ...game, id: 'speed-fly', title: '极速飞艇' }
+		const detail = racingPlanDetail(DEFAULT_RACING_PLAN, { game_id: otherGame.id })
+		const row = detail.history[0]
+		detail.history = Array.from({ length: 12 }, (_, index) => ({ ...row, id: 100 + index, issue: `saved-${20 - index}` }))
+		detail.history.unshift({ ...row, id: 999, game_id: 'speed-racing', issue: 'wrong-game' })
+		detail.history.unshift({ ...row, id: 998, source: 'manual', issue: 'wrong-source' })
+		feed.racing = detail
+		const html = renderToStaticMarkup(<PlanDetail games={[otherGame]} gameId={otherGame.id} onBack={() => {}} />)
     expect(html).toContain('极速飞艇')
     expect(html).toContain('saved-15')
     expect(html).not.toContain('saved-14')
     expect(html).not.toContain('wrong-game')
     expect(html).not.toContain('wrong-source')
     expect((html.match(/class="plan-history-row"/g) || []).length).toBe(6)
-  })
+	})
+	it('shows only verified hit statistics with their real sample size', () => {
+		const detail = racingPlanDetail()
+		for (const row of [...detail.recommendations, ...detail.latest_recommendations, ...detail.history]) {
+			row.master_hit_rate = 50
+			row.master_sample_count = 2
+		}
+		feed.racing = detail
+		const html = renderToStaticMarkup(<PlanDetail games={[game]} gameId={game.id} onBack={() => {}} />)
+		expect(html).toContain('命中 50% · 2期')
+		expect(html).not.toContain('80%')
+	})
   it('lists every configured game returned by the room catalog', () => {
     const otherGame = { ...game, id: 'speed-fly', title: '极速飞艇' }
     feed.catalog.push({ ...feed.catalog[0], game_id: otherGame.id })

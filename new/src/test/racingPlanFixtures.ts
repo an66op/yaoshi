@@ -20,21 +20,22 @@ export function racingPlanRow(patch: Partial<RacingPlanRecommendation> = {}): Ra
   return {
     id: 1, workspace_id: 2, game_id: 'speed-racing', issue: '100', master_name: '1号专家', master_title: '系统自动推荐', master_color: '#2aa9b3',
     numbers: [1, 3, 5, 9, 10], size: '', parity: '', dragon_tiger: '', result: 'pending', source: 'demo', note: '系统自动生成，仅供娱乐参考，不保证命中。', enabled: true, sort_order: 10,
-    master_hit_rate: null, created_at: '2026-08-30T08:00:00Z', updated_at: '2026-08-30T08:00:00Z', position: 1, plan_key: 'four-period-five-codes', kind: 'numbers',
+	master_hit_rate: null, master_sample_count: 0, created_at: '2026-08-30T08:00:00Z', updated_at: '2026-08-30T08:00:00Z', position: 1, plan_key: 'four-period-five-codes', kind: 'numbers',
     cycle_id: 1, cycle_period: 2, cycle_periods: 4, cycle_start_issue: '99', cycle_status: 'active', ...patch,
   }
 }
 
 export function racingPlanDetail(selection: RacingPlanSelection = DEFAULT_RACING_PLAN, patch: Partial<RacingPlanDetail> = {}): RacingPlanDetail {
-  const option = racingPlanOptions.find(item => item.key === selection.plan_key)!
-  const rows = [1, 2, 3].map(index => racingPlanRow({
-    ...selection, id: index, master_name: `${index}号专家`, sort_order: index * 10, kind: option.kind,
+	const option = racingPlanOptions.find(item => item.key === selection.plan_key)!
+	const gameId = patch.game_id ?? 'speed-racing'
+	const rows = [1, 2, 3].map(index => racingPlanRow({
+		...selection, id: index, game_id: gameId, master_name: `${index}号专家`, sort_order: index * 10, kind: option.kind,
     numbers: option.kind === 'numbers' ? Array.from({ length: option.number_count }, (_, number) => number + 1) : [],
     size: option.kind === 'size' ? '大' : '', parity: option.kind === 'parity' ? '单' : '', dragon_tiger: option.kind === 'dragon_tiger' ? '龙' : '',
     cycle_period: Math.min(2, option.periods), cycle_periods: option.periods,
   }))
   return {
-    game_id: 'speed-racing', current_issue: '100', recommendations: rows, latest_recommendations: rows, history: rows, legacy_history: [],
+		game_id: gameId, current_issue: '100', recommendations: rows, latest_recommendations: rows, history: rows, legacy_history: [],
     generation_mode: 'on_visit', automation_enabled: true, history_limit: 6, refresh_seconds: 15,
     options: racingPlanOptions, positions: racingPlanPositions, allowed_positions: racingPlanPositions.map(item => item.position), allowed_plan_keys: racingPlanOptions.map(item => item.key),
     selection: { ...selection, kind: option.kind, periods: option.periods, number_count: option.number_count },

@@ -44,6 +44,62 @@ type ActivityPayload struct {
 
 var activityTypes = map[string]string{"checkin": "签到", "banner": "轮播", "promotion": "推广活动", "invite": "邀请", "redpacket": "红包"}
 
+// Early development seeds started the displayed participant counters at 128
+// and 56. Real participation subsequently incremented those values, so the
+// repair must subtract the seed base rather than requiring an unused activity.
+// The full immutable seed signature and the base+COUNT equality are both
+// required: an operator-edited row or counter is deliberately left alone.
+const legacySeedParticipantsReconcileSQL = `
+WITH legacy_candidate AS (
+  SELECT
+    activity.id,
+    CASE activity.type WHEN 'checkin' THEN 128 ELSE 56 END AS legacy_base,
+    COUNT(participation.id)::bigint AS actual_participants
+  FROM ops_activities AS activity
+  LEFT JOIN activity_participations AS participation
+    ON participation.activity_id = activity.id
+  WHERE activity.workspace_id = ?
+    AND activity.deleted_at IS NULL
+    AND (
+      (activity.type = 'checkin'
+       AND activity.title = '每日签到'
+       AND activity.subtitle = '连续签到领取积分'
+       AND activity.status = 'active'
+       AND COALESCE(activity.cover, '') = ''
+       AND activity.reward_cents = 100
+       AND activity.pool_total_cents = 0
+       AND activity.pool_remaining_cents = 0
+       AND activity.config_json = '{"days":7}'
+       AND activity.sort_order = 1
+       AND activity.starts_at IS NULL
+       AND activity.ends_at IS NULL)
+      OR
+      (activity.type = 'redpacket'
+       AND activity.title = '幸运红包'
+       AND activity.subtitle = '开奖聊天室随机红包'
+       AND activity.status = 'active'
+       AND COALESCE(activity.cover, '') = ''
+       AND activity.reward_cents = 888
+       AND activity.pool_total_cents = 8800
+       AND activity.pool_remaining_cents = 8800
+       AND activity.config_json = '{"pool":88,"min_amount":1,"max_amount":8.8}'
+       AND activity.sort_order = 4
+       AND activity.starts_at IS NULL
+       AND activity.ends_at IS NULL)
+    )
+  GROUP BY activity.id, activity.type, activity.participants
+  HAVING activity.participants =
+    CASE activity.type WHEN 'checkin' THEN 128 ELSE 56 END
+    + COUNT(participation.id)
+)
+UPDATE ops_activities AS activity
+SET participants = legacy_candidate.actual_participants,
+    updated_at = clock_timestamp()
+FROM legacy_candidate
+WHERE activity.id = legacy_candidate.id
+  AND activity.participants =
+    legacy_candidate.legacy_base + legacy_candidate.actual_participants`
+
 func NewActivityAdminService(db *gorm.DB) *ActivityAdminService { return &ActivityAdminService{db: db} }
 
 func (s *ActivityAdminService) List(status string) ([]ActivityView, error) {
@@ -156,15 +212,15 @@ func (s *ActivityAdminService) EnsureDefaultsForWorkspace(workspaceID uint64) er
 	return s.ensureDefaultsForWorkspace(workspaceID)
 }
 
-func (s *ActivityAdminService) ensureDefaultsForWorkspace(workspaceID uint64) error {
-	defaults := []activity.Activity{
-		{Type: "checkin", Title: "每日签到", Subtitle: "连续签到领取积分", Status: "active", RewardCents: 100, Participants: 128, SortOrder: 1, ConfigJSON: `{"days":7}`},
+func workspaceDefaultActivities() []activity.Activity {
+	return []activity.Activity{
+		{Type: "checkin", Title: "每日签到", Subtitle: "连续签到领取积分", Status: "active", RewardCents: 100, Participants: 0, SortOrder: 1, ConfigJSON: `{"days":7}`},
 		{Type: "banner", Title: "首页轮播", Subtitle: "运营位轮播图", Status: "active", SortOrder: 2, ConfigJSON: `{"slides":[]}`},
 		{Type: "invite", Title: "邀请有礼", Subtitle: "邀请好友双方得奖励", Status: "active", RewardCents: 500, SortOrder: 3, ConfigJSON: `{"bonus":5}`},
-		{Type: "redpacket", Title: "幸运红包", Subtitle: "开奖聊天室随机红包", Status: "active", RewardCents: 888, PoolTotalCents: 8800, PoolRemainingCents: 8800, Participants: 56, SortOrder: 4, ConfigJSON: `{"pool":88,"min_amount":1,"max_amount":8.8}`},
+		{Type: "redpacket", Title: "幸运红包", Subtitle: "开奖聊天室随机红包", Status: "active", RewardCents: 888, PoolTotalCents: 8800, PoolRemainingCents: 8800, Participants: 0, SortOrder: 4, ConfigJSON: `{"pool":88,"min_amount":1,"max_amount":8.8}`},
 		{Type: "promotion", Title: "幸运大转盘", Subtitle: "单转最高可获 288.88 积分", Status: "active", Cover: "/images/activities/lucky-wheel.jpg", SortOrder: 101, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/welfare"}`},
 		{Type: "promotion", Title: "加拿大28玩法上线", Subtitle: "全新加拿大28玩法现已开放", Status: "active", Cover: "/images/activities/canada-28-launch.jpg", SortOrder: 102, ConfigJSON: `{"action_type":"internal","action_url":"/games/canada-28"}`},
-		{Type: "promotion", Title: "连续签到七天送彩金", Subtitle: "连续签到，天天领取积分好礼", Status: "active", Cover: "/images/activities/seven-day-checkin.jpg", SortOrder: 103, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/welfare"}`},
+		{Type: "promotion", Title: "连续签到七天送积分", Subtitle: "连续签到，天天领取积分好礼", Status: "active", Cover: "/images/activities/seven-day-checkin.jpg", SortOrder: 103, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/welfare"}`},
 		{Type: "promotion", Title: "98Pay首充礼", Subtitle: "积分首充活动", Status: "active", Cover: "/images/activities/98pay-first-credit.jpg", SortOrder: 104, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/credit"}`},
 		{Type: "promotion", Title: "爆庄来袭", Subtitle: "全场福利活动", Status: "active", Cover: "/images/activities/bonus-arrival.jpg", SortOrder: 105, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/welfare"}`},
 		{Type: "promotion", Title: "每周累计流水送彩金", Subtitle: "每周累计流水领取专属奖励", Status: "active", Cover: "/images/activities/weekly-turnover.jpg", SortOrder: 106, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/rebate"}`},
@@ -172,6 +228,23 @@ func (s *ActivityAdminService) ensureDefaultsForWorkspace(workspaceID uint64) er
 		{Type: "promotion", Title: "组合及单点连中奖励", Subtitle: "组合及单点连中享额外奖励", Status: "active", Cover: "/images/activities/streak-reward.jpg", SortOrder: 108, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/welfare"}`},
 		{Type: "promotion", Title: "全民代理计划", Subtitle: "邀请好友，查看代理奖励计划", Status: "active", Cover: "/images/activities/agent-plan.jpg", SortOrder: 109, ConfigJSON: `{"action_type":"internal","action_url":"/wallet/invite"}`},
 	}
+}
+
+func (s *ActivityAdminService) ensureDefaultsForWorkspace(workspaceID uint64) error {
+	// Keep this precise idempotent reconciliation in runtime bootstrap as well
+	// as the versioned migration. Legacy bases are removed while preserving the
+	// actual count; operator-managed counters fail the exact equality guard.
+	if err := s.db.Exec(legacySeedParticipantsReconcileSQL, workspaceID).Error; err != nil {
+		return err
+	}
+	// Reconcile the former cash-oriented copy before materializing defaults so
+	// existing rooms do not keep advertising check-in points as cash bonuses.
+	if err := s.db.Model(&activity.Activity{}).
+		Where("workspace_id = ? AND type = ? AND title = ?", workspaceID, "promotion", "连续签到七天送彩金").
+		Updates(map[string]any{"title": "连续签到七天送积分", "subtitle": "连续签到，天天领取积分好礼"}).Error; err != nil {
+		return err
+	}
+	defaults := workspaceDefaultActivities()
 	for index := range defaults {
 		row := defaults[index]
 		row.WorkspaceID = workspaceID

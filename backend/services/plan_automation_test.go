@@ -155,15 +155,20 @@ func TestPlanAutomationConfigInputRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
-func TestPlanDemoRowsNeverContributeToHitRate(t *testing.T) {
+func TestDerivedStatisticsKeepSameNamedManualAndAutomaticMastersSeparate(t *testing.T) {
 	manual := plan.Recommendation{GameID: "speed-racing", MasterName: "same name", Source: "manual", Result: plan.ResultMiss}
 	demo := manual
 	demo.Source, demo.Result = "demo", plan.ResultHit
-	rates := planHitRates([]plan.Recommendation{manual, demo})
-	if rate := rates["speed-racing\x00same name"]; rate == nil || *rate != 0 {
-		t.Fatalf("demo result entered manual hit rate: %v", rate)
+	statistics := planHitStatistics([]plan.Recommendation{manual, demo})
+	manualStatistic := statistics["speed-racing\x00manual\x00same name"]
+	if manualStatistic.Rate == nil || *manualStatistic.Rate != 0 || manualStatistic.SampleCount != 1 {
+		t.Fatalf("manual statistics crossed source identity: %+v", manualStatistic)
 	}
-	if view := planView(demo, rates); view.Source != "demo" || view.MasterHitRate != nil {
-		t.Fatalf("demo row displayed a hit rate: %#v", view)
+	demoStatistic := statistics["speed-racing\x00demo\x00same name"]
+	if demoStatistic.Rate == nil || *demoStatistic.Rate != 100 || demoStatistic.SampleCount != 1 {
+		t.Fatalf("automatic statistics crossed source identity: %+v", demoStatistic)
+	}
+	if view := planView(demo, statistics); view.Source != "demo" || view.MasterHitRate == nil || *view.MasterHitRate != 100 || view.MasterSampleCount != 1 {
+		t.Fatalf("automatic row omitted its derived sample statistics: %#v", view)
 	}
 }

@@ -8,13 +8,213 @@ full_reset_script="$script_dir/dev-reset-database.sh"
 sentinel_script="$script_dir/dev-reset-init-sentinel.sh"
 verify_script="$script_dir/dev-reset-verify-bootstrap.sh"
 complete_receipt_script="$script_dir/dev-reset-complete-receipt.sh"
+restore_payment_qr_script="$script_dir/dev-reset-restore-payment-qr.sh"
 migration="$script_dir/../backend/migrations/202608270010_dev_reset_guard.sql"
 marker_migration="$script_dir/../backend/migrations/202608270011_reset_guard_workspace_marker.sql"
 identity_migration="$script_dir/../backend/migrations/202608270012_reset_identity_receipts.sql"
 
-bash -n "$reset_script" "$dev_backup_script" "$full_reset_script" "$sentinel_script" "$verify_script" "$complete_receipt_script" "$script_dir/lib/dev-reset-safety.sh"
+bash -n "$reset_script" "$dev_backup_script" "$full_reset_script" "$sentinel_script" "$verify_script" "$complete_receipt_script" "$restore_payment_qr_script" "$script_dir/lib/dev-reset-safety.sh"
+# shellcheck source=lib/backend-env.sh
+source "$script_dir/lib/backend-env.sh"
+# shellcheck source=lib/dev-reset-safety.sh
+source "$script_dir/lib/dev-reset-safety.sh"
 test_root="$(mktemp -d)"
+test_root="$(cd "$test_root" && pwd -P)"
 trap 'rm -rf -- "$test_root"' EXIT INT TERM
+
+# Private payment QR cleanup is constrained to the generated
+# workspace/user/random-name layout and deletes files individually. Exercise
+# the helper without a database so this destructive boundary remains testable.
+payment_upload_root="$test_root/payment-uploads"
+mkdir -p "$payment_upload_root/.private/member-payment-qr/37/91"
+payment_upload_root="$(cd "$payment_upload_root" && pwd -P)"
+payment_qr_fixture="$payment_upload_root/.private/member-payment-qr/37/91/0123456789abcdef0123456789abcdef.png"
+printf 'sanitized-png-fixture' >"$payment_qr_fixture"
+reset_validate_payment_qr_cleanup_target "$payment_upload_root"
+[[ "$RESET_PAYMENT_QR_DIRECTORY" == "$payment_upload_root/.private/member-payment-qr" && "$RESET_PAYMENT_QR_FILE_COUNT" == "1" ]] || {
+  echo "二维码清理目标或文件计数不正确" >&2
+  exit 1
+}
+
+# A reset backup is only complete when its private QR companion is encrypted,
+# checksummed, independently readable and exact. Exercise creation, validation
+# and the documented restore shape without requiring PostgreSQL.
+payment_backup_dir="$test_root/payment-backups"
+mkdir "$payment_backup_dir"
+chmod 700 "$payment_backup_dir"
+payment_database_backup="$payment_backup_dir/database.dump.age"
+printf 'encrypted-database-placeholder' >"$payment_database_backup"
+chmod 600 "$payment_database_backup"
+payment_age_identity_file="$test_root/payment-backup-identity.txt"
+age-keygen --output "$payment_age_identity_file" >/dev/null 2>&1
+chmod 600 "$payment_age_identity_file"
+payment_age_identity="$(awk '/^AGE-SECRET-KEY-/ { print }' "$payment_age_identity_file")"
+reset_archive_payment_qr_files "$payment_upload_root" "$payment_database_backup" "$payment_age_identity"
+payment_qr_archive="$RESET_PAYMENT_QR_ARCHIVE"
+[[ "$RESET_PAYMENT_QR_ARCHIVE_FILE_COUNT" == "1" && "$payment_qr_archive" == "$payment_database_backup.member-payment-qr.tar.age" ]] || {
+  echo "二维码配套归档路径或文件数不正确" >&2
+  exit 1
+}
+[[ -f "$payment_qr_archive.sha256" && ! -L "$payment_qr_archive.sha256" ]] || { echo "二维码归档缺少校验文件" >&2; exit 1; }
+reset_validate_payment_qr_archive "$payment_qr_archive" "$RESET_PAYMENT_QR_ARCHIVE_SHA256" 1 "$payment_age_identity"
+if tar --list --file "$payment_qr_archive" >/dev/null 2>&1; then
+  echo "二维码配套归档错误地发布成了明文 tar" >&2
+  exit 1
+fi
+restored_payment_root="$test_root/restored-payment-uploads"
+mkdir "$restored_payment_root"
+restored_payment_root="$(cd "$restored_payment_root" && pwd -P)"
+payment_restore_receipt="$payment_database_backup.reset-receipt"
+{
+  printf 'status=complete\n'
+  printf 'database=wangzhe_test\n'
+  printf 'backup=%s\n' "$(basename "$payment_database_backup")"
+  printf 'backup_sha256=%s\n' "$(reset_file_sha256 "$payment_database_backup")"
+  printf 'payment_qr_backup=%s\n' "$(basename "$payment_qr_archive")"
+  printf 'payment_qr_backup_sha256=%s\n' "$RESET_PAYMENT_QR_ARCHIVE_SHA256"
+  printf 'payment_qr_files_archived=1\n'
+  printf 'payment_qr_files_expected=1\n'
+  printf 'payment_qr_files_removed=1\n'
+} >"$payment_restore_receipt"
+chmod 600 "$payment_restore_receipt"
+restore_fake_bin="$test_root/restore-fake-bin"
+mkdir "$restore_fake_bin"
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" ".private/member-payment-qr/37/91/0123456789abcdef0123456789abcdef.png"' >"$restore_fake_bin/psql"
+chmod 700 "$restore_fake_bin/psql"
+PATH="$restore_fake_bin:$PATH" \
+  BACKEND_SERVER_MODE=debug BACKEND_SERVER_PORT=65431 \
+  BACKEND_DATABASE_HOST=127.0.0.1 BACKEND_DATABASE_PORT=5432 \
+  BACKEND_DATABASE_USER=test BACKEND_DATABASE_PASSWORD=test BACKEND_DATABASE_DBNAME=wangzhe_test BACKEND_DATABASE_SSLMODE=disable \
+  BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY="$payment_age_identity" \
+  bash "$restore_payment_qr_script" --receipt "$payment_restore_receipt" --upload-dir "$restored_payment_root"
+reset_validate_payment_qr_cleanup_target "$restored_payment_root"
+[[ "$RESET_PAYMENT_QR_FILE_COUNT" == "1" ]] || { echo "二维码配套归档无法恢复精确文件集" >&2; exit 1; }
+cmp -s "$payment_qr_fixture" "$restored_payment_root/.private/member-payment-qr/37/91/0123456789abcdef0123456789abcdef.png" || {
+  echo "二维码配套归档恢复内容不一致" >&2
+  exit 1
+}
+tampered_payment_archive="$payment_backup_dir/tampered.tar.age"
+cp "$payment_qr_archive" "$tampered_payment_archive"
+chmod 600 "$tampered_payment_archive"
+printf 'tampered' >>"$tampered_payment_archive"
+if reset_validate_payment_qr_archive "$tampered_payment_archive" "$RESET_PAYMENT_QR_ARCHIVE_SHA256" 1 "$payment_age_identity" >"$test_root/tampered-payment-archive.out" 2>&1; then
+  echo "二维码归档校验错误地接受了篡改文件" >&2
+  exit 1
+fi
+grep -Fq 'SHA-256 不匹配' "$test_root/tampered-payment-archive.out"
+
+# A file arriving after the companion snapshot must never be silently deleted
+# without a matching backup.
+unarchived_payment_qr="$payment_upload_root/.private/member-payment-qr/37/91/abcdefabcdefabcdefabcdefabcdefab.png"
+printf 'not-in-archive' >"$unarchived_payment_qr"
+if reset_remove_payment_qr_files "$payment_upload_root" 1 >"$test_root/payment-archive-count-drift.out" 2>&1; then
+  echo "二维码删除错误地接受了与归档不一致的文件集" >&2
+  exit 1
+fi
+grep -Fq '与配套归档不一致' "$test_root/payment-archive-count-drift.out"
+[[ -f "$payment_qr_fixture" && -f "$unarchived_payment_qr" ]] || { echo "归档数量漂移后文件被误删" >&2; exit 1; }
+rm -- "$unarchived_payment_qr"
+reset_remove_payment_qr_files "$payment_upload_root" 1
+[[ "$RESET_PAYMENT_QR_REMOVED_COUNT" == "1" && ! -e "$payment_qr_fixture" ]] || {
+  echo "二维码清理未精确删除目标文件" >&2
+  exit 1
+}
+printf 'unrelated' >"$payment_upload_root/.private/member-payment-qr/37/91/customer.png"
+if reset_validate_payment_qr_cleanup_target "$payment_upload_root" >"$test_root/invalid-payment-qr.out" 2>&1; then
+  echo "二维码清理错误地接受了非应用生成文件" >&2
+  exit 1
+fi
+grep -Fq '非应用生成文件' "$test_root/invalid-payment-qr.out"
+rm -- "$payment_upload_root/.private/member-payment-qr/37/91/customer.png"
+payment_qr_symlink="$payment_upload_root/.private/member-payment-qr/37/91/abcdefabcdefabcdefabcdefabcdefab.png"
+ln -s "$test_root/never-delete-this-file" "$payment_qr_symlink"
+if reset_validate_payment_qr_cleanup_target "$payment_upload_root" >"$test_root/symlink-payment-qr.out" 2>&1; then
+  echo "二维码清理错误地接受了符号链接" >&2
+  exit 1
+fi
+grep -Fq '包含符号链接' "$test_root/symlink-payment-qr.out"
+rm -- "$payment_qr_symlink"
+hardlink_source="$test_root/never-archive-this-file"
+printf 'private-unrelated-data' >"$hardlink_source"
+payment_qr_hardlink="$payment_upload_root/.private/member-payment-qr/37/91/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png"
+ln "$hardlink_source" "$payment_qr_hardlink"
+if reset_validate_payment_qr_cleanup_target "$payment_upload_root" >"$test_root/hardlink-payment-qr.out" 2>&1; then
+  echo "二维码归档边界错误地接受了硬链接" >&2
+  exit 1
+fi
+grep -Fq '不是服务生成的独占普通文件' "$test_root/hardlink-payment-qr.out"
+rm -- "$payment_qr_hardlink" "$hardlink_source"
+payment_upload_link="$test_root/payment-uploads-link"
+ln -s "$payment_upload_root" "$payment_upload_link"
+if reset_validate_payment_qr_cleanup_target "$payment_upload_link" >"$test_root/symlink-payment-root.out" 2>&1; then
+  echo "二维码清理错误地接受了符号链接上传根目录" >&2
+  exit 1
+fi
+grep -Fq '上传目录不存在、不是普通目录或是符号链接' "$test_root/symlink-payment-root.out"
+rm -- "$payment_upload_link"
+if reset_validate_payment_qr_cleanup_target / >"$test_root/broad-payment-qr.out" 2>&1; then
+  echo "二维码清理错误地接受了根目录" >&2
+  exit 1
+fi
+grep -Fq '拒绝使用过宽的上传目录' "$test_root/broad-payment-qr.out"
+
+# A failed find must never be mistaken for an empty directory. Bash process
+# substitution loses this status, so both the validation scan and the later
+# deletion-manifest scan are exercised with deterministic command failures.
+find() { return 73; }
+if reset_validate_payment_qr_cleanup_target "$payment_upload_root" >"$test_root/payment-find-failure.out" 2>&1; then
+  unset -f find
+  echo "二维码校验错误地吞掉了枚举失败" >&2
+  exit 1
+fi
+unset -f find
+grep -Fq '无法完整枚举会员收款二维码目录' "$test_root/payment-find-failure.out"
+
+payment_qr_fixture="$payment_upload_root/.private/member-payment-qr/37/91/11111111111111111111111111111111.png"
+printf 'sanitized-png-fixture' >"$payment_qr_fixture"
+payment_find_calls=0
+find() {
+  payment_find_calls=$((payment_find_calls + 1))
+  if (( payment_find_calls == 1 )); then
+    command find "$@"
+    return
+  fi
+  return 74
+}
+if reset_remove_payment_qr_files "$payment_upload_root" >"$test_root/payment-remove-find-failure.out" 2>&1; then
+  unset -f find
+  echo "二维码删除错误地吞掉了枚举失败" >&2
+  exit 1
+fi
+unset -f find
+grep -Fq '无法完整枚举待删除的会员收款二维码文件' "$test_root/payment-remove-find-failure.out"
+[[ -f "$payment_qr_fixture" ]] || { echo "枚举失败后二维码文件被误删" >&2; exit 1; }
+rm -- "$payment_qr_fixture"
+
+# Exercise the real filesystem permission failure where the current user is
+# not root. The directory permission is always restored before asserting so
+# test cleanup remains deterministic.
+if (( EUID != 0 )); then
+  permission_owner_directory="$payment_upload_root/.private/member-payment-qr/38/92"
+  mkdir -p "$permission_owner_directory"
+  permission_qr_fixture="$permission_owner_directory/22222222222222222222222222222222.png"
+  printf 'sanitized-png-fixture' >"$permission_qr_fixture"
+  chmod 000 "$permission_owner_directory"
+  permission_scan_failed=false
+  if ! reset_validate_payment_qr_cleanup_target "$payment_upload_root" >"$test_root/payment-permission-failure.out" 2>&1; then
+    permission_scan_failed=true
+  fi
+  chmod 700 "$permission_owner_directory"
+  [[ "$permission_scan_failed" == "true" ]] || { echo "二维码校验错误地接受了不可枚举目录" >&2; exit 1; }
+  grep -Fq '无法完整枚举会员收款二维码目录' "$test_root/payment-permission-failure.out"
+  [[ -f "$permission_qr_fixture" ]] || { echo "权限拒绝后二维码文件被误删" >&2; exit 1; }
+  rm -- "$permission_qr_fixture"
+fi
+
+if grep -Eq '(^|[[:space:]])rm[[:space:]]+-[A-Za-z]*r|find .*-(delete|exec)' "$reset_script" "$full_reset_script" "$script_dir/lib/dev-reset-safety.sh"; then
+  echo "二维码清理不得递归删除目录或使用 find 批量删除" >&2
+  exit 1
+fi
 
 write_env() {
   local target="$1" mode="$2" host="$3"
@@ -71,8 +271,8 @@ manifest_preserved="$(grep -Eo "\('[a-z_][a-z0-9_]*','preserve'\)" "$reset_scrip
 manifest_cleared="$(grep -Eo "\('[a-z_][a-z0-9_]*','clear'\)" "$reset_script" | cut -d "'" -f2 | LC_ALL=C sort)"
 truncate_statement="$(sed -n '/^TRUNCATE TABLE$/,/^RESTART IDENTITY;$/p' "$reset_script")"
 truncate_tables="$(grep -Eo 'public\.[a-z_][a-z0-9_]*' <<<"$truncate_statement" | cut -d. -f2 | LC_ALL=C sort)"
-[[ "$(grep -c . <<<"$manifest_preserved")" == "25" && "$(grep -c . <<<"$manifest_cleared")" == "32" ]] || {
-  echo "业务重置必须保持当前 25 张保留表、32 张清理表的审定边界" >&2
+[[ "$(grep -c . <<<"$manifest_preserved")" == "25" && "$(grep -c . <<<"$manifest_cleared")" == "33" ]] || {
+  echo "业务重置必须保持当前 25 张保留表、33 张清理表的审定边界" >&2
   exit 1
 }
 [[ -n "$preview_preserved" && "$preview_preserved" == "$manifest_preserved" ]] || { echo "保留表预览与 SQL manifest 不一致" >&2; exit 1; }
@@ -101,7 +301,7 @@ schema_tables="$(printf '%s\n' schema_migrations "$schema_tables" | LC_ALL=C sor
 for preserved in schema_migrations development_reset_receipts workspace_migration_markers workspace_robot_reset_receipts ws_session_revocation_outbox lottery_games ops_activities special_number_campaigns plan_automations; do
   grep -Fxq "$preserved" <<<"$manifest_preserved" || { echo "不可变凭证、安全撤销意图或配置表未保留：$preserved" >&2; exit 1; }
 done
-for cleared in member_payment_accounts special_number_grants member_chat_read_cursors lottery_issue_windows plan_generation_receipts plan_streams plan_stream_cycles plan_stream_periods lottery_sgssc_backfill_attempts lottery_sgssc_backfill_items system_event_logs; do
+for cleared in member_payment_accounts special_number_grants member_chat_read_cursors lottery_issue_windows plan_generation_receipts plan_streams plan_stream_cycles plan_stream_periods plan_publication_views lottery_sgssc_backfill_attempts lottery_sgssc_backfill_items system_event_logs; do
   grep -Fxq "$cleared" <<<"$truncate_tables" || { echo "运行记录未随关联业务一起清理：$cleared" >&2; exit 1; }
 done
 grep -Fq 'public.lottery_sgssc_backfill_attempts, public.lottery_sgssc_backfill_items,' <<<"$truncate_statement" || {
@@ -240,6 +440,54 @@ grep -Fq 'FROM public.schema_migrations' "$full_reset_script"
 grep -Fq 'FROM pg_catalog.pg_stat_activity' "$full_reset_script"
 grep -Fq 'DROP SCHEMA public CASCADE' "$full_reset_script"
 grep -Fq 'CREATE SCHEMA public AUTHORIZATION CURRENT_USER' "$full_reset_script"
+grep -Fq 'unset BACKEND_UPLOAD_DIR' "$full_reset_script"
+grep -Fq ': "${BACKEND_UPLOAD_DIR:?执行完整重建时必须显式设置 BACKEND_UPLOAD_DIR}"' "$full_reset_script"
+grep -Fq 'reset_validate_payment_qr_cleanup_target "$BACKEND_UPLOAD_DIR"' "$full_reset_script"
+grep -Fq '"备份目录不能位于待清理的二维码目录内"' "$full_reset_script"
+grep -Fq 'reset_archive_payment_qr_files "$BACKEND_UPLOAD_DIR" "$backup_file"' "$full_reset_script"
+grep -Fq '"$script_dir/dev-postgres-backup.sh" --backup-dir "$backup_dir"' "$full_reset_script"
+grep -Fq 'age --decrypt --identity "$restore_identity_file" --output "$restore_database_file" "$backup_file"' "$full_reset_script"
+grep -Fq '"$restore_database_file"' "$full_reset_script"
+grep -Fq "printf 'payment_qr_backup=%s\\n'" "$full_reset_script"
+grep -Fq "printf 'payment_qr_backup_sha256=%s\\n'" "$full_reset_script"
+grep -Fq "printf 'payment_qr_files_archived=%s\\n'" "$full_reset_script"
+grep -Fq 'write_external_receipt "schema_rebuilt_qr_cleanup_pending"' "$full_reset_script"
+grep -Fq 'reset_remove_payment_qr_files "$BACKEND_UPLOAD_DIR" "$payment_qr_archived_count"' "$full_reset_script"
+grep -Fq "printf 'payment_qr_files_removed=%s\\n'" "$full_reset_script"
+[[ "$(grep -Fc 'chmod 600 "$manifest"' "$script_dir/lib/dev-reset-safety.sh")" == "2" ]] || {
+  echo "二维码扫描和删除 manifest 都必须显式限制为 0600" >&2
+  exit 1
+}
+
+# A successful schema COMMIT must be recorded as cleanup-pending before any QR
+# deletion. Only successful exact cleanup may advance the receipt to bootstrap.
+full_commit_line="$(grep -n '^COMMIT;$' "$full_reset_script" | tail -n 1 | cut -d: -f1)"
+full_qr_archive_line="$(grep -n 'reset_archive_payment_qr_files "$BACKEND_UPLOAD_DIR" "$backup_file"' "$full_reset_script" | cut -d: -f1)"
+full_cleanup_pending_line="$(grep -n 'write_external_receipt "schema_rebuilt_qr_cleanup_pending"' "$full_reset_script" | cut -d: -f1)"
+full_qr_remove_line="$(grep -n 'reset_remove_payment_qr_files "$BACKEND_UPLOAD_DIR" "$payment_qr_archived_count"' "$full_reset_script" | cut -d: -f1)"
+full_bootstrap_pending_line="$(grep -n 'write_external_receipt "bootstrap_pending"' "$full_reset_script" | cut -d: -f1)"
+[[ -n "$full_qr_archive_line" && -n "$full_commit_line" && -n "$full_cleanup_pending_line" && -n "$full_qr_remove_line" && -n "$full_bootstrap_pending_line" ]] &&
+  (( full_qr_archive_line < full_commit_line &&
+     full_commit_line < full_cleanup_pending_line &&
+     full_cleanup_pending_line < full_qr_remove_line &&
+     full_qr_remove_line < full_bootstrap_pending_line )) || {
+  echo "完整重建必须在 schema 提交后先记录二维码清理 pending，仅清理成功后记录 bootstrap pending" >&2
+  exit 1
+}
+grep -Fq 'reset_archive_payment_qr_files "$BACKEND_UPLOAD_DIR" "$backup_file"' "$reset_script"
+grep -Fq 'reset_remove_payment_qr_files "$BACKEND_UPLOAD_DIR" "$payment_qr_archived_count"' "$reset_script"
+grep -Fq "printf 'payment_qr_backup=%s\\n'" "$reset_script"
+grep -Fq "printf 'payment_qr_backup_sha256=%s\\n'" "$reset_script"
+grep -Fq "printf 'payment_qr_files_archived=%s\\n'" "$reset_script"
+business_qr_archive_line="$(grep -n 'reset_archive_payment_qr_files "$BACKEND_UPLOAD_DIR" "$backup_file"' "$reset_script" | cut -d: -f1)"
+business_commit_line="$(grep -n '^COMMIT;$' "$reset_script" | tail -n 1 | cut -d: -f1)"
+business_qr_remove_line="$(grep -n 'reset_remove_payment_qr_files "$BACKEND_UPLOAD_DIR" "$payment_qr_archived_count"' "$reset_script" | cut -d: -f1)"
+[[ -n "$business_qr_archive_line" && -n "$business_commit_line" && -n "$business_qr_remove_line" ]] &&
+  (( business_qr_archive_line < business_commit_line && business_commit_line < business_qr_remove_line )) || {
+  echo "业务重置必须先发布配套二维码归档，再提交数据库并精确删除文件" >&2
+  exit 1
+}
+grep -Fq 'reset_validate_payment_qr_archive "$payment_qr_backup"' "$complete_receipt_script"
 if grep -Eiq 'DROP[[:space:]]+DATABASE' "$full_reset_script"; then
   echo "完整开发重置不得删除数据库本身" >&2
   exit 1

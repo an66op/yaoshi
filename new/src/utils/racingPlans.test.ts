@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { racingPlanDetail, racingPlanRow } from '../test/racingPlanFixtures'
-import { DEFAULT_RACING_PLAN, racingPlanAllowed, racingPlanResultLabel, racingPlanDirection, racingPlanHistory, racingPlanIsCurrent, racingPlanMasters, racingPlanPositionLabel, racingPlanProgress } from './racingPlans'
+import { DEFAULT_RACING_PLAN, RACING_PLAN_GAME_IDS, isRacingPlanGame, racingPlanAllowed, racingPlanResultLabel, racingPlanDirection, racingPlanHistory, racingPlanIsCurrent, racingPlanMasters, racingPlanPositionLabel, racingPlanProgress } from './racingPlans'
 
 describe('racing plan stream presentation', () => {
   it('defaults to champion / four-period-five-codes and labels all ten positions', () => {
     expect(DEFAULT_RACING_PLAN).toEqual({ position: 1, plan_key: 'four-period-five-codes' })
     expect(Array.from({ length: 10 }, (_, index) => racingPlanPositionLabel(index + 1))).toEqual(['冠军', '亚军', '第三名', '第四名', '第五名', '第六名', '第七名', '第八名', '第九名', '第十名'])
   })
+	it('routes exactly the seven verified racing-v2 products to the rich matrix', () => {
+		expect(RACING_PLAN_GAME_IDS).toEqual(['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10', 'bingo-racing-a', 'bingo-racing-b'])
+		for (const gameId of RACING_PLAN_GAME_IDS) expect(isRacingPlanGame(gameId)).toBe(true)
+		for (const gameId of ['speed-ssc', 'canada-28', 'bingo-mark-six', 'official-tw-bingo']) expect(isRacingPlanGame(gameId)).toBe(false)
+	})
   it('filters wrong position/type/game/source rows even if issue and expert name match', () => {
     const detail = racingPlanDetail()
     const wrongRows = [racingPlanRow({ id: 80, position: 2 }), racingPlanRow({ id: 81, plan_key: 'three-period-five-codes' }), racingPlanRow({ id: 82, game_id: 'speed-fly' }), racingPlanRow({ id: 83, source: 'manual' })]

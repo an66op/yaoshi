@@ -67,7 +67,6 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
   const [switchingRoom, setSwitchingRoom] = useState('')
   const [roomSwitchError, setRoomSwitchError] = useState('')
   const [roomCodeInput, setRoomCodeInput] = useState('')
-  const [roomNotice, setRoomNotice] = useState('【公告】加载中…')
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([])
   const [dialogAnnouncements, setDialogAnnouncements] = useState<AnnouncementItem[]>([])
   const [entertainmentMessage, setEntertainmentMessage] = useState('')
@@ -125,7 +124,6 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
   useEffect(() => {
     let activeRequest = true
     setAnnouncements([])
-    setRoomNotice('')
     void portalApi.roomSettings().then((settings) => {
       if (!activeRequest) return
       const source = Array.isArray(settings.announcements) ? settings.announcements : []
@@ -135,11 +133,22 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
       const fallback: AnnouncementItem = { id: 'welcome', title: '欢迎公告', content: settings.room_notice || `欢迎来到${BRAND_NAME}`, enabled: true, popup_on_login: true, sort_order: 10 }
       const next = active.length ? active : source.length === 0 && settings.room_notice ? [fallback] : []
       setAnnouncements(next)
-      setRoomNotice(next[0]?.content || '')
       const loginNotices = next.filter(item => item.popup_on_login)
       const shownKey = `wangzhe-login-announcements-shown:${room}`
-      if (loginNotices.length && sessionStorage.getItem(shownKey) !== '1') {
-        sessionStorage.setItem(shownKey, '1')
+      let alreadyShown = false
+      try {
+        alreadyShown = sessionStorage.getItem(shownKey) === '1'
+      } catch {
+        // Storage can be unavailable in privacy-restricted browsers. The
+        // announcement is still business content and must remain visible.
+      }
+      if (loginNotices.length && !alreadyShown) {
+        try {
+          sessionStorage.setItem(shownKey, '1')
+        } catch {
+          // Showing the dialog is more important than persisting this
+          // session-only convenience flag.
+        }
         setDialogAnnouncements(loginNotices)
         setAnnouncementOpen(true)
       }
@@ -148,7 +157,6 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
       // Announcements are business data. Keep this area empty when the API is
       // unavailable instead of presenting a locally fabricated notice.
       setAnnouncements([])
-      setRoomNotice('')
     })
     return () => { activeRequest = false }
   }, [room])
@@ -193,7 +201,6 @@ export function Lobby({ room, roomName, roomLogo, roomHistory, games, theme, gam
   return <>
     <header className="lobby-hero">
       <div className="hero-top"><span className="brand-word brand-logo"><img alt={BRAND_NAME} src="/images/wangzhe-header-logo.png" /></span><button className="room-cluster" aria-expanded={roomSwitcherOpen} aria-haspopup="dialog" aria-label={`切换房间，当前房间 ${room}，${roomName}`} onClick={() => { setRoomSwitchError(''); setRoomSwitcherOpen((open) => !open) }} ref={roomSwitcherTriggerRef}><Icon name="room" /><span className="room-cluster-copy"><b>{room}</b><small>{roomName || '当前房间'}</small></span><Icon name="arrow" /></button><div className="hero-tools"><button className="theme-switch" onClick={onToggleTheme} aria-label="切换昼夜模式">{theme === 'day' ? '☾' : '☀'}</button></div></div>
-      {announcements.length > 0 && <button className="announcement lobby-announcement" onClick={() => { setDialogAnnouncements(announcements); setAnnouncementOpen(true) }}><span className="announcement-badge">公告</span><p><b>{announcements[0]?.title || '大厅公告'}</b><small>{roomNotice}</small></p>{announcements.length > 1 && <em className="announcement-count">{announcements.length}</em>}<Icon name="arrow" /></button>}
     </header>
     <section className="lobby-body">
       <div className="lobby-category-shell" {...controlSurfaceProps}><div className="lobby-toolbar" aria-label="大厅分类" ref={categoryRailRef}>{filters.map((item) => <button aria-pressed={filter === item.id} className={filter === item.id ? 'toolbar-active' : ''} key={item.id} onClick={() => chooseFilter(item.id)}>{item.label}</button>)}</div><button className="lobby-category-next" aria-label="向右查看更多分类" onClick={() => categoryRailRef.current?.scrollBy({ left: 150, behavior: 'smooth' })}><Icon name="arrow" /></button></div>

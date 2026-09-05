@@ -27,6 +27,7 @@ export type PlanRecommendation = {
   enabled: boolean
   sort_order: number
   master_hit_rate: number | null
+  master_sample_count: number
   created_at: string
   updated_at: string
 }
@@ -81,6 +82,6 @@ export const planApi = {
   catalog: (signal?: AbortSignal) => request<PlanGameSummary[]>('/member/plans', { signal }),
   detail: (gameId: string, signal?: AbortSignal) => request<PlanDetail>(`/member/plans/${encodeURIComponent(gameId)}?${historyQuery}`, { signal }),
   activate: (gameId: string, signal?: AbortSignal) => request<PlanDetail>(`/member/plans/${encodeURIComponent(gameId)}/activate?${historyQuery}`, { method: 'POST', body: '{}', signal }),
-  racingDetail: (selection: RacingPlanSelection, signal?: AbortSignal) => request<RacingPlanDetail>(`/member/plans/speed-racing?${racingPlanQuery(selection)}`, { signal }),
-  activateRacing: (selection: RacingPlanSelection, signal?: AbortSignal) => request<RacingPlanDetail>(`/member/plans/speed-racing/activate?${historyQuery}`, { method: 'POST', body: JSON.stringify(selection), signal }),
+  racingDetail: (selection: RacingPlanSelection, signal?: AbortSignal, gameId = 'speed-racing') => request<RacingPlanDetail>(`/member/plans/${encodeURIComponent(gameId)}?${racingPlanQuery(selection)}`, { signal }),
+  activateRacing: (selection: RacingPlanSelection, signal?: AbortSignal, gameId = 'speed-racing') => request<RacingPlanDetail>(`/member/plans/${encodeURIComponent(gameId)}/activate?${historyQuery}`, { method: 'POST', body: JSON.stringify(selection), signal }),
 }

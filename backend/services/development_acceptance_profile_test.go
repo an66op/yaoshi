@@ -28,6 +28,15 @@ func TestDevelopmentAcceptanceProfileContract(t *testing.T) {
 	if games != len(defaultGames) || games != 22 {
 		t.Fatalf("configured games = %d, want 22", games)
 	}
+	configured := make(map[string]bool, games)
+	for _, gameID := range developmentProfileGameIDs(profile) {
+		configured[gameID] = true
+	}
+	for _, gameID := range racingPlanGameIDs {
+		if !configured[gameID] {
+			t.Fatalf("local initialization omits rich racing plan product %s", gameID)
+		}
+	}
 	if quotes != 1437 {
 		t.Fatalf("configured quotes = %d, want 1437", quotes)
 	}
@@ -124,7 +133,7 @@ func TestDevelopmentAcceptanceProfilePostgresFreshIdempotentAndNonOverwriting(t 
 	}
 	if first.HumanAccounts != 4 || first.RobotAccounts != 30 || first.Workspaces != 3 ||
 		first.ActiveAccounts != 34 || first.ActiveMemberships != 34 || first.ConfiguredGames != 22 || first.ConfiguredPlayQuotes != 1437 ||
-		first.AgentRoomCode != demoRoomCode || first.AgentRoomOpenGames != 22 ||
+		first.AgentRoomCode != demoRoomCode || first.AgentRoomOpenGames != 22 || first.AgentRoomPlanGames != 22 ||
 		first.AgentRoomRobotQuota != MaxWorkspaceRobotQuota || first.AgentRoomRobots != MaxWorkspaceRobotQuota {
 		t.Fatalf("unexpected fresh profile report: %+v", first)
 	}

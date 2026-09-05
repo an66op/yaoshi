@@ -2,6 +2,8 @@ import type { RacingPlanDetail, RacingPlanKind, RacingPlanRecommendation, Racing
 import { recentPlanHistory } from './planPresentation'
 
 export const DEFAULT_RACING_PLAN: RacingPlanSelection = { position: 1, plan_key: 'four-period-five-codes' }
+export const RACING_PLAN_GAME_IDS = ['speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10', 'bingo-racing-a', 'bingo-racing-b'] as const
+export const isRacingPlanGame = (gameId: string) => (RACING_PLAN_GAME_IDS as readonly string[]).includes(gameId)
 export const RACING_PLAN_GROUPS: Array<{ kind: RacingPlanKind; label: string }> = [
   { kind: 'numbers', label: '号码计划' }, { kind: 'size', label: '大小计划' },
   { kind: 'parity', label: '单双计划' }, { kind: 'dragon_tiger', label: '龙虎计划' },
@@ -17,27 +19,27 @@ export function racingPlanAllowed(detail: RacingPlanDetail, selection: RacingPla
 
 /** The response and every row must match the requested stream. Legacy/manual
  * publications are deliberately separate, even when their expert name matches. */
-export function isRacingStreamRow(row: RacingPlanRecommendation, selection: RacingPlanSelection) {
-  return row.game_id === 'speed-racing' && row.source === 'demo' && sameRacingPlan(row, selection)
+export function isRacingStreamRow(row: RacingPlanRecommendation, selection: RacingPlanSelection, gameId = 'speed-racing') {
+  return row.game_id === gameId && row.source === 'demo' && sameRacingPlan(row, selection)
 }
 
 export function racingPlanMasters(detail: RacingPlanDetail | null, selection: RacingPlanSelection) {
   if (!detail || !sameRacingPlan(detail.selection, selection)) return []
   const rows = new Map<string, RacingPlanRecommendation>()
   for (const row of [...detail.latest_recommendations, ...detail.recommendations]) {
-    if (isRacingStreamRow(row, selection) && row.kind === detail.selection.kind) rows.set(row.master_name, row)
+    if (isRacingStreamRow(row, selection, detail.game_id) && row.kind === detail.selection.kind) rows.set(row.master_name, row)
   }
   return [...rows.values()].sort((a, b) => a.sort_order - b.sort_order || a.master_name.localeCompare(b.master_name))
 }
 
 export function racingPlanIsCurrent(detail: RacingPlanDetail | null, selection: RacingPlanSelection, row?: RacingPlanRecommendation) {
-  return Boolean(row && detail && sameRacingPlan(detail.selection, selection) && isRacingStreamRow(row, selection)
-    && detail.current_issue && row.issue === detail.current_issue && detail.recommendations.some(item => item.id === row.id && isRacingStreamRow(item, selection)))
+  return Boolean(row && detail && sameRacingPlan(detail.selection, selection) && isRacingStreamRow(row, selection, detail.game_id)
+    && detail.current_issue && row.issue === detail.current_issue && detail.recommendations.some(item => item.id === row.id && isRacingStreamRow(item, selection, detail.game_id)))
 }
 
 export function racingPlanHistory(detail: RacingPlanDetail | null, selection: RacingPlanSelection, master?: RacingPlanRecommendation) {
   if (!detail || !master || !sameRacingPlan(detail.selection, selection)) return []
-  return recentPlanHistory(detail.history.filter(row => isRacingStreamRow(row, selection) && row.kind === master.kind && row.master_name === master.master_name && row.source === master.source))
+  return recentPlanHistory(detail.history.filter(row => isRacingStreamRow(row, selection, detail.game_id) && row.kind === master.kind && row.master_name === master.master_name && row.source === master.source))
 }
 
 export function racingPlanProgress(row: RacingPlanRecommendation) {
@@ -47,7 +49,7 @@ export function racingPlanProgress(row: RacingPlanRecommendation) {
 
 // Publication progress and draw outcome are independent. Even a completed
 // cycle remains pending until the server can grade its actual draw.
-export const racingPlanResultLabel = (row: RacingPlanRecommendation) => row.result === 'hit' ? '中' : row.result === 'miss' ? '不中' : row.note === '系统补充的历史展示记录，不计入命中率。' ? '未统计' : '待开奖'
+export const racingPlanResultLabel = (row: RacingPlanRecommendation) => row.result === 'hit' ? '中' : row.result === 'miss' ? '不中' : '待开奖'
 
 export function racingPlanDirection(row: RacingPlanRecommendation) {
   return row.kind === 'size' ? row.size : row.kind === 'parity' ? row.parity : row.kind === 'dragon_tiger' ? row.dragon_tiger : ''

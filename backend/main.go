@@ -94,7 +94,30 @@ func main() {
 	if err := os.MkdirAll(filepath.Join(uploadRoot, "activities"), 0o750); err != nil {
 		log.Fatalf("创建上传目录失败: %v", err)
 	}
-	r.Static("/api/public/uploads", uploadRoot)
+	// A soft-deleted payment account with qr_code_file still set is a durable
+	// filesystem cleanup job. Reconcile before accepting traffic; failures keep
+	// the database reference intact and fail startup so the next launch retries.
+	paymentAccountService := services.NewMemberPaymentAccountService(db)
+	paymentQRCleanupContext, cancelPaymentQRCleanup := context.WithTimeout(rootContext, 15*time.Second)
+	err = paymentAccountService.ReconcileDeletedPaymentQRCodes(paymentQRCleanupContext)
+	cancelPaymentQRCleanup()
+	if err != nil {
+		log.Fatalf("清理已删除收款方式的私有二维码失败: %v", err)
+	}
+	// A process can terminate after writing a sanitized file but before its
+	// account transaction commits. Scan all active and soft-deleted references
+	// under the same cross-process lock used by uploads; fail startup rather
+	// than silently retaining an unsafe or unclassifiable private tree.
+	paymentQROrphanContext, cancelPaymentQROrphanCleanup := context.WithTimeout(rootContext, 15*time.Second)
+	err = paymentAccountService.ReconcileOrphanedPaymentQRCodes(paymentQROrphanContext)
+	cancelPaymentQROrphanCleanup()
+	if err != nil {
+		log.Fatalf("清理无数据库引用的私有收款二维码失败: %v", err)
+	}
+	// Only explicitly public activity artwork is mounted. Member payment QR
+	// codes live below .private and are served by an authenticated owner-scoped
+	// handler, never by the static file server.
+	r.Static("/api/public/uploads/activities", filepath.Join(uploadRoot, "activities"))
 	// 加载路由
 	api.LoadRoutesForMode(r, db, scheduler, cfg.Server.Mode)
 	if err := ws.StartClusterBridge(rootContext, db); err != nil {

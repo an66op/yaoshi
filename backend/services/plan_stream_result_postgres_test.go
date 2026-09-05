@@ -28,6 +28,10 @@ func TestPlanStreamsPostgresRealDrawResultsAreReadOnly(t *testing.T) {
 	if err := db.Model(&stream).Update("cycle_id", cycle.ID).Error; err != nil {
 		t.Fatal(err)
 	}
+	sourceRevision, conversionRevision, versioned := trustedDrawRevision(stream.GameID)
+	if !versioned {
+		t.Fatal("speed-racing test fixture unexpectedly has no trusted draw contract")
+	}
 	for index := 0; index < 3; index++ {
 		at := now.Add(time.Duration(index-5) * time.Minute)
 		issue := lottery.Issue{GameID: stream.GameID, Issue: strconv.Itoa(941001 + index), Status: lottery.IssueStatusSettled, SourceMode: "external", AcceptAt: at.Add(-2 * time.Minute), SealAt: at.Add(-30 * time.Second), ScheduledDrawAt: &at, DrawAt: &at}
@@ -43,7 +47,7 @@ func TestPlanStreamsPostgresRealDrawResultsAreReadOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 		if index < 2 {
-			if err := db.Create(&lottery.Draw{GameID: stream.GameID, Issue: issue.Issue, Numbers: "6,8,10,1,2,4,9,7,3,5", DrawAt: at}).Error; err != nil {
+			if err := db.Create(&lottery.Draw{GameID: stream.GameID, Issue: issue.Issue, Numbers: "6,8,10,1,2,4,9,7,3,5", DrawAt: at, SourceRevision: sourceRevision, ConversionRevision: conversionRevision}).Error; err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -59,6 +63,9 @@ func TestPlanStreamsPostgresRealDrawResultsAreReadOnly(t *testing.T) {
 			t.Fatalf("history=%d err=%v", len(detail.History), err)
 		}
 		for _, pick := range detail.History {
+			if pick.MasterSampleCount != 1 || pick.MasterHitRate == nil {
+				t.Fatalf("real settled sample was not disclosed: %+v", pick)
+			}
 			if pick.Issue != "941001" {
 				if pick.Result != "pending" || len(pick.DrawNumbers) != 0 || pick.DrawAt != nil {
 					t.Fatalf("unproven result: %+v", pick)
@@ -71,8 +78,14 @@ func TestPlanStreamsPostgresRealDrawResultsAreReadOnly(t *testing.T) {
 			if pick.MasterName == picks[0].MasterName && pick.Result != "hit" {
 				t.Fatal("actual hit missing", pick)
 			}
+			if pick.MasterName == picks[0].MasterName && *pick.MasterHitRate != 100 {
+				t.Fatal("actual hit rate was not derived from the one settled sample", pick)
+			}
 			if pick.MasterName == picks[1].MasterName && pick.Result != "miss" {
 				t.Fatal("actual miss missing", pick)
+			}
+			if pick.MasterName == picks[1].MasterName && *pick.MasterHitRate != 0 {
+				t.Fatal("actual miss rate was not derived from the one settled sample", pick)
 			}
 		}
 	}

@@ -11,7 +11,7 @@ import {
   setNotificationMuted,
   stopNotificationSounds,
 } from "../utils/notificationAudio";
-import { portalApi, type ActivityItem, type MemberNotification, type RoomSettings } from "../api/portal";
+import { portalApi, type ActivityItem, type MemberNotification } from "../api/portal";
 import { chatApi, type ChatMessage, type ChatPreview } from "../api/chat";
 import { WS_EVENT, type WsEvent, useWebSocketConnected } from "../hooks/useWebSocket";
 import { lotteryGameLogo } from "../hooks/useLotteryGames";
@@ -25,6 +25,7 @@ import {
 } from "../utils/notificationVisibility";
 import { resolveActivityAction } from "../utils/activityAction";
 import { memberFacingServiceName, serviceMessageIdentity } from "../utils/chatIdentity";
+import { selectedRoomAnnouncement } from "../utils/roomAnnouncements";
 
 type Room = "group" | "service";
 
@@ -439,13 +440,6 @@ function MessageLogo({ kind, badge, image }: { kind: Room | "notice" | "activity
             : kind === "plan" ? <><path d="M4 18V9m5 9V5m5 13v-6m5 6V3" /><path d="m3 7 5-3 5 5 7-7" /></>
             : <><rect x="5" y="8" width="14" height="11" rx="2" /><path d="M3.5 8h17v4h-17zM12 8v11M12 8S8 7 8 4.8C8 3.4 10 3.6 12 8Zm0 0s4-1 4-3.2C16 3.4 14 3.6 12 8Z" /></>;
   return <span className={`message-logo message-logo-${kind} ${image ? "has-room-logo" : ""}`} aria-hidden="true">{image ? <img alt="" src={image} /> : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{art}</svg>}{badge && <i>{badge}</i>}</span>;
-}
-
-function selectedRoomAnnouncement(settings: RoomSettings) {
-  const current = [...(settings.announcements ?? [])]
-    .filter((item) => item.enabled && item.content.trim())
-    .sort((left, right) => left.sort_order - right.sort_order)[0];
-  return current?.content.trim() || settings.room_notice?.trim() || "";
 }
 
 function chatMemberTitle(message: ChatMessage, roomTitle: string) {

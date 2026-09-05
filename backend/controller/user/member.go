@@ -7,8 +7,11 @@ import (
 	apperrors "backend/errors"
 	"backend/services"
 	"backend/sessionauth"
+	uploads "backend/uploadsecurity"
 	"backend/ws"
+	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -38,6 +41,7 @@ type MemberHandler interface {
 	WalletChannels(c *gin.Context)
 	ListPaymentAccounts(c *gin.Context)
 	CreatePaymentAccount(c *gin.Context)
+	PaymentAccountQRCode(c *gin.Context)
 	DeletePaymentAccount(c *gin.Context)
 	RoomSettings(c *gin.Context)
 	GameOdds(c *gin.Context)
@@ -88,6 +92,13 @@ type memberHandler struct {
 	chat            *services.MemberChatService
 	games           *services.WorkspaceGameService
 	plans           memberPlanService
+}
+
+type changePasswordRequest struct {
+	OldPassword string `json:"old_password" binding:"required"`
+	// Length is validated by the service in UTF-8 bytes. Gin's min/max
+	// validators count runes, which would reject otherwise valid passwords.
+	NewPassword string `json:"new_password" binding:"required"`
 }
 
 type memberBetAssistant interface {
@@ -151,17 +162,23 @@ func (h *memberHandler) PlanDetail(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if c.Param("gameID") == "speed-racing" {
+	if services.IsRacingPlanGame(c.Param("gameID")) {
 		position, err := strconv.Atoi(c.DefaultQuery("position", "1"))
 		if err != nil {
 			constants.SendError(c, http.StatusBadRequest, "推荐位置不正确", err)
 			return
 		}
-		result, err := h.plans.StreamDetail(roomID, position, c.DefaultQuery("plan_key", services.DefaultPlanKey), limit)
+		result, err := h.plans.StreamDetailForGame(roomID, c.Param("gameID"), position, c.DefaultQuery("plan_key", services.DefaultPlanKey), limit)
 		if err != nil {
 			constants.SendError(c, http.StatusBadRequest, "读取彩票计划失败", err)
 			return
 		}
+		// GET is metadata-only. Recommendation payloads are returned exclusively by
+		// the activation POST after the immutable member-view receipt is committed.
+		result.Recommendations = []services.PlanRecommendationView{}
+		result.LatestRecommendations = []services.PlanRecommendationView{}
+		result.History = []services.PlanRecommendationView{}
+		result.LegacyHistory = []services.PlanRecommendationView{}
 		constants.SendSuccess(c, http.StatusOK, "ok", result)
 		return
 	}
@@ -170,6 +187,9 @@ func (h *memberHandler) PlanDetail(c *gin.Context) {
 		constants.SendError(c, http.StatusBadRequest, "读取彩票计划失败", err)
 		return
 	}
+	result.Recommendations = []services.PlanRecommendationView{}
+	result.LatestRecommendations = []services.PlanRecommendationView{}
+	result.History = []services.PlanRecommendationView{}
 	constants.SendSuccess(c, http.StatusOK, "ok", result)
 }
 
@@ -647,17 +667,101 @@ func (h *memberHandler) CreatePaymentAccount(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req services.CreateMemberPaymentAccountInput
-	if err := c.ShouldBindJSON(&req); err != nil {
+	req, qrCode, err := bindMemberPaymentAccount(c)
+	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "收款方式参数不正确", err)
 		return
 	}
-	item, err := h.paymentAccounts.Create(userID, req)
+	item, err := h.paymentAccounts.CreateWithQRCode(userID, req, qrCode)
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "新增收款方式失败", err)
 		return
 	}
 	constants.SendSuccess(c, http.StatusCreated, "收款方式已保存", item)
+}
+
+func bindMemberPaymentAccount(c *gin.Context) (services.CreateMemberPaymentAccountInput, *uploads.PaymentQRCode, error) {
+	var request services.CreateMemberPaymentAccountInput
+	mediaType, _, mediaTypeErr := mime.ParseMediaType(c.GetHeader("Content-Type"))
+	if mediaTypeErr != nil || mediaType != "multipart/form-data" {
+		if err := c.ShouldBindJSON(&request); err != nil {
+			return request, nil, err
+		}
+		return request, nil, nil
+	}
+	if err := c.Request.ParseMultipartForm(1 << 20); err != nil {
+		return request, nil, err
+	}
+	if c.Request.MultipartForm != nil {
+		defer c.Request.MultipartForm.RemoveAll()
+		for field, files := range c.Request.MultipartForm.File {
+			if field != "qr_code" || len(files) > 1 {
+				return request, nil, apperrors.NewBusinessError("INVALID_PAYMENT_QR_CODE", "二维码上传内容不正确")
+			}
+		}
+	}
+	isDefault := false
+	if raw := strings.TrimSpace(c.PostForm("is_default")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return request, nil, apperrors.NewBusinessError("INVALID_PAYMENT_ACCOUNT", "默认收款方式参数不正确")
+		}
+		isDefault = value
+	}
+	request = services.CreateMemberPaymentAccountInput{
+		AccountType: c.PostForm("account_type"),
+		Label:       c.PostForm("label"),
+		AccountName: c.PostForm("account_name"),
+		AccountNo:   c.PostForm("account_no"),
+		HolderName:  c.PostForm("holder_name"),
+		IsDefault:   isDefault,
+	}
+	file, err := c.FormFile("qr_code")
+	if errors.Is(err, http.ErrMissingFile) {
+		return request, nil, nil
+	}
+	if err != nil {
+		return request, nil, apperrors.NewBusinessError("INVALID_PAYMENT_QR_CODE", "二维码图片读取失败")
+	}
+	if file.Size <= 0 || file.Size > uploads.MaxPaymentQRCodeBytes {
+		return request, nil, apperrors.NewBusinessError("INVALID_PAYMENT_QR_CODE", "二维码图片需在 4MB 以内")
+	}
+	source, err := file.Open()
+	if err != nil {
+		return request, nil, apperrors.NewBusinessError("INVALID_PAYMENT_QR_CODE", "二维码图片读取失败")
+	}
+	defer source.Close()
+	cleaned, err := uploads.SanitizePaymentQRCode(source)
+	if err != nil {
+		return request, nil, apperrors.NewBusinessError("INVALID_PAYMENT_QR_CODE", err.Error())
+	}
+	return request, cleaned, nil
+}
+
+func (h *memberHandler) PaymentAccountQRCode(c *gin.Context) {
+	userID, ok := memberUserID(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		constants.SendError(c, http.StatusNotFound, "收款二维码不存在", nil)
+		return
+	}
+	qrCode, err := h.paymentAccounts.QRCode(userID, id)
+	if err != nil {
+		constants.SendError(c, http.StatusNotFound, "收款二维码不存在", err)
+		return
+	}
+	defer qrCode.File.Close()
+	streamPaymentQRCode(c, qrCode)
+}
+
+func streamPaymentQRCode(c *gin.Context, qrCode *services.MemberPaymentQRCode) {
+	c.Header("Content-Disposition", "inline")
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.DataFromReader(http.StatusOK, qrCode.Size, "image/png", qrCode.File, nil)
 }
 
 func (h *memberHandler) DeletePaymentAccount(c *gin.Context) {
@@ -753,10 +857,14 @@ func (h *memberHandler) CheckIn(c *gin.Context) {
 	}
 	result, err := h.portal.CheckIn(userID, id)
 	if err != nil {
-		constants.SendError(c, http.StatusInternalServerError, "签到失败", err)
+		sendCheckInError(c, err)
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "签到成功", result)
+}
+
+func sendCheckInError(c *gin.Context, err error) {
+	constants.SendError(c, http.StatusBadRequest, "签到失败", err)
 }
 
 func (h *memberHandler) ClaimRedPacket(c *gin.Context) {
@@ -919,19 +1027,20 @@ func (h *memberHandler) ChangePassword(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req struct {
-		OldPassword string `json:"old_password" binding:"required"`
-		NewPassword string `json:"new_password" binding:"required,min=8,max=72"`
-	}
+	var req changePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		constants.SendError(c, http.StatusBadRequest, "密码参数不正确", err)
 		return
 	}
 	if err := h.member.ChangePassword(userID, req.OldPassword, req.NewPassword); err != nil {
-		constants.SendError(c, http.StatusBadRequest, "修改密码失败", err)
+		sendChangePasswordError(c, err)
 		return
 	}
 	constants.SendSuccess(c, http.StatusOK, "密码已更新", nil)
+}
+
+func sendChangePasswordError(c *gin.Context, err error) {
+	constants.SendError(c, http.StatusBadRequest, "修改密码失败", err)
 }
 
 func (h *memberHandler) UpdateNickname(c *gin.Context) {

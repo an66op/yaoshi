@@ -79,6 +79,9 @@ func TestPrivilegedRouteBoundaries(t *testing.T) {
 		"GET /api/member/plans",
 		"GET /api/member/plans/:gameID",
 		"POST /api/member/plans/:gameID/activate",
+		"GET /api/member/payment-accounts/:id/qr-code",
+		"POST /api/member/payment-accounts",
+		"POST /api/member/password",
 		"GET /api/admin/plans",
 		"POST /api/admin/plans",
 		"PUT /api/admin/plans/:id",
@@ -141,6 +144,21 @@ func TestPrivilegedRouteBoundaries(t *testing.T) {
 		if _, ok := registered[forbidden]; ok {
 			t.Errorf("forbidden cross-scope route is registered: %s", forbidden)
 		}
+	}
+}
+
+func TestMemberSensitiveWriteRoutesCarryIndependentRateLimits(t *testing.T) {
+	payment := memberPaymentAccountCreateRoute(func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	if payment.Method != http.MethodPost || payment.Pattern != "/payment-accounts" || len(payment.Middlewares) != 1 {
+		t.Fatalf("member payment account create route is not independently limited: %#v", payment)
+	}
+	qrRead := memberPaymentQRCodeReadRoute(func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	if qrRead.Method != http.MethodGet || qrRead.Pattern != "/payment-accounts/:id/qr-code" || len(qrRead.Middlewares) != 1 {
+		t.Fatalf("member payment QR read route is not independently limited: %#v", qrRead)
+	}
+	password := memberPasswordChangeRoute(func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	if password.Method != http.MethodPost || password.Pattern != "/password" || len(password.Middlewares) != 2 {
+		t.Fatalf("member password route lacks per-user and trusted-client limits: %#v", password)
 	}
 }
 

@@ -912,11 +912,12 @@ export type PlanRecommendation = {
   enabled: boolean
   sort_order: number
   master_hit_rate: number | null
+  master_sample_count: number
   created_at: string
   updated_at: string
 }
 
-export type PlanRecommendationPayload = Omit<PlanRecommendation, 'id' | 'source' | 'created_at' | 'updated_at' | 'master_hit_rate'>
+export type PlanRecommendationPayload = Omit<PlanRecommendation, 'id' | 'source' | 'created_at' | 'updated_at' | 'master_hit_rate' | 'master_sample_count'>
 
 export type PlanVariantOption = {
   key: string

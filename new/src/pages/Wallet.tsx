@@ -71,11 +71,11 @@ function SubpageNotice({ title, children }: { title: string; children: ReactNode
   return <div className="wallet-subpage-notice"><b>{title}</b><span>{children}</span></div>
 }
 
-function WalletPage({ title, hint, sectionLabel = '资金服务', onBack, children, footer }: { title: string; hint?: string; sectionLabel?: string; onBack: () => void; children: ReactNode; footer?: ReactNode }) {
+function WalletPage({ title, hint, sectionLabel = '资金服务', backLabel = '返回钱包', onBack, children, footer }: { title: string; hint?: string; sectionLabel?: string; backLabel?: string; onBack: () => void; children: ReactNode; footer?: ReactNode }) {
   return (
     <section className="wallet-page wallet-subpage">
       <header className="wallet-header wallet-header-back">
-        <button type="button" className="wallet-panel-back" aria-label="返回钱包" onClick={onBack}>←</button>
+        <button type="button" className="wallet-panel-back" aria-label={backLabel} onClick={onBack}>←</button>
         <div><b>{title}</b>{hint && <small>{hint}</small>}</div>
         <span aria-hidden="true" />
       </header>
@@ -149,6 +149,8 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
   const [paymentAccountName, setPaymentAccountName] = useState('')
   const [paymentAccountNo, setPaymentAccountNo] = useState('')
   const [paymentAccountHolder, setPaymentAccountHolder] = useState('')
+  const [paymentAccountQRCode, setPaymentAccountQRCode] = useState<File | null>(null)
+  const [paymentAccountQRCodePreview, setPaymentAccountQRCodePreview] = useState('')
   const [paymentAccountSaving, setPaymentAccountSaving] = useState(false)
   const [betFilter, setBetFilter] = useState<'all' | 'pending' | 'settled'>('all')
   const [betHasMore, setBetHasMore] = useState(false)
@@ -295,6 +297,44 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
     setSelectedBet(null)
   }, [activeAction])
 
+  useEffect(() => () => {
+    if (paymentAccountQRCodePreview) URL.revokeObjectURL(paymentAccountQRCodePreview)
+  }, [paymentAccountQRCodePreview])
+
+  const closePaymentAccountEditor = () => {
+    setPaymentAccountEditorOpen(false)
+    setPaymentAccountQRCode(null)
+    setPaymentAccountQRCodePreview('')
+    setMessage('')
+  }
+
+  const openPaymentAccountEditor = (accountType: (typeof paymentAccountTypes)[number]['id']) => {
+    setMessage('')
+    setPaymentAccountType(accountType)
+    setPaymentAccountLabel('')
+    setPaymentAccountName('')
+    setPaymentAccountNo('')
+    setPaymentAccountHolder('')
+    setPaymentAccountQRCode(null)
+    setPaymentAccountQRCodePreview('')
+    setPaymentAccountEditorOpen(true)
+  }
+
+  const selectPaymentAccountQRCode = (file: File | undefined) => {
+    if (!file) return
+    if (file.type && !['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      setMessage('二维码仅支持 PNG、JPG 或 WebP 图片')
+      return
+    }
+    if (file.size <= 0 || file.size > 4 * 1024 * 1024) {
+      setMessage('二维码图片需在 4MB 以内')
+      return
+    }
+    setMessage('')
+    setPaymentAccountQRCode(file)
+    setPaymentAccountQRCodePreview(URL.createObjectURL(file))
+  }
+
   const submitApplication = async (request_type: 'credit' | 'debit') => {
     const numericAmount = Number(amount)
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
@@ -395,6 +435,7 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
         account_no: paymentAccountNo.trim(),
         holder_name: paymentAccountHolder.trim(),
         is_default: paymentAccounts.length === 0,
+        qr_code: paymentAccountQRCode,
       })
       setPaymentAccounts((current) => [created, ...current.map((item) => ({ ...item, is_default: created.is_default ? false : item.is_default }))])
       setPaymentAccountId(created.id)
@@ -402,6 +443,8 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
       setPaymentAccountName('')
       setPaymentAccountNo('')
       setPaymentAccountHolder('')
+      setPaymentAccountQRCode(null)
+      setPaymentAccountQRCodePreview('')
       setPaymentAccountEditorOpen(false)
       setMessage('收款方式已保存')
     } catch (reason) {
@@ -497,6 +540,36 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
 
     if (activeAction === '收款方式') {
       const selectedAccountType = paymentAccountTypes.find((item) => item.id === paymentAccountType) ?? paymentAccountTypes[0]
+      if (paymentAccountEditorOpen) {
+        return (
+          <WalletPage
+            title={`新增${selectedAccountType.label}`}
+            hint="填写后保存到收款方式"
+            sectionLabel="账户资料"
+            backLabel="返回收款方式"
+            onBack={closePaymentAccountEditor}
+            footer={<button type="button" className="wallet-submit" disabled={paymentAccountSaving} onClick={() => void savePaymentAccount()}>{paymentAccountSaving ? '安全保存中…' : `保存${selectedAccountType.label}`}</button>}
+          >
+            <SubpageNotice title="独立安全添加">账号仅用于下分审核；二维码会在服务端核验真实图片内容并重新编码。</SubpageNotice>
+            <div className="wallet-account-type-grid" aria-label="收款账户类型">{paymentAccountTypes.map((item) => <button type="button" className={paymentAccountType === item.id ? 'is-selected' : ''} aria-pressed={paymentAccountType === item.id} key={item.id} onClick={() => setPaymentAccountType(item.id)}><i>{item.mark}</i>{item.label}</button>)}</div>
+            <div className="wallet-payment-account-form">
+              <label className="wallet-field"><span>显示名称 <em>选填</em></span><input value={paymentAccountLabel} maxLength={80} onChange={(event) => setPaymentAccountLabel(event.target.value)} placeholder={`例如常用${selectedAccountType.label}`} /></label>
+              <label className="wallet-field"><span>收款账号 / 地址</span><input value={paymentAccountNo} maxLength={180} onChange={(event) => setPaymentAccountNo(event.target.value)} placeholder={selectedAccountType.hint} /></label>
+              <label className="wallet-field"><span>账户名称</span><input value={paymentAccountName} maxLength={100} onChange={(event) => setPaymentAccountName(event.target.value)} placeholder="例如张三或账户昵称" /></label>
+              <label className="wallet-field"><span>收款人姓名 <em>选填</em></span><input value={paymentAccountHolder} maxLength={80} onChange={(event) => setPaymentAccountHolder(event.target.value)} placeholder="与账户实名一致" /></label>
+              <section className="wallet-qr-upload">
+                <header><div><b>收款二维码</b><small>选填 · PNG/JPG/WebP · 最大 4MB</small></div><span>安全重编码</span></header>
+                <label className={paymentAccountQRCodePreview ? 'has-preview' : ''}>
+                  <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { selectPaymentAccountQRCode(event.currentTarget.files?.[0]); event.currentTarget.value = '' }} />
+                  {paymentAccountQRCodePreview ? <><img src={paymentAccountQRCodePreview} alt="待上传的收款二维码预览" /><strong>更换二维码</strong></> : <><i>＋</i><strong>选择二维码图片</strong><small>后缀名不会作为格式依据</small></>}
+                </label>
+                {paymentAccountQRCode && <button type="button" onClick={() => { setPaymentAccountQRCode(null); setPaymentAccountQRCodePreview('') }}>移除二维码</button>}
+              </section>
+            </div>
+            {message && <p className="wallet-message" role="alert">{message}</p>}
+          </WalletPage>
+        )
+      }
       return (
         <WalletPage title="收款方式" hint="下分到账账户，可随时新增或删除" onBack={goHome}>
           <SubpageNotice title="安全提示">仅保存用于下分审核的账户信息；展示时会自动隐藏账号。</SubpageNotice>
@@ -504,14 +577,13 @@ export function Wallet({ balance, walletAction, returnGameId, onBackToGame, onRe
             <div className="wallet-payment-type-actions" aria-label="新增收款方式">
               {featuredPaymentAccountTypes.map((item) => {
                 const count = paymentAccounts.filter((account) => account.account_type === item.id).length
-                return <button type="button" className={item.id} key={item.id} onClick={() => { setMessage(''); setPaymentAccountType(item.id); setPaymentAccountEditorOpen(true) }}><i>{item.mark}</i><span><b>{item.label}</b><small>{count > 0 ? `已添加 ${count} 个账户` : '尚未添加账户'}</small></span><em>＋ 添加</em></button>
+                return <button type="button" className={item.id} key={item.id} onClick={() => openPaymentAccountEditor(item.id)}><i>{item.mark}</i><span><b>{item.label}</b><small>{count > 0 ? `已添加 ${count} 个账户` : '尚未添加账户'}</small></span><em>进入添加</em></button>
               })}
             </div>
             <div className="wallet-payment-account-list">
-              {paymentAccounts.map((account) => <article className="wallet-payment-account" key={account.id}><span className={`account-mark ${account.account_type}`}>{paymentAccountTypeLabel[account.account_type]?.slice(0, 1) ?? '收'}</span><div><b>{account.label}{account.is_default && <i>默认</i>}</b><small>{paymentAccountTypeLabel[account.account_type] ?? account.account_type} · {account.account_name}</small><em>{account.account_no}</em></div><button type="button" aria-label={`删除${account.label}`} onClick={() => void removePaymentAccount(account)}>删除</button></article>)}
+              {paymentAccounts.map((account) => <article className="wallet-payment-account" key={account.id}>{account.qr_code_url ? <img className="account-qr" src={memberApi.paymentAccountQRCodeURL(account.id)} alt={`${account.label}收款二维码`} /> : <span className={`account-mark ${account.account_type}`}>{paymentAccountTypeLabel[account.account_type]?.slice(0, 1) ?? '收'}</span>}<div><b>{account.label}{account.is_default && <i>默认</i>}{account.qr_code_url && <i>二维码</i>}</b><small>{paymentAccountTypeLabel[account.account_type] ?? account.account_type} · {account.account_name}</small><em>{account.account_no}</em></div><button type="button" aria-label={`删除${account.label}`} onClick={() => void removePaymentAccount(account)}>删除</button></article>)}
               {paymentAccounts.length === 0 && <EmptyHint text="还没有收款方式，新增后可用于下分申请" />}
             </div>
-            {paymentAccountEditorOpen && <section className="wallet-payment-account-editor"><header><b>新增{selectedAccountType.label}收款方式</b><button type="button" onClick={() => setPaymentAccountEditorOpen(false)}>收起</button></header><div className="wallet-account-type-grid">{paymentAccountTypes.map((item) => <button type="button" className={paymentAccountType === item.id ? 'is-selected' : ''} key={item.id} onClick={() => setPaymentAccountType(item.id)}><i>{item.mark}</i>{item.label}</button>)}</div><label className="wallet-field"><span>显示名称 <em>选填</em></span><input value={paymentAccountLabel} maxLength={80} onChange={(event) => setPaymentAccountLabel(event.target.value)} placeholder={`例如常用${selectedAccountType.label}`} /></label><label className="wallet-field"><span>收款账号 / 地址</span><input value={paymentAccountNo} maxLength={180} onChange={(event) => setPaymentAccountNo(event.target.value)} placeholder={selectedAccountType.hint} /></label><label className="wallet-field"><span>账户名称</span><input value={paymentAccountName} maxLength={100} onChange={(event) => setPaymentAccountName(event.target.value)} placeholder="例如张三或账户昵称" /></label><label className="wallet-field"><span>收款人姓名 <em>选填</em></span><input value={paymentAccountHolder} maxLength={80} onChange={(event) => setPaymentAccountHolder(event.target.value)} placeholder="与账户实名一致" /></label><button type="button" className="wallet-submit" disabled={paymentAccountSaving} onClick={() => void savePaymentAccount()}>{paymentAccountSaving ? '保存中…' : `保存${selectedAccountType.label}`}</button></section>}
           </>}
           {message && <p className="wallet-message">{message}</p>}
         </WalletPage>

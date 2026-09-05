@@ -1,3 +1,4 @@
+import { isValidElement, type ReactElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HookHarness } from './test/hookHarness'
 import type { AppRoute } from './router'
@@ -12,8 +13,8 @@ const runtime = vi.hoisted(() => ({
   route: { kind: 'login' } as AppRoute,
   theme: 'day',
   cached: null as Record<string, unknown> | null,
-  me: vi.fn(), refreshSession: vi.fn(), roomHistory: vi.fn(),
-  clearBusiness: vi.fn(), navigate: vi.fn(),
+  me: vi.fn(), refreshSession: vi.fn(), roomHistory: vi.fn(), logout: vi.fn(),
+  clearBusiness: vi.fn(), broadcastLogout: vi.fn(), navigate: vi.fn(),
 }))
 vi.mock('react', async importOriginal => ({
   ...await importOriginal<typeof import('react')>(),
@@ -37,11 +38,11 @@ vi.mock('./hooks/useFontScale', () => ({ useFontScale: () => undefined }))
 vi.mock('./hooks/useWebSocket', () => ({ useWebSocket: () => undefined, useWebSocketConnected: () => true }))
 vi.mock('./utils/notificationAudio', () => ({ stopNotificationSounds: () => undefined }))
 vi.mock('./api/client', () => ({ AuthError: class AuthError extends Error {} }))
-vi.mock('./api/member', () => ({ memberApi: { me: runtime.me, refreshSession: runtime.refreshSession, roomHistory: runtime.roomHistory } }))
+vi.mock('./api/member', () => ({ memberApi: { me: runtime.me, refreshSession: runtime.refreshSession, roomHistory: runtime.roomHistory, logout: runtime.logout } }))
 vi.mock('./api/portal', () => ({ portalApi: { unreadCount: async () => ({ unread: 0 }), roomSettings: async () => ({}), activities: async () => [] } }))
 vi.mock('./utils/businessStorage', () => ({
   clearMemberBusinessStorage: runtime.clearBusiness,
-  clearLoginAnnouncementMarkers: () => undefined, broadcastMemberLogout: () => undefined,
+  clearLoginAnnouncementMarkers: () => undefined, broadcastMemberLogout: runtime.broadcastLogout,
   MEMBER_AUTH_EVENT_KEY: 'auth', MEMBER_SESSION_KEY: 'session',
 }))
 vi.mock('./router', async importOriginal => ({
@@ -66,6 +67,13 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+type NodeProps = { children?: ReactNode; onPasswordChanged?: () => Promise<void> }
+function find(node: ReactNode, predicate: (node: ReactElement<NodeProps>) => boolean): ReactElement<NodeProps> | undefined {
+  if (Array.isArray(node)) return node.map(child => find(child, predicate)).find(Boolean)
+  if (!isValidElement<NodeProps>(node)) return
+  return predicate(node) ? node : find(node.props.children, predicate)
+}
+
 describe('App startup authentication boundary', () => {
   const render = () => {
     const result = runtime.hooks!.render(() => App())
@@ -81,7 +89,9 @@ describe('App startup authentication boundary', () => {
     runtime.me.mockReset()
     runtime.refreshSession.mockReset().mockResolvedValue(undefined)
     runtime.roomHistory.mockReset().mockResolvedValue([])
+    runtime.logout.mockReset().mockResolvedValue(undefined)
     runtime.clearBusiness.mockClear()
+    runtime.broadcastLogout.mockClear()
     runtime.navigate.mockClear()
     vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn(), scrollTo: vi.fn(), location: { reload: vi.fn() } })
     vi.stubGlobal('document', { documentElement: { dataset: {} } })
@@ -149,6 +159,21 @@ describe('App startup authentication boundary', () => {
     expect(result.type).toBe('main')
     expect(result.props.className).toContain('theme-day')
     expect(runtime.refreshSession).toHaveBeenCalledOnce()
+  })
+
+  it('always clears the invalidated session after a successful password change, even if the logout request fails', async () => {
+    runtime.route = { kind: 'tab', tab: 'profile' }
+    runtime.cached = { account: 'verified-user', nickname: 'Verified name', room: '99001', balance: 123 }
+    runtime.me.mockResolvedValue({ username: 'verified-user', nickname: 'Verified name', room_code: '99001', balance: 123 })
+    runtime.logout.mockRejectedValue(new Error('network unavailable'))
+    render()
+    await settle()
+    const profile = find(render(), node => typeof node.props.onPasswordChanged === 'function')
+    expect(profile).toBeDefined()
+    await profile!.props.onPasswordChanged!()
+    expect(runtime.logout).toHaveBeenCalledOnce()
+    expect(runtime.broadcastLogout).toHaveBeenCalledOnce()
+    expect(runtime.navigate).toHaveBeenCalledWith('/login')
   })
 
   it('loads and passes real room history after login even when the account has no current room', async () => {

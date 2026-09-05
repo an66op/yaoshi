@@ -120,6 +120,56 @@ func TestMigrationsPostgresFreshAndRepeat(t *testing.T) {
 	}
 }
 
+func TestLegacyPlanSeedCleanupPostgresPreservesEditedManualRows(t *testing.T) {
+	db := migrationTestDatabase(t)
+	if err := Run(db); err != nil {
+		t.Fatal("fresh migrations:", err)
+	}
+	if err := db.Exec(`
+		INSERT INTO "user" (user_id, public_id, username, password, nickname, role)
+		VALUES (99008, 99008, 'legacy_plan_owner', 'not-a-login-fixture', '旧计划房主', 'tenant');
+		INSERT INTO workspaces (id, code, room_code, type, owner_user_id, scope, name, status)
+		VALUES (99008, 'legacy-plan-room', '990008', 'tenant', 99008, 'legacy-plan-room', '旧计划房间', 1);
+		INSERT INTO lottery_games (id, code, name, category, lobby_category, badge, badge_color)
+		VALUES
+		  ('speed-racing', 'legacy-speed-racing', '极速赛车', '赛车', '彩票', '测', '#000000'),
+		  ('canada-28', 'legacy-canada-28', '加拿大28', 'PC', 'PC', '测', '#000000');
+		INSERT INTO plan_recommendations
+			(workspace_id, game_id, issue, master_name, master_title, master_color, numbers,
+			 size, parity, result, source, note, enabled, sort_order)
+		VALUES
+		  (99008, 'speed-racing', 'legacy-exact-1', '青云老师', '综合趋势', '#2aa9b3', '1,5,9', '大', '单', 'pending', 'manual', '房间人工计划，由后台维护', true, 10),
+		  (99008, 'canada-28', 'legacy-exact-2', '北斗数据师', '冷热分析', '#6e70df', '6,11,19', '小', '双', 'pending', 'manual', '房间人工计划，由后台维护', true, 20),
+		  (99008, 'speed-racing', 'operator-note', '青云老师', '综合趋势', '#2aa9b3', '1,5,9', '大', '单', 'pending', 'manual', '房间人工计划（已确认）', true, 10),
+		  (99008, 'canada-28', 'operator-picks', '北斗数据师', '冷热分析', '#6e70df', '6,11,20', '小', '双', 'pending', 'manual', '房间人工计划，由后台维护', true, 20),
+		  (99008, 'canada-28', 'operator-disabled', '北斗数据师', '冷热分析', '#6e70df', '6,11,19', '小', '双', 'pending', 'manual', '房间人工计划，由后台维护', false, 20);
+	`).Error; err != nil {
+		t.Fatal(err)
+	}
+	raw, err := migrationFiles.ReadFile("202609050008_remove_legacy_plan_seed.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := db.Exec(string(raw)).Error; err != nil {
+			t.Fatalf("cleanup attempt %d: %v", attempt+1, err)
+		}
+	}
+	var issues []string
+	if err := db.Table("plan_recommendations").Where("workspace_id = ?", 99008).Order("issue").Pluck("issue", &issues).Error; err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"operator-disabled", "operator-note", "operator-picks"}
+	if len(issues) != len(want) {
+		t.Fatalf("cleanup retained issues %v, want %v", issues, want)
+	}
+	for index := range want {
+		if issues[index] != want[index] {
+			t.Fatalf("cleanup retained issues %v, want %v", issues, want)
+		}
+	}
+}
+
 func TestMigrationsPostgresRejectsUnversionedObjects(t *testing.T) {
 	for name, fixture := range map[string]string{
 		"application_table":  `CREATE TABLE public."user" (user_id bigint)`,

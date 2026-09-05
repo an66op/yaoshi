@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { isValidElement, type ComponentProps, type ReactElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Icon } from '../components/Icon'
+import { AnnouncementDialog } from '../components/Dialogs'
 import { HookHarness } from '../test/hookHarness'
 import { DEFAULT_ROOM_LOGO } from '../utils/roomHistory'
 import { Lobby } from './Lobby'
@@ -105,6 +106,37 @@ describe('lobby room switcher cards', () => {
     vi.stubGlobal('sessionStorage', { getItem: vi.fn(() => null), setItem: vi.fn() })
   })
   afterEach(() => { runtime.hooks!.unmount(); vi.unstubAllGlobals() })
+
+  it('shows login announcements only as a dialog and omits the lobby top banner', async () => {
+    runtime.roomSettings.mockResolvedValue({
+      room_notice: '房间公告内容',
+      announcements: [{ id: 'notice-1', title: '欢迎公告', content: '房间公告内容', enabled: true, popup_on_login: true, sort_order: 1 }],
+    })
+
+    render()
+    const root = await settle()
+
+    expect(elements(root).some(element => hasClass(element, 'lobby-announcement'))).toBe(false)
+    expect(elements(root).some(element => element.type === AnnouncementDialog)).toBe(true)
+    expect(sessionStorage.setItem).toHaveBeenCalledWith(`wangzhe-login-announcements-shown:${roomCodes[0]}`, '1')
+  })
+
+  it('still shows the login announcement when session storage is unavailable', async () => {
+    runtime.roomSettings.mockResolvedValue({
+      room_notice: '',
+      announcements: [{ id: 'notice-private', title: '公告', content: '隐私模式也应显示', enabled: true, popup_on_login: true, sort_order: 1 }],
+    })
+    vi.stubGlobal('sessionStorage', {
+      getItem: vi.fn(() => { throw new DOMException('blocked', 'SecurityError') }),
+      setItem: vi.fn(() => { throw new DOMException('blocked', 'SecurityError') }),
+    })
+
+    render()
+    const root = await settle()
+
+    expect(elements(root).some(element => element.type === AnnouncementDialog)).toBe(true)
+    expect(elements(root).some(element => hasClass(element, 'lobby-announcement'))).toBe(false)
+  })
 
   it('renders a real non-draggable default image for current, available, pending and disabled rooms', async () => {
     const root = await open()

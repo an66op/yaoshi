@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { PlanDetail, PlanRecommendation } from '../api/plans'
-import { displayedPlanMasters, planIsCurrent, planResultLabel, recentPlanHistory } from './planPresentation'
+import { displayedPlanMasters, planIsCurrent, planMasterIdentity, planResultLabel, recentPlanHistory } from './planPresentation'
 
 const row: PlanRecommendation = {
   id: 1, workspace_id: 2, game_id: 'speed-racing', issue: '100', master_name: '1号专家',
   master_title: '系统自动推荐', master_color: '#2aa9b3', numbers: [1, 3, 5, 9, 10], size: '', parity: '',
-  result: 'pending', source: 'demo', note: '系统自动生成', enabled: true, sort_order: 10, master_hit_rate: null,
+  result: 'pending', source: 'demo', note: '系统自动生成', enabled: true, sort_order: 10, master_hit_rate: null, master_sample_count: 0,
   created_at: '2026-08-30T08:00:00Z', updated_at: '2026-08-30T08:00:00Z',
 }
 const detail: PlanDetail = { game_id: row.game_id, current_issue: '101', recommendations: [], latest_recommendations: [row], history: [row] }
@@ -35,9 +35,17 @@ describe('honest current and historical plan presentation', () => {
     expect(planIsCurrent(updated, current)).toBe(true)
     expect(planIsCurrent(updated, other)).toBe(false)
   })
-  it('never displays a claimed win or loss for a demo row', () => {
-    expect(planResultLabel({ ...row, result: 'hit' })).toBe('未统计')
-    expect(planResultLabel({ ...row, result: 'miss' })).toBe('未统计')
+  it('keeps same-named masters from different publication sources distinct', () => {
+    const manual = { ...row, id: 4, source: 'manual' as const, master_hit_rate: 0, master_sample_count: 1 }
+    const automatic = { ...row, id: 5, source: 'demo' as const, master_hit_rate: 100, master_sample_count: 1 }
+    const masters = displayedPlanMasters({ ...detail, recommendations: [manual, automatic], latest_recommendations: [] })
+    expect(masters).toHaveLength(2)
+    expect(masters.map(planMasterIdentity)).toEqual(['demo\u00001号专家', 'manual\u00001号专家'])
+    expect(masters.map(item => item.master_hit_rate)).toEqual([100, 0])
+  })
+  it('renders only the server-derived result, regardless of publication source', () => {
+    expect(planResultLabel({ ...row, result: 'hit' })).toBe('中')
+    expect(planResultLabel({ ...row, result: 'miss' })).toBe('未中')
     expect(planResultLabel({ ...row, source: 'manual', result: 'hit' })).toBe('中')
     expect(planResultLabel({ ...row, source: 'manual', result: 'pending' })).toBe('待开奖')
   })

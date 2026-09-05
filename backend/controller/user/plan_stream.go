@@ -15,9 +15,9 @@ import (
 type memberPlanService interface {
 	Catalog(workspaceID uint64) ([]services.PlanGameSummary, error)
 	Detail(workspaceID uint64, gameID string, historyLimits ...int) (services.PlanDetail, error)
-	StreamDetail(workspaceID uint64, position int, key string, historyLimits ...int) (services.PlanStreamDetail, error)
-	ActivateStream(ctx context.Context, workspaceID uint64, position int, key string, historyLimits ...int) (services.PlanStreamDetail, error)
-	ActivateGame(ctx context.Context, workspaceID uint64, gameID string, historyLimits ...int) (services.PlanDetail, error)
+	StreamDetailForGame(workspaceID uint64, gameID string, position int, key string, historyLimits ...int) (services.PlanStreamDetail, error)
+	ActivateStreamForMember(ctx context.Context, userID, workspaceID uint64, gameID string, position int, key string, historyLimits ...int) (services.PlanStreamDetail, error)
+	ActivateGameForMember(ctx context.Context, userID, workspaceID uint64, gameID string, historyLimits ...int) (services.PlanDetail, error)
 }
 
 func memberPlanHistoryLimit(c *gin.Context) (int, bool) {
@@ -30,7 +30,8 @@ func memberPlanHistoryLimit(c *gin.Context) (int, bool) {
 }
 
 func (h *memberHandler) ActivatePlanStream(c *gin.Context) {
-	if _, ok := memberUserID(c); !ok {
+	userID, ok := memberUserID(c)
+	if !ok {
 		return
 	}
 	roomID, ok := c.Get("workspace_id")
@@ -51,12 +52,13 @@ func (h *memberHandler) ActivatePlanStream(c *gin.Context) {
 		constants.SendError(c, http.StatusBadRequest, "推荐位置或方案不正确", err)
 		return
 	}
-	if c.Param("gameID") != "speed-racing" {
+	gameID := c.Param("gameID")
+	if !services.IsRacingPlanGame(gameID) {
 		if input.Position != 0 || input.PlanKey != "" {
 			constants.SendError(c, http.StatusBadRequest, "该彩种仅支持默认单期推荐", nil)
 			return
 		}
-		result, err := h.plans.ActivateGame(c.Request.Context(), workspaceID, c.Param("gameID"), limit)
+		result, err := h.plans.ActivateGameForMember(c.Request.Context(), userID, workspaceID, gameID, limit)
 		if err != nil {
 			constants.SendError(c, http.StatusBadRequest, "读取本次访问推荐失败", err)
 			return
@@ -70,7 +72,7 @@ func (h *memberHandler) ActivatePlanStream(c *gin.Context) {
 	if input.PlanKey == "" {
 		input.PlanKey = services.DefaultPlanKey
 	}
-	result, err := h.plans.ActivateStream(c.Request.Context(), workspaceID, input.Position, input.PlanKey, limit)
+	result, err := h.plans.ActivateStreamForMember(c.Request.Context(), userID, workspaceID, gameID, input.Position, input.PlanKey, limit)
 	if err != nil {
 		constants.SendError(c, http.StatusBadRequest, "启用推荐方案失败", err)
 		return

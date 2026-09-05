@@ -1,6 +1,7 @@
 package services
 
 import (
+	"backend/data/models/lottery"
 	"backend/data/models/plan"
 	"encoding/json"
 	"reflect"
@@ -74,6 +75,33 @@ func TestPlanStreamMatrixHasSeventeenOperationalOptions(t *testing.T) {
 	}
 }
 
+func TestPlanStreamRacingProductsExactlyMatchVerifiedTenPositionRules(t *testing.T) {
+	want := []string{"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10", "bingo-racing-a", "bingo-racing-b"}
+	if !reflect.DeepEqual(racingPlanGameIDs, want) {
+		t.Fatalf("rich plan products = %v, want %v", racingPlanGameIDs, want)
+	}
+	config := PlanAutomationView{Enabled: true, GameIDs: append([]string{}, want...), Positions: defaultPlanPositions(), PlanKeys: defaultPlanKeys()}
+	option, _ := planOption(DefaultPlanKey)
+	for _, gameID := range want {
+		profile, ready := rulesForGame(&lottery.Game{ID: gameID})
+		if !ready || profile.Version != "racing-v2" || !profile.Racing || !profile.Unique || profile.BallCount != 10 || profile.MinNumber != 1 || profile.MaxNumber != 10 {
+			t.Fatalf("%s is not a verified ten-position racing-v2 product: %#v ready=%v", gameID, profile, ready)
+		}
+		if !IsRacingPlanGame(gameID) || !planRequestedStreamAllowed(config, gameID, 10, DefaultPlanKey) {
+			t.Fatalf("%s did not route through the full position/type plan matrix", gameID)
+		}
+		picks := planCyclePicksForGame(7, gameID, 10, option, "actual-100")
+		if len(picks) != len(planDemoMasters) || len(picks[0].Numbers) != option.NumberCount {
+			t.Fatalf("%s did not create a complete rich plan payload: %#v", gameID, picks)
+		}
+	}
+	for _, gameID := range []string{"speed-ssc", "canada-28", "bingo-mark-six", "official-tw-bingo", "unknown-racing"} {
+		if IsRacingPlanGame(gameID) {
+			t.Fatalf("non-racing-v2 product %s entered the rich racing plan contract", gameID)
+		}
+	}
+}
+
 func TestPlanStreamTTLExpiresWithoutDefaultOrCycleKeepalive(t *testing.T) {
 	now := time.Now().UTC()
 	past, future := now.Add(-time.Minute), now.Add(time.Minute)
@@ -118,6 +146,11 @@ func TestPlanStreamConfigurationRevocationIsAuthoritative(t *testing.T) {
 		if planStreamAllowed(copy, 1, DefaultPlanKey) {
 			t.Fatal("revoked selection remained allowed")
 		}
+	}
+	disabled := view
+	disabled.Enabled = false
+	if planStreamAllowed(disabled, 1, DefaultPlanKey) || !planStreamConfiguredForGame(disabled, "speed-racing", 1, DefaultPlanKey) {
+		t.Fatal("generation switch did not preserve the browseable configured matrix")
 	}
 	for _, test := range []struct {
 		p []int

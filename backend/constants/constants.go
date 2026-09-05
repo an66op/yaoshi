@@ -45,7 +45,7 @@ func SendError(c *gin.Context, defaultCode int, defaultMessage string, err error
 		if appErr.Type == apperrors.ErrTypeBusiness {
 			// 业务错误：根据错误代码设置合适的状态码
 			switch appErr.Code {
-			case "USERNAME_EXISTS", "EMAIL_EXISTS":
+			case "USERNAME_EXISTS", "EMAIL_EXISTS", "PAYMENT_ACCOUNT_LIMIT_REACHED", "CHECKIN_ALREADY_COMPLETED", "PASSWORD_CHANGED_CONCURRENTLY":
 				httpCode = http.StatusConflict // 409
 			case "USER_NOT_FOUND", "INVALID_CREDENTIALS", "USER_DISABLED":
 				httpCode = http.StatusUnauthorized // 401
@@ -55,7 +55,7 @@ func SendError(c *gin.Context, defaultCode int, defaultMessage string, err error
 				httpCode = http.StatusNotFound
 			case "INSUFFICIENT_BALANCE":
 				httpCode = http.StatusBadRequest
-			case "INVALID_REQUEST":
+			case "INVALID_REQUEST", "OLD_PASSWORD_INCORRECT":
 				httpCode = http.StatusBadRequest // 400
 			default:
 				httpCode = http.StatusBadRequest // 400

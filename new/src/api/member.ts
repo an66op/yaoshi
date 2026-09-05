@@ -1,4 +1,4 @@
-import { publicRequest, request } from './client'
+import { apiBase, publicRequest, request } from './client'
 import { createRequestId } from '../utils/requestId'
 
 export type LoginCaptcha = { id: string; image: string; expires_in: number }
@@ -107,6 +107,7 @@ export type MemberPaymentAccount = {
   account_no: string
   holder_name: string
   is_default: boolean
+  qr_code_url?: string
 }
 
 export type WalletSummary = {
@@ -194,8 +195,23 @@ export const memberApi = {
   },
   walletChannels: () => request<WalletChannel[]>('/member/wallet/channels'),
   paymentAccounts: () => request<MemberPaymentAccount[]>('/member/payment-accounts'),
-  createPaymentAccount: (payload: { account_type: string; label?: string; account_name: string; account_no: string; holder_name?: string; is_default?: boolean }) =>
-    request<MemberPaymentAccount>('/member/payment-accounts', { method: 'POST', body: JSON.stringify(payload) }),
+  createPaymentAccount: (payload: { account_type: string; label?: string; account_name: string; account_no: string; holder_name?: string; is_default?: boolean; qr_code?: File | null }) => {
+    if (!payload.qr_code) {
+      const { qr_code: _qrCode, ...account } = payload
+      return request<MemberPaymentAccount>('/member/payment-accounts', { method: 'POST', body: JSON.stringify(account) })
+    }
+    const form = new FormData()
+    form.set('account_type', payload.account_type)
+    form.set('label', payload.label ?? '')
+    form.set('account_name', payload.account_name)
+    form.set('account_no', payload.account_no)
+    form.set('holder_name', payload.holder_name ?? '')
+    form.set('is_default', String(Boolean(payload.is_default)))
+    // The server ignores this synthetic name and derives its own random name.
+    form.set('qr_code', payload.qr_code, 'qr-code-upload')
+    return request<MemberPaymentAccount>('/member/payment-accounts', { method: 'POST', body: form })
+  },
+  paymentAccountQRCodeURL: (id: number) => `${apiBase}/member/payment-accounts/${encodeURIComponent(String(id))}/qr-code`,
   deletePaymentAccount: (id: number) => request<null>(`/member/payment-accounts/${id}`, { method: 'DELETE' }),
   walletSummary: () => request<WalletSummary>('/member/wallet/summary'),
   rebatePreview: () => request<RebatePreview>('/member/wallet/rebate'),

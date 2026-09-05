@@ -13,6 +13,8 @@ usage() {
 账号、配置、旧迁移记录及孤立旧表都会清空；后端下次启动时重新建表、
 执行全部版本化迁移并生成本地初始账号。必须显式设置
 BACKEND_SEED_EXPERIENCE_ACCOUNTS=true，并让重建后首次后端启动沿用同一环境。
+执行模式还必须显式设置绝对路径 BACKEND_UPLOAD_DIR；schema 提交后
+只会逐个删除其 .private/member-payment-qr 下经过结构校验的会员收款二维码。
 工具不会删除数据库本身。
 不传 ENV_FILE 时，必须由当前进程环境显式提供全部 BACKEND_* 变量。
 USAGE
@@ -47,6 +49,7 @@ if [[ -n "$env_file" ]]; then
   unset BACKEND_DATABASE_SSLMODE BACKEND_SERVER_PORT BACKEND_ALLOW_DEVELOPMENT_RESET
   unset BACKEND_DEVELOPMENT_RESET_DATABASE BACKEND_DEVELOPMENT_RESET_SENTINEL_TOKEN
   unset BACKEND_SEED_EXPERIENCE_ACCOUNTS
+  unset BACKEND_UPLOAD_DIR
   load_backend_env "$env_file"
 fi
 
@@ -85,6 +88,7 @@ esac
 echo "目标数据库：$BACKEND_DATABASE_HOST:$BACKEND_DATABASE_PORT/$BACKEND_DATABASE_DBNAME"
 echo "动作：完整备份后 DROP SCHEMA public CASCADE，再创建空 public schema。"
 echo "结果：账号、工作区、彩票数据、聊天、注单、流水、配置、迁移记录和孤立旧表全部清空。"
+echo "执行模式还会精确清理 BACKEND_UPLOAD_DIR/.private/member-payment-qr 下的应用生成文件。"
 echo "数据库本身不会删除；后端必须保持停止，随后由 bootstrap 完整重建。"
 
 if [[ "$mode" == "dry-run" ]]; then
@@ -111,19 +115,28 @@ case "$backup_dir" in
 esac
 sentinel_token="${BACKEND_DEVELOPMENT_RESET_SENTINEL_TOKEN:-}"
 (( ${#sentinel_token} >= 32 && ${#sentinel_token} <= 256 )) || { echo "sentinel token 必须为 32-256 个字符" >&2; exit 1; }
-for command_name in psql pg_restore createdb dropdb awk basename date mv sed tail lsof; do
+for command_name in age age-keygen psql pg_restore createdb dropdb awk basename chmod cmp date dirname find id mkdir mktemp mv rm rmdir sed sort stat tail tar lsof; do
   command -v "$command_name" >/dev/null 2>&1 || { echo "缺少命令：$command_name" >&2; exit 1; }
 done
+: "${BACKEND_UPLOAD_DIR:?执行完整重建时必须显式设置 BACKEND_UPLOAD_DIR}"
+reset_validate_payment_qr_cleanup_target "$BACKEND_UPLOAD_DIR"
+case "$backup_dir/" in
+  "$RESET_PAYMENT_QR_DIRECTORY/"*) echo "备份目录不能位于待清理的二维码目录内" >&2; exit 1 ;;
+esac
+payment_qr_directory="$RESET_PAYMENT_QR_DIRECTORY"
+payment_qr_expected_count="$RESET_PAYMENT_QR_FILE_COUNT"
+payment_qr_removed_count="pending"
+echo "已锁定二维码清理目标：$payment_qr_directory（$payment_qr_expected_count 个文件）"
 
 reset_assert_backend_port_stopped
 token_sha256="$(reset_sha256 "$sentinel_token")"
 unset sentinel_token BACKEND_DEVELOPMENT_RESET_SENTINEL_TOKEN
 identity_before="$(reset_verified_identity "$token_sha256" true)"
 IFS=$'\t' read -r server_system_identifier server_address server_port source_user_count source_balance_cents source_ledger_count <<<"$identity_before"
+reset_validate_payment_qr_database_file_consistency "$BACKEND_UPLOAD_DIR"
 
 echo "开始创建整库重建前完整备份……"
-backup_source="${env_file:---current-env}"
-backup_output="$(BACKUP_DIR="$backup_dir" BACKUP_RETENTION_DAYS=3650 "$script_dir/postgres-backup.sh" "$backup_source")"
+backup_output="$("$script_dir/dev-postgres-backup.sh" --backup-dir "$backup_dir")"
 printf '%s\n' "$backup_output"
 backup_file="$(printf '%s\n' "$backup_output" | sed -n 's/^数据库备份完成：//p' | tail -n 1)"
 [[ -n "$backup_file" && -f "$backup_file" && -f "$backup_file.sha256" ]] || {
@@ -133,11 +146,52 @@ backup_file="$(printf '%s\n' "$backup_output" | sed -n 's/^数据库备份完成
 backup_sha256="$(awk 'NR == 1 { print $1 }' "$backup_file.sha256")"
 [[ "$backup_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "备份 SHA-256 不正确" >&2; exit 1; }
 backup_name="$(basename "$backup_file")"
+echo "开始创建与数据库备份配套的加密会员收款二维码归档……"
+reset_archive_payment_qr_files "$BACKEND_UPLOAD_DIR" "$backup_file" \
+  "${BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY:?缺少 BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY}"
+payment_qr_archive="$RESET_PAYMENT_QR_ARCHIVE"
+payment_qr_archive_name="$(basename "$payment_qr_archive")"
+payment_qr_archive_sha256="$RESET_PAYMENT_QR_ARCHIVE_SHA256"
+payment_qr_archived_count="$RESET_PAYMENT_QR_ARCHIVE_FILE_COUNT"
+[[ "$payment_qr_archived_count" == "$payment_qr_expected_count" ]] || {
+  echo "二维码归档数量与重建前快照不一致，拒绝继续" >&2
+  exit 1
+}
+reset_validate_payment_qr_archive_database_consistency "$payment_qr_archive" "$payment_qr_archive_sha256" \
+  "$payment_qr_archived_count" "$BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY"
 request_id="dev-full-reset-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
 receipt_file="$backup_file.full-reset-receipt"
 receipt_partial="$receipt_file.partial"
 scratch_database="wz_reset_verify_$$_${RANDOM}"
 [[ "$scratch_database" =~ ^wz_reset_verify_[0-9]+_[0-9]+$ ]] || { echo "临时验库名不安全" >&2; exit 1; }
+
+restore_work_dir=""
+restore_identity_file=""
+restore_database_file=""
+scratch_created="false"
+cleanup_scratch() {
+  if [[ "$scratch_created" == "true" && -n "${scratch_database:-}" && "$scratch_database" =~ ^wz_reset_verify_[0-9]+_[0-9]+$ ]]; then
+    dropdb --if-exists --host "$BACKEND_DATABASE_HOST" --port "$BACKEND_DATABASE_PORT" \
+      --username "$BACKEND_DATABASE_USER" --maintenance-db "$BACKEND_DATABASE_DBNAME" \
+      "$scratch_database" >/dev/null 2>&1 || true
+  fi
+  [[ -z "${restore_database_file:-}" ]] || rm -f -- "$restore_database_file"
+  [[ -z "${restore_identity_file:-}" ]] || rm -f -- "$restore_identity_file"
+  if [[ -n "${restore_work_dir:-}" && -d "$restore_work_dir" && ! -L "$restore_work_dir" ]]; then
+    rmdir "$restore_work_dir" 2>/dev/null || true
+  fi
+  unset BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY
+}
+trap cleanup_scratch EXIT INT TERM
+restore_work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wangzhe-dev-full-reset-restore.XXXXXXXX")"
+chmod 700 "$restore_work_dir"
+restore_identity_file="$restore_work_dir/age-identity.txt"
+restore_database_file="$restore_work_dir/database.dump"
+printf '%s\n' "${BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY:?缺少 BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY}" >"$restore_identity_file"
+chmod 600 "$restore_identity_file"
+age --decrypt --identity "$restore_identity_file" --output "$restore_database_file" "$backup_file"
+chmod 600 "$restore_database_file"
+unset BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY
 
 reset_assert_backend_port_stopped
 identity_after_backup="$(reset_verified_identity "$token_sha256" true)"
@@ -145,20 +199,13 @@ reset_identity_matches "$identity_before" "$identity_after_backup"
 
 export PGPASSWORD="$BACKEND_DATABASE_PASSWORD"
 export PGSSLMODE="$BACKEND_DATABASE_SSLMODE"
-cleanup_scratch() {
-  if [[ -n "${scratch_database:-}" && "$scratch_database" =~ ^wz_reset_verify_[0-9]+_[0-9]+$ ]]; then
-    dropdb --if-exists --host "$BACKEND_DATABASE_HOST" --port "$BACKEND_DATABASE_PORT" \
-      --username "$BACKEND_DATABASE_USER" --maintenance-db "$BACKEND_DATABASE_DBNAME" \
-      "$scratch_database" >/dev/null 2>&1 || true
-  fi
-}
-trap cleanup_scratch EXIT INT TERM
 createdb --host "$BACKEND_DATABASE_HOST" --port "$BACKEND_DATABASE_PORT" \
   --username "$BACKEND_DATABASE_USER" --maintenance-db "$BACKEND_DATABASE_DBNAME" \
   --owner "$BACKEND_DATABASE_USER" "$scratch_database"
+scratch_created="true"
 pg_restore --exit-on-error --no-owner --no-privileges \
   --host "$BACKEND_DATABASE_HOST" --port "$BACKEND_DATABASE_PORT" \
-  --username "$BACKEND_DATABASE_USER" --dbname "$scratch_database" "$backup_file"
+  --username "$BACKEND_DATABASE_USER" --dbname "$scratch_database" "$restore_database_file"
 scratch_snapshot="$(PGAPPNAME=wangzhe-reset-restore-verifier psql \
   --host "$BACKEND_DATABASE_HOST" --port "$BACKEND_DATABASE_PORT" \
   --username "$BACKEND_DATABASE_USER" --dbname "$scratch_database" \
@@ -184,7 +231,13 @@ IFS=$'\t' read -r restored_user_count restored_balance_cents restored_ledger_cou
 }
 dropdb --host "$BACKEND_DATABASE_HOST" --port "$BACKEND_DATABASE_PORT" \
   --username "$BACKEND_DATABASE_USER" --maintenance-db "$BACKEND_DATABASE_DBNAME" "$scratch_database"
+scratch_created="false"
 scratch_database=""
+rm -- "$restore_database_file" "$restore_identity_file"
+restore_database_file=""
+restore_identity_file=""
+rmdir "$restore_work_dir"
+restore_work_dir=""
 trap - EXIT INT TERM
 reset_assert_backend_port_stopped
 identity_after_restore="$(reset_verified_identity "$token_sha256" true)"
@@ -198,6 +251,9 @@ write_external_receipt() {
     printf 'database=%s\n' "$BACKEND_DATABASE_DBNAME"
     printf 'backup=%s\n' "$backup_name"
     printf 'backup_sha256=%s\n' "$backup_sha256"
+    printf 'payment_qr_backup=%s\n' "$payment_qr_archive_name"
+    printf 'payment_qr_backup_sha256=%s\n' "$payment_qr_archive_sha256"
+    printf 'payment_qr_files_archived=%s\n' "$payment_qr_archived_count"
     printf 'scope=public_schema_rebuild\n'
     printf 'server_system_identifier=%s\n' "$server_system_identifier"
     printf 'server_address=%s\n' "$server_address"
@@ -207,6 +263,9 @@ write_external_receipt() {
     printf 'source_balance_cents=%s\n' "$source_balance_cents"
     printf 'source_ledger_count=%s\n' "$source_ledger_count"
     printf 'scratch_restore_verified=true\n'
+    printf 'payment_qr_directory=%s\n' "$payment_qr_directory"
+    printf 'payment_qr_files_expected=%s\n' "$payment_qr_expected_count"
+    printf 'payment_qr_files_removed=%s\n' "$payment_qr_removed_count"
     printf 'status=%s\n' "$reset_status"
     printf 'recorded_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } >"$receipt_partial"
@@ -291,10 +350,26 @@ COMMENT ON SCHEMA public IS 'Recreated by guarded local development reset; boots
 COMMIT;
 SQL
 
+# The schema transaction has committed and cannot be rolled back if filesystem
+# cleanup later fails. Persist that exact intermediate state before touching any
+# files so the receipt can never falsely claim bootstrap is ready.
+write_external_receipt "schema_rebuilt_qr_cleanup_pending"
+
+# Revalidate the entire controlled subtree, then remove only the individually
+# named server-generated PNGs. The helper never recursively removes a directory.
+reset_remove_payment_qr_files "$BACKEND_UPLOAD_DIR" "$payment_qr_archived_count"
+payment_qr_removed_count="$RESET_PAYMENT_QR_REMOVED_COUNT"
+[[ "$payment_qr_removed_count" == "$payment_qr_archived_count" ]] || {
+  echo "二维码删除数量与配套归档不一致" >&2
+  exit 1
+}
+
 write_external_receipt "bootstrap_pending"
 
 echo "本地开发数据库 public schema 已重建为空。"
+echo "已精确删除 $payment_qr_removed_count 个会员收款二维码文件（不会递归删除目录）。"
 echo "备份：$backup_file"
+echo "配套加密二维码归档：$payment_qr_archive（$payment_qr_archived_count 个文件）"
 echo "外部凭证：$receipt_file"
 echo "下一步：沿用 BACKEND_SEED_EXPERIENCE_ACCOUNTS=true 的同一环境启动后端，等待迁移和本地数据初始化完成。"
 echo "完成后运行 dev-reset-complete-receipt.sh；只有严格只读验收通过后凭证才会变为 complete。"

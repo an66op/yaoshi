@@ -14,9 +14,12 @@ const (
 	// prevents an unauthenticated client from making handlers buffer an
 	// unbounded request body.
 	defaultMaxRequestBodyBytes int64 = 1 << 20
-	// The only larger request is the activity-image upload (8 MiB maximum).
-	// Leave room for multipart framing while still bounding temporary disk use.
+	// Activity artwork allows 8 MiB. Leave room for multipart framing while
+	// still bounding temporary disk use.
 	uploadMaxRequestBodyBytes int64 = 10 << 20
+	// Member QR codes are capped at 4 MiB, with a small allowance for the
+	// multipart envelope and account fields.
+	paymentQRCodeRequestBodyBytes int64 = 5 << 20
 )
 
 // SecurityHeaders applies browser-facing protections to every response. The
@@ -53,6 +56,9 @@ func RequestBodyLimit() gin.HandlerFunc {
 		limit := defaultMaxRequestBodyBytes
 		if c.Request.Method == http.MethodPost && c.Request.URL.Path == "/api/admin/activities/upload" {
 			limit = uploadMaxRequestBodyBytes
+		} else if c.Request.Method == http.MethodPost && c.Request.URL.Path == "/api/member/payment-accounts" &&
+			strings.HasPrefix(strings.ToLower(c.GetHeader("Content-Type")), "multipart/form-data;") {
+			limit = paymentQRCodeRequestBodyBytes
 		}
 		if c.Request.ContentLength > limit {
 			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"message": "请求内容过大"})

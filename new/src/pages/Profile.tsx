@@ -15,6 +15,7 @@ import { generateNickname } from '../data/nicknames'
 import type { Theme } from '../types'
 import type { GameGuideTab } from '../components/GameGuidePanel'
 import { dispatchProfileNavigation, type ProfileNavigationTarget, type ProfileSheetPanel } from '../utils/profileNavigation'
+import { passwordUTF8ByteLength } from '../utils/password'
 
 type SettingRow = { icon: string; label: string; hint?: string; panel: ProfileNavigationTarget; tone: string }
 
@@ -34,19 +35,21 @@ export type ProfileProps = {
   onResetDemo: () => void
   onToggleTheme: () => void
   onOpenGuide: (tab: GameGuideTab) => void
+  onOpenService: () => void
+  onPasswordChanged: () => Promise<void>
   onChangeNickname: (nickname: string) => Promise<void>
   onChangeAvatar: (avatar: string) => Promise<void>
 }
 
 const preferenceRowDefs: Array<Omit<SettingRow, 'hint'> & { hint?: (prefs: PreferenceSummary) => string }> = [
-  { icon: '◷', label: '聊天室历史开奖期数', panel: 'history', tone: 'mint', hint: (p) => `最近 ${p.drawHistoryLimit} 期` },
-  { icon: '▤', label: '默认投注面板', panel: 'betMode', tone: 'violet', hint: (p) => ({ quick: '快捷输入', dual: '两面盘', numbers: '号码面板' }[p.defaultBetMode]) },
+  { icon: '◷', label: '开奖统计期数', panel: 'history', tone: 'mint', hint: (p) => `最近 ${p.drawHistoryLimit} 期` },
+  { icon: '▤', label: '默认投注面板', panel: 'betMode', tone: 'violet', hint: (p) => ({ chat: '聊天下注', detail: '详细网投' }[p.defaultBetMode]) },
   { icon: 'A', label: '字体大小', panel: 'fontSize', tone: 'blue', hint: (p) => ({ standard: '标准', large: '大一号', xlarge: '大两号' }[p.fontScale]) },
   { icon: '♪', label: '消息与通知声音', hint: () => '4 类提醒', panel: 'sounds', tone: 'coral' },
   { icon: '◉', label: '线路检测', hint: () => '连接良好', panel: 'line', tone: 'lime' },
 ]
 const accountRowDefs: SettingRow[] = [
-  { icon: '⚙', label: '账户与安全', hint: '已认证', panel: 'security', tone: 'blue' },
+  { icon: '⚙', label: '账户与安全', panel: 'security', tone: 'blue' },
   { icon: '◐', label: '显示与主题', hint: '白天模式', panel: 'theme', tone: 'gold' },
   { icon: '?', label: '帮助与反馈', panel: 'help', tone: 'aqua' },
 ]
@@ -56,7 +59,7 @@ const gameRowDefs: SettingRow[] = [
 ]
 
 /** “我的”仅保留资料与设置；资产类服务全部收拢到钱包。 */
-export function Profile({ account, publicId, balance, avatarUrl = '', publicTitle = '', badge = '', theme, onLogout, logoutError = '', loggingOut = false, onResetDemo, onToggleTheme, onOpenGuide, onChangeNickname, onChangeAvatar }: ProfileProps) {
+export function Profile({ account, publicId, balance, avatarUrl = '', publicTitle = '', badge = '', theme, onLogout, logoutError = '', loggingOut = false, onResetDemo, onToggleTheme, onOpenGuide, onOpenService, onPasswordChanged, onChangeNickname, onChangeAvatar }: ProfileProps) {
   const [panel, setPanel] = useState<ProfileSheetPanel | null>(null)
   const [avatar, setAvatar] = usePersistentState<AvatarSelection>('seven-star-avatar', { index: 0 })
   const { drawHistoryLimit, defaultBetMode, fontScale, displayStyle } = useMemberPreferences()
@@ -83,16 +86,16 @@ export function Profile({ account, publicId, balance, avatarUrl = '', publicTitl
   const selectProfileTarget = (target: ProfileNavigationTarget) => {
     dispatchProfileNavigation(target, onOpenGuide, setPanel)
   }
-  return <section className="profile-simple-page"><header className="profile-simple-hero"><b>个人资料</b><button aria-label="打开显示设置" onClick={() => setPanel('theme')}><Icon name="more" /></button><section><button className="profile-simple-avatar" aria-label="修改头像" onClick={() => setPanel('avatar')}><Avatar index={selectedAvatarIndex} src={displayedAvatar} label="当前头像" /><i>编辑</i></button><div className="profile-name-block"><button className="profile-nickname-edit" aria-label="修改昵称" onClick={() => setPanel('nickname')}>修改</button><button className="profile-current-name" aria-label="修改昵称" onClick={() => setPanel('nickname')}><strong>{account}{badge && <i>{badge}</i>}</strong>{publicTitle && <em>{publicTitle}</em>}</button><small>{publicId ? `ID ${publicId} · ` : ''}余额 {balance.toFixed(2)} 元</small></div></section></header><ProfileGroup title="游戏服务" rows={gameRowDefs} onSelect={selectProfileTarget} /><ProfileGroup title="偏好设置" rows={preferenceRows} onSelect={selectProfileTarget} /><ProfileGroup title="账户设置" rows={accountRows} onSelect={selectProfileTarget} /><button className="profile-logout" disabled={loggingOut} onClick={() => void onLogout()}>{loggingOut ? '退出中…' : '退出登录'}</button>{logoutError && <p className="profile-logout-error" role="alert">{logoutError}</p>}<p className="profile-simple-version">{BRAND_NAME} · 安全服务已开启</p>{panel && <ProfilePanel avatarIndex={selectedAvatarIndex} onAvatarChange={changeAvatar} account={account} onChangeNickname={onChangeNickname} panel={panel} theme={theme} onClose={() => setPanel(null)} onResetDemo={onResetDemo} onToggleTheme={onToggleTheme} />}</section>
+  return <section className="profile-simple-page"><header className="profile-simple-hero"><b>个人资料</b><button aria-label="打开显示设置" onClick={() => setPanel('theme')}><Icon name="more" /></button><section><button className="profile-simple-avatar" aria-label="修改头像" onClick={() => setPanel('avatar')}><Avatar index={selectedAvatarIndex} src={displayedAvatar} label="当前头像" /><i>编辑</i></button><div className="profile-name-block"><button className="profile-nickname-edit" aria-label="修改昵称" onClick={() => setPanel('nickname')}>修改</button><button className="profile-current-name" aria-label="修改昵称" onClick={() => setPanel('nickname')}><strong>{account}{badge && <i>{badge}</i>}</strong>{publicTitle && <em>{publicTitle}</em>}</button><small>{publicId ? `ID ${publicId} · ` : ''}余额 {balance.toFixed(2)} 元</small></div></section></header><ProfileGroup title="游戏服务" rows={gameRowDefs} onSelect={selectProfileTarget} /><ProfileGroup title="偏好设置" rows={preferenceRows} onSelect={selectProfileTarget} /><ProfileGroup title="账户设置" rows={accountRows} onSelect={selectProfileTarget} /><button className="profile-logout" disabled={loggingOut} onClick={() => void onLogout()}>{loggingOut ? '退出中…' : '退出登录'}</button>{logoutError && <p className="profile-logout-error" role="alert">{logoutError}</p>}<p className="profile-simple-version">{BRAND_NAME}</p>{panel && <ProfilePanel avatarIndex={selectedAvatarIndex} onAvatarChange={changeAvatar} account={account} onChangeNickname={onChangeNickname} onOpenService={onOpenService} onPasswordChanged={onPasswordChanged} panel={panel} theme={theme} onClose={() => setPanel(null)} onResetDemo={onResetDemo} onToggleTheme={onToggleTheme} />}</section>
 }
 
 function ProfileGroup({ title, rows, onSelect }: { title: string; rows: SettingRow[]; onSelect: (panel: ProfileNavigationTarget) => void }) {
   return <section className="profile-setting-group"><small>{title}</small><div>{rows.map((row) => <button key={row.label} onClick={() => onSelect(row.panel)}><span className={row.tone}>{row.icon}</span><b>{row.label}</b>{row.hint && <em>{row.hint}</em>}<Icon name="arrow" /></button>)}</div></section>
 }
 
-function ProfilePanel({ panel, theme, onClose, onResetDemo, onToggleTheme, avatarIndex, onAvatarChange, account, onChangeNickname }: { panel: ProfileSheetPanel; theme: Theme; onClose: () => void; onResetDemo: () => void; onToggleTheme: () => void; avatarIndex: number; onAvatarChange: (index: number) => Promise<void>; account: string; onChangeNickname: (nickname: string) => Promise<void> }) {
+function ProfilePanel({ panel, theme, onClose, onResetDemo, onToggleTheme, avatarIndex, onAvatarChange, account, onChangeNickname, onOpenService, onPasswordChanged }: { panel: ProfileSheetPanel; theme: Theme; onClose: () => void; onResetDemo: () => void; onToggleTheme: () => void; avatarIndex: number; onAvatarChange: (index: number) => Promise<void>; account: string; onChangeNickname: (nickname: string) => Promise<void>; onOpenService: () => void; onPasswordChanged: () => Promise<void> }) {
   const info = panelInfo[panel]
-  return createPortal(<div className={`profile-sheet-layer theme-${theme}`} role="presentation" onClick={onClose}><section className="profile-sheet" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><header><button onClick={onClose}><Icon name="back" /></button><b>{info.title}</b><button onClick={onClose}>完成</button></header>{panel === 'avatar' ? <AvatarSettings selected={avatarIndex} onSelect={onAvatarChange} /> : panel === 'nickname' ? <NicknameSettings current={account} onSave={onChangeNickname} onSaved={onClose} /> : panel === 'sounds' ? <SoundSettings /> : panel === 'theme' ? <ThemeSettings theme={theme} onResetDemo={onResetDemo} onToggleTheme={onToggleTheme} /> : panel === 'security' ? <SecuritySettings /> : panel === 'line' ? <LineSettings /> : panel === 'help' ? <HelpSettings /> : panel === 'history' ? <HistorySettings onClose={onClose} /> : panel === 'betMode' ? <BetModeSettings onClose={onClose} /> : panel === 'fontSize' ? <FontSizeSettings /> : <SimplePanel content={info} />}</section></div>, document.body)
+  return createPortal(<div className={`profile-sheet-layer theme-${theme}`} role="presentation" onClick={onClose}><section className={`profile-sheet${panel === 'security' ? ' profile-internal-page' : ''}`} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><header><button aria-label="返回个人资料" onClick={onClose}><Icon name="back" /></button><b>{info.title}</b><button onClick={onClose}>完成</button></header>{panel === 'avatar' ? <AvatarSettings selected={avatarIndex} onSelect={onAvatarChange} /> : panel === 'nickname' ? <NicknameSettings current={account} onSave={onChangeNickname} onSaved={onClose} /> : panel === 'sounds' ? <SoundSettings /> : panel === 'theme' ? <ThemeSettings theme={theme} onResetDemo={onResetDemo} onToggleTheme={onToggleTheme} /> : panel === 'security' ? <SecuritySettings onPasswordChanged={onPasswordChanged} /> : panel === 'line' ? <LineSettings /> : panel === 'help' ? <HelpSettings onOpenService={onOpenService} /> : panel === 'history' ? <HistorySettings /> : panel === 'betMode' ? <BetModeSettings /> : panel === 'fontSize' ? <FontSizeSettings /> : <SimplePanel content={info} />}</section></div>, document.body)
 }
 
 const panelInfo: Record<ProfileSheetPanel, { title: string; summary: string; rows: Array<{ icon: string; title: string; detail: string; value?: string }> }> = {
@@ -100,12 +103,12 @@ const panelInfo: Record<ProfileSheetPanel, { title: string; summary: string; row
   nickname: { title: '显示昵称', summary: '', rows: [] },
   sounds: { title: '消息与通知声音', summary: '', rows: [] },
   theme: { title: '显示与主题', summary: '', rows: [] },
-  history: { title: '聊天室历史开奖期数', summary: '默认展示最近 50 期开奖记录，可随时调整。', rows: [{ icon: '20', title: '最近 20 期', detail: '节省聊天内容空间' }, { icon: '50', title: '最近 50 期', detail: '当前使用中', value: '已选择' }, { icon: '100', title: '最近 100 期', detail: '保留更多开奖信息' }] },
-  betMode: { title: '默认投注面板', summary: '这是网投面板的默认页签；各彩种是否支持聊天下注或详细网投，请在“游戏玩法”查看。', rows: [{ icon: '⌨', title: '快捷输入', detail: '数字与玩法可重复点击', value: '使用中' }, { icon: '▦', title: '两面盘', detail: '进入彩种页后可切换使用' }, { icon: '1~10', title: '号码面板', detail: '快速连续输入号码' }] },
+  history: { title: '开奖统计期数', summary: '', rows: [] },
+  betMode: { title: '默认投注面板', summary: '', rows: [] },
   fontSize: { title: '字体大小', summary: '', rows: [] },
   line: { title: '线路检测', summary: '当前线路连接稳定。', rows: [{ icon: '✓', title: '主线路', detail: '延迟 26 ms', value: '良好' }, { icon: '✓', title: '备用线路', detail: '延迟 41 ms', value: '可用' }] },
-  security: { title: '账户与安全', summary: '请妥善保管帐号和房间号。', rows: [{ icon: '✓', title: '实名认证', detail: '帐号认证状态正常', value: '已认证' }, { icon: '✓', title: '登录设备保护', detail: '当前设备安全', value: '已开启' }, { icon: '△', title: '修改登录密码', detail: '建议定期更新密码' }] },
-  help: { title: '帮助与反馈', summary: '遇到问题可联系在线客服。', rows: [{ icon: '七', title: '专属客服小七', detail: '全天候在线支持', value: '在线' }, { icon: '!', title: '提交问题反馈', detail: '描述遇到的问题，我们会尽快处理' }] },
+  security: { title: '账户与安全', summary: '', rows: [] },
+  help: { title: '帮助与反馈', summary: '', rows: [] },
 }
 
 function SimplePanel({ content }: { content: (typeof panelInfo)[ProfileSheetPanel] }) {
@@ -187,90 +190,82 @@ function FontSizeSettings() {
   return <div className="theme-setting font-size-setting"><p className="sheet-subtitle">仅调整界面阅读大小，不影响下注金额、号码与开奖结果。</p>{options.map((item) => <section key={item.id}><span className={`theme-preview font-size-preview ${item.id}`}>Aa</span><div><b>{item.label}</b><small>{item.helper}</small></div><button className={fontScale === item.id ? 'selected' : ''} onClick={() => setFontScale(item.id)}>{fontScale === item.id ? '使用中' : '使用'}</button></section>)}</div>
 }
 
-function SecuritySettings() {
+export function SecuritySettings({ onPasswordChanged }: { onPasswordChanged: () => Promise<void> }) {
   const [oldPassword, setOldPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
+  const passwordBytes = passwordUTF8ByteLength(newPassword)
+  const passwordValid = passwordBytes >= 8 && passwordBytes <= 72
+  const passwordsMatch = newPassword === confirmPassword
   const submit = async () => {
+    if (!oldPassword || !passwordValid || !passwordsMatch || oldPassword === newPassword) return
     setLoading(true)
     setMessage('')
     try {
       await memberApi.changePassword(oldPassword, newPassword)
-      setMessage('密码已更新')
       setOldPassword('')
       setNewPassword('')
+      setConfirmPassword('')
+      await onPasswordChanged()
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : '修改失败')
-    } finally {
       setLoading(false)
     }
   }
   return (
     <div className="theme-setting">
-      <p className="sheet-subtitle">修改登录密码后，下次登录需使用新密码。</p>
-      <div className="security-fields"><label>原密码<input type="password" autoComplete="current-password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} /></label><label>新密码<input type="password" autoComplete="new-password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} /></label></div>
-      <button className="demo-reset security-submit" disabled={loading} onClick={() => void submit()}>{loading ? '提交中…' : '保存新密码'}</button>
+      <p className="sheet-subtitle">修改登录密码</p>
+      <div className="security-fields"><label>原密码<input type="password" autoComplete="current-password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} /></label><label>新密码<input type="password" autoComplete="new-password" maxLength={72} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} /><small>{passwordBytes}/72 字节 · 密码需为 8–72 个 UTF-8 字节，中文通常占 3 字节</small></label><label>确认新密码<input type="password" autoComplete="new-password" maxLength={72} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />{confirmPassword && !passwordsMatch && <small className="security-field-error">两次输入的新密码不一致</small>}</label></div>
+      <button className="demo-reset security-submit" disabled={loading || !oldPassword || !passwordValid || !passwordsMatch || oldPassword === newPassword} onClick={() => void submit()}>{loading ? '提交中…' : '保存新密码'}</button>
       {message && <p className="security-message">{message}</p>}
     </div>
   )
 }
 
-function HelpSettings() {
-  const [invite, setInvite] = useState<{ invite_code: string; share_text: string } | null>(null)
+export function HelpSettings({ onOpenService }: { onOpenService: () => void }) {
   const supportEmail = String(import.meta.env.VITE_SUPPORT_EMAIL ?? '').trim()
-  useEffect(() => {
-    void memberApi.inviteInfo().then(setInvite).catch(() => setInvite(null))
-  }, [])
   return (
-    <div className="theme-setting">
-      <p className="sheet-subtitle">需要协助时，请优先通过在线客服提交问题，便于追踪处理进度。</p>
-      <section className="help-setting-block"><b>在线客服</b><p>消息页 → 在线客服</p><small>请附上房间号、彩种、期号和问题截图。</small></section>
-      {supportEmail && <section className="help-setting-block"><b>客服邮箱</b><p><a href={`mailto:${supportEmail}`}>{supportEmail}</a></p><small>邮件主题请注明「王者用户反馈」。</small></section>}
-      {invite && (
-        <section className="help-setting-block">
-          <b>我的邀请码</b>
-          <p>{invite.invite_code}</p>
-          <small>{invite.share_text}</small>
-        </section>
-      )}
-      <section className="help-setting-block"><b>注册链接</b><p>/register?invite={invite?.invite_code ?? 'U账号ID'}</p></section>
+    <div className="theme-setting help-settings">
+      <p className="sheet-subtitle">联系方式</p>
+      <section className="help-setting-block"><div><b>在线客服</b><small>站内客服会话</small></div><button className="help-contact-link" type="button" onClick={onOpenService}>进入客服</button></section>
+      {supportEmail && <section className="help-setting-block"><div><b>客服邮箱</b><small>{supportEmail}</small></div><a className="help-contact-link" href={`mailto:${supportEmail}`}>发邮件</a></section>}
     </div>
   )
 }
 
-function HistorySettings({ onClose }: { onClose: () => void }) {
+export function HistorySettings() {
   const { drawHistoryLimit, setDrawHistoryLimit } = useMemberPreferences()
   const options = [20, 50, 100]
   return (
     <div className="theme-setting">
-      <p className="sheet-subtitle">设置彩种页与聊天室展示的历史开奖期数。</p>
+      <p className="sheet-subtitle">控制房间读取的开奖查询范围，供开奖记录图片、长龙及走势统计使用；不会改变聊天消息或时间线的保留条数。</p>
       {options.map((value) => (
         <section key={value}>
           <span className="theme-preview day-preview">{value}</span>
           <div><b>最近 {value} 期</b><small>{value === drawHistoryLimit ? '当前使用中' : '点击切换'}</small></div>
-          <button className={drawHistoryLimit === value ? 'selected' : ''} onClick={() => { setDrawHistoryLimit(value); onClose() }}>{drawHistoryLimit === value ? '使用中' : '使用'}</button>
+          <button className={drawHistoryLimit === value ? 'selected' : ''} onClick={() => setDrawHistoryLimit(value)}>{drawHistoryLimit === value ? '使用中' : '使用'}</button>
         </section>
       ))}
     </div>
   )
 }
 
-function BetModeSettings({ onClose }: { onClose: () => void }) {
+export function BetModeSettings() {
   const { defaultBetMode, setDefaultBetMode } = useMemberPreferences()
   const options: Array<{ id: BetModePreference; label: string; helper: string }> = [
-    { id: 'quick', label: '快捷输入', helper: '数字与玩法可重复点击' },
-    { id: 'dual', label: '两面盘', helper: '大小单双龙虎' },
-    { id: 'numbers', label: '号码面板', helper: '1 ~ 10 号码' },
+    { id: 'chat', label: '聊天下注', helper: '进入彩种时先打开聊天室' },
+    { id: 'detail', label: '详细网投', helper: '进入彩种时先打开详细投注面板' },
   ]
   return (
     <div className="theme-setting">
-      <p className="sheet-subtitle">进入彩种页时默认打开的投注面板。</p>
+      <p className="sheet-subtitle">进入彩种时默认打开的投注方式；若该彩种只支持一种方式，会自动进入可用页面。</p>
       {options.map((item) => (
         <section key={item.id}>
           <span className="theme-preview day-preview">▤</span>
           <div><b>{item.label}</b><small>{item.helper}</small></div>
-          <button className={defaultBetMode === item.id ? 'selected' : ''} onClick={() => { setDefaultBetMode(item.id); onClose() }}>{defaultBetMode === item.id ? '使用中' : '使用'}</button>
+          <button className={defaultBetMode === item.id ? 'selected' : ''} onClick={() => setDefaultBetMode(item.id)}>{defaultBetMode === item.id ? '使用中' : '使用'}</button>
         </section>
       ))}
     </div>

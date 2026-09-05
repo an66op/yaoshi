@@ -11,7 +11,7 @@ import (
 // complete draw may grade a recommendation saved before its draw boundary.
 // Returning pending for missing/invalid evidence avoids inventing a result.
 func racingPlanDrawResult(pick PlanRecommendationView, period plan.StreamPeriod, draw lottery.Draw, now time.Time) (string, []int, *time.Time) {
-	if pick.GameID != "speed-racing" || draw.GameID != pick.GameID || draw.Issue != pick.Issue || period.Issue != pick.Issue ||
+	if !racingPlanGameID(pick.GameID) || draw.GameID != pick.GameID || draw.Issue != pick.Issue || period.Issue != pick.Issue ||
 		pick.Position < 1 || pick.Position > 10 || period.CreatedAt.IsZero() || period.ScheduledDrawAt.IsZero() ||
 		draw.DrawAt.IsZero() || draw.DrawAt.After(now) || !period.CreatedAt.Before(period.ScheduledDrawAt) || !period.CreatedAt.Before(draw.DrawAt) {
 		return "pending", nil, nil

@@ -312,7 +312,7 @@ BEGIN
     'admin_audit_logs', 'system_event_logs', 'data_cleanup_runs', 'admin_audit_log_archives', 'lottery_bet_archives',
     'user_balance_transaction_archives', 'lottery_play_limits', 'user_play_odds', 'room_play_odds',
     'workspace_robot_games', 'plan_recommendations', 'plan_automations', 'plan_generation_receipts',
-    'plan_streams', 'plan_stream_cycles', 'plan_stream_periods'
+    'plan_streams', 'plan_stream_cycles', 'plan_stream_periods', 'plan_publication_views'
   ] LOOP
     EXECUTE format('SELECT count(*) FROM public.%I', table_name) INTO row_count;
     IF row_count <> 0 THEN

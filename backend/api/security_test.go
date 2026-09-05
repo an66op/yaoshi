@@ -107,6 +107,33 @@ func TestRequestBodyLimitAllowsBoundedActivityUpload(t *testing.T) {
 	}
 }
 
+func TestRequestBodyLimitAllowsOnlyBoundedMemberQRCodeMultipart(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(RequestBodyLimit())
+	called := 0
+	engine.POST("/api/member/payment-accounts", func(c *gin.Context) { called++; c.Status(http.StatusNoContent) })
+
+	allowed := httptest.NewRequest(http.MethodPost, "/api/member/payment-accounts", bytes.NewReader(make([]byte, defaultMaxRequestBodyBytes+1)))
+	allowed.Header.Set("Content-Type", "multipart/form-data; boundary=safe-boundary")
+	allowedResponse := httptest.NewRecorder()
+	engine.ServeHTTP(allowedResponse, allowed)
+	if allowedResponse.Code != http.StatusNoContent {
+		t.Fatalf("bounded QR upload status = %d, want 204", allowedResponse.Code)
+	}
+
+	oversized := httptest.NewRequest(http.MethodPost, "/api/member/payment-accounts", bytes.NewReader(make([]byte, paymentQRCodeRequestBodyBytes+1)))
+	oversized.Header.Set("Content-Type", "multipart/form-data; boundary=safe-boundary")
+	oversizedResponse := httptest.NewRecorder()
+	engine.ServeHTTP(oversizedResponse, oversized)
+	if oversizedResponse.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized QR upload status = %d, want 413", oversizedResponse.Code)
+	}
+	if called != 1 {
+		t.Fatalf("member payment handler calls = %d, want 1", called)
+	}
+}
+
 func TestSafeRequestLoggerRedactsQueryString(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previous := gin.DefaultWriter

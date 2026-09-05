@@ -6,6 +6,7 @@ import type { Game } from '../types'
 import { HookHarness } from '../test/hookHarness'
 import { MarkSixDrawBall } from '../components/MarkSixBall'
 import { LotteryCountdown } from '../components/LotteryCountdown'
+import { FullBetBoard } from '../components/FullBetBoard'
 import { resolveLotteryTiming } from '../utils/lotteryTiming'
 import { GAME_TIMELINE_LIMIT } from '../utils/gameTimelineBudget'
 import { SG_SSC_LOTTERY_SOURCE_URL } from '../utils/lotterySourceURL'
@@ -13,7 +14,7 @@ import { BetKeyboard, GameRoom, GameTimeline, QuickActions } from './GameRoom'
 
 const runtime = vi.hoisted(() => ({
   hooks: null as HookHarness | null,
-  draws: [] as DrawResult[], drawsLoading: false,
+  draws: [] as DrawResult[], drawsLoading: false, drawHistoryLimit: 8, defaultBetMode: 'chat' as 'chat' | 'detail', drawHook: vi.fn(),
   chatMessages: vi.fn(), command: vi.fn(), send: vi.fn(), bets: vi.fn(), assistantHistory: vi.fn(), assistantStatus: vi.fn(), assistantPlace: vi.fn(), webPlaceBatch: vi.fn(), feed: vi.fn(), notifications: vi.fn(), roomSettings: vi.fn(), gameOdds: vi.fn(), sound: vi.fn(),
 }))
 vi.mock('react', async importOriginal => ({
@@ -30,9 +31,9 @@ vi.mock('../api/chat', () => ({ chatApi: { messages: runtime.chatMessages, comma
 vi.mock('../api/bets', () => ({ betsApi: { list: runtime.bets, assistantHistory: runtime.assistantHistory, assistantStatus: runtime.assistantStatus, assistantPlace: runtime.assistantPlace, webPlaceBatch: runtime.webPlaceBatch } }))
 vi.mock('../api/portal', () => ({ portalApi: { gameFeed: runtime.feed, notifications: runtime.notifications, roomSettings: runtime.roomSettings, gameOdds: runtime.gameOdds } }))
 vi.mock('../api/member', () => ({ memberApi: { walletSummary: vi.fn(async () => null) } }))
-vi.mock('../hooks/useGameDraws', () => ({ useGameDraws: () => ({ draws: runtime.draws, loading: runtime.drawsLoading }) }))
+vi.mock('../hooks/useGameDraws', () => ({ useGameDraws: (gameId: string, limit: number) => { runtime.drawHook(gameId, limit); return { draws: runtime.draws, loading: runtime.drawsLoading } } }))
 vi.mock('../hooks/useWebSocket', () => ({ WS_EVENT: 'test-room-ws', useWebSocketConnected: () => true }))
-vi.mock('../hooks/useMemberPreferences', () => ({ useMemberPreferences: () => ({ drawHistoryLimit: 8, defaultBetMode: 'quick', fontScale: 'standard' }) }))
+vi.mock('../hooks/useMemberPreferences', () => ({ useMemberPreferences: () => ({ drawHistoryLimit: runtime.drawHistoryLimit, defaultBetMode: runtime.defaultBetMode, fontScale: 'standard' }) }))
 vi.mock('../utils/notificationAudio', () => ({ playNotificationSound: runtime.sound }))
 
 type Props = ComponentProps<typeof GameRoom>
@@ -75,6 +76,9 @@ describe('room keyboard and issue lifecycle', () => {
     runtime.hooks = new HookHarness()
     runtime.draws = []
     runtime.drawsLoading = false
+    runtime.drawHistoryLimit = 8
+    runtime.defaultBetMode = 'chat'
+    runtime.drawHook.mockReset()
     runtime.chatMessages.mockReset().mockResolvedValue({ items: [] })
     runtime.command.mockReset().mockImplementation(async (content: string, gameId: string): Promise<ChatMessage> => ({ id: 10, user_id: 8, nickname: '王者玩家', room_type: 'group', room_scope: 'agent:2', game_id: gameId, content, message_type: 'text', mine: true, created_at: '2026-08-30T06:45:10Z' }))
     runtime.send.mockReset()
@@ -99,6 +103,15 @@ describe('room keyboard and issue lifecycle', () => {
     expect(text).toContain('本期正在受理。')
     expect(text).not.toContain('多车道示例')
     expect(text).not.toContain('每组用 #')
+  })
+
+  it('uses the configured draw query limit and opens the saved real room surface', () => {
+    runtime.drawHistoryLimit = 50
+    runtime.defaultBetMode = 'detail'
+    const root = render()
+    expect(runtime.drawHook).toHaveBeenCalledWith(game.id, 50)
+    expect(find(root, node => node.type === FullBetBoard)?.props.active).toBe(true)
+    expect(find(root, node => node.type === 'main')?.props.className).toContain('detail-mode-open')
   })
 
   it('updates the first quick action from the room settings API', async () => {

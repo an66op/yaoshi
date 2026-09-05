@@ -277,17 +277,31 @@ func (s *MemberService) ChangePassword(userID uint64, oldPassword, newPassword s
 		return apperrors.NewSystemError("DATABASE_ERROR", "读取用户失败", err)
 	}
 	if !utils.CheckPasswordHash(oldPassword, account.Password) {
-		return apperrors.NewBusinessError("INVALID_CREDENTIALS", "原密码不正确")
+		return apperrors.NewBusinessError("OLD_PASSWORD_INCORRECT", "原密码不正确")
 	}
 	hash, err := utils.HashPassword(newPassword)
 	if err != nil {
 		return apperrors.NewSystemError("HASH_PASSWORD_ERROR", "密码更新失败", err)
 	}
-	if err := s.db.Model(&account).Updates(passwordSessionUpdate(hash)).Error; err != nil {
-		return apperrors.NewSystemError("PASSWORD_UPDATE_FAILED", "密码更新失败", err)
+	result := changePasswordCompareAndSwap(s.db, userID, account.Password, hash)
+	if result.Error != nil {
+		return apperrors.NewSystemError("PASSWORD_UPDATE_FAILED", "密码更新失败", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		// Another request may have verified the same old hash concurrently. The
+		// password predicate makes PostgreSQL re-check the row after waiting for
+		// that update, so only the winner changes credentials/auth_version and
+		// enqueues a session-revocation receipt.
+		return apperrors.NewBusinessError("PASSWORD_CHANGED_CONCURRENTLY", "密码已被其他请求更新，请重新登录后再试")
 	}
 	ws.DisconnectUser(userID)
 	return nil
+}
+
+func changePasswordCompareAndSwap(db *gorm.DB, userID uint64, oldHash, newHash string) *gorm.DB {
+	return db.Model(&user.User{}).
+		Where("user_id = ? AND password = ?", userID, oldHash).
+		Updates(passwordSessionUpdate(newHash))
 }
 
 // UpdateNickname persists the member's public in-room name. Keeping this in

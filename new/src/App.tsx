@@ -388,17 +388,17 @@ function App() {
     navigate(pathForRoom())
   }
 
-  const logout = async () => {
-    if (loggingOut) return
+  const logout = async (credentialsAlreadyChanged = false) => {
+    if (loggingOut && !credentialsAlreadyChanged) return
     setLoggingOut(true)
     setLogoutError('')
     try {
       await memberApi.logout()
     } catch (reason) {
-      // A 401 means the cookie is no longer accepted. Network/5xx failures
-      // keep the current UI authenticated because JavaScript cannot remove an
-      // HttpOnly cookie and must not claim that logout succeeded.
-      if (!(reason instanceof AuthError)) {
+      // A normal logout keeps the verified session on a network/5xx failure.
+      // After a password change the backend has already advanced auth_version,
+      // so this cookie is unusable and the local session must always be cleared.
+      if (!(reason instanceof AuthError) && !credentialsAlreadyChanged) {
         setLogoutError('退出未完成，当前登录仍然有效，请检查网络后重试')
         setLoggingOut(false)
         return
@@ -519,7 +519,7 @@ function App() {
       ? <Lobby room={activeSession.room} roomName={activeSession.roomName} roomLogo={activeSession.roomLogo} roomHistory={roomHistory} games={liveGames} theme={demo.theme} gamesLive={gamesLive} gamesError={gamesError} initialFilter={route.kind === 'tab' ? route.lobbyFilter ?? lastLobbyFilter : lastLobbyFilter} onFilterChange={(filter) => { setLastLobbyFilter(filter); replace(pathForLobby(filter)) }} onToggleTheme={toggleTheme} onOpenGame={(gameId, sourceFilter) => { setLastLobbyFilter(sourceFilter); navigate(pathForGame(gameId, false, sourceFilter)) }} onSwitchRoom={switchRoom} />
       : activeTab === 'shop'
         ? <Wallet balance={activeSession.balance} walletAction={walletAction} returnGameId={walletReturnGameId} onBackToGame={walletReturnGameId ? () => navigate(pathForGame(walletReturnGameId, true, route.kind === 'tab' ? route.returnLobbyFilter : undefined)) : undefined} onRefresh={() => void refreshBalance()} onNavigate={navigate} />
-        : <Profile account={displayName} publicId={activeSession.publicId} balance={activeSession.balance} avatarUrl={activeSession.avatar} publicTitle={activeSession.publicTitle} badge={activeSession.badge} theme={demo.theme} onLogout={logout} logoutError={logoutError} loggingOut={loggingOut} onResetDemo={resetDemo} onToggleTheme={toggleTheme} onOpenGuide={(tab) => navigate(pathForGameGuide(tab))} onChangeAvatar={async (avatar) => {
+        : <Profile account={displayName} publicId={activeSession.publicId} balance={activeSession.balance} avatarUrl={activeSession.avatar} publicTitle={activeSession.publicTitle} badge={activeSession.badge} theme={demo.theme} onLogout={logout} logoutError={logoutError} loggingOut={loggingOut} onResetDemo={resetDemo} onToggleTheme={toggleTheme} onOpenGuide={(tab) => navigate(pathForGameGuide(tab))} onOpenService={() => navigate(pathForChat('service'))} onPasswordChanged={() => logout(true)} onChangeAvatar={async (avatar) => {
           const profile = await memberApi.updateAvatar(avatar)
           setSession((current) => current ? { ...current, avatar: profile.avatar || avatar, publicTitle: profile.public_title, badge: profile.badge, publicId: profile.public_id, balance: profile.balance } : current)
         }} onChangeNickname={async (nickname) => {

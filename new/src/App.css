@@ -743,6 +743,7 @@ button:active {
   color: #987b38;
   text-align: center;
   font-size: 10px;
+  white-space: pre-line;
 }
 .chat-history {
   min-height: 0;

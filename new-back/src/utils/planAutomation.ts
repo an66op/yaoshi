@@ -2,6 +2,13 @@ import type { PlanAutomationPayload } from '../api'
 
 export const canManagePlanAutomation = (role: string | undefined) => role === 'admin'
 
+export const RACING_PLAN_GAME_IDS = [
+  'speed-racing', 'speed-fly', 'sg-fly', 'fly-racing', 'au-lucky-10',
+  'bingo-racing-a', 'bingo-racing-b',
+] as const
+
+export const hasRacingPlanGame = (gameIds: string[]) => gameIds.some(id => (RACING_PLAN_GAME_IDS as readonly string[]).includes(id))
+
 type RacingSelection = { positions: number[]; plan_keys: string[] }
 
 export function buildPlanAutomationPayload(workspaceId: number, enabled: boolean, gameIds: string[], racing?: RacingSelection): PlanAutomationPayload {
@@ -13,7 +20,7 @@ export function buildPlanAutomationPayload(workspaceId: number, enabled: boolean
     if (racing.positions.some(position => !Number.isSafeInteger(position) || position < 1 || position > 10)) throw new Error('名次必须为冠军至第十名')
     payload.positions = [...new Set(racing.positions)].sort((a, b) => a - b)
     payload.plan_keys = [...new Set(racing.plan_keys.map(key => key.trim()).filter(Boolean))]
-    if (enabled && selectedGames.includes('speed-racing') && (!payload.positions.length || !payload.plan_keys.length)) throw new Error('极速赛车至少选择一个名次和一种计划')
+    if (enabled && hasRacingPlanGame(selectedGames) && (!payload.positions.length || !payload.plan_keys.length)) throw new Error('赛车类彩种至少选择一个名次和一种计划')
   }
   return payload
 }

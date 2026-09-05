@@ -47,6 +47,7 @@ type MemberPaymentAccount struct {
 	AccountName string         `gorm:"size:100;not null" json:"account_name"`
 	AccountNo   string         `gorm:"type:text;not null" json:"-"`
 	HolderName  string         `gorm:"size:80" json:"holder_name"`
+	QRCodeFile  *string        `gorm:"size:64" json:"-"`
 	IsDefault   bool           `gorm:"not null;default:false" json:"is_default"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`

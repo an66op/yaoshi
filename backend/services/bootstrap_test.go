@@ -114,9 +114,12 @@ func TestDebugPlanTemplatesHaveUniqueRoomIdentity(t *testing.T) {
 		seen[key] = struct{}{}
 		games[template.GameID] = struct{}{}
 	}
-	for _, gameID := range []string{"speed-racing", "canada-28", "au-lucky-10"} {
-		if _, exists := games[gameID]; !exists {
-			t.Fatalf("missing plan template game %q", gameID)
+	if _, exists := games["canada-28"]; !exists {
+		t.Fatal("missing non-racing debug plan template")
+	}
+	for _, gameID := range racingPlanGameIDs {
+		if _, exists := games[gameID]; exists {
+			t.Fatalf("racing-v2 debug template %q would create a generic publication hidden from members", gameID)
 		}
 	}
 }

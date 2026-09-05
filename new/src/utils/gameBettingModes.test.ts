@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { roomBettingAssembly, roomBettingMode } from './gameBettingModes'
+import { preferredRoomBettingMode, roomBettingAssembly, roomBettingMode } from './gameBettingModes'
 
 describe('roomBettingAssembly', () => {
   it('assembles chat first and a compatible detail board for verified game families', () => {
@@ -38,5 +38,13 @@ describe('roomBettingAssembly', () => {
       modes: [{ id: 'mode1', label: '聊天', surface: 'chat' }],
       defaultMode: 'mode1',
     })
+  })
+
+  it('uses the saved surface when available and falls back to the only real mode', () => {
+    const dual = roomBettingAssembly('speed-racing')
+    expect(preferredRoomBettingMode(dual, 'chat')).toBe('mode1')
+    expect(preferredRoomBettingMode(dual, 'detail')).toBe('mode2')
+    expect(preferredRoomBettingMode(roomBettingAssembly('unverified-game'), 'detail')).toBe('mode1')
+    expect(preferredRoomBettingMode(roomBettingAssembly('bingo-mark-six'), 'chat')).toBe('mode2')
   })
 })

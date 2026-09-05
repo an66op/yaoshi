@@ -10,6 +10,8 @@ usage() {
 
 此工具只清理本地非 release 数据库的业务记录，保留 schema、迁移记录、
 登录账号、工作区、彩票目录和房间配置。执行前必须停止前后端服务。
+执行模式必须显式设置绝对路径 BACKEND_UPLOAD_DIR；数据库提交后只会
+精确删除其 .private/member-payment-qr 下经过结构校验的会员收款二维码文件。
 不传 ENV_FILE 时，必须由当前进程环境显式提供全部 BACKEND_* 变量。
 USAGE
 }
@@ -42,6 +44,7 @@ if [[ -n "$env_file" ]]; then
   unset BACKEND_DATABASE_USER BACKEND_DATABASE_PASSWORD BACKEND_DATABASE_DBNAME
   unset BACKEND_DATABASE_SSLMODE BACKEND_SERVER_PORT BACKEND_ALLOW_DEVELOPMENT_RESET
   unset BACKEND_DEVELOPMENT_RESET_DATABASE BACKEND_DEVELOPMENT_RESET_SENTINEL_TOKEN
+  unset BACKEND_UPLOAD_DIR
   load_backend_env "$env_file"
 fi
 
@@ -93,7 +96,7 @@ cleared_tables=(
   lottery_sgssc_backfill_attempts lottery_sgssc_backfill_items
   user_balance_transactions user_applications lottery_issues lottery_draws lottery_issue_windows
   lottery_bets lottery_assistant_requests lottery_bet_requests plan_recommendations
-  plan_generation_receipts plan_streams plan_stream_cycles plan_stream_periods
+  plan_generation_receipts plan_streams plan_stream_cycles plan_stream_periods plan_publication_views
   member_payment_accounts activity_participations special_number_grants
   admin_notifications member_notifications member_chat_messages member_chat_read_cursors chat_red_packets
   chat_red_packet_claims rebate_daily_records agent_profit_share_records
@@ -106,6 +109,7 @@ echo "保留表（${#preserved_tables[@]}）：${preserved_tables[*]}"
 echo "清理表（${#cleared_tables[@]}）：${cleared_tables[*]}"
 echo "账号余额将归零、登录会话将失效、机器人总开关将关闭。"
 echo "彩票期号/同步状态、活动参与/剩余奖池、特殊号码发放计数和计划运行统计将复位。"
+echo "执行模式还会精确清理 BACKEND_UPLOAD_DIR/.private/member-payment-qr 下的应用生成文件。"
 
 if [[ "$mode" == "dry-run" ]]; then
   echo "仅预览：没有连接数据库、没有备份、没有修改任何数据。"
@@ -129,18 +133,27 @@ expected_confirmation="RESET:${BACKEND_DATABASE_DBNAME}:BUSINESS-DATA"
 case "$backup_dir" in
   /|/home|/Users|"$HOME") echo "拒绝使用过宽的备份目录：$backup_dir" >&2; exit 1 ;;
 esac
+for command_name in age age-keygen psql awk basename chmod cmp date dirname find id mkdir mktemp mv rm sed sort stat tail tar lsof; do
+  command -v "$command_name" >/dev/null 2>&1 || { echo "缺少命令：$command_name" >&2; exit 1; }
+done
+: "${BACKEND_UPLOAD_DIR:?执行业务数据重置时必须显式设置 BACKEND_UPLOAD_DIR}"
+reset_validate_payment_qr_cleanup_target "$BACKEND_UPLOAD_DIR"
+case "$backup_dir/" in
+  "$RESET_PAYMENT_QR_DIRECTORY/"*) echo "备份目录不能位于待清理的二维码目录内" >&2; exit 1 ;;
+esac
+payment_qr_directory="$RESET_PAYMENT_QR_DIRECTORY"
+payment_qr_expected_count="$RESET_PAYMENT_QR_FILE_COUNT"
+echo "已锁定二维码清理目标：$payment_qr_directory（$payment_qr_expected_count 个文件）"
 
 sentinel_token="${BACKEND_DEVELOPMENT_RESET_SENTINEL_TOKEN:-}"
 (( ${#sentinel_token} >= 32 && ${#sentinel_token} <= 256 )) || { echo "sentinel token 必须为 32-256 个字符" >&2; exit 1; }
-for command_name in psql awk basename date mkdir mv sed tail lsof; do
-  command -v "$command_name" >/dev/null 2>&1 || { echo "缺少命令：$command_name" >&2; exit 1; }
-done
 
 reset_assert_backend_port_stopped
 token_sha256="$(reset_sha256 "$sentinel_token")"
 unset sentinel_token BACKEND_DEVELOPMENT_RESET_SENTINEL_TOKEN
 identity_before="$(reset_verified_identity "$token_sha256" true)"
 IFS=$'\t' read -r server_system_identifier server_address server_port _ _ _ <<<"$identity_before"
+reset_validate_payment_qr_database_file_consistency "$BACKEND_UPLOAD_DIR"
 
 echo "开始创建重置前完整加密备份……"
 backup_output="$("$script_dir/dev-postgres-backup.sh" --backup-dir "$backup_dir")"
@@ -153,12 +166,54 @@ backup_file="$(printf '%s\n' "$backup_output" | sed -n 's/^数据库备份完成
 backup_sha256="$(awk 'NR == 1 { print $1 }' "$backup_file.sha256")"
 [[ "$backup_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "备份 SHA-256 不正确" >&2; exit 1; }
 backup_name="$(basename "$backup_file")"
+echo "开始创建与数据库备份配套的加密会员收款二维码归档……"
+reset_archive_payment_qr_files "$BACKEND_UPLOAD_DIR" "$backup_file" \
+  "${BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY:?缺少 BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY}"
+payment_qr_archive="$RESET_PAYMENT_QR_ARCHIVE"
+payment_qr_archive_name="$(basename "$payment_qr_archive")"
+payment_qr_archive_sha256="$RESET_PAYMENT_QR_ARCHIVE_SHA256"
+payment_qr_archived_count="$RESET_PAYMENT_QR_ARCHIVE_FILE_COUNT"
+[[ "$payment_qr_archived_count" == "$payment_qr_expected_count" ]] || {
+  echo "二维码归档数量与重置前快照不一致，拒绝继续" >&2
+  exit 1
+}
+reset_validate_payment_qr_archive_database_consistency "$payment_qr_archive" "$payment_qr_archive_sha256" \
+  "$payment_qr_archived_count" "$BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY"
 request_id="dev-reset-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
+receipt_file="$backup_file.reset-receipt"
+receipt_partial="$receipt_file.partial"
+payment_qr_removed_count="pending"
+write_business_reset_receipt() {
+  local reset_status="$1"
+  umask 077
+  {
+    printf 'request_id=%s\n' "$request_id"
+    printf 'database=%s\n' "$BACKEND_DATABASE_DBNAME"
+    printf 'backup=%s\n' "$backup_name"
+    printf 'backup_sha256=%s\n' "$backup_sha256"
+    printf 'payment_qr_backup=%s\n' "$payment_qr_archive_name"
+    printf 'payment_qr_backup_sha256=%s\n' "$payment_qr_archive_sha256"
+    printf 'payment_qr_files_archived=%s\n' "$payment_qr_archived_count"
+    printf 'payment_qr_files_expected=%s\n' "$payment_qr_expected_count"
+    printf 'server_system_identifier=%s\n' "$server_system_identifier"
+    printf 'server_address=%s\n' "$server_address"
+    printf 'server_port=%s\n' "$server_port"
+    printf 'sentinel_token_sha256=%s\n' "$token_sha256"
+    printf 'payment_qr_directory=%s\n' "$payment_qr_directory"
+    printf 'payment_qr_files_removed=%s\n' "$payment_qr_removed_count"
+    printf 'status=%s\n' "$reset_status"
+    printf 'recorded_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } >"$receipt_partial"
+  chmod 600 "$receipt_partial"
+  mv "$receipt_partial" "$receipt_file"
+}
 unset BACKEND_DEVELOPMENT_BACKUP_AGE_IDENTITY
 
 reset_assert_backend_port_stopped
 identity_after="$(reset_verified_identity "$token_sha256" true)"
 reset_identity_matches "$identity_before" "$identity_after"
+
+write_business_reset_receipt "business_reset_authorized_pending"
 
 export PGPASSWORD="$BACKEND_DATABASE_PASSWORD"
 export PGSSLMODE="${BACKEND_DATABASE_SSLMODE:-disable}"
@@ -251,6 +306,7 @@ INSERT INTO dev_reset_manifest (table_name, disposition) VALUES
   ('lottery_assistant_requests','clear'), ('lottery_bet_requests','clear'),
   ('plan_recommendations','clear'), ('plan_generation_receipts','clear'),
   ('plan_streams','clear'), ('plan_stream_cycles','clear'), ('plan_stream_periods','clear'),
+  ('plan_publication_views','clear'),
   ('member_payment_accounts','clear'),
   ('activity_participations','clear'), ('special_number_grants','clear'),
   ('admin_notifications','clear'), ('member_notifications','clear'),
@@ -292,7 +348,7 @@ TRUNCATE TABLE
     public.lottery_issues, public.lottery_draws, public.lottery_issue_windows, public.lottery_bets,
     public.lottery_assistant_requests, public.lottery_bet_requests,
     public.plan_recommendations, public.plan_generation_receipts,
-    public.plan_streams, public.plan_stream_cycles, public.plan_stream_periods,
+    public.plan_streams, public.plan_stream_cycles, public.plan_stream_periods, public.plan_publication_views,
     public.member_payment_accounts,
     public.activity_participations, public.special_number_grants,
     public.admin_notifications, public.member_notifications,
@@ -439,22 +495,23 @@ WHERE disposition = 'clear';
 COMMIT;
 SQL
 
-umask 077
-receipt_file="$backup_file.reset-receipt"
-receipt_partial="$receipt_file.partial"
-{
-  printf 'request_id=%s\n' "$request_id"
-  printf 'database=%s\n' "$BACKEND_DATABASE_DBNAME"
-  printf 'backup=%s\n' "$backup_name"
-  printf 'backup_sha256=%s\n' "$backup_sha256"
-  printf 'server_system_identifier=%s\n' "$server_system_identifier"
-  printf 'server_address=%s\n' "$server_address"
-  printf 'server_port=%s\n' "$server_port"
-  printf 'sentinel_token_sha256=%s\n' "$token_sha256"
-  printf 'completed_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-} >"$receipt_partial"
-mv "$receipt_partial" "$receipt_file"
+write_business_reset_receipt "business_reset_committed_qr_cleanup_pending"
+
+# The backend and all database clients were required to be stopped before the
+# reset. Revalidate the exact private subtree after the database commit, then
+# remove only server-generated QR PNG paths one by one. If this fails, set -e
+# prevents a misleading completed receipt; rerunning the authorized reset can
+# finish cleanup without widening the deletion scope.
+reset_remove_payment_qr_files "$BACKEND_UPLOAD_DIR" "$payment_qr_archived_count"
+payment_qr_removed_count="$RESET_PAYMENT_QR_REMOVED_COUNT"
+[[ "$payment_qr_removed_count" == "$payment_qr_archived_count" ]] || {
+  echo "二维码删除数量与配套归档不一致" >&2
+  exit 1
+}
+write_business_reset_receipt "complete"
 
 echo "开发业务数据重置完成。备份：$backup_file"
+echo "配套加密二维码归档：$payment_qr_archive（$payment_qr_archived_count 个文件）"
+echo "已精确删除 $payment_qr_removed_count 个会员收款二维码文件（不会递归删除目录）。"
 echo "重置凭证：$receipt_file"
 echo "重新启动后端前请先确认账号余额归零、机器人关闭及迁移就绪。"

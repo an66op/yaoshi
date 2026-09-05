@@ -16,6 +16,13 @@ describe('racing plan stream requests', () => {
     planApi.activateRacing({ position: 6, plan_key: 'dragon-tiger-three-periods' }, controller.signal)
     expect(transport.request).toHaveBeenCalledWith('/member/plans/speed-racing/activate?history_limit=6', { method: 'POST', body: '{"position":6,"plan_key":"dragon-tiger-three-periods"}', signal: controller.signal })
   })
+	it('routes another verified racing product without falling back to speed-racing', () => {
+		const controller = new AbortController()
+		planApi.racingDetail({ position: 3, plan_key: 'size-five-periods' }, controller.signal, 'speed-fly')
+		expect(transport.request).toHaveBeenCalledWith('/member/plans/speed-fly?position=3&plan_key=size-five-periods&history_limit=6', { signal: controller.signal })
+		planApi.activateRacing({ position: 3, plan_key: 'size-five-periods' }, controller.signal, 'speed-fly')
+		expect(transport.request).toHaveBeenLastCalledWith('/member/plans/speed-fly/activate?history_limit=6', { method: 'POST', body: '{"position":3,"plan_key":"size-five-periods"}', signal: controller.signal })
+	})
   it('limits non-racing reads to six real periods and touches with a separate POST', () => {
     planApi.detail('canada-28')
     expect(transport.request).toHaveBeenCalledWith('/member/plans/canada-28?history_limit=6', { signal: undefined })

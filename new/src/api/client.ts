@@ -27,6 +27,13 @@ export class AuthError extends Error {
   }
 }
 
+function requestHeaders(init?: RequestInit) {
+  const headers = new Headers(init?.headers)
+  const multipart = typeof FormData !== 'undefined' && init?.body instanceof FormData
+  if (!multipart && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  return headers
+}
+
 function responseErrorMessage(response: Response, value: unknown, fallback: string) {
   // Never render database/proxy diagnostics returned by an unexpected server
   // failure. Validation and rate-limit messages remain available to users.
@@ -48,7 +55,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
 	  credentials: 'include',
       signal: init?.signal ?? controller?.signal,
-      headers: { 'Content-Type': 'application/json', ...init?.headers },
+	  headers: requestHeaders(init),
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw new Error('请求超时，请稍后重试')
@@ -86,7 +93,7 @@ export async function publicRequest<T>(path: string, init?: RequestInit): Promis
       ...init,
 	  credentials: 'include',
       signal: init?.signal ?? controller?.signal,
-      headers: { 'Content-Type': 'application/json', ...init?.headers },
+	  headers: requestHeaders(init),
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw new Error('请求超时，请稍后重试')

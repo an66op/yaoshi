@@ -435,6 +435,7 @@
 .wallet-payment-account b i { margin-left: 6px; padding: 2px 5px; border-radius: 5px; background: #d9f4ef; color: #138b80; font-size: 9px; font-style: normal; }
 .wallet-payment-account small, .wallet-payment-account em { overflow: hidden; color: #76929c; font-size: 10px; font-style: normal; white-space: nowrap; text-overflow: ellipsis; }
 .wallet-payment-account > button { padding: 5px 3px; border: 0; background: transparent; color: #d36866; font-size: 10px; }
+.wallet-payment-account > .account-qr { width: 42px; height: 42px; flex: none; border: 1px solid #cde4e6; border-radius: 10px; background: #fff; object-fit: cover; }
 .account-mark { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 11px; background: linear-gradient(135deg, #26adbd, #327ebb); color: #fff; font-size: 14px; font-weight: 700; }
 .account-mark.alipay { background: linear-gradient(135deg, #337de4, #59b6eb); }
 .account-mark.bank { background: linear-gradient(135deg, #e58f49, #d65e57); }
@@ -448,6 +449,23 @@
 .wallet-account-type-grid button { display: grid; justify-items: center; gap: 4px; padding: 7px 2px; border: 1px solid #d5e8eb; border-radius: 9px; background: #fff; color: #62808a; font-size: 10px; }
 .wallet-account-type-grid button i { display: grid; place-items: center; width: 21px; height: 21px; border-radius: 7px; background: #dbf4f4; color: #178a98; font-size: 11px; font-style: normal; font-weight: 700; }
 .wallet-account-type-grid button.is-selected { border-color: #2facb4; background: #e4f8f7; color: #127f8d; }
+.wallet-payment-account-form { display: grid; gap: 12px; margin-top: 15px; }
+.wallet-qr-upload { display: grid; gap: 9px; padding: 12px; border: 1px solid #d4e8ea; border-radius: 14px; background: #f7fcfc; }
+.wallet-qr-upload > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.wallet-qr-upload > header > div { display: grid; gap: 2px; }
+.wallet-qr-upload > header b { color: #285263; font-size: 12px; }
+.wallet-qr-upload > header small { color: #7e969e; font-size: 9px; }
+.wallet-qr-upload > header > span { padding: 4px 7px; border-radius: 999px; background: #e0f5f1; color: #15877f; font-size: 8px; font-weight: 800; }
+.wallet-qr-upload > label { position: relative; display: grid; min-height: 112px; place-items: center; align-content: center; gap: 5px; overflow: hidden; border: 1px dashed #6fc2c6; border-radius: 12px; background: #fff; color: #1b8790; text-align: center; cursor: pointer; }
+.wallet-qr-upload > label:focus-within { border-color: #229fa8; box-shadow: 0 0 0 3px #24a7aa20; }
+.wallet-qr-upload > label input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.wallet-qr-upload > label > i { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 10px; background: #e1f6f4; font-size: 18px; font-style: normal; }
+.wallet-qr-upload > label > strong { font-size: 11px; }
+.wallet-qr-upload > label > small { color: #839da4; font-size: 8px; }
+.wallet-qr-upload > label.has-preview { grid-template-columns: 76px 1fr; min-height: 92px; padding: 8px; text-align: left; }
+.wallet-qr-upload > label.has-preview img { grid-row: 1; width: 76px; height: 76px; border-radius: 10px; background: #fff; object-fit: contain; }
+.wallet-qr-upload > label.has-preview strong { grid-column: 2; grid-row: 1; justify-self: start; }
+.wallet-qr-upload > button { justify-self: end; padding: 2px; border: 0; background: transparent; color: #c45d5b; font-size: 9px; }
 .wallet-add-account-option { width: 100%; padding: 8px; border: 0; border-top: 1px solid #dbecee; background: transparent; color: #168896; font-size: 11px; font-weight: 700; text-align: left; }
 .wallet-payment-empty { border-style: dashed !important; }
 .wallet-bet-filter { display: flex; gap: 7px; margin-bottom: 10px; }
@@ -480,6 +498,12 @@
 .theme-night .wallet-payment-account small, .theme-night .wallet-payment-account em { color: #8cb8c1; }
 .theme-night .wallet-add-payment-account, .theme-night .wallet-account-type-grid button { border-color: #4bd4dc45; background: #102f4c; color: #9bdde2; }
 .theme-night .wallet-account-type-grid button.is-selected { border-color: #49cfd0; background: #134f62; color: #a6fffa; }
+.theme-night .wallet-qr-upload { border-color: #4bd4dc35; background: #092942; }
+.theme-night .wallet-qr-upload > header b { color: #e2f7fa; }
+.theme-night .wallet-qr-upload > header small { color: #8cb8c1; }
+.theme-night .wallet-qr-upload > header > span { background: #164d50; color: #83eee2; }
+.theme-night .wallet-qr-upload > label { border-color: #4bcbd070; background: #08253d; color: #9df8f1; }
+.theme-night .wallet-qr-upload > label > small { color: #8cb8c1; }
 .theme-night .wallet-bet-filter button { border-color: #4bd4dc35; background: #0e304d; color: #9ec5cd; }
 .theme-night .wallet-bet-filter button.is-active { border-color: #4dd4d0; background: #134f62; color: #a6fffa; }
 .theme-night .wallet-bet-row { border-bottom-color: #4bd4dc24; }

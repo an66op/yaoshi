@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { adminApi, agentApi, tenantApi, type AdminGame, type PlanRecommendation, type WorkspaceGame } from '../api'
 import { getStoredUser } from '../auth'
 import { loadPlanWorkspaces } from '../utils/planWorkspaces'
-import { buildPlanRecommendationPayload, planRecommendationNumberError, planRecommendationSelection, type PlanRecommendationDraft } from '../utils/planRecommendation'
+import { buildPlanRecommendationPayload, isRacingPlanGame, isSupportedManualPlanGame, planRecommendationNumberError, planRecommendationSelection, type PlanRecommendationDraft } from '../utils/planRecommendation'
 import { PlanRecommendationNumberFields } from './PlanRecommendationNumberFields'
 import { useFeedback } from './feedback'
 
@@ -69,7 +69,11 @@ export function PlanManagementPanel({ workspaceId: controlledWorkspaceId, refres
   }, [load, refreshKey])
 
   const gameNames = useMemo(() => new Map(games.map(game => [game.id, game.name])), [games])
-  const openEdit = (item: PlanRecommendation) => setDraft({ ...item, numbersText: item.numbers.join(','), workspace_id: item.workspace_id })
+  const manualGames = useMemo(() => games.filter(game => isSupportedManualPlanGame(game.id) && !isRacingPlanGame(game.id)), [games])
+  const openEdit = (item: PlanRecommendation) => {
+    if (item.source === 'demo' || !isSupportedManualPlanGame(item.game_id) || isRacingPlanGame(item.game_id)) return
+    setDraft({ ...item, numbersText: item.numbers.join(','), workspace_id: item.workspace_id })
+  }
   const save = async () => {
     if (!draft) return
     setSaving(true); setError('')
@@ -101,7 +105,7 @@ export function PlanManagementPanel({ workspaceId: controlledWorkspaceId, refres
   return <Card variant="outlined" sx={{ mt: 2, maxWidth: 1080 }}>
     <CardContent>
       <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} gap={1.2} mb={1.5}>
-        <Box flex={1}><Typography fontWeight={900}>计划群推荐</Typography><Typography fontSize={11} color="text.secondary">手工及其他彩种发布记录（含停用）；会员页仅展示最近 6 期实际发布记录，不补造历史或命中率。</Typography></Box>
+        <Box flex={1}><Typography fontWeight={900}>计划群推荐</Typography><Typography fontSize={11} color="text.secondary">非赛车彩种可手工发布；赛车类统一使用上方名次与方案矩阵。会员页展示最近 6 期真实发布与可信开奖统计。</Typography></Box>
         {role === 'admin' && controlledWorkspaceId === undefined && <TextField select size="small" label="配置房间" value={workspaceId} disabled={saving} onChange={event => { loadSequence.current += 1; setItems([]); setDraft(null); setPendingDelete(null); setWorkspaceId(Number(event.target.value)) }} sx={{ minWidth: 260 }}>{workspaces.map(item => <MenuItem key={item.id} value={item.id}>{item.label}</MenuItem>)}</TextField>}
         <Button variant="outlined" startIcon={<RefreshRounded />} disabled={loading || saving || (role === 'admin' && !workspaceId)} onClick={() => void load()}>刷新推荐</Button>
         <Button variant="contained" startIcon={<AddRounded />} disabled={role === 'admin' && !workspaceId} onClick={() => setDraft(blankDraft(workspaceId))}>新增推荐</Button>
@@ -111,9 +115,9 @@ export function PlanManagementPanel({ workspaceId: controlledWorkspaceId, refres
         {items.map(item => <Paper key={item.id} variant="outlined" sx={{ p: 1.3, opacity: item.enabled ? 1 : .6 }}>
           <Stack direction="row" alignItems="center" gap={1}>
             <Box width={32} height={32} borderRadius={1.7} display="grid" sx={{ placeItems: 'center', bgcolor: item.master_color, color: '#fff', fontWeight: 900 }}>{item.master_name.slice(0, 1)}</Box>
-            <Box flex={1} minWidth={0}><Stack direction="row" gap={.7} alignItems="center" flexWrap="wrap"><Typography fontWeight={850} noWrap>{gameNames.get(item.game_id) || item.game_id}</Typography><Chip size="small" label={item.enabled ? '已发布' : '已停用'} color={item.enabled ? 'success' : 'default'} />{item.source === 'demo' && <Chip size="small" label="自动生成" color="warning" variant="outlined" />}</Stack><Typography fontSize={10.5} color="text.secondary" noWrap>第 {item.issue} 期 · {item.master_name} · {planRecommendationSelection(item)}</Typography></Box>
-            <IconButton size="small" onClick={() => openEdit(item)}><EditRounded fontSize="small" /></IconButton>
-            <IconButton size="small" color="error" onClick={() => setPendingDelete(item)}><DeleteOutlineRounded fontSize="small" /></IconButton>
+            <Box flex={1} minWidth={0}><Stack direction="row" gap={.7} alignItems="center" flexWrap="wrap"><Typography fontWeight={850} noWrap>{gameNames.get(item.game_id) || item.game_id}</Typography><Chip size="small" label={item.enabled ? '已发布' : '已停用'} color={item.enabled ? 'success' : 'default'} />{item.source === 'demo' && <Chip size="small" label="自动生成" color="warning" variant="outlined" />}{isRacingPlanGame(item.game_id) && item.source === 'manual' && <Chip size="small" label="旧手工记录 · 仅后台存档" variant="outlined" />}</Stack><Typography fontSize={10.5} color="text.secondary" noWrap>第 {item.issue} 期 · {item.master_name} · {planRecommendationSelection(item)}</Typography></Box>
+            <IconButton size="small" disabled={item.source === 'demo' || !isSupportedManualPlanGame(item.game_id) || isRacingPlanGame(item.game_id)} title={item.source === 'demo' ? '系统自动推荐不能手工修改' : isRacingPlanGame(item.game_id) ? '赛车类请使用自动计划矩阵' : !isSupportedManualPlanGame(item.game_id) ? '该彩种尚未配置可验证的推荐规则' : '编辑推荐'} onClick={() => openEdit(item)}><EditRounded fontSize="small" /></IconButton>
+            <IconButton size="small" color="error" disabled={item.source === 'demo'} title={item.source === 'demo' ? '系统自动推荐不能手工删除' : '删除推荐'} onClick={() => item.source !== 'demo' && setPendingDelete(item)}><DeleteOutlineRounded fontSize="small" /></IconButton>
           </Stack>
         </Paper>)}
       </Box>
@@ -124,12 +128,11 @@ export function PlanManagementPanel({ workspaceId: controlledWorkspaceId, refres
     <Dialog open={Boolean(draft)} onClose={() => !saving && setDraft(null)} fullWidth maxWidth="sm">
       <DialogTitle>{draft?.id ? '编辑计划推荐' : '新增计划推荐'}</DialogTitle>
       <DialogContent><Stack gap={1.3} pt={1}>
-        {draft?.source === 'demo' && <Alert severity="warning">自动生成号码不参与命中统计，结果固定为待开奖，不能标记命中或未命中。</Alert>}
-        <TextField select label="彩种" value={draft?.game_id ?? ''} onChange={event => { const game = games.find(item => item.id === event.target.value); setDraft(current => current && ({ ...current, game_id: event.target.value, issue: current.issue || game?.current_issue || game?.issue || '' })) }}>{games.map(game => <MenuItem key={game.id} value={game.id}>{game.name}</MenuItem>)}</TextField>
+        <Alert severity="info">推荐发布后，结果只按已验证开奖号码自动结算，后台不能手工标记命中或未命中。赛车类彩种请在上方自动计划中配置。</Alert>
+        <TextField select label="彩种" value={draft?.game_id ?? ''} onChange={event => { const game = manualGames.find(item => item.id === event.target.value); setDraft(current => current && ({ ...current, game_id: event.target.value, issue: current.issue || game?.current_issue || game?.issue || '' })) }}>{manualGames.map(game => <MenuItem key={game.id} value={game.id}>{game.name}</MenuItem>)}</TextField>
         <Stack direction={{ xs: 'column', sm: 'row' }} gap={1.3}><TextField fullWidth label="期号" value={draft?.issue ?? ''} onChange={event => setDraft(current => current && ({ ...current, issue: event.target.value }))} /><TextField fullWidth label="专家名称" value={draft?.master_name ?? ''} onChange={event => setDraft(current => current && ({ ...current, master_name: event.target.value }))} /></Stack>
         <Stack direction={{ xs: 'column', sm: 'row' }} gap={1.3}><TextField fullWidth label="专家标签" value={draft?.master_title ?? ''} onChange={event => setDraft(current => current && ({ ...current, master_title: event.target.value }))} /><TextField fullWidth type="color" label="标识颜色" value={draft?.master_color ?? '#2aa9b3'} onChange={event => setDraft(current => current && ({ ...current, master_color: event.target.value }))} /></Stack>
         <PlanRecommendationNumberFields gameId={draft?.game_id ?? ''} value={{ numbersText: draft?.numbersText ?? '', size: draft?.size ?? '', parity: draft?.parity ?? '' }} onChange={patch => setDraft(current => current && ({ ...current, ...patch }))} />
-        <TextField select fullWidth label="结果" disabled={draft?.source === 'demo'} value={draft?.source === 'demo' ? 'pending' : draft?.result ?? 'pending'} onChange={event => setDraft(current => current && ({ ...current, result: event.target.value as Draft['result'] }))}><MenuItem value="pending">待开奖</MenuItem><MenuItem value="hit">命中</MenuItem><MenuItem value="miss">未命中</MenuItem></TextField>
         <TextField multiline minRows={2} label="推荐说明" value={draft?.note ?? ''} onChange={event => setDraft(current => current && ({ ...current, note: event.target.value }))} />
         <Stack direction="row" alignItems="center" justifyContent="space-between"><TextField size="small" type="number" label="排序" value={draft?.sort_order ?? 100} onChange={event => setDraft(current => current && ({ ...current, sort_order: Number(event.target.value) }))} /><Stack direction="row" alignItems="center"><Typography fontSize={12}>发布到前端</Typography><Switch checked={draft?.enabled ?? true} onChange={event => setDraft(current => current && ({ ...current, enabled: event.target.checked }))} /></Stack></Stack>
       </Stack></DialogContent>

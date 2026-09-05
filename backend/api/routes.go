@@ -27,6 +27,30 @@ func adminRoomActivityRunOnceRoute(handler gin.HandlerFunc) Route {
 	}
 }
 
+func memberPaymentAccountCreateRoute(handler gin.HandlerFunc) Route {
+	return Route{
+		Method: "POST", Pattern: "/payment-accounts", Handler: handler,
+		Middlewares: []gin.HandlerFunc{middleware.MemberPaymentAccountCreateRateLimit()},
+	}
+}
+
+func memberPaymentQRCodeReadRoute(handler gin.HandlerFunc) Route {
+	return Route{
+		Method: "GET", Pattern: "/payment-accounts/:id/qr-code", Handler: handler,
+		Middlewares: []gin.HandlerFunc{middleware.MemberPaymentQRCodeReadRateLimit()},
+	}
+}
+
+func memberPasswordChangeRoute(handler gin.HandlerFunc) Route {
+	return Route{
+		Method: "POST", Pattern: "/password", Handler: handler,
+		Middlewares: []gin.HandlerFunc{
+			middleware.MemberPasswordChangeRateLimit(),
+			middleware.MemberPasswordChangeClientRateLimit(),
+		},
+	}
+}
+
 // LoadRoutesForMode keeps security-sensitive route availability tied to the
 // configured server mode. LoadRoutes remains as a compatibility wrapper for
 // tests and local tools that already set Gin's mode explicitly.
@@ -119,14 +143,15 @@ func LoadRoutesForMode(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Schedu
 				{Method: "GET", Pattern: "/balance-history", Handler: h.MemberHandler.BalanceHistory},
 				{Method: "GET", Pattern: "/wallet/channels", Handler: h.MemberHandler.WalletChannels},
 				{Method: "GET", Pattern: "/payment-accounts", Handler: h.MemberHandler.ListPaymentAccounts},
-				{Method: "POST", Pattern: "/payment-accounts", Handler: h.MemberHandler.CreatePaymentAccount},
+				memberPaymentAccountCreateRoute(h.MemberHandler.CreatePaymentAccount),
+				memberPaymentQRCodeReadRoute(h.MemberHandler.PaymentAccountQRCode),
 				{Method: "DELETE", Pattern: "/payment-accounts/:id", Handler: h.MemberHandler.DeletePaymentAccount},
 				{Method: "GET", Pattern: "/wallet/summary", Handler: h.MemberHandler.WalletSummary},
 				{Method: "GET", Pattern: "/wallet/rebate", Handler: h.MemberHandler.RebatePreview},
 				{Method: "GET", Pattern: "/invite", Handler: h.MemberHandler.InviteInfo},
 				{Method: "GET", Pattern: "/entertainment", Handler: h.MemberHandler.ListEntertainment},
 				{Method: "POST", Pattern: "/entertainment/:code/launch", Handler: h.MemberHandler.LaunchEntertainment},
-				{Method: "POST", Pattern: "/password", Handler: h.MemberHandler.ChangePassword},
+				memberPasswordChangeRoute(h.MemberHandler.ChangePassword),
 				{Method: "PATCH", Pattern: "/nickname", Handler: h.MemberHandler.UpdateNickname},
 				{Method: "PATCH", Pattern: "/avatar", Handler: h.MemberHandler.UpdateAvatar},
 				{Method: "GET", Pattern: "/chat/preview", Handler: h.MemberHandler.ChatPreview},

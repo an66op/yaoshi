@@ -26,8 +26,8 @@ describe('plan feed refresh lifecycle', () => {
     runtime.hooks!.flushEffects()
     return result
   }
-  const renderRacing = (room = '88001') => {
-    const result = runtime.hooks!.render(() => useRacingPlanStream(room))
+  const renderRacing = (room = '88001', gameId = 'speed-racing') => {
+    const result = runtime.hooks!.render(() => useRacingPlanStream(room, gameId))
     runtime.hooks!.flushEffects()
     return result
   }
@@ -51,8 +51,8 @@ describe('plan feed refresh lifecycle', () => {
     runtime.catalog.mockReset().mockResolvedValue([row])
     runtime.detail.mockReset().mockResolvedValue({ game_id: 'speed-racing', current_issue: '100', recommendations: [], latest_recommendations: [], history: [] })
     runtime.activate.mockReset()
-    runtime.racingDetail.mockReset().mockImplementation((selection: RacingPlanSelection) => Promise.resolve(racingPlanDetail(selection)))
-    runtime.activateRacing.mockReset().mockImplementation((selection: RacingPlanSelection) => Promise.resolve(racingPlanDetail(selection)))
+	runtime.racingDetail.mockReset().mockImplementation((selection: RacingPlanSelection, _signal?: AbortSignal, gameId = 'speed-racing') => Promise.resolve(racingPlanDetail(selection, { game_id: gameId })))
+	runtime.activateRacing.mockReset().mockImplementation((selection: RacingPlanSelection, _signal?: AbortSignal, gameId = 'speed-racing') => Promise.resolve(racingPlanDetail(selection, { game_id: gameId })))
     events = new EventTarget()
     documentEvents = Object.assign(new EventTarget(), { visibilityState: 'visible' })
     vi.stubGlobal('document', documentEvents)
@@ -69,6 +69,12 @@ describe('plan feed refresh lifecycle', () => {
     expect(render().data).toEqual([row])
     expect(runtime.catalog).toHaveBeenCalledTimes(2)
   })
+	it('keeps another racing product in its own API and refresh identity', async () => {
+		renderRacing('88001', 'speed-fly'); await vi.advanceTimersByTimeAsync(0)
+		expect(runtime.racingDetail.mock.lastCall?.[2]).toBe('speed-fly')
+		expect(runtime.activateRacing.mock.lastCall?.[2]).toBe('speed-fly')
+		expect(renderRacing('88001', 'speed-fly').data?.game_id).toBe('speed-fly')
+	})
   it('coalesces draw bursts and retains confirmed data while retrying failures', async () => {
     render(); await vi.advanceTimersByTimeAsync(0)
     runtime.catalog.mockRejectedValueOnce(new Error('offline'))
@@ -132,41 +138,51 @@ describe('plan feed refresh lifecycle', () => {
     expect(runtime.racingDetail).toHaveBeenCalledTimes(1)
     expect(runtime.activateRacing).toHaveBeenCalledTimes(1)
   })
-  it.each(['disabled', 'not-allowed'])('keeps %s streams read-only on every refresh', async condition => {
+  it('uses the audited POST to read existing publications while generation is disabled', async () => {
     const detail = racingPlanDetail()
-    if (condition === 'disabled') detail.automation_enabled = false
-    else detail.stream.allowed = false
+    detail.automation_enabled = false
+    runtime.racingDetail.mockResolvedValue(detail)
+    runtime.activateRacing.mockResolvedValue(detail)
+    renderRacing(); await vi.advanceTimersByTimeAsync(30_000)
+    expect(runtime.racingDetail).toHaveBeenCalledTimes(3)
+    expect(runtime.activateRacing).toHaveBeenCalledTimes(3)
+    expect(renderRacing().data?.history).toEqual(detail.history)
+  })
+  it('returns metadata only for a selection the room has not allowed', async () => {
+    const detail = racingPlanDetail()
+    detail.stream.allowed = false
     runtime.racingDetail.mockResolvedValue(detail)
     renderRacing(); await vi.advanceTimersByTimeAsync(30_000)
     expect(runtime.racingDetail).toHaveBeenCalledTimes(3)
     expect(runtime.activateRacing).not.toHaveBeenCalled()
-    expect(renderRacing().data?.history).toEqual(detail.history)
+    expect(renderRacing().data?.history).toEqual([])
   })
-  it('does not activate saved plans when switching while automation is disabled', async () => {
+  it('records a view when switching saved plans while generation is disabled', async () => {
     runtime.racingDetail.mockImplementation((selection: RacingPlanSelection) => Promise.resolve(racingPlanDetail(selection, { automation_enabled: false })))
+    runtime.activateRacing.mockImplementation((selection: RacingPlanSelection) => Promise.resolve(racingPlanDetail(selection, { automation_enabled: false })))
     renderRacing(); await vi.advanceTimersByTimeAsync(0)
     const next = { position: 2, plan_key: 'size-five-periods' }
     expect(await renderRacing().activate(next)).toBe(true)
-    expect(runtime.activateRacing).not.toHaveBeenCalled()
+    expect(runtime.activateRacing).toHaveBeenCalledTimes(2)
     expect(renderRacing().selection).toEqual(next)
   })
-  it('preserves real publications when an initial visitor touch fails', async () => {
+  it('never exposes the metadata GET snapshot when the initial visitor receipt fails', async () => {
     runtime.activateRacing.mockRejectedValueOnce(new Error('访问计划已达上限'))
     renderRacing(); await vi.advanceTimersByTimeAsync(0)
     expect(renderRacing()).toMatchObject({ error: '访问计划已达上限', loading: false })
-    expect(renderRacing().data?.history).toHaveLength(3)
+    expect(renderRacing().data?.history).toEqual([])
     await vi.advanceTimersByTimeAsync(14_999)
     expect(runtime.activateRacing).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1)
     expect(renderRacing().error).toBe('')
   })
-  it('retains the first successful read when its visitor POST times out', async () => {
+  it('retains only metadata when its visitor POST times out', async () => {
     runtime.activateRacing.mockImplementationOnce((_selection: RacingPlanSelection, signal: AbortSignal) => new Promise((_resolve, reject) => {
       signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
     }))
     renderRacing(); await vi.advanceTimersByTimeAsync(15_000)
     expect(renderRacing()).toMatchObject({ loading: false, error: '更新计划超时，请稍后重试' })
-    expect(renderRacing().data?.history).toHaveLength(3)
+    expect(renderRacing().data?.history).toEqual([])
     expect(runtime.activateRacing).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(15_000)
     expect(renderRacing().error).toBe('')
@@ -227,7 +243,7 @@ describe('plan feed refresh lifecycle', () => {
     setVisible(true); await vi.advanceTimersByTimeAsync(0)
     expect(runtime.activateRacing.mock.lastCall?.[0]).toEqual(DEFAULT_RACING_PLAN)
   })
-  it('touches an enabled legacy game only while visible and returns to GET-only after disabling', async () => {
+  it('touches an enabled legacy game only while visible and keeps posting an idempotent view receipt after disabling', async () => {
     const detail = { game_id: 'speed-fly', current_issue: '100', recommendations: [], latest_recommendations: [], history: [], automation_enabled: true }
     runtime.detail.mockResolvedValue(detail)
     runtime.activate.mockResolvedValue(detail)
@@ -237,20 +253,21 @@ describe('plan feed refresh lifecycle', () => {
     setVisible(false); await vi.advanceTimersByTimeAsync(60_000)
     expect(runtime.activate).toHaveBeenCalledTimes(1)
     runtime.detail.mockResolvedValue({ ...detail, automation_enabled: false })
+    runtime.activate.mockResolvedValue({ ...detail, automation_enabled: false })
     setVisible(true); await vi.advanceTimersByTimeAsync(30_000)
-    expect(runtime.activate).toHaveBeenCalledTimes(1)
+    expect(runtime.activate).toHaveBeenCalledTimes(4)
     expect(renderLegacy().data?.automation_enabled).toBe(false)
   })
-  it('keeps a manual legacy publication after a failed visit without manufacturing history', async () => {
+  it('does not expose a generic GET publication after its view receipt fails', async () => {
     const published = racingPlanDetail().history[0]
     const detail = { game_id: 'speed-fly', current_issue: '100', recommendations: [], latest_recommendations: [], history: [published], automation_enabled: true }
     runtime.detail.mockResolvedValue(detail)
-    runtime.activate.mockRejectedValue(new Error('自动推荐已关闭'))
+    runtime.activate.mockRejectedValueOnce(new Error('自动推荐已关闭'))
     renderLegacy(); await vi.advanceTimersByTimeAsync(0)
-    expect(renderLegacy()).toMatchObject({ error: '自动推荐已关闭', data: { history: [published] } })
+    expect(renderLegacy()).toMatchObject({ error: '自动推荐已关闭', data: { history: [] } })
     runtime.detail.mockResolvedValue({ ...detail, automation_enabled: false })
     await vi.advanceTimersByTimeAsync(15_000)
-    expect(runtime.activate).toHaveBeenCalledTimes(1)
+    expect(runtime.activate).toHaveBeenCalledTimes(2)
     expect(renderLegacy().error).toBe('')
   })
   it('changes to the confirmed independent stream and aborts old reads before they can overwrite it', async () => {

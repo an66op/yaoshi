@@ -1,7 +1,9 @@
 package services
 
 import (
+	"backend/data/models/lottery"
 	"backend/data/models/plan"
+	apperrors "backend/errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -23,25 +25,58 @@ func TestCanonicalPlanNumbersRejectsInvalidAndDeduplicates(t *testing.T) {
 	}
 }
 
-func TestPlanHitRateUsesOnlyPersistedSettledResults(t *testing.T) {
+func TestAutomaticPlanPublicationCannotBeEditedAsManualContent(t *testing.T) {
+	row := plan.Recommendation{Source: "demo"}
+	if err := ensurePlanRecommendationEditable(row); err == nil || apperrors.GetErrorCode(err) != "PLAN_PUBLICATION_IMMUTABLE" {
+		t.Fatalf("automatic publication edit error = %v", err)
+	}
+	if err := ensurePlanRecommendationEditable(plan.Recommendation{Source: "manual"}); err != nil {
+		t.Fatalf("manual publication unexpectedly immutable: %v", err)
+	}
+}
+
+func TestPlanNumberContractUsesEachGamesVerifiedTargetRange(t *testing.T) {
+	for _, test := range []struct {
+		gameID, numbers string
+		valid           bool
+	}{
+		{gameID: "speed-ssc", numbers: "0,5,9", valid: true},
+		{gameID: "speed-ssc", numbers: "0,10", valid: false},
+		{gameID: "canada-28", numbers: "0,14,27", valid: true},
+		{gameID: "canada-28", numbers: "28", valid: false},
+		{gameID: "hong-kong-mark-six", numbers: "1,25,49", valid: true},
+		{gameID: "hong-kong-mark-six", numbers: "0,50", valid: false},
+		{gameID: "unknown", numbers: "1,2,3", valid: false},
+	} {
+		err := validatePlanNumberContract(lottery.Game{ID: test.gameID}, test.numbers)
+		if (err == nil) != test.valid {
+			t.Fatalf("%s numbers %q valid=%v, error=%v", test.gameID, test.numbers, test.valid, err)
+		}
+	}
+	if err := validatePlanNumberContract(lottery.Game{ID: "unknown"}, "1,2,3"); apperrors.GetErrorCode(err) != "RULES_NOT_READY" {
+		t.Fatalf("unsupported game error = %v", err)
+	}
+}
+
+func TestPlanHitStatisticsUseOnlyDerivedSettledResultsAndExposeSample(t *testing.T) {
 	rows := []plan.Recommendation{
 		{GameID: "speed-racing", MasterName: "青云老师", Result: plan.ResultPending},
 		{GameID: "speed-racing", MasterName: "青云老师", Result: plan.ResultHit},
 		{GameID: "speed-racing", MasterName: "青云老师", Result: plan.ResultMiss},
 		{GameID: "canada-28", MasterName: "青云老师", Result: plan.ResultPending},
 	}
-	rates := planHitRates(rows)
-	if rate := rates["speed-racing\x00青云老师"]; rate == nil || *rate != 50 {
-		t.Fatalf("settled hit rate = %v, want 50", rate)
+	statistics := planHitStatistics(rows)
+	if statistic := statistics["speed-racing\x00manual\x00青云老师"]; statistic.Rate == nil || *statistic.Rate != 50 || statistic.SampleCount != 2 {
+		t.Fatalf("settled hit statistics = %+v, want 50%% over 2 samples", statistic)
 	}
-	if rate := rates["canada-28\x00青云老师"]; rate != nil {
-		t.Fatalf("pending-only recommendation fabricated a hit rate: %v", *rate)
+	if statistic := statistics["canada-28\x00manual\x00青云老师"]; statistic.Rate != nil || statistic.SampleCount != 0 {
+		t.Fatalf("pending-only recommendation fabricated statistics: %+v", statistic)
 	}
 }
 
 func TestValidatePlanInputNeverPromotesPendingToHit(t *testing.T) {
 	row, err := validatePlanInput(PlanRecommendationInput{
-		GameID: "speed-racing", Issue: "34130317", MasterName: "1号专家", Numbers: []int{1, 3, 5, 7, 9},
+		GameID: "canada-28", Issue: "34130317", MasterName: "1号专家", Numbers: []int{1, 3, 5, 7, 9},
 	})
 	if err != nil {
 		t.Fatalf("validatePlanInput() error = %v", err)
@@ -49,35 +84,24 @@ func TestValidatePlanInputNeverPromotesPendingToHit(t *testing.T) {
 	if row.Result != plan.ResultPending {
 		t.Fatalf("default result = %q, want pending", row.Result)
 	}
+	for _, result := range []string{plan.ResultHit, plan.ResultMiss, "80%"} {
+		input := PlanRecommendationInput{GameID: "canada-28", Issue: "real-open-1", MasterName: "人工专家", Numbers: []int{1, 3, 5}, Result: result}
+		if _, err := validatePlanInput(input); err == nil {
+			t.Fatalf("administrator could manually claim result %q", result)
+		}
+	}
 }
 
-func TestSpeedRacingPlanInputRequiresFiveUniqueNumbersOnly(t *testing.T) {
-	valid := PlanRecommendationInput{GameID: "speed-racing", Issue: "confirmed-500", MasterName: "自定义专家", Numbers: []int{1, 3, 5, 7, 10}}
-	if row, err := validatePlanInput(valid); err != nil || row.Numbers != "1,3,5,7,10" || row.Size != "" || row.Parity != "" {
-		t.Fatalf("five-number input rejected: %#v %v", row, err)
-	}
-	for _, numbers := range [][]int{{1, 2, 3}, {1, 2, 3, 4}, {1, 2, 3, 4, 5, 6}, {1, 2, 3, 4, 4}, {0, 2, 3, 4, 5}, {1, 2, 3, 4, 11}} {
-		input := valid
-		input.Numbers = numbers
-		if _, err := validatePlanInput(input); err == nil || !strings.Contains(err.Error(), "5个不重复") {
-			t.Fatalf("invalid racing numbers accepted: %v error=%v", numbers, err)
+func TestRacingPlanInputRequiresRichAutomaticMatrix(t *testing.T) {
+	for _, gameID := range racingPlanGameIDs {
+		input := PlanRecommendationInput{GameID: gameID, Issue: "confirmed-500", MasterName: "自定义专家", Numbers: []int{1, 3, 5, 7, 10}}
+		if _, err := validatePlanInput(input); err == nil || !strings.Contains(err.Error(), "名次和方案矩阵") {
+			t.Fatalf("%s accepted a hidden generic manual recommendation: %v", gameID, err)
 		}
 	}
-	for _, dimension := range []string{"size", "parity"} {
-		input := valid
-		if dimension == "size" {
-			input.Size = "大"
-		} else {
-			input.Parity = "单"
-		}
-		if _, err := validatePlanInput(input); err == nil {
-			t.Fatalf("racing %s prediction was accepted", dimension)
-		}
-	}
-	other := valid
-	other.GameID, other.Numbers, other.Size, other.Parity = "speed-fly", []int{1, 5, 9}, "大", "单"
-	if _, err := validatePlanInput(other); err != nil {
-		t.Fatalf("other game contract changed: %v", err)
+	other := PlanRecommendationInput{GameID: "canada-28", Issue: "confirmed-500", MasterName: "自定义专家", Numbers: []int{1, 5, 9}, Size: "大", Parity: "单"}
+	if row, err := validatePlanInput(other); err != nil || row.Numbers != "1,5,9" || row.Size != "大" || row.Parity != "单" {
+		t.Fatalf("non-racing manual contract changed: %#v %v", row, err)
 	}
 }
 
@@ -96,7 +120,7 @@ func TestLegacyAutomaticPlanPresentationPreservesHistoricalFacts(t *testing.T) {
 			!reflect.DeepEqual(view.Numbers, []int{1, 5, 9}) || !view.CreatedAt.Equal(row.CreatedAt) || !view.UpdatedAt.Equal(row.UpdatedAt) || view.Result != row.Result {
 			t.Fatalf("historical facts changed: %#v", view)
 		}
-		if view.Size != "" || view.Parity != "" || view.MasterHitRate != nil || !reflect.DeepEqual(row, original) {
+		if view.Size != "" || view.Parity != "" || view.MasterHitRate != nil || view.MasterSampleCount != 0 || !reflect.DeepEqual(row, original) {
 			t.Fatalf("racing dimensions/rate leaked or stored row was changed: %#v", view)
 		}
 		row.Source, row.GameID = "manual", "speed-fly"

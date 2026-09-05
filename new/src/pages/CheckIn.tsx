@@ -68,12 +68,12 @@ export function CheckIn({ onBack, onComplete }: Props) {
       <section className="check-in-hero">
         <small>DAILY REWARD</small>
         <h1>{status?.title ?? '好运每日相伴'}</h1>
-        <p>{loading ? '加载中…' : activityId ? '完成签到后奖励自动入账' : '当前没有进行中的签到活动'}</p>
+        <p>{loading ? '加载中…' : activityId ? '完成签到后积分自动入账' : '当前没有进行中的签到活动'}</p>
         <div><span>已连续签到</span><b>{streak} <small>天</small></b></div>
       </section>
       <section className="check-in-card">
         <header>
-          <div><small>签到记录</small><b>每日签到，奖励自动入账</b></div>
+          <div><small>签到记录</small><b>每日签到，积分自动入账</b></div>
           <em>{checkedIn ? '今日已签到' : '待签到'}</em>
         </header>
         {activityId ? <div className="check-in-days">
@@ -84,7 +84,7 @@ export function CheckIn({ onBack, onComplete }: Props) {
               <article className={`${completed ? 'completed' : ''} ${today ? 'today' : ''}`} key={index}>
                 <small>第 {index + 1} 天</small>
                 <b>{completed ? '✓' : '待领'}</b>
-                <span>{completed ? '已领取' : '签到奖励'}</span>
+                <span>{completed ? '已领取' : '签到积分'}</span>
               </article>
             )
           })}
@@ -94,7 +94,7 @@ export function CheckIn({ onBack, onComplete }: Props) {
         </button>
         {message && <p className="check-in-note">{message}</p>}
       </section>
-      <p className="check-in-note">每日 00:00 刷新 · 奖励入账后可于钱包查看</p>
+      <p className="check-in-note">每日 00:00 刷新 · 积分入账后可于钱包查看</p>
     </main>
   )
 }

@@ -29,8 +29,8 @@ func planHistoryLimit(limits []int) int {
 }
 
 func planRequestedStreamAllowed(config PlanAutomationView, gameID string, position int, key string) bool {
-	if gameID == "speed-racing" {
-		return planStreamAllowed(config, position, key)
+	if racingPlanGameID(gameID) {
+		return planStreamAllowedForGame(config, gameID, position, key)
 	}
 	if !config.Enabled || position != 1 || key != singlePeriodPlanKey {
 		return false
@@ -44,13 +44,75 @@ func planRequestedStreamAllowed(config PlanAutomationView, gameID string, positi
 }
 
 func (s *PlanContentService) ActivateGame(ctx context.Context, workspaceID uint64, gameID string, historyLimits ...int) (PlanDetail, error) {
-	if gameID == "speed-racing" {
-		return PlanDetail{}, apperrors.NewBusinessError("INVALID_REQUEST", "请选择极速赛车推荐方案")
+	return s.activateGameForMember(ctx, 0, workspaceID, gameID, historyLimits...)
+}
+
+func (s *PlanContentService) ActivateGameForMember(ctx context.Context, userID, workspaceID uint64, gameID string, historyLimits ...int) (PlanDetail, error) {
+	return s.activateGameForMember(ctx, userID, workspaceID, gameID, historyLimits...)
+}
+
+func (s *PlanContentService) auditedPlanDetail(ctx context.Context, userID, workspaceID uint64, gameID string, historyLimits ...int) (PlanDetail, error) {
+	if userID == 0 {
+		return s.Detail(workspaceID, gameID, historyLimits...)
 	}
-	if _, err := s.touchPlan(ctx, workspaceID, gameID, 1, singlePeriodPlanKey); err != nil {
+	var result PlanDetail
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockPlanPublicationGame(tx, workspaceID, gameID); err != nil {
+			return err
+		}
+		var err error
+		result, err = NewPlanContentService(tx).Detail(workspaceID, gameID, historyLimits...)
+		if err != nil {
+			return err
+		}
+		return recordVisiblePlanPublicationViews(tx, userID, workspaceID, gameID, 0, singlePeriodPlanKey, result)
+	})
+	return result, err
+}
+
+func (s *PlanContentService) activateGameForMember(ctx context.Context, userID, workspaceID uint64, gameID string, historyLimits ...int) (PlanDetail, error) {
+	if racingPlanGameID(gameID) {
+		return PlanDetail{}, apperrors.NewBusinessError("INVALID_REQUEST", "请选择该赛车彩种的名次和计划类型")
+	}
+	// Member GET is deliberately read-only. When automation is disabled, the
+	// follow-up POST records every publication it returns. When enabled,
+	// touchPlanForMember first publishes the complete issue without exposing it;
+	// the final response is then assembled and audited while holding the same
+	// room/game publication lock, so concurrent content cannot slip into it.
+	if userID > 0 {
+		snapshot, err := s.Detail(workspaceID, gameID, historyLimits...)
+		if err != nil {
+			return PlanDetail{}, err
+		}
+		if !snapshot.AutomationEnabled {
+			var lockedSnapshot PlanDetail
+			becameEnabled := false
+			if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := lockPlanPublicationGame(tx, workspaceID, gameID); err != nil {
+					return err
+				}
+				var err error
+				lockedSnapshot, err = NewPlanContentService(tx).Detail(workspaceID, gameID, historyLimits...)
+				if err != nil {
+					return err
+				}
+				if lockedSnapshot.AutomationEnabled {
+					becameEnabled = true
+					return nil
+				}
+				return recordVisiblePlanPublicationViews(tx, userID, workspaceID, gameID, 0, singlePeriodPlanKey, lockedSnapshot)
+			}); err != nil {
+				return PlanDetail{}, err
+			}
+			if !becameEnabled {
+				return lockedSnapshot, nil
+			}
+		}
+	}
+	if _, err := s.touchPlanForMember(ctx, userID, workspaceID, gameID, 1, singlePeriodPlanKey); err != nil {
 		return PlanDetail{}, err
 	}
-	return s.Detail(workspaceID, gameID, historyLimits...)
+	return s.auditedPlanDetail(ctx, userID, workspaceID, gameID, historyLimits...)
 }
 
 // A member visit serializes with configuration changes and other instances.
@@ -58,6 +120,10 @@ func (s *PlanContentService) ActivateGame(ctx context.Context, workspaceID uint6
 // coalesces simultaneous visitors for five seconds without extending a lease
 // or running generation again; GET never enters this path.
 func (s *PlanContentService) touchPlan(ctx context.Context, workspaceID uint64, gameID string, position int, key string) (PlanAutomationRun, error) {
+	return s.touchPlanForMember(ctx, 0, workspaceID, gameID, position, key)
+}
+
+func (s *PlanContentService) touchPlanForMember(ctx context.Context, userID, workspaceID uint64, gameID string, position int, key string) (PlanAutomationRun, error) {
 	result := PlanAutomationRun{WorkspaceID: workspaceID, RanAt: time.Now().UTC(), SkippedGameIDs: []string{}, Notice: PlanDemoNotice}
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Match betting and room trading: game before automation, room, owner,
@@ -118,6 +184,9 @@ func (s *PlanContentService) touchPlan(ctx context.Context, workspaceID uint64, 
 		if _, _, supported := planDemoNumberRange(game); !supported {
 			return apperrors.NewBusinessError("INVALID_REQUEST", "该彩种暂不支持按访问推荐")
 		}
+		if err := ensurePlanPublicationMember(tx, userID, workspaceID); err != nil {
+			return err
+		}
 		streams, cycles, err := readPlanStreams(tx, workspaceID)
 		if err != nil {
 			return err
@@ -133,7 +202,8 @@ func (s *PlanContentService) touchPlan(ctx context.Context, workspaceID uint64, 
 				selected = stream
 			}
 		}
-		if selected.ID > 0 && planStreamActive(selected, cycles[selected.CycleID], now) && now.Sub(selected.UpdatedAt) < 5*time.Second {
+		coalesced := selected.ID > 0 && planStreamActive(selected, cycles[selected.CycleID], now) && now.Sub(selected.UpdatedAt) < 5*time.Second
+		if coalesced {
 			return nil
 		}
 		if !planStreamActive(selected, cycles[selected.CycleID], now) && active >= MaxActivePlanStreams {
@@ -155,7 +225,7 @@ func (s *PlanContentService) touchPlan(ctx context.Context, workspaceID uint64, 
 		if err != nil {
 			return err
 		}
-		if gameID == "speed-racing" {
+		if racingPlanGameID(gameID) {
 			if err := prunePlanStreamHistory(tx, selected.ID); err != nil {
 				return err
 			}

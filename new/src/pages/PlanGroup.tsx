@@ -4,9 +4,9 @@ import { Icon } from '../components/Icon'
 import { ballTone } from '../data/games'
 import type { Game } from '../types'
 import { usePlanCatalog, usePlanDetail, useRacingPlanStream } from '../hooks/usePlanFeed'
-import { displayedPlanMasters, planIsCurrent, planResultLabel, recentPlanHistory } from '../utils/planPresentation'
+import { displayedPlanMasters, planIsCurrent, planMasterIdentity, planResultLabel, recentPlanHistory } from '../utils/planPresentation'
 import { PlanSelectionSheet } from '../components/PlanSelectionSheet'
-import { racingPlanResultLabel, racingPlanDirection, racingPlanHistory, racingPlanIsCurrent, racingPlanMasters, racingPlanPositionLabel, racingPlanProgress } from '../utils/racingPlans'
+import { isRacingPlanGame, racingPlanResultLabel, racingPlanDirection, racingPlanHistory, racingPlanIsCurrent, racingPlanMasters, racingPlanPositionLabel, racingPlanProgress } from '../utils/racingPlans'
 import { markSixDrawBallClass, markSixBallClass, usesMarkSixDrawPresentation } from '../utils/lotteryRules'
 
 const PC_PLAN_GAMES = new Set(['pc-canada', 'canada-28', 'canada-20'])
@@ -97,7 +97,7 @@ export function PlanLobby({ games, onBack, onSelect }: { games: Game[]; onBack: 
 type PlanDetailProps = { games: Game[]; gameId?: string; onBack: () => void }
 
 export function PlanDetail(props: PlanDetailProps) {
-  return props.gameId === 'speed-racing' ? <RacingPlanDetail {...props} /> : <LegacyPlanDetail {...props} />
+  return props.gameId && isRacingPlanGame(props.gameId) ? <RacingPlanDetail {...props} /> : <LegacyPlanDetail {...props} />
 }
 
 function RacingPlanPick({ row, compact = false }: { row: RacingPlanRecommendation; compact?: boolean }) {
@@ -107,19 +107,22 @@ function RacingPlanPick({ row, compact = false }: { row: RacingPlanRecommendatio
     : <strong className={`racing-plan-direction${compact ? ' is-compact' : ''}`}>{direction || '等待发布'}</strong>
 }
 
-function RacingPlanDetail({ games, onBack }: PlanDetailProps) {
-  const game = games.find(item => item.id === 'speed-racing')
-  const { data, loading, error, selection, activate, activating, activationError, clearActivationError } = useRacingPlanStream()
-  const [selectedMaster, setSelectedMaster] = useState('')
+function RacingPlanDetail({ games, gameId, onBack }: PlanDetailProps) {
+  const game = games.find(item => item.id === gameId)
+  const { data, loading, error, selection, activate, activating, activationError, clearActivationError } = useRacingPlanStream('', gameId ?? '')
+  const [selectedMasterIdentity, setSelectedMasterIdentity] = useState('')
   const [selectorOpen, setSelectorOpen] = useState(false)
   const masters = useMemo(() => racingPlanMasters(data, selection), [data, selection])
-  const activeMaster = masters.find(master => master.master_name === selectedMaster) ?? masters[0]
+  const activeMaster = masters.find(master => planMasterIdentity(master) === selectedMasterIdentity) ?? masters[0]
   const history = useMemo(() => racingPlanHistory(data, selection, activeMaster), [data, selection, activeMaster])
   const current = racingPlanIsCurrent(data, selection, activeMaster)
   const position = data?.positions.find(item => item.position === selection.position)
   const option = data?.options.find(item => item.key === selection.plan_key)
   const positionLabel = position?.label ?? racingPlanPositionLabel(selection.position)
   const planLabel = option?.label ?? (selection.plan_key === 'four-period-five-codes' ? '四期五码' : selection.plan_key)
+  const statsLabel = (master?: RacingPlanRecommendation) => master && master.master_sample_count > 0 && master.master_hit_rate !== null
+    ? `命中 ${master.master_hit_rate.toFixed(0)}% · ${master.master_sample_count}期`
+    : '暂无开奖样本'
   const confirmSelection = async (next: RacingPlanSelection) => { if (await activate(next)) setSelectorOpen(false) }
   const openSelector = () => { clearActivationError(); setSelectorOpen(true) }
 
@@ -139,7 +142,7 @@ function RacingPlanDetail({ games, onBack }: PlanDetailProps) {
     {!loading && !error && !masters.length && <p className="plan-empty">当前计划正在准备中。{data?.automation_enabled && data.stream.allowed ? '浏览本页时，开放期内会自动更新。' : ''}</p>}
     {masters.length > 0 && <>
       <div className="plan-master-tabs" role="tablist" aria-label="选择计划专家">
-        {masters.map((master, index) => <button type="button" aria-selected={activeMaster?.master_name === master.master_name} className={activeMaster?.master_name === master.master_name ? 'active' : ''} key={master.master_name} onClick={() => setSelectedMaster(master.master_name)} role="tab"><span style={{ background: master.master_color }}>{index + 1}</span><b>{master.master_name}</b><small>系统自动推荐</small></button>)}
+        {masters.map((master, index) => <button type="button" aria-selected={activeMaster ? planMasterIdentity(activeMaster) === planMasterIdentity(master) : false} className={activeMaster && planMasterIdentity(activeMaster) === planMasterIdentity(master) ? 'active' : ''} key={planMasterIdentity(master)} onClick={() => setSelectedMasterIdentity(planMasterIdentity(master))} role="tab"><span style={{ background: master.master_color }}>{index + 1}</span><b>{master.master_name}</b><small>{statsLabel(master)}</small></button>)}
       </div>
       {activeMaster && <article className="plan-recommendation racing-plan-recommendation">
         <header><div><small>{activeMaster.master_name} · {positionLabel}</small><b>{planLabel}</b></div><em>{current ? '本期计划' : '历史计划'}</em></header>
@@ -149,7 +152,7 @@ function RacingPlanDetail({ games, onBack }: PlanDetailProps) {
         {activeMaster.draw_numbers?.length === 10 && <div className="racing-plan-draw"><small>本期开奖号码</small><div className="racing-plan-numbers" aria-label={`开奖号码 ${activeMaster.draw_numbers.join('、')}`}>{activeMaster.draw_numbers.map((number, index) => <b className={`${ballTone(number)}${index + 1 === selection.position ? ' is-target' : ''}`} key={index}>{number}</b>)}</div></div>}
       </article>}
       <section className="plan-history racing-plan-history">
-        <header><b>最近 6 期发布记录</b><span>{positionLabel} · {planLabel}</span></header>
+        <header><b>最近 6 期发布记录</b><span>{statsLabel(activeMaster)}</span></header>
         <div className="plan-history-head"><span>期号 / 周期</span><span>推荐内容</span><span>结果</span></div>
         {history.map(row => <div className="plan-history-row" key={row.id}>
           <span><b>{shortIssue(row.issue)}</b><small>{racingPlanProgress(row)}</small><small>{updateTime(row.updated_at)}</small></span>
@@ -166,15 +169,18 @@ function RacingPlanDetail({ games, onBack }: PlanDetailProps) {
 function LegacyPlanDetail({ games, gameId, onBack }: PlanDetailProps) {
   const game = games.find(item => item.id === gameId)
   const { data, loading, error } = usePlanDetail(gameId ?? '')
-  const [selectedMaster, setSelectedMaster] = useState('')
+  const [selectedMasterIdentity, setSelectedMasterIdentity] = useState('')
   const [mode, setMode] = useState<PlanMode>('combo')
   const masters = useMemo(() => displayedPlanMasters(data), [data])
   const hasDirections = useMemo(() => [...masters, ...(data?.history ?? [])].some(row => Boolean(row.size || row.parity)), [data?.history, masters])
   const displayMode = hasDirections ? mode : 'numbers'
-  const activeMaster = masters.find(master => master.master_name === selectedMaster) ?? masters[0]
+  const activeMaster = masters.find(master => planMasterIdentity(master) === selectedMasterIdentity) ?? masters[0]
   const isCurrent = planIsCurrent(data, activeMaster)
   const isAutomatic = activeMaster?.source === 'demo'
   const history = useMemo(() => activeMaster ? recentPlanHistory((data?.history ?? []).filter(row => row.game_id === activeMaster.game_id && row.master_name === activeMaster.master_name && row.source === activeMaster.source)) : [], [activeMaster, data?.history])
+  const statsLabel = (master?: PlanRecommendation) => master && master.master_sample_count > 0 && master.master_hit_rate !== null
+    ? `命中 ${master.master_hit_rate.toFixed(0)}% · ${master.master_sample_count}期`
+    : '暂无开奖样本'
 
   if (!game) return <section className="plan-page"><header className="blue-header"><button aria-label="返回计划群" onClick={onBack}><Icon name="back" /></button><b>计划详情</b><span /></header><p className="plan-empty">该彩票计划暂未开放。</p></section>
 
@@ -189,7 +195,7 @@ function LegacyPlanDetail({ games, gameId, onBack }: PlanDetailProps) {
     {!loading && !error && masters.length === 0 && <p className="plan-empty">当前彩种计划正在准备中，请稍后刷新。</p>}
     {masters.length > 0 && <>
       <div className="plan-master-tabs" role="tablist" aria-label="选择计划专家">
-        {masters.map((master, index) => <button aria-selected={activeMaster?.master_name === master.master_name} className={activeMaster?.master_name === master.master_name ? 'active' : ''} key={master.master_name} onClick={() => setSelectedMaster(master.master_name)} role="tab"><span style={{ background: master.master_color }}>{index + 1}</span><b>{master.master_name}</b><small>{master.source === 'demo' ? '自动推荐' : master.master_hit_rate === null ? (master.master_title || '暂无统计') : `历史 ${master.master_hit_rate.toFixed(0)}%`}</small></button>)}
+        {masters.map((master, index) => <button aria-selected={activeMaster ? planMasterIdentity(activeMaster) === planMasterIdentity(master) : false} className={activeMaster && planMasterIdentity(activeMaster) === planMasterIdentity(master) ? 'active' : ''} key={planMasterIdentity(master)} onClick={() => setSelectedMasterIdentity(planMasterIdentity(master))} role="tab"><span style={{ background: master.master_color }}>{index + 1}</span><b>{master.master_name}</b><small>{statsLabel(master)}</small></button>)}
       </div>
       {hasDirections && <div className="plan-mode-tabs">{([['combo', '综合'], ['numbers', '号码'], ['size', '大小'], ['parity', '单双']] as const).map(([value, label]) => <button className={mode === value ? 'active' : ''} key={value} onClick={() => setMode(value)}>{label}</button>)}</div>}
       {activeMaster && <article className="plan-recommendation">
@@ -203,12 +209,12 @@ function LegacyPlanDetail({ games, gameId, onBack }: PlanDetailProps) {
         <p>{isAutomatic ? (activeMaster.note || '系统自动生成，仅供娱乐参考，不保证命中。') : activeMaster.note || '本推荐由后台发布，仅供娱乐参考。'}</p>
       </article>}
       <section className="plan-history">
-        <header><b>最近 6 期发布记录</b><span>{isAutomatic ? '不统计命中率' : activeMaster?.master_hit_rate === null ? '暂无已结算命中率' : `历史命中率 ${activeMaster?.master_hit_rate?.toFixed(0)}%`}</span></header>
+        <header><b>最近 6 期发布记录</b><span>{statsLabel(activeMaster)}</span></header>
         <div className="plan-history-head"><span>期号/时间</span><span>推荐内容</span><span>结果</span></div>
         {history.map(row => <div className="plan-history-row" key={row.id}>
           <span><b>{shortIssue(row.issue)}</b><small>{updateTime(row.updated_at)}</small></span>
           <PlanPickDisplay row={row} mode={displayMode} />
-          <em className={row.source !== 'demo' ? (row.result === 'hit' ? 'hit' : row.result === 'miss' ? 'miss' : '') : ''}>{planResultLabel(row)}</em>
+          <em className={row.result === 'hit' ? 'hit' : row.result === 'miss' ? 'miss' : ''}>{planResultLabel(row)}</em>
         </div>)}
         {history.length === 0 && <p className="plan-history-loading">暂无计划发布记录</p>}
       </section>

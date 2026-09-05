@@ -16,11 +16,13 @@ export function displayedPlanMasters(detail: PlanDetail | null) {
   if (!detail) return []
   // A newly published master can appear while others are still on the previous
   // issue. Retain their tabs, but never promote their old rows to this period.
-  const byName = new Map<string, PlanRecommendation>()
-  for (const row of detail.latest_recommendations ?? []) byName.set(row.master_name, row)
-  for (const row of detail.recommendations ?? []) byName.set(row.master_name, row)
-  return [...byName.values()].sort((left, right) => left.sort_order - right.sort_order || left.master_name.localeCompare(right.master_name))
+  const byIdentity = new Map<string, PlanRecommendation>()
+  for (const row of detail.latest_recommendations ?? []) byIdentity.set(planMasterIdentity(row), row)
+  for (const row of detail.recommendations ?? []) byIdentity.set(planMasterIdentity(row), row)
+  return [...byIdentity.values()].sort((left, right) => left.sort_order - right.sort_order || left.master_name.localeCompare(right.master_name) || left.source.localeCompare(right.source))
 }
+
+export const planMasterIdentity = (row: Pick<PlanRecommendation, 'source' | 'master_name'>) => `${row.source}\u0000${row.master_name}`
 
 export function planIsCurrent(detail: PlanDetail | null, row?: PlanRecommendation) {
   return Boolean(row && detail?.current_issue && row.issue === detail.current_issue
@@ -28,6 +30,5 @@ export function planIsCurrent(detail: PlanDetail | null, row?: PlanRecommendatio
 }
 
 export function planResultLabel(row: PlanRecommendation) {
-  if (row.source === 'demo') return '未统计'
   return row.result === 'hit' ? '中' : row.result === 'miss' ? '未中' : '待开奖'
 }

@@ -32,35 +32,36 @@ type PlanRecommendationInput struct {
 }
 
 type PlanRecommendationView struct {
-	ID              uint64     `json:"id"`
-	WorkspaceID     uint64     `json:"workspace_id"`
-	GameID          string     `json:"game_id"`
-	Issue           string     `json:"issue"`
-	MasterName      string     `json:"master_name"`
-	MasterTitle     string     `json:"master_title"`
-	MasterColor     string     `json:"master_color"`
-	Numbers         []int      `json:"numbers"`
-	Size            string     `json:"size"`
-	Parity          string     `json:"parity"`
-	Result          string     `json:"result"`
-	Source          string     `json:"source"`
-	Note            string     `json:"note"`
-	Enabled         bool       `json:"enabled"`
-	SortOrder       int        `json:"sort_order"`
-	MasterHitRate   *float64   `json:"master_hit_rate"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	Position        int        `json:"position,omitempty"`
-	PlanKey         string     `json:"plan_key,omitempty"`
-	Kind            string     `json:"kind,omitempty"`
-	DragonTiger     string     `json:"dragon_tiger,omitempty"`
-	CycleID         uint64     `json:"cycle_id,omitempty"`
-	CyclePeriod     int        `json:"cycle_period,omitempty"`
-	CyclePeriods    int        `json:"cycle_periods,omitempty"`
-	CycleStartIssue string     `json:"cycle_start_issue,omitempty"`
-	CycleStatus     string     `json:"cycle_status,omitempty"`
-	DrawNumbers     []int      `json:"draw_numbers,omitempty"`
-	DrawAt          *time.Time `json:"draw_at,omitempty"`
+	ID                uint64     `json:"id"`
+	WorkspaceID       uint64     `json:"workspace_id"`
+	GameID            string     `json:"game_id"`
+	Issue             string     `json:"issue"`
+	MasterName        string     `json:"master_name"`
+	MasterTitle       string     `json:"master_title"`
+	MasterColor       string     `json:"master_color"`
+	Numbers           []int      `json:"numbers"`
+	Size              string     `json:"size"`
+	Parity            string     `json:"parity"`
+	Result            string     `json:"result"`
+	Source            string     `json:"source"`
+	Note              string     `json:"note"`
+	Enabled           bool       `json:"enabled"`
+	SortOrder         int        `json:"sort_order"`
+	MasterHitRate     *float64   `json:"master_hit_rate"`
+	MasterSampleCount int        `json:"master_sample_count"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	Position          int        `json:"position,omitempty"`
+	PlanKey           string     `json:"plan_key,omitempty"`
+	Kind              string     `json:"kind,omitempty"`
+	DragonTiger       string     `json:"dragon_tiger,omitempty"`
+	CycleID           uint64     `json:"cycle_id,omitempty"`
+	CyclePeriod       int        `json:"cycle_period,omitempty"`
+	CyclePeriods      int        `json:"cycle_periods,omitempty"`
+	CycleStartIssue   string     `json:"cycle_start_issue,omitempty"`
+	CycleStatus       string     `json:"cycle_status,omitempty"`
+	DrawNumbers       []int      `json:"draw_numbers,omitempty"`
+	DrawAt            *time.Time `json:"draw_at,omitempty"`
 }
 
 type PlanGameSummary struct {
@@ -94,15 +95,9 @@ type defaultPlanTemplate struct {
 }
 
 var debugPlanTemplates = []defaultPlanTemplate{
-	{GameID: "speed-racing", MasterName: "1号专家", MasterTitle: "系统自动推荐", MasterColor: "#2aa9b3", Numbers: "1,3,5,7,9", SortOrder: 10},
-	{GameID: "speed-racing", MasterName: "2号专家", MasterTitle: "系统自动推荐", MasterColor: "#6e70df", Numbers: "2,4,6,8,10", SortOrder: 20},
-	{GameID: "speed-racing", MasterName: "3号专家", MasterTitle: "系统自动推荐", MasterColor: "#e58b45", Numbers: "1,2,4,7,10", SortOrder: 30},
 	{GameID: "canada-28", MasterName: "1号专家", MasterTitle: "系统自动推荐", MasterColor: "#2aa9b3", Numbers: "3,14,22", Size: "大", Parity: "单", SortOrder: 10},
 	{GameID: "canada-28", MasterName: "2号专家", MasterTitle: "系统自动推荐", MasterColor: "#6e70df", Numbers: "6,11,19", Size: "小", Parity: "双", SortOrder: 20},
 	{GameID: "canada-28", MasterName: "3号专家", MasterTitle: "系统自动推荐", MasterColor: "#e58b45", Numbers: "8,17,25", Size: "大", Parity: "双", SortOrder: 30},
-	{GameID: "au-lucky-10", MasterName: "1号专家", MasterTitle: "系统自动推荐", MasterColor: "#2aa9b3", Numbers: "1,4,8", Size: "大", Parity: "单", SortOrder: 10},
-	{GameID: "au-lucky-10", MasterName: "2号专家", MasterTitle: "系统自动推荐", MasterColor: "#6e70df", Numbers: "2,5,9", Size: "小", Parity: "双", SortOrder: 20},
-	{GameID: "au-lucky-10", MasterName: "3号专家", MasterTitle: "系统自动推荐", MasterColor: "#e58b45", Numbers: "3,6,10", Size: "大", Parity: "双", SortOrder: 30},
 }
 
 // SeedDebugPlanRecommendations creates local editorial fixtures only for a
@@ -192,21 +187,35 @@ func canonicalPlanNumbers(values []int) (string, error) {
 	return strings.Join(parts, ","), nil
 }
 
+func validatePlanNumberContract(game lottery.Game, rawNumbers string) error {
+	minimum, maximum, supported := planDemoNumberRange(game)
+	if !supported {
+		return apperrors.NewBusinessError("RULES_NOT_READY", "该彩种尚未配置可验证的推荐号码规则")
+	}
+	if _, valid := strictPlanPickNumbers(rawNumbers, minimum, maximum); !valid {
+		return apperrors.NewBusinessError("INVALID_REQUEST", fmt.Sprintf("该彩种推荐号码只能填写 %d 至 %d 的不重复整数", minimum, maximum))
+	}
+	return nil
+}
+
+func (s *PlanContentService) ensurePlanNumberContract(row plan.Recommendation) error {
+	var game lottery.Game
+	if err := s.db.First(&game, "id = ?", row.GameID).Error; err != nil {
+		return err
+	}
+	return validatePlanNumberContract(game, row.Numbers)
+}
+
+func ensurePlanRecommendationEditable(row plan.Recommendation) error {
+	if canonicalPlanSource(row.Source) == "demo" {
+		return apperrors.NewBusinessError("PLAN_PUBLICATION_IMMUTABLE", "系统自动推荐不能手工修改或删除；请通过自动计划配置管理")
+	}
+	return nil
+}
+
 func validatePlanInput(input PlanRecommendationInput) (plan.Recommendation, error) {
-	if strings.TrimSpace(input.GameID) == "speed-racing" {
-		if len(input.Numbers) != 5 {
-			return plan.Recommendation{}, apperrors.NewBusinessError("INVALID_REQUEST", "极速赛车推荐必须填写5个不重复的1至10号码")
-		}
-		seen := make(map[int]bool, 5)
-		for _, value := range input.Numbers {
-			if value < 1 || value > 10 || seen[value] {
-				return plan.Recommendation{}, apperrors.NewBusinessError("INVALID_REQUEST", "极速赛车推荐必须填写5个不重复的1至10号码")
-			}
-			seen[value] = true
-		}
-		if strings.TrimSpace(input.Size) != "" || strings.TrimSpace(input.Parity) != "" {
-			return plan.Recommendation{}, apperrors.NewBusinessError("INVALID_REQUEST", "极速赛车只支持号码推荐，不支持大小或单双")
-		}
+	if racingPlanGameID(strings.TrimSpace(input.GameID)) {
+		return plan.Recommendation{}, apperrors.NewBusinessError("INVALID_REQUEST", "赛车类彩种请使用自动计划的名次和方案矩阵，不能发布通用手工推荐")
 	}
 	numbers, err := canonicalPlanNumbers(input.Numbers)
 	if err != nil {
@@ -232,12 +241,10 @@ func validatePlanInput(input PlanRecommendationInput) (plan.Recommendation, erro
 	if row.Parity != "" && row.Parity != "单" && row.Parity != "双" {
 		return plan.Recommendation{}, apperrors.NewBusinessError("INVALID_REQUEST", "单双推荐只能填写单或双")
 	}
-	if row.Result == "" {
-		row.Result = plan.ResultPending
+	if row.Result != "" && row.Result != plan.ResultPending {
+		return plan.Recommendation{}, apperrors.NewBusinessError("INVALID_REQUEST", "推荐结果只能由已验证开奖自动计算")
 	}
-	if row.Result != plan.ResultPending && row.Result != plan.ResultHit && row.Result != plan.ResultMiss {
-		return plan.Recommendation{}, apperrors.NewBusinessError("INVALID_REQUEST", "推荐结果不正确")
-	}
+	row.Result = plan.ResultPending
 	return row, nil
 }
 
@@ -264,57 +271,71 @@ func (s *PlanContentService) ensureScope(workspaceID uint64, gameID string) erro
 	return nil
 }
 
-func (s *PlanContentService) ensureIssue(gameID, issue string) error {
-	var count int64
-	if err := s.db.Model(&lottery.Issue{}).
-		Where("game_id = ? AND issue = ?", strings.TrimSpace(gameID), strings.TrimSpace(issue)).
-		Count(&count).Error; err != nil {
+func (s *PlanContentService) ensureIssue(workspaceID uint64, gameID, issue string) error {
+	var row lottery.Issue
+	if err := s.db.Where("game_id = ? AND issue = ?", strings.TrimSpace(gameID), strings.TrimSpace(issue)).First(&row).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return apperrors.NewBusinessError("NOT_FOUND", "该彩种期号不存在")
+		}
 		return err
 	}
-	if count != 1 {
-		return apperrors.NewBusinessError("NOT_FOUND", "该彩种期号不存在")
+	now := time.Now().UTC()
+	var draws int64
+	if err := s.db.Model(&lottery.Draw{}).Where("game_id = ? AND issue = ?", row.GameID, row.Issue).Count(&draws).Error; err != nil {
+		return err
+	}
+	if draws > 0 || row.DrawAt != nil || row.Status != lottery.IssueStatusAccepting || row.ScheduledDrawAt == nil || row.ScheduledDrawAt.IsZero() {
+		return apperrors.NewBusinessError("PLAN_PUBLICATION_CLOSED", "该期已封盘或已开奖，不能回填推荐")
+	}
+	var game lottery.Game
+	if err := s.db.First(&game, "id = ?", row.GameID).Error; err != nil {
+		return err
+	}
+	rawSettings, actualWorkspaceID, err := readTimingSettings(s.db, workspaceID)
+	if err != nil {
+		return err
+	}
+	window, err := ensureIssueWindow(s.db, actualWorkspaceID, &game, row.Issue, *row.ScheduledDrawAt, rawSettings)
+	if err != nil {
+		return err
+	}
+	sealAt := effectivePlanSealAt(row, window)
+	acceptAt := row.AcceptAt
+	if window.AcceptAt.After(acceptAt) {
+		acceptAt = window.AcceptAt
+	}
+	if now.Before(acceptAt) || !now.Before(sealAt) || !now.Before(*row.ScheduledDrawAt) {
+		return apperrors.NewBusinessError("PLAN_PUBLICATION_CLOSED", "该期已封盘或已开奖，不能回填推荐")
 	}
 	return nil
 }
 
-func planHitRates(rows []plan.Recommendation) map[string]*float64 {
-	type score struct{ hits, settled int }
-	scores := map[string]score{}
-	for _, row := range rows {
-		if row.Source == "demo" {
-			continue
-		}
-		key := row.GameID + "\x00" + row.MasterName
-		value := scores[key]
-		switch row.Result {
-		case plan.ResultHit:
-			value.hits++
-			value.settled++
-		case plan.ResultMiss:
-			value.settled++
-		}
-		scores[key] = value
+func (s *PlanContentService) ensureGenericPublicationUnviewed(workspaceID uint64, gameID, issue string) error {
+	var count int64
+	if err := s.db.Model(&plan.PublicationView{}).
+		Where("workspace_id = ? AND game_id = ? AND issue = ? AND position = 0", workspaceID, strings.TrimSpace(gameID), strings.TrimSpace(issue)).
+		Count(&count).Error; err != nil {
+		return err
 	}
-	result := make(map[string]*float64, len(scores))
-	for key, value := range scores {
-		if value.settled == 0 {
-			result[key] = nil
-			continue
-		}
-		rate := float64(value.hits) * 100 / float64(value.settled)
-		result[key] = &rate
+	if count > 0 {
+		return apperrors.NewBusinessError("PLAN_PUBLICATION_LOCKED", "该期推荐已被会员查看，不能再新增")
 	}
-	return result
+	return nil
 }
 
-func planView(row plan.Recommendation, rates map[string]*float64) PlanRecommendationView {
-	source := row.Source
-	if source == "" {
-		source = "manual"
+func planPublicationLockedDatabaseError(err error) bool {
+	if err == nil {
+		return false
 	}
-	rate := rates[row.GameID+"\x00"+row.MasterName]
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "viewed plan publication is immutable") ||
+		strings.Contains(message, "plan publication insert is locked")
+}
+
+func planView(row plan.Recommendation, statistics map[string]planHitStatistic) PlanRecommendationView {
+	source := canonicalPlanSource(row.Source)
+	statistic := statistics[planMasterStatisticKey(row.GameID, source, row.MasterName)]
 	if source == "demo" {
-		rate = nil
 		// Presentation-only aliases keep published numbers, issue identity and
 		// timestamps immutable while old and new automatic rows share a label.
 		for index, previous := range []string{"青云演示师", "北斗演示师", "锦鲤演示师"} {
@@ -325,9 +346,7 @@ func planView(row plan.Recommendation, rates map[string]*float64) PlanRecommenda
 			}
 		}
 		row.MasterTitle = "系统自动推荐"
-		if row.Note != PlanHistoryBackfillNotice {
-			row.Note = PlanDemoNotice
-		}
+		row.Note = PlanDemoNotice
 	}
 	if row.GameID == "speed-racing" {
 		row.Size, row.Parity = "", ""
@@ -337,7 +356,7 @@ func planView(row plan.Recommendation, rates map[string]*float64) PlanRecommenda
 		MasterName: row.MasterName, MasterTitle: row.MasterTitle, MasterColor: row.MasterColor,
 		Numbers: parsePlanNumbers(row.Numbers), Size: row.Size, Parity: row.Parity,
 		Result: row.Result, Source: source, Note: row.Note, Enabled: row.Enabled, SortOrder: row.SortOrder,
-		MasterHitRate: rate, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		MasterHitRate: statistic.Rate, MasterSampleCount: statistic.SampleCount, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }
 
@@ -355,10 +374,13 @@ func (s *PlanContentService) ListAdmin(workspaceID uint64) ([]PlanRecommendation
 		Order("COALESCE(published_issue.scheduled_draw_at, published_draw.draw_at) DESC NULLS LAST, plan_recommendations.sort_order, plan_recommendations.id DESC").Limit(300).Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	rates := planHitRates(rows)
+	if err := deriveTrustedPlanResults(s.db, rows, time.Now().UTC()); err != nil {
+		return nil, err
+	}
+	statistics := planHitStatistics(rows)
 	result := make([]PlanRecommendationView, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, planView(row, rates))
+		result = append(result, planView(row, statistics))
 	}
 	return result, nil
 }
@@ -385,6 +407,12 @@ func (s *PlanContentService) Catalog(workspaceID uint64) ([]PlanGameSummary, err
 	}
 	result := make([]PlanGameSummary, 0, len(summaries))
 	for _, item := range summaries {
+		// Racing-v2 products are represented exclusively by immutable stream
+		// cycles. Never let retired generic/editorial rows create or replace a
+		// rich racing catalog card.
+		if racingPlanGameID(item.GameID) {
+			continue
+		}
 		current, err := s.currentOpenPlanIssue(workspaceID, item.GameID)
 		if err != nil {
 			return nil, err
@@ -406,6 +434,9 @@ func (s *PlanContentService) Detail(workspaceID uint64, gameID string, historyLi
 	}
 	result := PlanDetail{GameID: strings.TrimSpace(gameID), Recommendations: []PlanRecommendationView{}, History: []PlanRecommendationView{}, LatestRecommendations: []PlanRecommendationView{}}
 	result.GenerationMode, result.HistoryLimit, result.RefreshSeconds = "on_visit", planHistoryLimit(historyLimits), 15
+	if racingPlanGameID(result.GameID) {
+		return result, nil
+	}
 	config, err := NewPlanAutomationService(s.db).Get(workspaceID)
 	if err != nil {
 		return result, err
@@ -437,10 +468,13 @@ func (s *PlanContentService) Detail(workspaceID uint64, gameID string, historyLi
 	if len(rows) == 0 {
 		return result, nil
 	}
-	rates := planHitRates(rows)
+	if err := deriveTrustedPlanResults(s.db, rows, time.Now().UTC()); err != nil {
+		return result, err
+	}
+	statistics := planHitStatistics(rows)
 	seenMasters := map[string]bool{}
 	for _, row := range rows {
-		view := planView(row, rates)
+		view := planView(row, statistics)
 		masterIdentity := view.Source + "\x00" + view.MasterName
 		if !seenMasters[masterIdentity] {
 			seenMasters[masterIdentity] = true
@@ -500,29 +534,32 @@ func (s *PlanContentService) Create(workspaceID uint64, input PlanRecommendation
 	if err := s.ensureScope(workspaceID, row.GameID); err != nil {
 		return PlanRecommendationView{}, err
 	}
-	if err := s.ensureIssue(row.GameID, row.Issue); err != nil {
+	if err := s.ensurePlanNumberContract(row); err != nil {
+		return PlanRecommendationView{}, err
+	}
+	if err := s.ensureGenericPublicationUnviewed(workspaceID, row.GameID, row.Issue); err != nil {
+		return PlanRecommendationView{}, err
+	}
+	if err := s.ensureIssue(workspaceID, row.GameID, row.Issue); err != nil {
 		return PlanRecommendationView{}, err
 	}
 	row.WorkspaceID = workspaceID
 	row.Source = "manual"
 	if err := s.db.Create(&row).Error; err != nil {
+		if planPublicationLockedDatabaseError(err) {
+			return PlanRecommendationView{}, apperrors.NewBusinessError("PLAN_PUBLICATION_LOCKED", "该期推荐已被会员查看或已经封盘，不能再新增")
+		}
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return PlanRecommendationView{}, apperrors.NewBusinessError("INVALID_REQUEST", "该期该大师的推荐已经存在")
 		}
 		return PlanRecommendationView{}, err
 	}
-	return planView(row, planHitRates([]plan.Recommendation{row})), nil
+	return planView(row, nil), nil
 }
 
 func (s *PlanContentService) Update(workspaceID, id uint64, input PlanRecommendationInput) (PlanRecommendationView, error) {
 	patch, err := validatePlanInput(input)
 	if err != nil {
-		return PlanRecommendationView{}, err
-	}
-	if err := s.ensureScope(workspaceID, patch.GameID); err != nil {
-		return PlanRecommendationView{}, err
-	}
-	if err := s.ensureIssue(patch.GameID, patch.Issue); err != nil {
 		return PlanRecommendationView{}, err
 	}
 	var row plan.Recommendation
@@ -532,11 +569,27 @@ func (s *PlanContentService) Update(workspaceID, id uint64, input PlanRecommenda
 		}
 		return PlanRecommendationView{}, err
 	}
-	if row.Source == "demo" {
-		if patch.Result != plan.ResultPending {
-			return PlanRecommendationView{}, apperrors.NewBusinessError("INVALID_REQUEST", "自动推荐不统计命中结果")
-		}
-		patch.Note = PlanDemoNotice
+	if patch.GameID != row.GameID || patch.Issue != row.Issue {
+		return PlanRecommendationView{}, apperrors.NewBusinessError("INVALID_REQUEST", "已发布推荐不能更换彩种或期号")
+	}
+	if err := ensurePlanRecommendationEditable(row); err != nil {
+		return PlanRecommendationView{}, err
+	}
+	if err := s.ensureScope(workspaceID, row.GameID); err != nil {
+		return PlanRecommendationView{}, err
+	}
+	if err := s.ensurePlanNumberContract(patch); err != nil {
+		return PlanRecommendationView{}, err
+	}
+	if err := s.ensureIssue(workspaceID, row.GameID, row.Issue); err != nil {
+		return PlanRecommendationView{}, err
+	}
+	viewed, err := recommendationPublicationViewed(s.db, row)
+	if err != nil {
+		return PlanRecommendationView{}, err
+	}
+	if viewed {
+		return PlanRecommendationView{}, apperrors.NewBusinessError("PLAN_PUBLICATION_LOCKED", "该期推荐已被会员查看，不能再修改")
 	}
 	updates := map[string]any{
 		"game_id": patch.GameID, "issue": patch.Issue, "master_name": patch.MasterName,
@@ -545,20 +598,46 @@ func (s *PlanContentService) Update(workspaceID, id uint64, input PlanRecommenda
 		"enabled": patch.Enabled, "sort_order": patch.SortOrder,
 	}
 	if err := s.db.Model(&row).Updates(updates).Error; err != nil {
+		if planPublicationLockedDatabaseError(err) {
+			return PlanRecommendationView{}, apperrors.NewBusinessError("PLAN_PUBLICATION_LOCKED", "该期推荐已被会员查看或已经封盘，不能再修改")
+		}
 		return PlanRecommendationView{}, fmt.Errorf("update recommendation: %w", err)
 	}
 	if err := s.db.First(&row, id).Error; err != nil {
 		return PlanRecommendationView{}, err
 	}
-	return planView(row, planHitRates([]plan.Recommendation{row})), nil
+	return planView(row, nil), nil
 }
 
 func (s *PlanContentService) Delete(workspaceID, id uint64) error {
 	if err := s.ensureScope(workspaceID, ""); err != nil {
 		return err
 	}
+	var row plan.Recommendation
+	if err := s.db.Where("id = ? AND workspace_id = ?", id, workspaceID).First(&row).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return apperrors.NewBusinessError("NOT_FOUND", "推荐不存在")
+		}
+		return err
+	}
+	if err := ensurePlanRecommendationEditable(row); err != nil {
+		return err
+	}
+	if err := s.ensureIssue(workspaceID, row.GameID, row.Issue); err != nil {
+		return err
+	}
+	viewed, err := recommendationPublicationViewed(s.db, row)
+	if err != nil {
+		return err
+	}
+	if viewed {
+		return apperrors.NewBusinessError("PLAN_PUBLICATION_LOCKED", "该期推荐已被会员查看，不能再删除")
+	}
 	result := s.db.Where("id = ? AND workspace_id = ?", id, workspaceID).Delete(&plan.Recommendation{})
 	if result.Error != nil {
+		if planPublicationLockedDatabaseError(result.Error) {
+			return apperrors.NewBusinessError("PLAN_PUBLICATION_LOCKED", "该期推荐已被会员查看或已经封盘，不能再删除")
+		}
 		return result.Error
 	}
 	if result.RowsAffected != 1 {

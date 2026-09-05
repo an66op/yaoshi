@@ -48,6 +48,24 @@ var racingPlanOptions = []PlanOption{
 	{"dragon-tiger-three-periods", "龙虎三期", "dragon_tiger", 3, 0},
 }
 
+var racingPlanGameIDs = []string{
+	"speed-racing", "speed-fly", "sg-fly", "fly-racing", "au-lucky-10",
+	"bingo-racing-a", "bingo-racing-b",
+}
+
+func racingPlanGameID(gameID string) bool {
+	for _, candidate := range racingPlanGameIDs {
+		if gameID == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// IsRacingPlanGame is the shared HTTP/service routing contract for every
+// verified ten-position racing-v2 product.
+func IsRacingPlanGame(gameID string) bool { return racingPlanGameID(gameID) }
+
 type PlanPosition struct {
 	Position         int    `json:"position"`
 	Label            string `json:"label"`
@@ -127,12 +145,21 @@ func decodePlanMatrix(row plan.Automation) ([]int, []string, error) {
 }
 
 func planStreamAllowed(config PlanAutomationView, position int, key string) bool {
-	if !config.Enabled {
-		return false
-	}
+	return planStreamAllowedForGame(config, "speed-racing", position, key)
+}
+
+func planStreamAllowedForGame(config PlanAutomationView, gameID string, position int, key string) bool {
+	return config.Enabled && planStreamConfiguredForGame(config, gameID, position, key)
+}
+
+// Configured means the room owner still exposes this selection in the member
+// catalogue. It deliberately ignores the generation switch: switching
+// automation off must stop future publications without hiding already
+// published, auditable history.
+func planStreamConfiguredForGame(config PlanAutomationView, gameID string, position int, key string) bool {
 	game, p, k := false, false, false
 	for _, id := range config.GameIDs {
-		game = game || id == "speed-racing"
+		game = game || id == gameID
 	}
 	for _, value := range config.Positions {
 		p = p || value == position
@@ -225,14 +252,18 @@ func planStreamRoomAvailable(db *gorm.DB, workspaceID uint64, gameIDs ...string)
 }
 
 func (s *PlanContentService) StreamDetail(workspaceID uint64, position int, key string, historyLimits ...int) (PlanStreamDetail, error) {
+	return s.StreamDetailForGame(workspaceID, "speed-racing", position, key, historyLimits...)
+}
+
+func (s *PlanContentService) StreamDetailForGame(workspaceID uint64, gameID string, position int, key string, historyLimits ...int) (PlanStreamDetail, error) {
 	option, ok := planOption(key)
-	if !ok || position < 1 || position > 10 {
+	if !racingPlanGameID(gameID) || !ok || position < 1 || position > 10 {
 		return PlanStreamDetail{}, apperrors.NewBusinessError("INVALID_REQUEST", "推荐位置或方案不正确")
 	}
-	if err := s.ensureScope(workspaceID, "speed-racing"); err != nil {
+	if err := s.ensureScope(workspaceID, gameID); err != nil {
 		return PlanStreamDetail{}, err
 	}
-	result := PlanStreamDetail{PlanDetail: PlanDetail{GameID: "speed-racing", Recommendations: []PlanRecommendationView{}, History: []PlanRecommendationView{}, LatestRecommendations: []PlanRecommendationView{}},
+	result := PlanStreamDetail{PlanDetail: PlanDetail{GameID: gameID, Recommendations: []PlanRecommendationView{}, History: []PlanRecommendationView{}, LatestRecommendations: []PlanRecommendationView{}},
 		Options: append([]PlanOption{}, racingPlanOptions...), Positions: planPositions(), AllowedPositions: []int{}, AllowedPlanKeys: []string{},
 		Selection: PlanStreamSelection{position, key, option.Kind, option.Periods, option.NumberCount}, Stream: PlanStreamState{MaxActive: MaxActivePlanStreams}, LegacyHistory: []PlanRecommendationView{}, Notice: PlanDemoNotice}
 	result.GenerationMode, result.HistoryLimit, result.RefreshSeconds = "on_visit", planHistoryLimit(historyLimits), 15
@@ -240,20 +271,21 @@ func (s *PlanContentService) StreamDetail(workspaceID uint64, position int, key 
 	if err != nil {
 		return result, err
 	}
-	roomOpen, err := planStreamRoomAvailable(s.db, workspaceID)
+	roomOpen, err := planStreamRoomAvailable(s.db, workspaceID, gameID)
 	if err != nil {
 		return result, err
 	}
-	if config.Enabled && roomOpen {
+	if roomOpen {
 		for _, game := range config.GameIDs {
-			if game == "speed-racing" {
+			if game == gameID {
 				result.AllowedPositions, result.AllowedPlanKeys = config.Positions, config.PlanKeys
 			}
 		}
 	}
-	result.Stream.Allowed = roomOpen && planStreamAllowed(config, position, key)
-	result.AutomationEnabled = result.Stream.Allowed
-	// Revoked selections never expose their cached stream payload.
+	result.Stream.Allowed = roomOpen && planStreamConfiguredForGame(config, gameID, position, key)
+	result.AutomationEnabled = config.Enabled && result.Stream.Allowed
+	// Removed selections never expose cached payload. Disabling generation alone
+	// preserves the configured matrix and its already published history.
 	if !result.Stream.Allowed {
 		return result, nil
 	}
@@ -263,29 +295,23 @@ func (s *PlanContentService) StreamDetail(workspaceID uint64, position int, key 
 	}
 	var selected plan.Stream
 	for _, stream := range streams {
-		if !planRequestedStreamAllowed(config, stream.GameID, stream.Position, stream.PlanKey) {
-			continue
-		}
-		if planStreamActive(stream, cycles[stream.CycleID], time.Now().UTC()) {
+		if planRequestedStreamAllowed(config, stream.GameID, stream.Position, stream.PlanKey) && planStreamActive(stream, cycles[stream.CycleID], time.Now().UTC()) {
 			result.Stream.ActiveCount++
 		}
-		if stream.GameID == "speed-racing" && stream.Position == position && stream.PlanKey == key {
+		if stream.GameID == gameID && stream.Position == position && stream.PlanKey == key {
 			selected = stream
 		}
 	}
 	result.Stream.ID, result.Stream.ActiveUntil = selected.ID, selected.ActiveUntil
 	result.Stream.Active = selected.ID > 0 && planStreamActive(selected, cycles[selected.CycleID], time.Now().UTC())
 	result.Stream.ActivationRequired = !result.Stream.Active
-	if selected.Revoked {
-		return result, nil
-	}
-	result.CurrentIssue, err = s.currentOpenStreamIssue(workspaceID)
+	result.CurrentIssue, err = s.currentOpenStreamIssueForGame(workspaceID, gameID)
 	if err != nil {
 		return result, err
 	}
 	if selected.ID > 0 {
 		var periods []plan.StreamPeriod
-		if err := s.db.Where("stream_id = ?", selected.ID).Order("id DESC").Limit(result.HistoryLimit).Find(&periods).Error; err != nil {
+		if err := s.db.Where("stream_id = ?", selected.ID).Order("id DESC").Limit(retainedPlanPeriods).Find(&periods).Error; err != nil {
 			return result, err
 		}
 		// One bounded read for the selected stream's displayed periods. Results
@@ -298,7 +324,7 @@ func (s *PlanContentService) StreamDetail(workspaceID uint64, position int, key 
 		draws := map[string]lottery.Draw{}
 		if len(issues) > 0 {
 			var rows []lottery.Draw
-			if err := trustedDrawsForGame(s.db, "speed-racing").Where("issue IN ?", issues).Find(&rows).Error; err != nil {
+			if err := trustedDrawsForGame(s.db, gameID).Where("issue IN ?", issues).Find(&rows).Error; err != nil {
 				return result, err
 			}
 			for _, row := range rows {
@@ -318,25 +344,51 @@ func (s *PlanContentService) StreamDetail(workspaceID uint64, position int, key 
 				cycles[cycle.ID] = cycle
 			}
 		}
-		for i, period := range periods {
+		allRows := make([]PlanRecommendationView, 0, len(periods)*len(planDemoMasters))
+		for _, period := range periods {
 			cycle := cycles[period.CycleID]
 			var picks []PlanRecommendationView
 			if err := json.Unmarshal([]byte(cycle.PayloadJSON), &picks); err != nil {
 				return result, err
 			}
 			for expertIndex, pick := range picks {
-				pick.ID, pick.WorkspaceID, pick.GameID, pick.Issue = period.ID*10+uint64(expertIndex+1), workspaceID, "speed-racing", period.Issue
+				pick.ID, pick.WorkspaceID, pick.GameID, pick.Issue = period.ID*10+uint64(expertIndex+1), workspaceID, gameID, period.Issue
 				pick.Position, pick.PlanKey, pick.Kind = position, key, option.Kind
 				pick.CycleID, pick.CyclePeriod, pick.CyclePeriods, pick.CycleStartIssue, pick.CycleStatus = cycle.ID, period.PeriodIndex, cycle.Periods, cycle.StartIssue, cycle.Status
 				pick.CreatedAt, pick.UpdatedAt = period.CreatedAt, period.CreatedAt
 				pick.Result, pick.DrawNumbers, pick.DrawAt = racingPlanDrawResult(pick, period, draws[period.Issue], time.Now().UTC())
+				allRows = append(allRows, pick)
+			}
+		}
+		type score struct{ hits, settled int }
+		scores := map[string]score{}
+		for _, pick := range allRows {
+			identity := planMasterStatisticKey(pick.GameID, pick.Source, pick.MasterName)
+			value := scores[identity]
+			if pick.Result == plan.ResultHit {
+				value.hits++
+				value.settled++
+			} else if pick.Result == plan.ResultMiss {
+				value.settled++
+			}
+			scores[identity] = value
+		}
+		visibleRows := result.HistoryLimit * len(planDemoMasters)
+		for index, pick := range allRows {
+			value := scores[planMasterStatisticKey(pick.GameID, pick.Source, pick.MasterName)]
+			pick.MasterSampleCount = value.settled
+			if value.settled > 0 {
+				rate := float64(value.hits) * 100 / float64(value.settled)
+				pick.MasterHitRate = &rate
+			}
+			if index < visibleRows {
 				result.History = append(result.History, pick)
-				if i == 0 {
-					result.LatestRecommendations = append(result.LatestRecommendations, pick)
-				}
-				if period.Issue == result.CurrentIssue {
-					result.Recommendations = append(result.Recommendations, pick)
-				}
+			}
+			if index < len(planDemoMasters) {
+				result.LatestRecommendations = append(result.LatestRecommendations, pick)
+			}
+			if pick.Issue == result.CurrentIssue {
+				result.Recommendations = append(result.Recommendations, pick)
 			}
 		}
 	}
@@ -346,12 +398,16 @@ func (s *PlanContentService) StreamDetail(workspaceID uint64, position int, key 
 }
 
 func (s *PlanContentService) currentOpenStreamIssue(workspaceID uint64) (string, error) {
-	current, err := s.currentOpenPlanIssue(workspaceID, "speed-racing")
+	return s.currentOpenStreamIssueForGame(workspaceID, "speed-racing")
+}
+
+func (s *PlanContentService) currentOpenStreamIssueForGame(workspaceID uint64, gameID string) (string, error) {
+	current, err := s.currentOpenPlanIssue(workspaceID, gameID)
 	if err != nil || current == "" {
 		return current, err
 	}
 	var game lottery.Game
-	if err := s.db.Select("id", "next_issue").First(&game, "id = ?", "speed-racing").Error; err != nil {
+	if err := s.db.Select("id", "next_issue").First(&game, "id = ?", gameID).Error; err != nil {
 		return "", err
 	}
 	if game.NextIssue != current {
@@ -361,20 +417,93 @@ func (s *PlanContentService) currentOpenStreamIssue(workspaceID uint64) (string,
 }
 
 func (s *PlanContentService) ActivateStream(ctx context.Context, workspaceID uint64, position int, key string, historyLimits ...int) (PlanStreamDetail, error) {
+	return s.activateStreamForMember(ctx, 0, workspaceID, "speed-racing", position, key, historyLimits...)
+}
+
+func (s *PlanContentService) ActivateStreamForMember(ctx context.Context, userID, workspaceID uint64, gameID string, position int, key string, historyLimits ...int) (PlanStreamDetail, error) {
+	return s.activateStreamForMember(ctx, userID, workspaceID, gameID, position, key, historyLimits...)
+}
+
+func (s *PlanContentService) auditedStreamDetail(ctx context.Context, userID, workspaceID uint64, gameID string, position int, key string, historyLimits ...int) (PlanStreamDetail, error) {
+	if userID == 0 {
+		return s.StreamDetailForGame(workspaceID, gameID, position, key, historyLimits...)
+	}
+	var result PlanStreamDetail
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockPlanPublicationGame(tx, workspaceID, gameID); err != nil {
+			return err
+		}
+		var err error
+		result, err = NewPlanContentService(tx).StreamDetailForGame(workspaceID, gameID, position, key, historyLimits...)
+		if err != nil {
+			return err
+		}
+		return recordVisiblePlanPublicationViews(tx, userID, workspaceID, gameID, position, key, result.PlanDetail)
+	})
+	return result, err
+}
+
+func (s *PlanContentService) activateStreamForMember(ctx context.Context, userID, workspaceID uint64, gameID string, position int, key string, historyLimits ...int) (PlanStreamDetail, error) {
 	if _, ok := planOption(key); !ok || position < 1 || position > 10 {
 		return PlanStreamDetail{}, apperrors.NewBusinessError("INVALID_REQUEST", "推荐位置或方案不正确")
 	}
-	if _, err := s.touchPlan(ctx, workspaceID, "speed-racing", position, key); err != nil {
+	if !racingPlanGameID(gameID) {
+		return PlanStreamDetail{}, apperrors.NewBusinessError("INVALID_REQUEST", "该彩种不支持名次计划")
+	}
+	if userID > 0 {
+		snapshot, err := s.StreamDetailForGame(workspaceID, gameID, position, key, historyLimits...)
+		if err != nil {
+			return PlanStreamDetail{}, err
+		}
+		if !snapshot.Stream.Allowed {
+			return snapshot, nil
+		}
+		if !snapshot.AutomationEnabled {
+			var lockedSnapshot PlanStreamDetail
+			becameEnabled := false
+			if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := lockPlanPublicationGame(tx, workspaceID, gameID); err != nil {
+					return err
+				}
+				var err error
+				lockedSnapshot, err = NewPlanContentService(tx).StreamDetailForGame(workspaceID, gameID, position, key, historyLimits...)
+				if err != nil {
+					return err
+				}
+				if lockedSnapshot.AutomationEnabled {
+					becameEnabled = true
+					return nil
+				}
+				if !lockedSnapshot.Stream.Allowed {
+					return nil
+				}
+				return recordVisiblePlanPublicationViews(tx, userID, workspaceID, gameID, position, key, lockedSnapshot.PlanDetail)
+			}); err != nil {
+				return PlanStreamDetail{}, err
+			}
+			if !becameEnabled {
+				return lockedSnapshot, nil
+			}
+		}
+	}
+	if _, err := s.touchPlanForMember(ctx, userID, workspaceID, gameID, position, key); err != nil {
 		return PlanStreamDetail{}, err
 	}
-	return s.StreamDetail(workspaceID, position, key, historyLimits...)
+	return s.auditedStreamDetail(ctx, userID, workspaceID, gameID, position, key, historyLimits...)
 }
 
 func planCyclePicks(workspaceID uint64, position int, option PlanOption, startIssue string) []PlanRecommendationView {
+	return planCyclePicksForGame(workspaceID, "speed-racing", position, option, startIssue)
+}
+
+func planCyclePicksForGame(workspaceID uint64, gameID string, position int, option PlanOption, startIssue string) []PlanRecommendationView {
 	result := make([]PlanRecommendationView, 0, 3)
 	for _, master := range planDemoMasters {
 		pick := PlanRecommendationView{MasterName: master.Name, MasterTitle: master.Title, MasterColor: master.Color, Numbers: []int{}, Source: "demo", Result: "pending", Note: PlanDemoNotice, Enabled: true, SortOrder: master.SortOrder}
 		seed := fmt.Sprintf("plan-stream-v1\x00%d\x00%d\x00%s\x00%s\x00%s", workspaceID, position, option.Key, startIssue, master.Key)
+		if gameID != "speed-racing" {
+			seed = fmt.Sprintf("plan-stream-v2\x00%d\x00%s\x00%d\x00%s\x00%s\x00%s", workspaceID, gameID, position, option.Key, startIssue, master.Key)
+		}
 		digest := sha256.Sum256([]byte(seed))
 		switch option.Kind {
 		case "numbers":
@@ -437,7 +566,7 @@ func advancePlanStream(tx *gorm.DB, workspaceID uint64, game lottery.Game, issue
 				continue
 			}
 			option, _ := planOption(stream.PlanKey)
-			payload, _ := json.Marshal(planCyclePicks(workspaceID, stream.Position, option, issue.Issue))
+			payload, _ := json.Marshal(planCyclePicksForGame(workspaceID, game.ID, stream.Position, option, issue.Issue))
 			cycle = plan.StreamCycle{StreamID: stream.ID, Periods: option.Periods, Status: "active", StartIssue: issue.Issue, PayloadJSON: string(payload)}
 			if err := tx.Create(&cycle).Error; err != nil {
 				return 0, err
@@ -502,63 +631,66 @@ func (s *PlanContentService) appendStreamCatalog(workspaceID uint64, result []Pl
 	if err != nil {
 		return nil, err
 	}
-	// A permitted game must remain discoverable before its first member visit.
-	if config.Enabled {
-		for _, gameID := range config.GameIDs {
-			if gameID == "speed-racing" {
-				continue
+	for _, gameID := range config.GameIDs {
+		available, err := planStreamRoomAvailable(s.db, workspaceID, gameID)
+		if err != nil {
+			return nil, err
+		}
+		if !available {
+			continue
+		}
+		index := -1
+		for i := range result {
+			if result[i].GameID == gameID {
+				index = i
+				break
 			}
-			available, err := planStreamRoomAvailable(s.db, workspaceID, gameID)
+		}
+		if !racingPlanGameID(gameID) {
+			// A permitted game remains discoverable before its first member visit.
+			if config.Enabled && index < 0 {
+				result = append(result, PlanGameSummary{GameID: gameID, HistoryOnly: true})
+			}
+			continue
+		}
+		if len(config.Positions) == 0 || len(config.PlanKeys) == 0 {
+			continue
+		}
+		var latest plan.StreamPeriod
+		query := s.db.Model(&plan.StreamPeriod{}).Select("plan_stream_periods.*").
+			Joins("JOIN plan_streams AS stream ON stream.id = plan_stream_periods.stream_id").
+			Where("stream.workspace_id = ? AND stream.game_id = ? AND stream.position IN ? AND stream.plan_key IN ?", workspaceID, gameID, config.Positions, config.PlanKeys)
+		// Turning generation off revokes active leases, but it deliberately keeps
+		// the configured matrix browseable. Removed/reclassified selections stay
+		// hidden because they no longer match the saved game/position/key matrix.
+		if config.Enabled {
+			query = query.Where("stream.revoked = false")
+		}
+		query = query.Order("plan_stream_periods.id DESC").First(&latest)
+		if query.Error != nil && !errors.Is(query.Error, gorm.ErrRecordNotFound) {
+			return nil, query.Error
+		}
+		// Disabled automation exposes only a truthful history shelf. A configured
+		// racing product with no persisted publication has nothing to display yet.
+		if !config.Enabled && latest.ID == 0 {
+			continue
+		}
+		current := ""
+		if config.Enabled {
+			current, err = s.currentOpenStreamIssueForGame(workspaceID, gameID)
 			if err != nil {
 				return nil, err
 			}
-			if !available {
-				continue
-			}
-			found := false
-			for _, item := range result {
-				found = found || item.GameID == gameID
-			}
-			if !found {
-				result = append(result, PlanGameSummary{GameID: gameID, HistoryOnly: true})
-			}
+		}
+		item := PlanGameSummary{GameID: gameID, CurrentIssue: current, LatestIssue: latest.Issue, HistoryOnly: !config.Enabled || latest.Issue == "" || latest.Issue != current, UpdatedAt: latest.CreatedAt}
+		if latest.ID > 0 {
+			item.MasterCount = len(planDemoMasters)
+		}
+		if index >= 0 {
+			result[index] = item
+		} else {
+			result = append(result, item)
 		}
 	}
-	available, err := planStreamRoomAvailable(s.db, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	if !available || !config.Enabled || len(config.Positions) == 0 || len(config.PlanKeys) == 0 {
-		return result, nil
-	}
-	gameAllowed := false
-	for _, id := range config.GameIDs {
-		gameAllowed = gameAllowed || id == "speed-racing"
-	}
-	if !gameAllowed {
-		return result, nil
-	}
-	var latest plan.StreamPeriod
-	query := s.db.Model(&plan.StreamPeriod{}).Select("plan_stream_periods.*").
-		Joins("JOIN plan_streams AS stream ON stream.id = plan_stream_periods.stream_id").
-		Where("stream.workspace_id = ? AND stream.game_id = ? AND stream.revoked = false AND stream.position IN ? AND stream.plan_key IN ?", workspaceID, "speed-racing", config.Positions, config.PlanKeys).
-		Order("plan_stream_periods.id DESC").First(&latest)
-	if query.Error != nil && !errors.Is(query.Error, gorm.ErrRecordNotFound) {
-		return nil, query.Error
-	}
-	current, err := s.currentOpenStreamIssue(workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	item := PlanGameSummary{GameID: "speed-racing", CurrentIssue: current, LatestIssue: latest.Issue, HistoryOnly: latest.Issue == "" || latest.Issue != current, UpdatedAt: latest.CreatedAt}
-	if latest.ID > 0 {
-		item.MasterCount = 3
-	}
-	for i, old := range result {
-		if old.GameID == "speed-racing" {
-			result[i] = item
-			return result, nil
-		}
-	}
-	return append(result, item), nil
+	return result, nil
 }

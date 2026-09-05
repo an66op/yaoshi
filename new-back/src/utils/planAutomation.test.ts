@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildPlanAutomationPayload, canManagePlanAutomation, hasPlanAutomationChanges } from './planAutomation'
+import { buildPlanAutomationPayload, canManagePlanAutomation, hasPlanAutomationChanges, hasRacingPlanGame, RACING_PLAN_GAME_IDS } from './planAutomation'
 
 describe('plan automation permission boundary', () => {
   it('permits only the authenticated platform administrator', () => {
@@ -52,9 +52,13 @@ describe('plan automation configuration payload', () => {
 
   it('requires both dimensions only when racing is enabled', () => {
     const empty = { positions: [], plan_keys: [] }
-    expect(() => buildPlanAutomationPayload(37, true, ['speed-racing'], empty)).toThrow('至少选择一个名次和一种计划')
-    expect(() => buildPlanAutomationPayload(37, true, ['speed-racing'], { positions: [1], plan_keys: [' '] })).toThrow('至少选择一个名次和一种计划')
-    expect(() => buildPlanAutomationPayload(37, true, ['speed-fly'], empty)).not.toThrow()
+    for (const gameId of RACING_PLAN_GAME_IDS) {
+      expect(hasRacingPlanGame([gameId])).toBe(true)
+      expect(() => buildPlanAutomationPayload(37, true, [gameId], empty)).toThrow('赛车类彩种至少选择一个名次和一种计划')
+      expect(() => buildPlanAutomationPayload(37, true, [gameId], { positions: [1], plan_keys: [' '] })).toThrow('赛车类彩种至少选择一个名次和一种计划')
+    }
+    expect(hasRacingPlanGame(['speed-ssc', 'canada-28'])).toBe(false)
+    expect(() => buildPlanAutomationPayload(37, true, ['speed-ssc'], empty)).not.toThrow()
     expect(() => buildPlanAutomationPayload(37, false, ['speed-racing'], empty)).not.toThrow()
   })
 

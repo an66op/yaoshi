@@ -372,6 +372,9 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action, ref
 				if reference != "" {
 					return apperrors.NewBusinessError("REDPACKET_CLAIMED", "该红包已领取")
 				}
+				if action == "checkin" {
+					return apperrors.NewBusinessError("CHECKIN_ALREADY_COMPLETED", "今日已签到，请明日再来")
+				}
 				return apperrors.NewBusinessError("INVALID_REQUEST", "今日已参与，请明日再来")
 			}
 			return err
@@ -397,7 +400,7 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action, ref
 		}
 		remark := row.Title
 		if action == "checkin" {
-			remark = "签到奖励 · 连续" + itoa(streak) + "天"
+			remark = "签到积分 · 连续" + itoa(streak) + "天"
 		} else {
 			remark = "红包奖励 · " + row.Title
 		}
@@ -409,9 +412,10 @@ func (s *MemberPortalService) participate(userID, activityID uint64, action, ref
 			return err
 		}
 		title := "签到成功"
-		content := remark + "，到账 " + formatAmount(rewardCents) + " 元"
+		content := remark + "，获得 " + formatAmount(rewardCents) + " 积分"
 		if action == "redpacket" {
 			title = "红包领取成功"
+			content = remark + "，到账 " + formatAmount(rewardCents) + " 元"
 		}
 		notice := membernotify.MemberNotification{
 			WorkspaceID: workspaceID, UserID: userID, Title: title, Content: content,

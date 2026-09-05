@@ -40,7 +40,7 @@ import { exactRuleResponsesReady, gameRulesReady, isDigit5V3Game, isPC28RuleVers
 import { gameAvailability } from '../utils/gameAvailability'
 import { betCommandError } from '../utils/betCommand'
 import { DEFAULT_LOTTERY_SOURCE_URL, resolveGameLotterySourceURL, resolveLotterySourceURL } from '../utils/lotterySourceURL'
-import { roomBettingAssembly, roomBettingMode, type RoomBettingModeID } from '../utils/gameBettingModes'
+import { preferredRoomBettingMode, roomBettingAssembly, roomBettingMode, type RoomBettingModeID } from '../utils/gameBettingModes'
 import { canSubmitMarkSixBatchItemWithOddsResponse } from '../utils/markSixBetSelection'
 import { isPC28EnabledPlayCode, pc28OddsItem } from '../utils/pc28BetSelection'
 import { betStatusText, betStatusTone } from '../utils/betStatus'
@@ -140,8 +140,10 @@ function canAcceptBet(game: Game) {
 export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpenGame, onOpenService, onOpenWallet, onOpenResults, startWithQuickMenu = false, onRefreshBalance }: Props) {
   const realtimeConnected = useWebSocketConnected()
   const modeAssembly = roomBettingAssembly(game.id)
-  const [roomModeSession, setRoomModeSession] = useState<{ gameId: string; mode: RoomBettingModeID }>(() => ({ gameId: game.id, mode: modeAssembly.defaultMode }))
-  const activeRoomMode = roomBettingMode(modeAssembly, roomModeSession.gameId === game.id ? roomModeSession.mode : modeAssembly.defaultMode)
+  const { drawHistoryLimit, defaultBetMode, fontScale } = useMemberPreferences()
+  const preferredRoomMode = preferredRoomBettingMode(modeAssembly, defaultBetMode)
+  const [roomModeSession, setRoomModeSession] = useState<{ gameId: string; mode: RoomBettingModeID }>(() => ({ gameId: game.id, mode: preferredRoomMode }))
+  const activeRoomMode = roomBettingMode(modeAssembly, roomModeSession.gameId === game.id ? roomModeSession.mode : preferredRoomMode)
   const chatRoomMode = modeAssembly.modes.find(mode => mode.surface === 'chat')
   const detailRoomMode = modeAssembly.modes.find(mode => mode.surface === 'detail')
   const roomModeSwitchAvailable = modeAssembly.modes.length > 1 && modeAssembly.defaultMode === chatRoomMode?.id && Boolean(detailRoomMode)
@@ -159,7 +161,6 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
   const [betInput, setBetInput] = useState('')
   const [showKeyboard, setShowKeyboard] = useState(false)
   const [betMode, setBetMode] = useState<BetMode>('quick')
-  const { drawHistoryLimit, defaultBetMode, fontScale } = useMemberPreferences()
   const [dialog, setDialog] = useState<Dialog>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [submittedBets, setSubmittedBets] = useState<AcceptedTicket[]>([])
@@ -587,8 +588,14 @@ export function GameRoom({ game, games, theme, nickname, balance, onBack, onOpen
   }, [game.id, game.period])
 
   useEffect(() => {
-    setBetMode(defaultBetMode)
-  }, [game.id, defaultBetMode])
+    setRoomModeSession((current) => current.gameId === game.id && current.mode === preferredRoomMode
+      ? current
+      : { gameId: game.id, mode: preferredRoomMode })
+  }, [game.id, preferredRoomMode])
+
+  useEffect(() => {
+    setBetMode('quick')
+  }, [game.id])
 
   useEffect(() => {
     void loadBets()

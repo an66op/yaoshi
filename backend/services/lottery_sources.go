@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"backend/data/models/bet"
@@ -25,16 +24,16 @@ import (
 
 const officialUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36"
 
-var officialGroupLocks = map[string]*sync.Mutex{
-	"china-welfare":   {},
-	"china-sport":     {},
-	"taiwan-bingo":    {},
-	"taiwan-lottery":  {},
-	"163-highfreq":    {},
-	"163-pc28":        {},
-	"163-bingo":       {},
-	"163-marksix":     {},
-	"sg-ssc-verified": {},
+var officialGroupLocks = map[string]chan struct{}{
+	"china-welfare":   make(chan struct{}, 1),
+	"china-sport":     make(chan struct{}, 1),
+	"taiwan-bingo":    make(chan struct{}, 1),
+	"taiwan-lottery":  make(chan struct{}, 1),
+	"163-highfreq":    make(chan struct{}, 1),
+	"163-pc28":        make(chan struct{}, 1),
+	"163-bingo":       make(chan struct{}, 1),
+	"163-marksix":     make(chan struct{}, 1),
+	"sg-ssc-verified": make(chan struct{}, 1),
 }
 
 // IsOfficialSourceGroup keeps the administrator test endpoint constrained to
@@ -86,13 +85,32 @@ func (s *LotteryService) SyncOfficialSources(ctx context.Context) []SourceSyncRe
 // groups independent allows the high-frequency Bingo feed to run without
 // waiting for the slower daily lottery websites.
 func (s *LotteryService) SyncOfficialGroup(ctx context.Context, group string) []SourceSyncResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return []SourceSyncResult{{Status: "error", Error: "数据源同步已取消: " + err.Error()}}
+	}
 	group = strings.TrimSpace(group)
 	lock, ok := officialGroupLocks[group]
 	if !ok {
 		return []SourceSyncResult{{Status: "error", Error: "未知官方数据源分组: " + group}}
 	}
-	lock.Lock()
-	defer lock.Unlock()
+	select {
+	case lock <- struct{}{}:
+		defer func() { <-lock }()
+	case <-ctx.Done():
+		return []SourceSyncResult{{Status: "error", Error: "数据源同步已取消: " + ctx.Err().Error()}}
+	}
+	if s == nil || s.db == nil {
+		return []SourceSyncResult{{Status: "error", Error: "开奖数据库不可用"}}
+	}
+	// Bind every query, transaction and imported-draw settlement to the lease
+	// context. Losing leadership can then cancel the entire write chain instead
+	// of allowing a stale process to keep advancing schedules or balances.
+	worker := *s
+	worker.db = s.db.WithContext(ctx)
+	s = &worker
 
 	switch group {
 	case "china-welfare":
@@ -286,7 +304,7 @@ func (s *LotteryService) syncOfficialGameWithPublisher(ctx context.Context, game
 		// Retrying an existing draw is deliberate: a process can stop after the
 		// draw/schedule commit but before settlement. SettleImportedDraw already
 		// makes completely settled periods a no-op, including notifications.
-		settleImportedDrawBatch(s.db, gameID, draws)
+		settleImportedDrawBatch(ctx, s.db, gameID, draws)
 	}
 	latestIssue := ""
 	var latestAt time.Time
@@ -572,7 +590,14 @@ func sameIntSequence(first, second []int) bool {
 	return true
 }
 
-func settleImportedDrawBatch(db *gorm.DB, gameID string, draws []sourceDraw) {
+func settleImportedDrawBatch(ctx context.Context, db *gorm.DB, gameID string, draws []sourceDraw) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil || db == nil || len(draws) == 0 {
+		return
+	}
+	db = db.WithContext(ctx)
 	issues := make([]string, 0, len(draws))
 	for _, draw := range draws {
 		issues = append(issues, draw.Issue)
@@ -603,28 +628,48 @@ func settleImportedDrawBatch(db *gorm.DB, gameID string, draws []sourceDraw) {
 			issues = append(issues, draw.Issue)
 		}
 	}
-	// A two-day backfill can contain thousands of already settled rows. Filter
-	// these in bulk instead of issuing two extra queries for every historic row.
-	var settledIssues, pendingIssues []string
-	if err := db.Model(&lottery.Issue{}).Where("game_id = ? AND issue IN ? AND status = ?", gameID, issues, lottery.IssueStatusSettled).Pluck("issue", &settledIssues).Error; err != nil {
-		log.Printf("开奖结算候选读取失败: game=%s error=%v", gameID, err)
-		return
-	}
+	// A history backfill can contain thousands of draw-only rows. Build the
+	// settlement worklist with two bulk queries and do not create lifecycle rows
+	// for periods that never accepted a bet. Live periods remain candidates
+	// because their lifecycle already exists in a non-settled state.
+	var pendingIssues, unfinishedIssues []string
 	if err := db.Model(&bet.Bet{}).Distinct("issue").Where("game_id = ? AND issue IN ? AND status = ?", gameID, issues, "pending").Pluck("issue", &pendingIssues).Error; err != nil {
 		log.Printf("待结算期号读取失败: game=%s error=%v", gameID, err)
 		return
 	}
-	settled := make(map[string]bool, len(settledIssues))
-	for _, issue := range settledIssues {
-		settled[issue] = true
-	}
-	for _, issue := range pendingIssues {
-		delete(settled, issue)
+	if err := db.Model(&lottery.Issue{}).
+		Where("game_id = ? AND issue IN ? AND status <> ?", gameID, issues, lottery.IssueStatusSettled).
+		Pluck("issue", &unfinishedIssues).Error; err != nil {
+		log.Printf("未完成开奖生命周期读取失败: game=%s error=%v", gameID, err)
+		return
 	}
 	service := NewBetAdminService(db)
+	settleImportedDrawCandidates(ctx, draws, pendingIssues, unfinishedIssues, func(issue string) {
+		service.SettleImportedDraw(gameID, issue)
+	})
+}
+
+func settleImportedDrawCandidates(ctx context.Context, draws []sourceDraw, pendingIssues, unfinishedIssues []string, settle func(string)) {
+	if settle == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	candidates := make(map[string]struct{}, len(pendingIssues)+len(unfinishedIssues))
+	for _, issue := range pendingIssues {
+		candidates[issue] = struct{}{}
+	}
+	for _, issue := range unfinishedIssues {
+		candidates[issue] = struct{}{}
+	}
 	for _, draw := range draws {
-		if !settled[draw.Issue] {
-			service.SettleImportedDraw(gameID, draw.Issue)
+		if ctx.Err() != nil {
+			return
+		}
+		if _, candidate := candidates[draw.Issue]; candidate {
+			settle(draw.Issue)
+			delete(candidates, draw.Issue)
 		}
 	}
 }
@@ -661,7 +706,7 @@ func (s *LotteryService) importOfficialHistory(ctx context.Context, gameID strin
 		return 0, err
 	}
 	if game.Enabled {
-		settleImportedDrawBatch(s.db, gameID, draws)
+		settleImportedDrawBatch(ctx, s.db, gameID, draws)
 	}
 	return imported, nil
 }

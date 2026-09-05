@@ -7,12 +7,14 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 const LocalDevelopmentDatabaseMarkerNamespace = "wangzhe-local-development-v1"
@@ -95,7 +97,9 @@ func OpenDatabase() (*gorm.DB, error) {
 		return nil, fmt.Errorf("%s: %w", constants.ErrDatabaseConnectionFailed, err)
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: newDatabaseLogger(log.New(os.Stdout, "\r\n", log.LstdFlags)),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", constants.ErrDatabaseConnectionFailed, err)
 	}
@@ -104,11 +108,20 @@ func OpenDatabase() (*gorm.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", constants.ErrDatabaseConnectionFailed, err)
 	}
-	sqlDB.SetMaxIdleConns(10)
-	sqlDB.SetMaxOpenConns(100)
-	sqlDB.SetConnMaxLifetime(time.Hour)
+	sqlDB.SetMaxIdleConns(config.Database.MaxIdleConns)
+	sqlDB.SetMaxOpenConns(config.Database.MaxOpenConns)
+	sqlDB.SetConnMaxLifetime(time.Duration(config.Database.ConnMaxLifetimeSeconds) * time.Second)
 
 	return db, nil
+}
+
+func newDatabaseLogger(writer gormlogger.Writer) gormlogger.Interface {
+	return gormlogger.New(writer, gormlogger.Config{
+		SlowThreshold:             200 * time.Millisecond,
+		LogLevel:                  gormlogger.Warn,
+		IgnoreRecordNotFoundError: true,
+		Colorful:                  false,
+	})
 }
 
 // BuildPostgresDSN returns a pgx-compatible URL. URL encoding preserves every

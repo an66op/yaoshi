@@ -55,7 +55,7 @@ func run(args []string, output io.Writer) error {
 	if err := validateDevelopmentTarget(cfg, !*auditOnly); err != nil {
 		return err
 	}
-	if err := utils.InitFieldEncryption(cfg.Security.DataEncryptionKey); err != nil {
+	if err := utils.InitFieldEncryptionWithFallbacks(cfg.Security.DataEncryptionKey, cfg.Security.DataEncryptionPreviousKeys); err != nil {
 		return fmt.Errorf("初始化敏感字段加密失败: %w", err)
 	}
 	db, err := config.OpenDatabase()

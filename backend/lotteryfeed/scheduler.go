@@ -213,42 +213,58 @@ func (s *Scheduler) runOnce(parent context.Context, job JobConfig) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	lease, acquired, leaseErr := cluster.AcquireLease(parent, "lottery-sync:"+schedulerLeaseID(job.ID), timeout+30*time.Second)
-	if leaseErr != nil && cluster.Required() {
-		s.recordRuntimeError(job, "无法获取开奖同步分布式锁: "+leaseErr.Error())
+	var results []SyncResult
+	executed, leaseErr := cluster.RunWithLease(
+		parent,
+		"lottery-sync:"+schedulerLeaseID(job.ID),
+		timeout,
+		func(leaseContext context.Context) error {
+			s.mu.Lock()
+			s.standbyState[job.ID] = false
+			status := s.statuses[job.ID]
+			status.Running = true
+			status.LastStartedAt = time.Now().UTC()
+			status.LastError = ""
+			s.statuses[job.ID] = status
+			s.mu.Unlock()
+
+			ctx, cancel := context.WithTimeout(leaseContext, timeout)
+			defer cancel()
+			results = s.sync(ctx, job.Group)
+			return ctx.Err()
+		},
+	)
+	if executed && parent != nil && parent.Err() != nil {
+		// A running source call observes service shutdown through the exact same
+		// context as lease loss. Close its visible running state without turning
+		// an intentional shutdown into a source or scheduler incident.
+		s.mu.Lock()
+		status := s.statuses[job.ID]
+		status.Running = false
+		status.LastFinishedAt = time.Now().UTC()
+		s.statuses[job.ID] = status
+		s.mu.Unlock()
 		return
 	}
-	if leaseErr == nil {
-		if !acquired {
+	if !executed {
+		if leaseErr == nil {
 			s.markStandby(job)
 			return
 		}
-		defer func() {
-			releaseContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			_ = lease.Release(releaseContext)
-		}()
+		// Parent cancellation is the normal shutdown path. Do not turn a clean
+		// service stop into a persistent source alarm.
+		if parent == nil || parent.Err() == nil {
+			s.recordRuntimeError(job, "无法获取开奖同步分布式锁: "+leaseErr.Error())
+		}
+		return
 	}
-	s.mu.Lock()
-	s.standbyState[job.ID] = false
-	s.mu.Unlock()
-
-	started := time.Now().UTC()
-	s.mu.Lock()
-	status := s.statuses[job.ID]
-	status.Running = true
-	status.LastStartedAt = started
-	status.LastError = ""
-	s.statuses[job.ID] = status
-	s.mu.Unlock()
-
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	results := s.sync(ctx, job.Group)
-	cancel()
 
 	imported := 0
 	latest := ""
 	errors := make([]string, 0)
+	if leaseErr != nil {
+		errors = append(errors, "开奖同步租约执行中断: "+leaseErr.Error())
+	}
 	for _, result := range results {
 		imported += result.Imported
 		if result.LatestIssue != "" {
@@ -269,7 +285,7 @@ func (s *Scheduler) runOnce(parent context.Context, job JobConfig) {
 	finished := time.Now().UTC()
 	events := make([]Event, 0, len(results)+1)
 	s.mu.Lock()
-	status = s.statuses[job.ID]
+	status := s.statuses[job.ID]
 	previousFailures := status.ConsecutiveErr
 	status.Running = false
 	status.LastFinishedAt = finished

@@ -50,7 +50,7 @@ func main() {
 
 	// 初始化JWT
 	utils.InitJWT(cfg.JWT.Secret, cfg.JWT.Expire)
-	if err := utils.InitFieldEncryption(cfg.Security.DataEncryptionKey); err != nil {
+	if err := utils.InitFieldEncryptionWithFallbacks(cfg.Security.DataEncryptionKey, cfg.Security.DataEncryptionPreviousKeys); err != nil {
 		log.Fatalf("初始化敏感字段加密失败: %v", err)
 	}
 
@@ -109,7 +109,7 @@ func main() {
 	services.StartSGSSCBackfill(rootContext, db)
 	services.StartIdempotencyRecovery(rootContext, db)
 	services.StartDataLifecycleLoop(rootContext, db)
-	services.StartRoomActivityForMode(rootContext.Done(), db, cfg.Server.Mode)
+	services.StartRoomActivityForMode(rootContext, db, cfg.Server.Mode)
 	services.StartRedPacketExpiry(rootContext, db)
 	middleware.StartAuditRecovery(rootContext, db)
 	log.Printf(constants.ServerStartMessage, cfg.Server.Port)

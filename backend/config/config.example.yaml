@@ -20,6 +20,10 @@ database:
   password: CHANGE_ME
   dbname: wangzhe
   sslmode: require
+  # Budget these values across all backend replicas and PostgreSQL reserved connections.
+  max_idle_conns: 10
+  max_open_conns: 50
+  conn_max_lifetime_seconds: 3600
 
 redis:
   addr: 127.0.0.1:6379
@@ -37,3 +41,7 @@ jwt:
 
 security:
   data_encryption_key: REPLACE_WITH_AN_INDEPENDENT_RANDOM_32_BYTE_SECRET
+  # During a controlled rotation, keep old production secrets here until an
+  # inventory confirms that no enc:v1 or old-key enc:v2 values remain.
+  # New writes always use data_encryption_key; this list is decrypt-only.
+  data_encryption_previous_keys: []

@@ -2,6 +2,7 @@ package config
 
 import (
 	"backend/constants"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/spf13/viper"
 )
@@ -40,13 +42,22 @@ type ServerConfig struct {
 
 // DatabaseConfig 数据库配置
 type DatabaseConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	User     string `mapstructure:"user"`
-	Password string `mapstructure:"password"`
-	DBName   string `mapstructure:"dbname"`
-	SSLMode  string `mapstructure:"sslmode"`
+	Host                   string `mapstructure:"host"`
+	Port                   int    `mapstructure:"port"`
+	User                   string `mapstructure:"user"`
+	Password               string `mapstructure:"password"`
+	DBName                 string `mapstructure:"dbname"`
+	SSLMode                string `mapstructure:"sslmode"`
+	MaxIdleConns           int    `mapstructure:"max_idle_conns"`
+	MaxOpenConns           int    `mapstructure:"max_open_conns"`
+	ConnMaxLifetimeSeconds int    `mapstructure:"conn_max_lifetime_seconds"`
 }
+
+const (
+	defaultDatabaseMaxIdleConns           = 10
+	defaultDatabaseMaxOpenConns           = 50
+	defaultDatabaseConnMaxLifetimeSeconds = 3600
+)
 
 // RedisConfig Redis配置
 type RedisConfig struct {
@@ -66,7 +77,8 @@ type JWTConfig struct {
 }
 
 type SecurityConfig struct {
-	DataEncryptionKey string `mapstructure:"data_encryption_key"`
+	DataEncryptionKey          string   `mapstructure:"data_encryption_key"`
+	DataEncryptionPreviousKeys []string `mapstructure:"data_encryption_previous_keys"`
 }
 
 // LoadConfig 加载配置文件
@@ -178,6 +190,22 @@ func loadFromEnv() error {
 	if sslmode := os.Getenv("BACKEND_DATABASE_SSLMODE"); sslmode != "" {
 		Config.Database.SSLMode = sslmode
 	}
+	for _, setting := range []struct {
+		name   string
+		target *int
+	}{
+		{name: "BACKEND_DATABASE_MAX_IDLE_CONNS", target: &Config.Database.MaxIdleConns},
+		{name: "BACKEND_DATABASE_MAX_OPEN_CONNS", target: &Config.Database.MaxOpenConns},
+		{name: "BACKEND_DATABASE_CONN_MAX_LIFETIME_SECONDS", target: &Config.Database.ConnMaxLifetimeSeconds},
+	} {
+		if raw, exists := os.LookupEnv(setting.name); exists {
+			value, err := strconv.Atoi(strings.TrimSpace(raw))
+			if err != nil {
+				return fmt.Errorf("%s 必须是整数", setting.name)
+			}
+			*setting.target = value
+		}
+	}
 
 	// Redis配置
 	if addr := os.Getenv("BACKEND_REDIS_ADDR"); addr != "" {
@@ -220,6 +248,18 @@ func loadFromEnv() error {
 	}
 	if key := os.Getenv("BACKEND_SECURITY_DATA_ENCRYPTION_KEY"); key != "" {
 		Config.Security.DataEncryptionKey = key
+	}
+	if encodedKeys, exists := os.LookupEnv("BACKEND_SECURITY_DATA_ENCRYPTION_PREVIOUS_KEYS"); exists {
+		encodedKeys = strings.TrimSpace(encodedKeys)
+		if encodedKeys == "" {
+			Config.Security.DataEncryptionPreviousKeys = nil
+		} else {
+			var previousKeys []string
+			if err := json.Unmarshal([]byte(encodedKeys), &previousKeys); err != nil || previousKeys == nil {
+				return fmt.Errorf("BACKEND_SECURITY_DATA_ENCRYPTION_PREVIOUS_KEYS 必须是 JSON 字符串数组")
+			}
+			Config.Security.DataEncryptionPreviousKeys = previousKeys
+		}
 	}
 	return nil
 }
@@ -330,6 +370,24 @@ func validateConfig(cfg *Configuration) error {
 	if !validSSLModes[cfg.Database.SSLMode] {
 		return fmt.Errorf("数据库 sslmode 无效: %q", cfg.Database.SSLMode)
 	}
+	if cfg.Database.MaxIdleConns == 0 {
+		cfg.Database.MaxIdleConns = defaultDatabaseMaxIdleConns
+	}
+	if cfg.Database.MaxOpenConns == 0 {
+		cfg.Database.MaxOpenConns = defaultDatabaseMaxOpenConns
+	}
+	if cfg.Database.ConnMaxLifetimeSeconds == 0 {
+		cfg.Database.ConnMaxLifetimeSeconds = defaultDatabaseConnMaxLifetimeSeconds
+	}
+	if cfg.Database.MaxOpenConns < 1 || cfg.Database.MaxOpenConns > 10000 {
+		return fmt.Errorf("数据库最大连接数必须在 1-10000 之间")
+	}
+	if cfg.Database.MaxIdleConns < 1 || cfg.Database.MaxIdleConns > cfg.Database.MaxOpenConns {
+		return fmt.Errorf("数据库空闲连接数必须在 1 至最大连接数之间")
+	}
+	if cfg.Database.ConnMaxLifetimeSeconds < 60 || cfg.Database.ConnMaxLifetimeSeconds > 86400 {
+		return fmt.Errorf("数据库连接最长生命周期必须在 60-86400 秒之间")
+	}
 	for _, origin := range cfg.Server.AllowedOrigins {
 		if normalizeOrigin(origin) == "" {
 			return fmt.Errorf("无效的 CORS 来源: %q", origin)
@@ -350,6 +408,9 @@ func validateConfig(cfg *Configuration) error {
 	}
 	if len(cfg.Security.DataEncryptionKey) < 16 {
 		return fmt.Errorf("数据加密密钥长度至少16个字符，当前长度: %d", len(cfg.Security.DataEncryptionKey))
+	}
+	if err := validatePreviousDataEncryptionKeys(cfg, cfg.Server.Mode == "release"); err != nil {
+		return err
 	}
 	if cfg.Server.Mode == "release" {
 		if strings.TrimSpace(cfg.Redis.Addr) == "" {
@@ -395,6 +456,32 @@ func validateConfig(cfg *Configuration) error {
 		}
 	}
 
+	return nil
+}
+
+func validatePreviousDataEncryptionKeys(cfg *Configuration, release bool) error {
+	if len(cfg.Security.DataEncryptionPreviousKeys) > 8 {
+		return fmt.Errorf("历史数据加密密钥最多保留8把")
+	}
+	seen := map[string]struct{}{cfg.Security.DataEncryptionKey: {}}
+	for index, key := range cfg.Security.DataEncryptionPreviousKeys {
+		if len(key) < 16 || strings.TrimSpace(key) == "" {
+			return fmt.Errorf("第%d把历史数据加密密钥长度至少16个字符", index+1)
+		}
+		if strings.IndexFunc(key, unicode.IsControl) >= 0 {
+			return fmt.Errorf("第%d把历史数据加密密钥包含控制字符", index+1)
+		}
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("第%d把历史数据加密密钥重复", index+1)
+		}
+		seen[key] = struct{}{}
+		if key == cfg.JWT.Secret || key == cfg.Database.Password {
+			return fmt.Errorf("第%d把历史数据加密密钥不得复用 JWT 或数据库密码", index+1)
+		}
+		if release && (len(key) < 32 || isPlaceholderSecret(key) || !hasSufficientSecretVariety(key)) {
+			return fmt.Errorf("release 模式的第%d把历史数据加密密钥必须是至少32位的原生产随机密钥", index+1)
+		}
+	}
 	return nil
 }
 

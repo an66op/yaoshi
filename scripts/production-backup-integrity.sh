@@ -325,7 +325,9 @@ cleanup_integrity_work() {
     rm -rf -- "$integrity_work"
   fi
 }
-trap cleanup_integrity_work EXIT INT TERM
+trap cleanup_integrity_work EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 wal_targets_file="$integrity_work/wal-targets"
 wal_inventory_file="$integrity_work/wal-inventory"
 expected_remote_files="$integrity_work/expected-remote-files"

@@ -1,10 +1,14 @@
 package lotteryfeed
 
 import (
+	"backend/cluster"
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 func TestSGSSCVerifiedJobIsSeparateAndBounded(t *testing.T) {
@@ -81,6 +85,86 @@ func TestSchedulerStandbyEventIsEmittedOnlyOnTransition(t *testing.T) {
 
 	if len(events) != 1 || events[0].Type != "standby" {
 		t.Fatalf("repeated standby polling emitted noisy events: %+v", events)
+	}
+}
+
+func TestSchedulerCancelsSyncWhenLeaseOwnershipIsLost(t *testing.T) {
+	t.Cleanup(func() { _ = cluster.Init(context.Background(), cluster.Options{}) })
+	server := miniredis.RunT(t)
+	if err := cluster.Init(context.Background(), cluster.Options{Addr: server.Addr(), Required: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	job := JobConfig{ID: "lease-loss", Name: "lease-loss", Group: "lease-loss", Timeout: time.Second}
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	scheduler := NewScheduler([]JobConfig{job}, func(ctx context.Context, _ string) []SyncResult {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return []SyncResult{{GameID: "game", Status: "error", Error: ctx.Err().Error()}}
+	})
+	done := make(chan struct{})
+	go func() {
+		scheduler.runOnce(context.Background(), job)
+		close(done)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("lease-protected sync did not start")
+	}
+	server.Set(cluster.Key("lock", "lottery-sync:"+schedulerLeaseID(job.ID)), "replacement-owner")
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("lost scheduler lease did not cancel source synchronization")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not stop after losing its lease")
+	}
+
+	status := scheduler.Status().Jobs[0]
+	if status.Running || status.ConsecutiveErr != 1 || !strings.Contains(status.LastError, "租约") {
+		t.Fatalf("lease-loss state was not recorded: %+v", status)
+	}
+	if value, _ := server.Get(cluster.Key("lock", "lottery-sync:"+schedulerLeaseID(job.ID))); value != "replacement-owner" {
+		t.Fatalf("stale scheduler release changed replacement owner: %q", value)
+	}
+}
+
+func TestSchedulerDoesNotReportIntentionalShutdownAsFailure(t *testing.T) {
+	t.Cleanup(func() { _ = cluster.Init(context.Background(), cluster.Options{}) })
+	if err := cluster.Init(context.Background(), cluster.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	job := JobConfig{ID: "shutdown", Name: "shutdown", Group: "shutdown", Timeout: time.Minute}
+	started := make(chan struct{})
+	scheduler := NewScheduler([]JobConfig{job}, func(ctx context.Context, _ string) []SyncResult {
+		close(started)
+		<-ctx.Done()
+		return []SyncResult{{GameID: "game", Status: "error", Error: ctx.Err().Error()}}
+	})
+	events := make([]Event, 0)
+	scheduler.SetEventSink(func(_ context.Context, event Event) { events = append(events, event) })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		scheduler.runOnce(ctx, job)
+		close(done)
+	}()
+	<-started
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not stop after parent cancellation")
+	}
+	status := scheduler.Status().Jobs[0]
+	if status.Running || status.ConsecutiveErr != 0 || status.LastError != "" || len(events) != 0 {
+		t.Fatalf("intentional shutdown was reported as a failure: status=%+v events=%+v", status, events)
 	}
 }
 

@@ -31,7 +31,9 @@ umask 077
 payload_file="$(mktemp)"
 curl_config="$(mktemp)"
 cleanup() { rm -f -- "$payload_file" "$curl_config"; }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 now_epoch="$(date +%s)"
 jq -n --arg unit "$FAILED_UNIT" --argjson timestamp "$now_epoch" \
   '{service:"wangzhe",status:"firing",timestamp:$timestamp,alerts:[("systemd任务失败：" + $unit)]}' >"$payload_file"

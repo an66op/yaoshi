@@ -237,6 +237,9 @@ func sourceHealthyForGame(game *lottery.Game) bool {
 	if binding, ok := source163PC28BindingForGame(game.ID); ok && !source163PC28Bound(game, binding) {
 		return false
 	}
+	if binding, ok := source163MarkSixBindingForGame(game.ID); ok && !source163MarkSixBound(game, binding) {
+		return false
+	}
 	if binding, ok := bingo163BindingForGame(game.ID); ok && !bingo163SourceBound(game, binding) {
 		return false
 	}

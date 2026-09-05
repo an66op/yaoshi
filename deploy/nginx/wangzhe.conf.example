@@ -1,3 +1,3 @@
 # Compatibility note: the complete, maintained production configuration is
-# deploy/nginx/wz6688.app.conf. Install that file instead of duplicating server
-# blocks here. See PRODUCTION_OPERATIONS.md for the HTTP certificate bootstrap.
+# deploy/nginx/wz6688.split-hosts.conf. Install that file instead of duplicating
+# server blocks here. See PRODUCTION_OPERATIONS.md for certificate bootstrap.

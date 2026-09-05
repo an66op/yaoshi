@@ -35,6 +35,12 @@ type IdempotencyRecoveryResult struct {
 
 func (s *BetAdminService) RecoverStaleIdempotencyRequests(ctx context.Context, limit int) (IdempotencyRecoveryResult, error) {
 	result := IdempotencyRecoveryResult{}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if limit <= 0 {
 		limit = idempotencyRecoveryBatch
 	}
@@ -50,6 +56,9 @@ func (s *BetAdminService) RecoverStaleIdempotencyRequests(ctx context.Context, l
 		return result, err
 	}
 	for _, id := range directIDs {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		completed, failed, inconsistent, recoverErr := s.recoverDirectReservation(ctx, id)
 		if shouldQuarantineIdempotencyRecovery(ctx, recoverErr) {
 			quarantined, quarantineErr := s.quarantineIdempotencyReservation(ctx, &bet.BetRequest{}, id)
@@ -70,6 +79,9 @@ func (s *BetAdminService) RecoverStaleIdempotencyRequests(ctx context.Context, l
 		return result, err
 	}
 	for _, id := range assistantIDs {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		completed, failed, inconsistent, recoverErr := s.recoverAssistantReservation(ctx, id)
 		if shouldQuarantineIdempotencyRecovery(ctx, recoverErr) {
 			quarantined, quarantineErr := s.quarantineIdempotencyReservation(ctx, &bet.AssistantRequest{}, id)
@@ -277,8 +289,8 @@ func finishAssistantReservation(tx *gorm.DB, id uint64, status, lastError, resul
 func StartIdempotencyRecovery(ctx context.Context, db *gorm.DB) {
 	go func() {
 		run := func() {
-			_, err := cluster.RunWithLease(ctx, "scheduler:idempotency-recovery", 3*time.Minute, func() error {
-				result, recoverErr := NewBetAdminService(db).RecoverStaleIdempotencyRequests(ctx, idempotencyRecoveryBatch)
+			_, err := cluster.RunWithLease(ctx, "scheduler:idempotency-recovery", 3*time.Minute, func(workCtx context.Context) error {
+				result, recoverErr := NewBetAdminService(db).RecoverStaleIdempotencyRequests(workCtx, idempotencyRecoveryBatch)
 				if recoverErr != nil {
 					return recoverErr
 				}

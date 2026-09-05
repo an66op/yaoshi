@@ -14,15 +14,19 @@ import (
 // clock. External games remain exclusively controlled by upstream source sync.
 func StartSimulatedDrawLoop(ctx context.Context, db *gorm.DB) {
 	go func() {
-		publishDue := func() error {
+		publishDue := func(workCtx context.Context) error {
 			var games []lottery.Game
 			now := time.Now().UTC()
-			if err := db.Where("source_kind IN ? AND enabled = ? AND next_draw_at <= ?", []string{"platform", "simulated"}, true, now).
+			workDB := db.WithContext(workCtx)
+			if err := workDB.Where("source_kind IN ? AND enabled = ? AND next_draw_at <= ?", []string{"platform", "simulated"}, true, now).
 				Order("next_draw_at asc").Find(&games).Error; err != nil {
 				return err
 			}
-			service := NewBetAdminService(db)
+			service := NewBetAdminService(workDB)
 			for _, game := range games {
+				if err := workCtx.Err(); err != nil {
+					return err
+				}
 				if _, supported := rulesForGame(&game); !supported {
 					// Unknown PC/Mark Six products need verified rules, not a guessed
 					// five-digit result. Leave their issue and historic draws intact.

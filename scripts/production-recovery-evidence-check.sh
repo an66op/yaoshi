@@ -9,6 +9,8 @@ readonly PITR_STATUS_VERIFY_KEY_FILE=/etc/wangzhe/pitr-restore-status-ed25519-pu
 readonly LOGICAL_RESTORE_LUKS_MOUNT=/var/lib/wangzhe-restore
 readonly LOGICAL_DATABASE_LUKS_MOUNT=/var/lib/wangzhe-recovery-postgresql
 readonly PITR_DRILL_LUKS_MOUNT=/var/lib/wangzhe-pitr-drill
+readonly FIRST_INSTALL_PHASE_MARKER_FILE=/etc/wangzhe/maintenance
+readonly FIRST_INSTALL_PHASE_MARKER_PREFIX=wangzhe-first-install-phase1:v2
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/strict-env.sh
@@ -16,11 +18,81 @@ source "$SCRIPT_DIR/lib/strict-env.sh"
 # shellcheck source=lib/encrypted-backup.sh
 source "$SCRIPT_DIR/lib/encrypted-backup.sh"
 
+recovery_evidence_tmp_parent="${TMPDIR:-/tmp}"
+while [[ "$recovery_evidence_tmp_parent" != / && "$recovery_evidence_tmp_parent" == */ ]]; do
+  recovery_evidence_tmp_parent="${recovery_evidence_tmp_parent%/}"
+done
+recovery_evidence_work_dir=""
+cleanup_recovery_evidence() {
+  local cleanup_dir="${recovery_evidence_work_dir:-}"
+  [[ -n "$cleanup_dir" && -d "$cleanup_dir" && ! -L "$cleanup_dir" ]] || return 0
+  [[ "$(dirname -- "$cleanup_dir")" == "$recovery_evidence_tmp_parent" && "$(basename -- "$cleanup_dir")" == wangzhe-recovery-evidence.* ]] || {
+    echo "拒绝清理无法识别的恢复证据临时目录：$cleanup_dir" >&2
+    return 1
+  }
+  rm -rf -- "$cleanup_dir"
+  recovery_evidence_work_dir=""
+}
+
 recovery_evidence_fail() { echo "$*" >&2; return 1; }
+
+first_install_evidence_required=0
+first_install_evidence_not_before_epoch=""
+first_install_evidence_database_name=""
+first_install_evidence_database_sha=""
+first_install_evidence_upload_name=""
+first_install_evidence_upload_sha=""
+first_install_evidence_base_name=""
+first_install_evidence_base_sha=""
 
 recovery_evidence_field() {
   local file="$1" key="$2"
   awk -F= -v key="$key" '$1 == key { count++; value=substr($0, length(key) + 2) } END { if (count == 1) print value; else exit 1 }' "$file"
+}
+
+load_first_install_evidence_binding() {
+  local marker_file="$1" token owner mode links bytes lines payload_sha actual_payload_sha
+  local schema status manifest release_id wal_sha
+  first_install_evidence_required=0
+  [[ -e "$marker_file" || -L "$marker_file" ]] || return 0
+  [[ -f "$marker_file" && ! -L "$marker_file" ]] || return 0
+  IFS= read -r token <"$marker_file" || return 0
+  [[ "$token" == "${FIRST_INSTALL_PHASE_MARKER_PREFIX}:"* ]] || return 0
+
+  owner="$(strict_env_stat '%u' '%u' "$marker_file")"
+  mode="$(strict_env_stat '%a' '%Lp' "$marker_file")"
+  links="$(strict_env_stat '%h' '%l' "$marker_file")"
+  bytes="$(strict_env_stat '%s' '%z' "$marker_file")"
+  lines="$(awk 'END { print NR }' "$marker_file")"
+  [[ "$owner" == 0 && "$mode" == 644 && "$links" == 1 && "$bytes" =~ ^[0-9]+$ && \
+     "$bytes" -le 2048 && "$lines" == 13 ]] || recovery_evidence_fail "首次安装恢复证据绑定标记的权限或格式无效" || return 1
+  [[ "$token" =~ ^${FIRST_INSTALL_PHASE_MARKER_PREFIX}:([0-9a-f]{64})$ ]] || recovery_evidence_fail "首次安装恢复证据绑定 token 无效" || return 1
+  payload_sha="${BASH_REMATCH[1]}"
+  actual_payload_sha="$(tail -n +2 "$marker_file" | sha256sum | awk '{print $1}')"
+  [[ "$actual_payload_sha" == "$payload_sha" ]] || recovery_evidence_fail "首次安装恢复证据绑定摘要无效" || return 1
+
+  schema="$(recovery_evidence_field "$marker_file" schema)" || return 1
+  status="$(recovery_evidence_field "$marker_file" status)" || return 1
+  manifest="$(recovery_evidence_field "$marker_file" manifest_sha256)" || return 1
+  release_id="$(recovery_evidence_field "$marker_file" release_id)" || return 1
+  first_install_evidence_not_before_epoch="$(recovery_evidence_field "$marker_file" backup_completed_at_epoch)" || return 1
+  first_install_evidence_database_name="$(recovery_evidence_field "$marker_file" database_artifact_name)" || return 1
+  first_install_evidence_database_sha="$(recovery_evidence_field "$marker_file" database_cipher_sha256)" || return 1
+  first_install_evidence_upload_name="$(recovery_evidence_field "$marker_file" upload_artifact_name)" || return 1
+  first_install_evidence_upload_sha="$(recovery_evidence_field "$marker_file" upload_cipher_sha256)" || return 1
+  first_install_evidence_base_name="$(recovery_evidence_field "$marker_file" basebackup_artifact_name)" || return 1
+  first_install_evidence_base_sha="$(recovery_evidence_field "$marker_file" basebackup_cipher_sha256)" || return 1
+  wal_sha="$(recovery_evidence_field "$marker_file" wal_inventory_sha256)" || return 1
+  [[ "$schema" == wangzhe.first-install-phase1.v2 && "$status" == awaiting-recovery && \
+     "$manifest" =~ ^[0-9a-f]{64}$ && "$release_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ && \
+     "$first_install_evidence_not_before_epoch" =~ ^[1-9][0-9]{0,11}$ && \
+     "$first_install_evidence_database_name" =~ ^[A-Za-z][A-Za-z0-9_]{0,62}-[0-9]{8}-[0-9]{6}-[0-9]+\.dump\.age$ && \
+     "$first_install_evidence_upload_name" =~ ^uploads-[0-9]{8}-[0-9]{6}-[0-9]+\.tar\.age$ && \
+     "$first_install_evidence_base_name" =~ ^basebackup-[0-9]{8}-[0-9]{6}-[0-9]+\.tar\.age$ && \
+     "$first_install_evidence_database_sha" =~ ^[0-9a-f]{64}$ && "$first_install_evidence_upload_sha" =~ ^[0-9a-f]{64}$ && \
+     "$first_install_evidence_base_sha" =~ ^[0-9a-f]{64}$ && "$wal_sha" =~ ^[0-9a-f]{64}$ ]] || \
+    recovery_evidence_fail "首次安装恢复证据绑定字段无效" || return 1
+  first_install_evidence_required=1
 }
 
 verify_status_bundle() {
@@ -91,6 +163,13 @@ validate_logical_recovery_evidence() {
   [[ "$migrations" =~ ^[1-9][0-9]*$ && "$negative" == 0 && "$orphan" == 0 ]] || return 1
   [[ "$manifest_entries" =~ ^[0-9]+$ && "$restored_files" == "$manifest_entries" ]] || return 1
   [[ "$database_bytes" =~ ^[1-9][0-9]*$ && "$upload_bytes" =~ ^[1-9][0-9]*$ ]] || return 1
+  if (( first_install_evidence_required == 1 )); then
+    (( epoch > first_install_evidence_not_before_epoch )) || return 1
+    [[ "$database_name" == "$first_install_evidence_database_name" && \
+       "$database_sha" == "$first_install_evidence_database_sha" && \
+       "$upload_name" == "$first_install_evidence_upload_name" && \
+       "$upload_sha" == "$first_install_evidence_upload_sha" ]] || return 1
+  fi
 }
 
 validate_pitr_recovery_evidence() {
@@ -148,6 +227,11 @@ validate_pitr_recovery_evidence() {
   [[ "$first_wal" =~ ^([0-9A-F]{24}(\.[0-9A-F]{8}\.backup)?|[0-9A-F]{8}\.history)$ ]] || return 1
   [[ "$last_wal" =~ ^([0-9A-F]{24}(\.[0-9A-F]{8}\.backup)?|[0-9A-F]{8}\.history)$ && "$wal_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
   [[ "$migrations" =~ ^[1-9][0-9]*$ && "$negative" == 0 && "$orphan" == 0 ]] || return 1
+  if (( first_install_evidence_required == 1 )); then
+    (( epoch > first_install_evidence_not_before_epoch && target_epoch > first_install_evidence_not_before_epoch && \
+       source_epoch > first_install_evidence_not_before_epoch )) || return 1
+    [[ "$base_name" == "$first_install_evidence_base_name" && "$base_sha" == "$first_install_evidence_base_sha" ]] || return 1
+  fi
 }
 
 require_distinct_status_key_domains() {
@@ -166,7 +250,7 @@ download_status_bundle() {
 
 production_recovery_evidence_main() {
   [[ $# == 0 ]] || { echo "此门禁不接受命令行覆盖" >&2; exit 1; }
-  for command_name in awk basename date dirname grep mktemp openssl rclone rm sha256sum stat timeout; do
+  for command_name in awk basename date dirname grep mktemp openssl rclone rm sha256sum stat tail timeout; do
     command -v "$command_name" >/dev/null 2>&1 || { echo "缺少命令：$command_name" >&2; exit 1; }
   done
   grep -q -- '-rawin' < <(openssl pkeyutl -help 2>&1 || true) || { echo "恢复证据验签要求 OpenSSL 3.0+" >&2; exit 1; }
@@ -198,14 +282,16 @@ production_recovery_evidence_main() {
   validate_ed25519_public_key "$LOGICAL_STATUS_VERIFY_KEY_FILE" "逻辑恢复状态 Ed25519 公钥"
   validate_ed25519_public_key "$PITR_STATUS_VERIFY_KEY_FILE" "PITR 恢复状态 Ed25519 公钥"
   require_distinct_status_key_domains "$LOGICAL_STATUS_VERIFY_KEY_FILE" "$PITR_STATUS_VERIFY_KEY_FILE"
+  load_first_install_evidence_binding "$FIRST_INSTALL_PHASE_MARKER_FILE"
 
   umask 077
-  local work_dir logical_file pitr_file now_epoch
-  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wangzhe-recovery-evidence.XXXXXX")"
-  cleanup_recovery_evidence() { rm -rf -- "$work_dir"; }
-  trap cleanup_recovery_evidence EXIT INT TERM
-  logical_file="$work_dir/last-success.status"
-  pitr_file="$work_dir/last-pitr-success.status"
+  local logical_file pitr_file now_epoch
+  recovery_evidence_work_dir="$(mktemp -d "$recovery_evidence_tmp_parent/wangzhe-recovery-evidence.XXXXXX")"
+  trap cleanup_recovery_evidence EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  logical_file="$recovery_evidence_work_dir/last-success.status"
+  pitr_file="$recovery_evidence_work_dir/last-pitr-success.status"
   download_status_bundle "$RECOVERY_EVIDENCE_LOGICAL_STATUS_REMOTE_SOURCE" "$logical_file"
   download_status_bundle "$RECOVERY_EVIDENCE_PITR_STATUS_REMOTE_SOURCE" "$pitr_file"
   verify_status_bundle "$logical_file" "$logical_file.sha256" "$logical_file.sig" last-success.status "$LOGICAL_STATUS_VERIFY_KEY_FILE" "逻辑恢复证据"

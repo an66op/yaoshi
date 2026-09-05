@@ -105,11 +105,17 @@ func ApplyDevelopmentAcceptanceProfile(db *gorm.DB, mode string) (*DevelopmentBo
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", developmentAcceptanceProfileLock).Error; err != nil {
 			return err
 		}
-		var existingRows int64
-		if err := tx.Model(&odds.PlayLimit{}).Count(&existingRows).Error; err != nil {
+		inventory, err := readDevelopmentOddsInventory(tx, developmentProfileGameSet(profile))
+		if err != nil {
 			return err
 		}
-		fresh := existingRows == 0
+		// The explicit-odds migration deliberately left old numeric defaults in
+		// place but made them inert. Treat an inventory made exclusively from
+		// those fail-closed placeholders like an unpriced database, so a first
+		// local initialization works consistently after either a fresh install or
+		// an upgrade. Any partly configured inventory remains non-writable and is
+		// verified below instead of being repaired or overwritten.
+		fresh := inventory.TotalRows == 0 || inventory.NonInertRows == 0
 		if fresh {
 			if err := writeDevelopmentOddsProfile(tx, profile); err != nil {
 				return err
@@ -274,11 +280,10 @@ func writeDevelopmentOddsProfile(tx *gorm.DB, profile developmentOddsProfile) er
 
 func verifyDevelopmentOddsProfile(tx *gorm.DB, profile developmentOddsProfile, lock bool) error {
 	service := NewOddsAdminService(tx)
-	profileGames := make(map[string]struct{})
+	profileGames := developmentProfileGameSet(profile)
 	expectedRows := int64(0)
 	for _, template := range profile.Templates {
 		for _, gameID := range template.Games {
-			profileGames[gameID] = struct{}{}
 			expectedRows += int64(len(template.Odds))
 			var current *GameOddsLimits
 			var err error
@@ -303,23 +308,68 @@ func verifyDevelopmentOddsProfile(tx *gorm.DB, profile developmentOddsProfile, l
 			}
 		}
 	}
-	var foreignConfigured int64
-	if err := tx.Model(&odds.PlayLimit{}).
-		Where("explicitly_configured = ? AND game_id NOT IN ?", true, mapKeys(profileGames)).
-		Count(&foreignConfigured).Error; err != nil {
+	inventory, err := readDevelopmentOddsInventory(tx, profileGames)
+	if err != nil {
 		return err
 	}
-	if foreignConfigured != 0 {
-		return fmt.Errorf("已有 %d 条验收范围外的已确认赔率；不会自动覆盖", foreignConfigured)
+	if inventory.ForeignNonInertRows != 0 {
+		return fmt.Errorf("已有 %d 条验收范围外的已配置或非惰性赔率；不会自动覆盖", inventory.ForeignNonInertRows)
 	}
-	var actualRows int64
-	if err := tx.Model(&odds.PlayLimit{}).Count(&actualRows).Error; err != nil {
-		return err
-	}
-	if actualRows != expectedRows {
-		return fmt.Errorf("赔率表存在缺失、重复或目录外记录: %d/%d", actualRows, expectedRows)
+	if inventory.ProfileRows != expectedRows {
+		return fmt.Errorf("验收范围内赔率表存在缺失或目录外记录: %d/%d", inventory.ProfileRows, expectedRows)
 	}
 	return nil
+}
+
+type developmentOddsInventory struct {
+	TotalRows           int64
+	ProfileRows         int64
+	NonInertRows        int64
+	ForeignNonInertRows int64
+}
+
+// A legacy numeric value is harmless only while every activation field stays
+// in its canonical fail-closed state. Keeping this predicate narrow prevents a
+// stale rule binding, timestamp or nonstandard source from being silently
+// accepted merely because explicitly_configured happens to be false.
+func isInertDevelopmentOddsPlaceholder(row odds.PlayLimit) bool {
+	return !row.ExplicitlyConfigured &&
+		row.RuleVersion == "" &&
+		row.ConfigurationSource == oddsSourceUnconfigured &&
+		row.ConfiguredAt == nil
+}
+
+func inspectDevelopmentOddsInventory(rows []odds.PlayLimit, profileGames map[string]struct{}) (developmentOddsInventory, error) {
+	inventory := developmentOddsInventory{TotalRows: int64(len(rows))}
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		key := row.GameID + "\x00" + row.PlayCode
+		if _, duplicate := seen[key]; duplicate {
+			return developmentOddsInventory{}, fmt.Errorf("赔率表存在重复记录: %s/%s", row.GameID, row.PlayCode)
+		}
+		seen[key] = struct{}{}
+		_, inProfile := profileGames[row.GameID]
+		if inProfile {
+			inventory.ProfileRows++
+		}
+		if isInertDevelopmentOddsPlaceholder(row) {
+			continue
+		}
+		inventory.NonInertRows++
+		if !inProfile {
+			inventory.ForeignNonInertRows++
+		}
+	}
+	return inventory, nil
+}
+
+func readDevelopmentOddsInventory(tx *gorm.DB, profileGames map[string]struct{}) (developmentOddsInventory, error) {
+	var rows []odds.PlayLimit
+	if err := tx.Select("id", "game_id", "play_code", "explicitly_configured", "rule_version", "configuration_source", "configured_at").
+		Order("game_id ASC, play_code ASC, id ASC").Find(&rows).Error; err != nil {
+		return developmentOddsInventory{}, err
+	}
+	return inspectDevelopmentOddsInventory(rows, profileGames)
 }
 
 func configureDevelopmentAgentRoom(tx *gorm.DB, profile developmentOddsProfile, write bool) error {
@@ -530,11 +580,12 @@ func developmentProfileGameIDs(profile developmentOddsProfile) []string {
 	return ids
 }
 
-func mapKeys(values map[string]struct{}) []string {
-	result := make([]string, 0, len(values))
-	for value := range values {
-		result = append(result, value)
+func developmentProfileGameSet(profile developmentOddsProfile) map[string]struct{} {
+	result := make(map[string]struct{}, len(defaultGames))
+	for _, template := range profile.Templates {
+		for _, gameID := range template.Games {
+			result[gameID] = struct{}{}
+		}
 	}
-	sort.Strings(result)
 	return result
 }

@@ -21,6 +21,14 @@ func TestIdempotencyReservationTimeoutBoundary(t *testing.T) {
 	}
 }
 
+func TestIdempotencyRecoveryStopsBeforeDatabaseWorkWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := (&BetAdminService{}).RecoverStaleIdempotencyRequests(ctx, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation before database access, got %v", err)
+	}
+}
+
 func TestIdempotencyRecoveryRequiresMatchingBetEvidence(t *testing.T) {
 	ledger := user.BalanceTransaction{
 		WorkspaceID: 88, UserID: 9, Reference: "assistant_request:77", Type: "bet",

@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/backend-env.sh
 source "$SCRIPT_DIR/lib/backend-env.sh"
 load_backend_env "$ENV_FILE"
+command -v jq >/dev/null 2>&1 || { echo "缺少生产配置校验命令: jq" >&2; exit 1; }
 
 required=(
   BACKEND_SERVER_BIND BACKEND_SERVER_PORT BACKEND_SERVER_MODE
@@ -52,6 +53,27 @@ done
   echo "JWT 与数据加密必须使用不同密钥" >&2
   exit 1
 }
+previous_data_keys="${BACKEND_SECURITY_DATA_ENCRYPTION_PREVIOUS_KEYS:-[]}"
+if ! jq -e '
+    type == "array" and length <= 8 and
+    all(.[];
+      type == "string" and length >= 32 and
+      (explode | all(. >= 32 and . != 127)) and
+      ((ascii_downcase | test("change_me|changeme|replace_with|example|password123|123456") | not))
+    ) and
+    ((unique | length) == length)
+  ' <<<"$previous_data_keys" >/dev/null; then
+  echo "历史数据加密密钥必须是至多8项的不重复高强度 JSON 字符串数组，且不得复用当前密钥或其他凭据" >&2
+  exit 1
+fi
+while IFS= read -r previous_data_key; do
+  if [[ "$previous_data_key" == "$BACKEND_SECURITY_DATA_ENCRYPTION_KEY" ||
+        "$previous_data_key" == "$BACKEND_JWT_SECRET" ||
+        "$previous_data_key" == "$BACKEND_DATABASE_PASSWORD" ]]; then
+    echo "历史数据加密密钥不得复用当前密钥或其他凭据" >&2
+    exit 1
+  fi
+done < <(jq -r '.[]' <<<"$previous_data_keys")
 
 case "$BACKEND_DATABASE_SSLMODE" in
   disable|verify-ca|verify-full) ;;
@@ -67,6 +89,30 @@ case "$BACKEND_DATABASE_HOST" in
     }
     ;;
 esac
+
+database_max_idle="${BACKEND_DATABASE_MAX_IDLE_CONNS:-10}"
+database_max_open="${BACKEND_DATABASE_MAX_OPEN_CONNS:-50}"
+database_lifetime="${BACKEND_DATABASE_CONN_MAX_LIFETIME_SECONDS:-3600}"
+for entry in \
+  "BACKEND_DATABASE_MAX_IDLE_CONNS:$database_max_idle" \
+  "BACKEND_DATABASE_MAX_OPEN_CONNS:$database_max_open" \
+  "BACKEND_DATABASE_CONN_MAX_LIFETIME_SECONDS:$database_lifetime"; do
+  key="${entry%%:*}"
+  value="${entry#*:}"
+  [[ "$value" =~ ^[0-9]+$ ]] || { echo "$key 必须是正整数" >&2; exit 1; }
+done
+(( 10#$database_max_idle >= 1 && 10#$database_max_idle <= 10#$database_max_open )) || {
+  echo "数据库空闲连接数必须在 1 至最大连接数之间" >&2
+  exit 1
+}
+(( 10#$database_max_open >= 1 && 10#$database_max_open <= 10000 )) || {
+  echo "数据库最大连接数必须在 1-10000 之间" >&2
+  exit 1
+}
+(( 10#$database_lifetime >= 60 && 10#$database_lifetime <= 86400 )) || {
+  echo "数据库连接最长生命周期必须在 60-86400 秒之间" >&2
+  exit 1
+}
 
 case "$BACKEND_REDIS_TLS" in
   true|false) ;;
@@ -104,6 +150,11 @@ for origin in "${allowed_origins[@]}"; do
     exit 1
   }
 done
+expected_production_origins='https://wz6688.app,https://www.wz6688.app,https://admin.wz888.site'
+[[ "$BACKEND_SERVER_ALLOWED_ORIGINS" == "$expected_production_origins" ]] || {
+  echo "生产 CORS 来源必须精确匹配正式会员/管理域名：$expected_production_origins" >&2
+  exit 1
+}
 
 IFS=',' read -r -a trusted_proxies <<<"$BACKEND_SERVER_TRUSTED_PROXIES"
 for proxy in "${trusted_proxies[@]}"; do

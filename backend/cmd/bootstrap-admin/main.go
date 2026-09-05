@@ -31,7 +31,7 @@ func main() {
 
 	config.LoadConfig()
 	cfg := config.GetConfig()
-	if err := utils.InitFieldEncryption(cfg.Security.DataEncryptionKey); err != nil {
+	if err := utils.InitFieldEncryptionWithFallbacks(cfg.Security.DataEncryptionKey, cfg.Security.DataEncryptionPreviousKeys); err != nil {
 		log.Fatalf("初始化敏感字段加密失败: %v", err)
 	}
 	db, err := config.ConnectDB()

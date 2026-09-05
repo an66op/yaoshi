@@ -87,7 +87,11 @@ func LoadRoutesForMode(r *gin.Engine, db *gorm.DB, scheduler *lotteryfeed.Schedu
 		},
 		{
 			Prefix: "/ready",
-			Routes: []Route{{Method: "GET", Pattern: "", Handler: readinessHandler(db)}},
+			Routes: []Route{
+				{Method: "GET", Pattern: "", Handler: readinessHandler(db)},
+				{Method: "GET", Pattern: "/odds", Handler: oddsReadinessHandler(db)},
+				{Method: "GET", Pattern: "/encryption", Handler: sensitiveFieldReadinessHandler(db)},
+			},
 		},
 		{
 			Prefix: "/api",

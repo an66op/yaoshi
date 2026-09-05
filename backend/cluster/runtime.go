@@ -192,6 +192,13 @@ if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) 
 return 0
 `)
 
+var renewLeaseScript = redis.NewScript(`
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
+return 0
+`)
+
 func AcquireLease(ctx context.Context, name string, ttl time.Duration) (*Lease, bool, error) {
 	current := Client()
 	if current == nil {
@@ -216,6 +223,32 @@ func (lease *Lease) Release(ctx context.Context) error {
 	return releaseLeaseScript.Run(ctx, current, []string{lease.key}, lease.token).Err()
 }
 
+// Renew extends a lease only while the Redis key is still owned by this exact
+// token. It can never revive or overwrite a lease acquired by another backend.
+func (lease *Lease) Renew(ctx context.Context) error {
+	if lease == nil {
+		return ErrLeaseLost
+	}
+	current := Client()
+	if current == nil {
+		return ErrUnavailable
+	}
+	updated, err := renewLeaseScript.Run(
+		ctx,
+		current,
+		[]string{lease.key},
+		lease.token,
+		lease.ttl.Milliseconds(),
+	).Int()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
 func Publish(ctx context.Context, channel string, payload []byte) error {
 	current := Client()
 	if current == nil {
@@ -237,7 +270,10 @@ func Subscribe(ctx context.Context, channel string) (*redis.PubSub, error) {
 	return subscription, nil
 }
 
-var ErrUnavailable = errors.New("Redis shared runtime unavailable")
+var (
+	ErrUnavailable = errors.New("Redis shared runtime unavailable")
+	ErrLeaseLost   = errors.New("Redis scheduler lease lost")
+)
 
 func randomToken() string {
 	var bytes [16]byte

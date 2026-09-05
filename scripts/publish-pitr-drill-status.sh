@@ -94,7 +94,9 @@ now_epoch="$(date +%s)"
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wangzhe-pitr-status.XXXXXX")"
 cleanup_publish() { rm -rf -- "$work_dir"; }
-trap cleanup_publish EXIT INT TERM
+trap cleanup_publish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 remote_manifest="$work_dir/last-pitr-success.status.sha256"
 downloaded_manifest="$work_dir/remote.sha256"
 downloaded_signature="$work_dir/remote.sig"

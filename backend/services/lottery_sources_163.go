@@ -494,7 +494,7 @@ func (s *LotteryService) sync163MirrorGame(ctx context.Context, binding source16
 		publish(game)
 	}
 	if game.Enabled && source163MirrorBound(&game, binding) {
-		settleImportedDrawBatch(s.db, binding.GameID, draws)
+		settleImportedDrawBatch(ctx, s.db, binding.GameID, draws)
 	}
 	latestIssue := ""
 	var latestAt time.Time

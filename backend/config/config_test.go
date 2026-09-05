@@ -222,6 +222,114 @@ func TestDatabasePasswordEnvironmentCanExplicitlyBeEmpty(t *testing.T) {
 	}
 }
 
+func TestDatabasePoolDefaultsAndValidation(t *testing.T) {
+	cfg := validTestConfig("debug")
+	if err := validateConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Database.MaxIdleConns != defaultDatabaseMaxIdleConns ||
+		cfg.Database.MaxOpenConns != defaultDatabaseMaxOpenConns ||
+		cfg.Database.ConnMaxLifetimeSeconds != defaultDatabaseConnMaxLifetimeSeconds {
+		t.Fatalf("unexpected pool defaults: %+v", cfg.Database)
+	}
+
+	for name, mutate := range map[string]func(*DatabaseConfig){
+		"idle exceeds open": func(database *DatabaseConfig) {
+			database.MaxIdleConns, database.MaxOpenConns = 51, 50
+		},
+		"open too large": func(database *DatabaseConfig) { database.MaxOpenConns = 10001 },
+		"lifetime too short": func(database *DatabaseConfig) {
+			database.ConnMaxLifetimeSeconds = 59
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := validTestConfig("debug")
+			mutate(&candidate.Database)
+			if err := validateConfig(candidate); err == nil {
+				t.Fatal("unsafe database pool configuration was accepted")
+			}
+		})
+	}
+}
+
+func TestDatabasePoolEnvironmentIsTyped(t *testing.T) {
+	previous := Config
+	t.Cleanup(func() { Config = previous })
+	Config = validTestConfig("debug")
+	t.Setenv("BACKEND_DATABASE_MAX_IDLE_CONNS", "7")
+	t.Setenv("BACKEND_DATABASE_MAX_OPEN_CONNS", "35")
+	t.Setenv("BACKEND_DATABASE_CONN_MAX_LIFETIME_SECONDS", "900")
+	if err := loadFromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if Config.Database.MaxIdleConns != 7 || Config.Database.MaxOpenConns != 35 || Config.Database.ConnMaxLifetimeSeconds != 900 {
+		t.Fatalf("pool environment was not applied: %+v", Config.Database)
+	}
+
+	Config = validTestConfig("debug")
+	t.Setenv("BACKEND_DATABASE_MAX_OPEN_CONNS", "many")
+	if err := loadFromEnv(); err == nil {
+		t.Fatal("invalid database pool value was silently accepted")
+	}
+}
+
+func TestDataEncryptionPreviousKeysEnvironmentIsStrictJSON(t *testing.T) {
+	previous := Config
+	t.Cleanup(func() { Config = previous })
+	Config = validTestConfig("debug")
+	t.Setenv("BACKEND_SECURITY_DATA_ENCRYPTION_PREVIOUS_KEYS", `["previous-data-key-one-with-enough-length","previous-data-key-two-with-enough-length"]`)
+	if err := loadFromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if got := Config.Security.DataEncryptionPreviousKeys; len(got) != 2 || got[0] != "previous-data-key-one-with-enough-length" || got[1] != "previous-data-key-two-with-enough-length" {
+		t.Fatalf("previous keys environment was not applied: %#v", got)
+	}
+
+	for _, invalid := range []string{`old-key`, `{"key":"old-key"}`, `null`, `[1]`} {
+		Config = validTestConfig("debug")
+		t.Setenv("BACKEND_SECURITY_DATA_ENCRYPTION_PREVIOUS_KEYS", invalid)
+		if err := loadFromEnv(); err == nil {
+			t.Fatalf("invalid previous-key JSON was accepted: %s", invalid)
+		}
+	}
+}
+
+func TestValidateConfigDataEncryptionRotationKeyring(t *testing.T) {
+	validPrevious := "previous-production-data-key-2025-Q4-R7!z9"
+	cfg := validTestConfig("release")
+	cfg.Security.DataEncryptionPreviousKeys = []string{validPrevious}
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("valid rotation keyring was rejected: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		keys func(*Configuration) []string
+	}{
+		{name: "duplicates primary", keys: func(cfg *Configuration) []string { return []string{cfg.Security.DataEncryptionKey} }},
+		{name: "duplicates previous", keys: func(*Configuration) []string { return []string{validPrevious, validPrevious} }},
+		{name: "weak previous", keys: func(*Configuration) []string { return []string{"short-key"} }},
+		{name: "placeholder previous", keys: func(*Configuration) []string { return []string{"CHANGE_ME_PREVIOUS_DATA_ENCRYPTION_KEY_LONG"} }},
+		{name: "reuses jwt", keys: func(cfg *Configuration) []string { return []string{cfg.JWT.Secret} }},
+		{name: "too many", keys: func(*Configuration) []string {
+			return []string{
+				validPrevious + "1", validPrevious + "2", validPrevious + "3",
+				validPrevious + "4", validPrevious + "5", validPrevious + "6",
+				validPrevious + "7", validPrevious + "8", validPrevious + "9",
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := validTestConfig("release")
+			candidate.Security.DataEncryptionPreviousKeys = test.keys(candidate)
+			if err := validateConfig(candidate); err == nil {
+				t.Fatal("unsafe data-encryption rotation keyring was accepted")
+			}
+		})
+	}
+}
+
 func TestDeterministicLotteryHistorySeedConfigurationIsTypedAndDebugOnly(t *testing.T) {
 	previous := Config
 	t.Cleanup(func() { Config = previous })

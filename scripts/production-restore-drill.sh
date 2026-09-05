@@ -205,7 +205,9 @@ cleanup_drill() {
   case "${work_dir:-}" in "$restore_root"/.drill.*) rm -rf -- "$work_dir" ;; esac
   return 0
 }
-trap cleanup_drill EXIT INT TERM
+trap cleanup_drill EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 database_listing="$work_dir/database.remote.lsf"
 upload_listing="$work_dir/uploads.remote.lsf"
 database_name_regex="^${RESTORE_DRILL_SOURCE_DATABASE_NAME}-[0-9]{8}-[0-9]{6}-[0-9]+\\.dump\\.age$"

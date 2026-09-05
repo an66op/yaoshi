@@ -2,6 +2,7 @@ package services
 
 import (
 	"backend/data/models/lottery"
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -9,6 +10,17 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
+
+func TestSettleIssueContextStopsBeforeDatabaseWorkWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := (&BetAdminService{}).SettleIssueContext(ctx, "game", "issue", "worker"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation before database access, got %v", err)
+	}
+	if _, err := (&BetAdminService{}).RecoverSettlementBacklog(ctx, 1, "worker"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected recovery cancellation before database access, got %v", err)
+	}
+}
 
 func TestLimitDBTextPreservesUnicodeAndColumnLimit(t *testing.T) {
 	got := limitDBText("  开奖结算失败：数据库暂时繁忙  ", 8)

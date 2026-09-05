@@ -97,7 +97,10 @@ var roomActivityAliases = []string{
 
 // StartRoomActivityForMode receives the already validated server mode from the
 // application instead of inferring it from a second ambient configuration path.
-func StartRoomActivityForMode(ctxDone <-chan struct{}, db *gorm.DB, serverMode string) {
+func StartRoomActivityForMode(ctx context.Context, db *gorm.DB, serverMode string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	policy := resolveRoomActivityProcessPolicy(
 		serverMode,
 		os.Getenv("BACKEND_ROOM_ACTIVITY"),
@@ -131,7 +134,7 @@ func StartRoomActivityForMode(ctxDone <-chan struct{}, db *gorm.DB, serverMode s
 	service.statusMu.Lock()
 	service.status.Running = true
 	service.statusMu.Unlock()
-	go service.run(ctxDone)
+	go service.run(ctx)
 }
 
 type roomActivityProcessPolicy struct {
@@ -171,17 +174,17 @@ func resolveRoomActivityProcessPolicy(mode, enabledValue, maxWorkspacesValue str
 	return roomActivityProcessPolicy{enabled: true, maxWorkspaces: maximum}
 }
 
-func (s *RoomActivityService) run(ctxDone <-chan struct{}) {
+func (s *RoomActivityService) run(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			_, err := cluster.RunWithLease(context.Background(), "scheduler:room-activity", 5*time.Minute, s.runDueWorkspaces)
+			_, err := cluster.RunWithLease(ctx, "scheduler:room-activity", 5*time.Minute, s.runDueWorkspaces)
 			if err != nil {
 				log.Printf("机器人调度失败: %v", err)
 			}
-		case <-ctxDone:
+		case <-ctx.Done():
 			s.statusMu.Lock()
 			s.status.Running = false
 			s.statusMu.Unlock()
@@ -190,21 +193,25 @@ func (s *RoomActivityService) run(ctxDone <-chan struct{}) {
 	}
 }
 
-func (s *RoomActivityService) runDueWorkspaces() error {
-	if err := s.validateEnabledWorkspaceCap(); err != nil {
+func (s *RoomActivityService) runDueWorkspaces(ctx context.Context) error {
+	workDB := s.db.WithContext(ctx)
+	if err := s.validateEnabledWorkspaceCapWithDB(workDB); err != nil {
 		return err
 	}
 	var settings []workspacemodel.RobotSetting
-	if err := s.db.Where("enabled = ?", true).Order("workspace_id ASC").Find(&settings).Error; err != nil {
+	if err := workDB.Where("enabled = ?", true).Order("workspace_id ASC").Find(&settings).Error; err != nil {
 		return err
 	}
 	now := time.Now().UTC()
 	for _, setting := range settings {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		interval := clampRoomActivity(setting.IntervalSecs, 5, 3600, 30)
 		if setting.LastRunAt != nil && now.Sub(*setting.LastRunAt) < time.Duration(interval)*time.Second {
 			continue
 		}
-		if err := s.runWorkspace(setting); err != nil {
+		if err := s.runWorkspaceWithContext(ctx, setting); err != nil {
 			log.Printf("工作区 %d 机器人执行失败: %v", setting.WorkspaceID, err)
 		}
 	}
@@ -243,19 +250,36 @@ func IsRoomActivityWorkspaceCapError(err error) bool {
 }
 
 func (s *RoomActivityService) runWorkspace(setting workspacemodel.RobotSetting) error {
+	return s.runWorkspaceWithContext(context.Background(), setting)
+}
+
+func (s *RoomActivityService) runWorkspaceWithContext(ctx context.Context, setting workspacemodel.RobotSetting) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.cycleMu.Lock()
 	defer s.cycleMu.Unlock()
-	return withRoomActivityPolicyLock(s.db, func(tx *gorm.DB) error {
+	workDB := s.db.WithContext(ctx)
+	return withRoomActivityPolicyLock(workDB, func(tx *gorm.DB) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		freshSetting, err := RobotSettingForWorkspace(tx, setting.WorkspaceID)
 		if err != nil {
 			return err
 		}
-		return s.runWorkspaceWithPolicyLock(freshSetting)
+		return s.runWorkspaceWithPolicyLock(ctx, tx, NewBetAdminService(tx), freshSetting)
 	})
 }
 
-func (s *RoomActivityService) runWorkspaceWithPolicyLock(setting workspacemodel.RobotSetting) error {
-	if err := s.validateEnabledWorkspaceCap(); err != nil {
+func (s *RoomActivityService) runWorkspaceWithPolicyLock(ctx context.Context, db *gorm.DB, bets *BetAdminService, setting workspacemodel.RobotSetting) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.validateEnabledWorkspaceCapWithDB(db); err != nil {
 		return err
 	}
 	if s.maxEnabledWorkspaces > 0 && !setting.Enabled {
@@ -263,32 +287,32 @@ func (s *RoomActivityService) runWorkspaceWithPolicyLock(setting workspacemodel.
 	}
 	started := time.Now().UTC()
 	var workspace workspacemodel.Workspace
-	if err := s.db.Where("id = ? AND status = ?", setting.WorkspaceID, 1).First(&workspace).Error; err != nil {
-		return s.finishWorkspaceRun(setting, started, 0, 0, 0, err)
+	if err := db.Where("id = ? AND status = ?", setting.WorkspaceID, 1).First(&workspace).Error; err != nil {
+		return s.finishWorkspaceRun(ctx, db, setting, started, 0, 0, 0, err)
 	}
 	target := roomActivityTarget{workspaceID: workspace.ID, scope: workspace.Scope}
-	bots, err := s.ensureAccounts(target, 0)
+	bots, err := s.ensureAccountsWithDB(db, target, 0)
 	if err != nil {
-		return s.finishWorkspaceRun(setting, started, 0, 0, 0, err)
+		return s.finishWorkspaceRun(ctx, db, setting, started, 0, 0, 0, err)
 	}
 	bots = activeRobotAccounts(bots, time.Now())
 	if len(bots) == 0 {
-		return s.finishWorkspaceRun(setting, started, 0, 0, 0, fmt.Errorf("没有已启用的机器人"))
+		return s.finishWorkspaceRun(ctx, db, setting, started, 0, 0, 0, fmt.Errorf("没有已启用的机器人"))
 	}
-	todayBets, pendingBets, err := s.robotBetCounts(setting.WorkspaceID, started)
+	todayBets, pendingBets, err := s.robotBetCountsWithDB(db, setting.WorkspaceID, started)
 	if err != nil {
-		return s.finishWorkspaceRun(setting, started, len(bots), 0, 0, err)
+		return s.finishWorkspaceRun(ctx, db, setting, started, len(bots), 0, 0, err)
 	}
 	allowance, pauseReason := robotRunAllowance(setting, todayBets, pendingBets)
 	if pauseReason != "" {
-		return s.finishWorkspacePause(setting, started, len(bots), pauseReason)
+		return s.finishWorkspacePause(ctx, db, setting, started, len(bots), pauseReason)
 	}
-	games, err := s.enabledGames(setting.WorkspaceID)
+	games, err := s.enabledGamesWithDB(db, setting.WorkspaceID)
 	if err != nil || len(games) == 0 {
 		if err == nil {
 			err = fmt.Errorf("没有已启用的彩种")
 		}
-		return s.finishWorkspaceRun(setting, started, len(bots), len(games), 0, err)
+		return s.finishWorkspaceRun(ctx, db, setting, started, len(bots), len(games), 0, err)
 	}
 	betsPlaced := 0
 	count := clampRoomActivity(setting.BetsPerCycle, 1, 20, 1)
@@ -296,37 +320,49 @@ func (s *RoomActivityService) runWorkspaceWithPolicyLock(setting workspacemodel.
 		count = allowance
 	}
 	for index := 0; index < count; index++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		bot := bots[s.randomIndex(len(bots))]
 		available := allowedRobotGames(bot, games)
 		if len(available) == 0 {
 			continue
 		}
 		game := available[s.randomIndex(len(available))]
-		issue, issueErr := s.bets.CurrentIssue(game.ID)
+		issue, issueErr := bets.CurrentIssue(game.ID)
 		if issueErr != nil {
 			continue
 		}
-		if s.place(bot, game, issue, int(time.Now().UnixNano())+index) == nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if s.placeWithService(bets, bot, game, issue, int(time.Now().UnixNano())+index) == nil {
 			betsPlaced++
 		}
 	}
-	return s.finishWorkspaceRun(setting, started, len(bots), len(games), betsPlaced, nil)
+	return s.finishWorkspaceRun(ctx, db, setting, started, len(bots), len(games), betsPlaced, nil)
 }
 
-func (s *RoomActivityService) finishWorkspaceRun(setting workspacemodel.RobotSetting, at time.Time, bots, games, bets int, runErr error) error {
+func (s *RoomActivityService) finishWorkspaceRun(ctx context.Context, db *gorm.DB, setting workspacemodel.RobotSetting, at time.Time, bots, games, bets int, runErr error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	updates := map[string]any{"last_run_at": at, "last_error": "", "pause_reason": ""}
 	if runErr != nil {
 		updates["last_error"] = truncateRunMessage(runErr.Error(), 500)
 	}
-	_ = s.db.Model(&workspacemodel.RobotSetting{}).Where("workspace_id = ?", setting.WorkspaceID).Updates(updates).Error
+	_ = db.Model(&workspacemodel.RobotSetting{}).Where("workspace_id = ?", setting.WorkspaceID).Updates(updates).Error
 	config := roomActivityConfig{Enabled: setting.Enabled, IntervalSecs: setting.IntervalSecs, BetsPerCycle: setting.BetsPerCycle}
 	s.recordActivityRun(config, at, 1, games, bots, bets, 0, runErr)
 	return runErr
 }
 
-func (s *RoomActivityService) finishWorkspacePause(setting workspacemodel.RobotSetting, at time.Time, bots int, reason string) error {
+func (s *RoomActivityService) finishWorkspacePause(ctx context.Context, db *gorm.DB, setting workspacemodel.RobotSetting, at time.Time, bots int, reason string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	reason = truncateRunMessage(reason, 240)
-	_ = s.db.Model(&workspacemodel.RobotSetting{}).Where("workspace_id = ?", setting.WorkspaceID).Updates(map[string]any{
+	_ = db.Model(&workspacemodel.RobotSetting{}).Where("workspace_id = ?", setting.WorkspaceID).Updates(map[string]any{
 		"last_run_at": at, "last_error": "", "pause_reason": reason,
 	}).Error
 	config := roomActivityConfig{Enabled: setting.Enabled, IntervalSecs: setting.IntervalSecs, BetsPerCycle: setting.BetsPerCycle}
@@ -578,14 +614,18 @@ func withRoomActivityPolicyLock(db *gorm.DB, operation func(*gorm.DB) error) err
 }
 
 func (s *RoomActivityService) robotBetCounts(workspaceID uint64, now time.Time) (int64, int64, error) {
+	return s.robotBetCountsWithDB(s.db, workspaceID, now)
+}
+
+func (s *RoomActivityService) robotBetCountsWithDB(db *gorm.DB, workspaceID uint64, now time.Time) (int64, int64, error) {
 	location, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		location = time.FixedZone("Asia/Shanghai", 8*60*60)
 	}
 	localNow := now.In(location)
 	dayStart := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, location).UTC()
-	robotUsers := s.db.Table("workspace_robot_profiles").Select("user_id").Where("workspace_id = ? AND enabled = ?", workspaceID, true)
-	base := s.db.Table("lottery_bets").Where("workspace_id = ? AND user_id IN (?)", workspaceID, robotUsers)
+	robotUsers := db.Table("workspace_robot_profiles").Select("user_id").Where("workspace_id = ? AND enabled = ?", workspaceID, true)
+	base := db.Table("lottery_bets").Where("workspace_id = ? AND user_id IN (?)", workspaceID, robotUsers)
 	var today, pending int64
 	if err := base.Session(&gorm.Session{}).Where("created_at >= ?", dayStart).Count(&today).Error; err != nil {
 		return 0, 0, err
@@ -722,8 +762,12 @@ func (s *RoomActivityService) targets() ([]roomActivityTarget, error) {
 }
 
 func (s *RoomActivityService) enabledGames(workspaceID uint64) ([]lottery.Game, error) {
+	return s.enabledGamesWithDB(s.db, workspaceID)
+}
+
+func (s *RoomActivityService) enabledGamesWithDB(db *gorm.DB, workspaceID uint64) ([]lottery.Game, error) {
 	var games []lottery.Game
-	err := workspaceEnabledGamesQuery(s.db, workspaceID).Order("sort_order asc, id asc").Find(&games).Error
+	err := workspaceEnabledGamesQuery(db, workspaceID).Order("sort_order asc, id asc").Find(&games).Error
 	return games, err
 }
 
@@ -776,11 +820,15 @@ func robotAccountActiveAt(account user.User, now time.Time) bool {
 }
 
 func (s *RoomActivityService) ensureAccounts(target roomActivityTarget, count int) ([]user.User, error) {
+	return s.ensureAccountsWithDB(s.db, target, count)
+}
+
+func (s *RoomActivityService) ensureAccountsWithDB(db *gorm.DB, target roomActivityTarget, count int) ([]user.User, error) {
 	// Robot identities are provisioned once and remain independent. Runtime
 	// execution only consumes profiles already owned by this workspace; it never
 	// clones accounts merely because another room exists.
 	var bots []user.User
-	query := s.db.Model(&user.User{}).
+	query := db.Model(&user.User{}).
 		Select(`"user".*`).
 		Joins("JOIN workspace_robot_profiles AS profile ON profile.user_id = \"user\".user_id").
 		Where(`"user".workspace_id = ? AND "user".status = ? AND profile.workspace_id = ? AND profile.enabled = ?`, target.workspaceID, 1, target.workspaceID, true).
@@ -795,6 +843,10 @@ func (s *RoomActivityService) ensureAccounts(target roomActivityTarget, count in
 }
 
 func (s *RoomActivityService) place(account user.User, game lottery.Game, issue string, salt int) error {
+	return s.placeWithService(s.bets, account, game, issue, salt)
+}
+
+func (s *RoomActivityService) placeWithService(bets *BetAdminService, account user.User, game lottery.Game, issue string, salt int) error {
 	position := s.randomIndex(5) + 1
 	selection := strconv.Itoa((s.randomIndex(10) + salt) % 10)
 	amounts := []float64{12.5, 18.8, 24.75, 33.33, 50}
@@ -803,7 +855,7 @@ func (s *RoomActivityService) place(account user.User, game lottery.Game, issue 
 		amount = float64(account.RobotMinBetCents+s.randomInt64(account.RobotMaxBetCents-account.RobotMinBetCents+1)) / 100
 	}
 	noFly := 0.0
-	_, err := s.bets.Place(PlaceBetInput{
+	_, err := bets.Place(PlaceBetInput{
 		GameID: game.ID, Issue: issue, UserID: account.UserID,
 		PlayCode: "ball_1_5", PlayName: "1-5球号", Position: position,
 		Selection: selection, Amount: amount, Odds: 9.9, FlyAmount: &noFly,

@@ -76,8 +76,8 @@ func StartAuditRecovery(ctx context.Context, db *gorm.DB) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_, err := cluster.RunWithLease(ctx, "scheduler:audit-fallback-replay", 10*time.Minute, func() error {
-					return replayAuditFallback(db)
+				_, err := cluster.RunWithLease(ctx, "scheduler:audit-fallback-replay", 10*time.Minute, func(workCtx context.Context) error {
+					return replayAuditFallback(workCtx, db.WithContext(workCtx))
 				})
 				if err != nil && !os.IsNotExist(err) {
 					log.Printf("恢复管理审计保底记录失败: %v", err)
@@ -87,9 +87,18 @@ func StartAuditRecovery(ctx context.Context, db *gorm.DB) {
 	}()
 }
 
-func replayAuditFallback(db *gorm.DB) error {
+func replayAuditFallback(ctx context.Context, db *gorm.DB) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	auditFallbackMu.Lock()
 	defer auditFallbackMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	path := auditFallbackPath()
 	payload, err := os.ReadFile(path)
 	if err != nil {
@@ -100,6 +109,9 @@ func replayAuditFallback(db *gorm.DB) error {
 		if os.IsNotExist(err) {
 			return nil
 		}
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	lines := strings.Split(string(payload), "\n")
@@ -122,6 +134,9 @@ func replayAuditFallback(db *gorm.DB) error {
 		latest[entry.EventID] = entry
 	}
 	for _, eventID := range order {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		entry := latest[eventID]
 		if err := upsertAuditRecord(db, entry); err != nil {
 			encoded, marshalErr := json.Marshal(entry)
@@ -134,14 +149,23 @@ func replayAuditFallback(db *gorm.DB) error {
 	if len(remaining) > 0 {
 		contents = strings.Join(remaining, "\n") + "\n"
 	}
-	return replaceAuditFallbackDurably(path, []byte(contents))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return replaceAuditFallbackDurably(ctx, path, []byte(contents))
 }
 
 // replaceAuditFallbackDurably keeps spool compaction crash-safe. The new
 // contents are fsync'd before the atomic rename, then the parent directory is
 // fsync'd so the rename itself survives a host crash. Existing file
 // permissions are retained rather than being widened by compaction.
-func replaceAuditFallbackDurably(path string, contents []byte) (resultErr error) {
+func replaceAuditFallbackDurably(ctx context.Context, path string, contents []byte) (resultErr error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	mode := os.FileMode(0o600)
 	if info, err := os.Stat(path); err == nil {
 		mode = info.Mode().Perm()
@@ -171,6 +195,12 @@ func replaceAuditFallbackDurably(path string, contents []byte) (resultErr error)
 		return err
 	}
 	if err := file.Close(); err != nil {
+		return err
+	}
+	// The rename is the only operation that changes the durable queue. Once a
+	// lease context is cancelled, leave the original spool untouched so a new
+	// owner can safely replay it. The temporary file is removed by the defer.
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := os.Rename(temporary, path); err != nil {

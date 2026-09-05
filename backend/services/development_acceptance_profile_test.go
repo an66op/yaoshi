@@ -9,6 +9,7 @@ import (
 	workspacemodel "backend/data/models/workspace"
 	"backend/utils"
 	"testing"
+	"time"
 )
 
 func TestDevelopmentAcceptanceProfileContract(t *testing.T) {
@@ -32,6 +33,59 @@ func TestDevelopmentAcceptanceProfileContract(t *testing.T) {
 	}
 }
 
+func TestDevelopmentOddsInventoryAcceptsOnlyCanonicalInertForeignPlaceholders(t *testing.T) {
+	profileGames := map[string]struct{}{"speed-racing": {}}
+	configuredAt := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	activeProfile := odds.PlayLimit{
+		ID: 1, GameID: "speed-racing", PlayCode: "sum", Odds: 9.9,
+		ExplicitlyConfigured: true, RuleVersion: "racing-v2",
+		ConfigurationSource: oddsSourceAdminSave, ConfiguredAt: &configuredAt,
+	}
+	legacyForeign := odds.PlayLimit{
+		ID: 2, GameID: "official-fc3d", PlayCode: "sum", Odds: 50,
+		ConfigurationSource: oddsSourceUnconfigured,
+	}
+
+	inventory, err := inspectDevelopmentOddsInventory([]odds.PlayLimit{activeProfile, legacyForeign}, profileGames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inventory.TotalRows != 2 || inventory.ProfileRows != 1 || inventory.NonInertRows != 1 || inventory.ForeignNonInertRows != 0 {
+		t.Fatalf("unexpected inventory: %+v", inventory)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*odds.PlayLimit)
+	}{
+		{"explicit confirmation", func(row *odds.PlayLimit) { row.ExplicitlyConfigured = true }},
+		{"stale rule version", func(row *odds.PlayLimit) { row.RuleVersion = "digits3-v1" }},
+		{"noncanonical source", func(row *odds.PlayLimit) { row.ConfigurationSource = "legacy_default" }},
+		{"blank source", func(row *odds.PlayLimit) { row.ConfigurationSource = "" }},
+		{"configuration timestamp", func(row *odds.PlayLimit) { row.ConfiguredAt = &configuredAt }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			row := legacyForeign
+			test.mutate(&row)
+			got, err := inspectDevelopmentOddsInventory([]odds.PlayLimit{row}, profileGames)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ForeignNonInertRows != 1 || got.NonInertRows != 1 {
+				t.Fatalf("unsafe foreign row was accepted as inert: %+v / %+v", row, got)
+			}
+		})
+	}
+}
+
+func TestDevelopmentOddsInventoryRejectsDuplicateGamePlayRows(t *testing.T) {
+	row := odds.PlayLimit{GameID: "official-fc3d", PlayCode: "sum", ConfigurationSource: oddsSourceUnconfigured}
+	if _, err := inspectDevelopmentOddsInventory([]odds.PlayLimit{row, row}, map[string]struct{}{}); err == nil {
+		t.Fatal("duplicate game/play rows were accepted")
+	}
+}
+
 func TestDevelopmentAcceptanceProfilePostgresFreshIdempotentAndNonOverwriting(t *testing.T) {
 	db := timingPostgresDatabase(t)
 	var bootstrapAdmin user.User
@@ -51,6 +105,17 @@ func TestDevelopmentAcceptanceProfilePostgresFreshIdempotentAndNonOverwriting(t 
 	}
 	if err := Bootstrap(db, BootstrapOptions{Mode: "debug", SeedExperienceAccounts: true}); err != nil {
 		t.Fatal("seed experience hierarchy:", err)
+	}
+	// Simulate an upgrade from the pre-confirmation schema. Its numeric value
+	// is intentionally preserved, but the explicit activation metadata keeps
+	// it unavailable and must not prevent the first local profile install.
+	legacyPlaceholder := odds.PlayLimit{
+		GameID: "official-fc3d", PlayCode: "sum", PlayName: "旧总和", Odds: 50,
+		MinBet: 1, MaxBet: 1000, MaxUserPeriod: 1000, MaxPeriodTotal: 10000,
+		ConfigurationSource: oddsSourceUnconfigured,
+	}
+	if err := db.Create(&legacyPlaceholder).Error; err != nil {
+		t.Fatal("insert isolated inert legacy placeholder:", err)
 	}
 
 	first, err := ApplyDevelopmentAcceptanceProfile(db, "debug")
@@ -76,6 +141,31 @@ func TestDevelopmentAcceptanceProfilePostgresFreshIdempotentAndNonOverwriting(t 
 	}
 	if *audited != *first {
 		t.Fatalf("audit changed report: first=%+v audit=%+v", first, audited)
+	}
+	var preserved odds.PlayLimit
+	if err := db.First(&preserved, legacyPlaceholder.ID).Error; err != nil {
+		t.Fatal("read preserved inert legacy placeholder:", err)
+	}
+	if preserved.Odds != legacyPlaceholder.Odds || preserved.ExplicitlyConfigured || preserved.RuleVersion != "" ||
+		preserved.ConfigurationSource != oddsSourceUnconfigured || preserved.ConfiguredAt != nil {
+		t.Fatalf("inert legacy placeholder was rewritten or activated: %+v", preserved)
+	}
+	var allOddsRows int64
+	if err := db.Model(&odds.PlayLimit{}).Count(&allOddsRows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if allOddsRows != int64(first.ConfiguredPlayQuotes)+1 {
+		t.Fatalf("physical odds rows = %d, want %d configured plus one inert placeholder", allOddsRows, first.ConfiguredPlayQuotes)
+	}
+
+	if err := db.Model(&legacyPlaceholder).Update("configuration_source", "legacy_default").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AuditDevelopmentAcceptanceProfile(db, "debug"); err == nil {
+		t.Fatal("expected audit to reject a noncanonical out-of-profile legacy row")
+	}
+	if err := db.Model(&legacyPlaceholder).Update("configuration_source", oddsSourceUnconfigured).Error; err != nil {
+		t.Fatal(err)
 	}
 
 	var agent user.User

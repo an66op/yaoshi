@@ -8,6 +8,7 @@ import (
 	workspacemodel "backend/data/models/workspace"
 	apperrors "backend/errors"
 	"backend/ws"
+	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -929,18 +930,29 @@ func (s *ChatAdminService) DeleteMessage(id uint64, operator string) error {
 // It is safe to run concurrently: each packet is locked and only active rows
 // can transition to expired.
 func (s *ChatAdminService) CloseExpiredRedPackets(limit int) error {
+	return s.CloseExpiredRedPacketsContext(context.Background(), limit)
+}
+
+func (s *ChatAdminService) CloseExpiredRedPacketsContext(ctx context.Context, limit int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if limit < 1 || limit > 500 {
 		limit = 100
 	}
+	db := s.db.WithContext(ctx)
 	var ids []uint64
-	if err := s.db.Model(&chat.RedPacket{}).
+	if err := db.Model(&chat.RedPacket{}).
 		Where("status = ? AND expires_at IS NOT NULL AND expires_at <= ?", "active", time.Now().UTC()).
 		Order("id ASC").Limit(limit).Pluck("id", &ids).Error; err != nil {
 		return err
 	}
 	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		changed := false
-		if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := db.Transaction(func(tx *gorm.DB) error {
 			var err error
 			changed, err = closeRedPacketTx(tx, id, "系统", "红包已过期", "expired")
 			return err
@@ -948,7 +960,7 @@ func (s *ChatAdminService) CloseExpiredRedPackets(limit int) error {
 			return err
 		}
 		if changed {
-			notifyRedPacketMessageUpdatedByPacketID(s.db, id)
+			notifyRedPacketMessageUpdatedByPacketID(db, id)
 		}
 	}
 	return nil

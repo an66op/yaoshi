@@ -55,6 +55,42 @@ func Test163MarkSixRegistersFourIndependentContracts(t *testing.T) {
 	}
 }
 
+func Test163MarkSixBettingHealthRequiresEveryExactBinding(t *testing.T) {
+	for _, binding := range source163MarkSixBindings {
+		t.Run(binding.GameID, func(t *testing.T) {
+			valid := lottery.Game{
+				ID: binding.GameID, SourceKind: "external", SourceName: source163MirrorName,
+				SourceURL: source163MirrorURL, SyncStatus: "ok",
+			}
+			if !sourceHealthyForGame(&valid) {
+				t.Fatal("exact healthy 163 Mark Six binding was rejected")
+			}
+			mutations := []struct {
+				name   string
+				mutate func(*lottery.Game)
+			}{
+				{name: "kind", mutate: func(game *lottery.Game) { game.SourceKind = "platform" }},
+				{name: "name", mutate: func(game *lottery.Game) { game.SourceName = legacy168HighFreqName }},
+				{name: "url", mutate: func(game *lottery.Game) { game.SourceURL = legacy168HighFreqURL }},
+				{name: "stale", mutate: func(game *lottery.Game) { game.SyncStatus = "stale" }},
+				{name: "error", mutate: func(game *lottery.Game) { game.SyncStatus = "error" }},
+				{name: "syncing with error", mutate: func(game *lottery.Game) {
+					game.SyncStatus, game.LastSyncError = "syncing", "upstream failed"
+				}},
+			}
+			for _, mutation := range mutations {
+				t.Run(mutation.name, func(t *testing.T) {
+					changed := valid
+					mutation.mutate(&changed)
+					if sourceHealthyForGame(&changed) {
+						t.Fatalf("accepted unsafe binding/state: %+v", changed)
+					}
+				})
+			}
+		})
+	}
+}
+
 func Test163MarkSixCutoverOnlyAcceptsExactFormerDefaults(t *testing.T) {
 	for _, binding := range source163MarkSixBindings {
 		legacy := lottery.Game{ID: binding.GameID, SourceKind: "external", SourceName: legacy168HighFreqName, SourceURL: legacy168HighFreqURL}

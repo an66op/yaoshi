@@ -55,7 +55,9 @@ cleanup_restore() {
   [[ -z "${temporary_signature:-}" ]] || rm -f -- "$temporary_signature"
   [[ -z "${temporary_directory:-}" ]] || rmdir -- "$temporary_directory" 2>/dev/null || true
 }
-trap cleanup_restore EXIT INT TERM
+trap cleanup_restore EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 provenance_expected_remote=""
 source_manifest="$encrypted.source.sha256"
 if [[ -f "$encrypted" && ! -L "$encrypted" ]]; then

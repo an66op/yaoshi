@@ -20,8 +20,8 @@ func TestReplayAuditFallbackTreatsMissingSpoolAsEmptyQueue(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "never-created", "audit.jsonl")
 	t.Setenv("BACKEND_AUDIT_FALLBACK_FILE", path)
 
-	executed, err := cluster.RunWithLease(context.Background(), "test:missing-audit-fallback", time.Minute, func() error {
-		return replayAuditFallback(nil)
+	executed, err := cluster.RunWithLease(context.Background(), "test:missing-audit-fallback", time.Minute, func(context.Context) error {
+		return replayAuditFallback(context.Background(), nil)
 	})
 	if err != nil {
 		t.Fatalf("missing audit spool escaped lease wrapper: %v", err)
@@ -37,7 +37,7 @@ func TestReplayAuditFallbackTreatsMissingSpoolAsEmptyQueue(t *testing.T) {
 func TestReplayAuditFallbackPreservesOtherReadErrors(t *testing.T) {
 	path := t.TempDir()
 	t.Setenv("BACKEND_AUDIT_FALLBACK_FILE", path)
-	if err := replayAuditFallback(nil); err == nil || os.IsNotExist(err) {
+	if err := replayAuditFallback(context.Background(), nil); err == nil || os.IsNotExist(err) {
 		t.Fatalf("non-missing read failure was discarded: %v", err)
 	}
 }
@@ -117,7 +117,7 @@ func TestReplaceAuditFallbackDurablyPreservesModeAndReplacesContents(t *testing.
 	if err := os.WriteFile(path, []byte("old\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := replaceAuditFallbackDurably(path, []byte("new\n")); err != nil {
+	if err := replaceAuditFallbackDurably(context.Background(), path, []byte("new\n")); err != nil {
 		t.Fatal(err)
 	}
 	payload, err := os.ReadFile(path)
@@ -136,5 +136,27 @@ func TestReplaceAuditFallbackDurablyPreservesModeAndReplacesContents(t *testing.
 	}
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 		t.Fatalf("temporary file remained after replacement: %v", err)
+	}
+}
+
+func TestReplaceAuditFallbackDurablyLeavesSpoolUntouchedWhenCancelled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	if err := os.WriteFile(path, []byte("original\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := replaceAuditFallbackDurably(ctx, path, []byte("replacement\n")); err != context.Canceled {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(payload) != "original\n" {
+		t.Fatalf("cancelled compaction changed durable spool: %q", payload)
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("cancelled compaction left a temporary file: %v", err)
 	}
 }

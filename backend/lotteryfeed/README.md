@@ -71,6 +71,18 @@ draw stores a source and conversion revision; old rows keep their original
 provenance, and any same-issue conflict with unresolved financial evidence
 fails closed.
 
+## 163 direct Mark Six sources
+
+Hong Kong, Happy8, New Macau and Old Macau Mark Six use direct seven-ball 163
+IDs `18`, `141`, `140` and `70`. Each product has its own immutable source,
+conversion and rules revisions even though the current validated play catalogue
+is shared. The `163-marksix` reader requires the latest result to occur in at
+least seven bounded history rows, seven unique values in 1-49, consecutive
+issues, increasing timestamps and an explicit next issue/open time. Happy8 and
+both Macau products additionally require exact 24-hour boundaries. A database
+source binding mismatch is unhealthy for betting even if `sync_status` still
+says `ok`; no manual, random or platform fallback is permitted.
+
 ## SG SSC verified feed
 
 SG SSC uses a separate `sg-ssc-verified` job. 163 ID `64` is the only source

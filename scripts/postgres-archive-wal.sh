@@ -76,7 +76,9 @@ cleanup_partial() {
   [[ -z "${signature_partial:-}" ]] || rm -f -- "$signature_partial"
   return 0
 }
-trap cleanup_partial EXIT INT TERM
+trap cleanup_partial EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [[ -e "$target" || -L "$target" ]]; then
   validate_encrypted_backup_and_manifest "$target" || { echo "已有 WAL 归档损坏：$target" >&2; exit 1; }

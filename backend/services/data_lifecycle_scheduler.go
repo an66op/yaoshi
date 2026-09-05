@@ -35,8 +35,8 @@ func StartDataLifecycleLoop(ctx context.Context, db *gorm.DB) {
 				}
 				return
 			case <-timer.C:
-				_, err := cluster.RunWithLease(ctx, "scheduler:data-lifecycle", 6*time.Hour, func() error {
-					runScheduledLifecycle(db, next)
+				_, err := cluster.RunWithLease(ctx, "scheduler:data-lifecycle", 6*time.Hour, func(workCtx context.Context) error {
+					runScheduledLifecycle(workCtx, db, next)
 					return nil
 				})
 				if err != nil {
@@ -47,7 +47,8 @@ func StartDataLifecycleLoop(ctx context.Context, db *gorm.DB) {
 	}()
 }
 
-func runScheduledLifecycle(db *gorm.DB, scheduledAt time.Time) {
+func runScheduledLifecycle(ctx context.Context, db *gorm.DB, scheduledAt time.Time) {
+	db = db.WithContext(ctx)
 	var platform workspacemodel.Workspace
 	if err := db.Where("type = ? AND status = 1", workspacemodel.TypePlatform).Order("id ASC").First(&platform).Error; err != nil {
 		log.Printf("数据生命周期自动维护跳过：平台工作区不可用: %v", err)
@@ -64,6 +65,9 @@ func runScheduledLifecycle(db *gorm.DB, scheduledAt time.Time) {
 	actor := LifecycleActor{UserID: platform.OwnerUserID, Username: "系统维护", WorkspaceID: platform.ID}
 	date := scheduledAt.In(beijingLifecycleLocation()).Format("20060102")
 	for _, workspace := range workspaces {
+		if ctx.Err() != nil {
+			return
+		}
 		policies, err := service.Policies(workspace.ID)
 		if err != nil {
 			log.Printf("数据生命周期自动维护读取工作区 %d 策略失败: %v", workspace.ID, err)

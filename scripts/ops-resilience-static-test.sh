@@ -21,8 +21,60 @@ for script in \
   postgres-backup.sh upload-backup.sh postgres-archive-wal.sh postgres-base-backup.sh \
   postgres-restore-wal.sh production-restore-drill.sh pitr-recovery-source-sync.sh production-pitr-restore-drill.sh \
   publish-pitr-drill-status.sh production-unit-failure-alert.sh redis-production-check.sh \
-  redis-aof-restart-integration-test.sh production-monitor.sh production-backup-integrity.sh; do
+  redis-aof-restart-integration-test.sh production-monitor.sh production-backup-integrity.sh \
+  production-recovery-evidence-check.sh; do
   bash -n "$ROOT_DIR/scripts/$script"
+done
+
+# Resource cleanup belongs to EXIT only. INT/TERM must terminate instead of
+# returning to the command stream after deleting partial state. Check every
+# production helper with this lifecycle and execute its real trap declarations
+# with foreground self-signals (portable across macOS and Linux Bash).
+signal_safe_specs=(
+  'postgres-backup.sh|cleanup_partial'
+  'upload-backup.sh|cleanup_partial'
+  'postgres-base-backup.sh|cleanup_partial'
+  'postgres-archive-wal.sh|cleanup_partial'
+  'production-backup-integrity.sh|cleanup_integrity_work'
+  'postgres-restore-wal.sh|cleanup_restore'
+  'publish-pitr-drill-status.sh|cleanup_publish'
+  'production-unit-failure-alert.sh|cleanup'
+)
+for signal_safe_spec in "${signal_safe_specs[@]}"; do
+  IFS='|' read -r signal_safe_script signal_safe_cleanup <<<"$signal_safe_spec"
+  signal_safe_path="$ROOT_DIR/scripts/$signal_safe_script"
+  rg -Fxq "trap $signal_safe_cleanup EXIT" "$signal_safe_path"
+  rg -Fxq "trap 'exit 130' INT" "$signal_safe_path"
+  rg -Fxq "trap 'exit 143' TERM" "$signal_safe_path"
+  if rg -q "^trap ${signal_safe_cleanup} EXIT INT TERM$" "$signal_safe_path"; then
+    echo "$signal_safe_script 的资源清理 trap 会吞掉终止信号" >&2
+    exit 1
+  fi
+
+  for signal_case in 'INT|130' 'TERM|143'; do
+    IFS='|' read -r signal_name expected_status <<<"$signal_case"
+    signal_case_root="$fixture_dir/signal-safe-${signal_safe_script%.sh}-$signal_name"
+    mkdir -p "$signal_case_root"
+    signal_harness="$signal_case_root/harness.sh"
+    {
+      printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
+        'signal_name="$1"' 'case_root="$2"' \
+        "$signal_safe_cleanup() { : >\"\$case_root/cleanup-ran\"; }"
+      grep -Fx "trap $signal_safe_cleanup EXIT" "$signal_safe_path"
+      grep -Fx "trap 'exit 130' INT" "$signal_safe_path"
+      grep -Fx "trap 'exit 143' TERM" "$signal_safe_path"
+      printf '%s\n' 'kill -s "$signal_name" "$$"' ': >"$case_root/continued-after-signal"'
+    } >"$signal_harness"
+    set +e
+    bash "$signal_harness" "$signal_name" "$signal_case_root" >/dev/null 2>&1
+    signal_status=$?
+    set -e
+    [[ "$signal_status" == "$expected_status" && -f "$signal_case_root/cleanup-ran" && \
+       ! -e "$signal_case_root/continued-after-signal" ]] || {
+      echo "$signal_safe_script 收到 $signal_name 后仍继续、未清理或退出码错误：$signal_status" >&2
+      exit 1
+    }
+  done
 done
 
 injection_marker="$fixture_dir/injection-must-not-run"
@@ -390,9 +442,152 @@ for config_path in logical-restore-source-read-rclone.conf logical-restore-statu
 done
 rg -q 'SOURCE_RCLONE_CONFIG.*-ef.*STATUS_RCLONE_CONFIG' "$logical_drill"
 rg -q 'source_config_sha256.*!=.*status_config_sha256' "$logical_drill"
-trap_line="$(rg -n '^trap cleanup_drill EXIT INT TERM$' "$logical_drill" | cut -d: -f1)"
+trap_line="$(rg -n '^trap cleanup_drill EXIT$' "$logical_drill" | cut -d: -f1)"
+rg -Fq "trap 'exit 130' INT" "$logical_drill"
+rg -Fq "trap 'exit 143' TERM" "$logical_drill"
+if rg -q '^trap cleanup_drill EXIT INT TERM$' "$logical_drill"; then
+  echo "逻辑恢复资源清理 trap 会吞掉终止信号" >&2
+  exit 1
+fi
 first_source_line="$(rg -n 'select_latest_remote_backup .*RESTORE_DRILL_DATABASE_REMOTE_SOURCE' "$logical_drill" | cut -d: -f1)"
 [[ "$trap_line" -lt "$first_source_line" ]] || { echo "逻辑恢复在安装清理 trap 前访问异机源" >&2; exit 1; }
+
+# Execute the production cleanup/traps and upload replacement block in a
+# portable fixture. The mv wrapper sends a real signal only after the old
+# target has moved aside and before the restored target can be installed.
+write_logical_restore_signal_harness() {
+  local harness_path="$1"
+  {
+    printf '%s\n' \
+      '#!/usr/bin/env bash' \
+      'set -euo pipefail' \
+      'test_signal="$1"' \
+      'restore_root="$2"' \
+      'RESTORE_DRILL_UPLOAD_TARGET_DIR="$restore_root/uploads"' \
+      'work_dir="$restore_root/.drill.fixture"' \
+      'extract_dir="$work_dir/extracted"' \
+      'restore_mount_root="$restore_root"' \
+      'previous_target=""' \
+      'move_count=0' \
+      'validate_no_symlink_path_components() { :; }' \
+      'require_canonical_existing_directory() { :; }' \
+      'direct_luks_mount_for_directory() { printf '\''%s\n'\'' "$restore_mount_root"; }' \
+      'validate_luks_service_directory() { :; }' \
+      'mv() {' \
+      '  command mv "$@"' \
+      '  move_count=$((move_count + 1))' \
+      '  if (( move_count == 1 )); then' \
+      '    : >"$restore_root/swap-window-hit"' \
+      '    kill -s "$test_signal" "$$"' \
+      '  fi' \
+      '}'
+    sed -n '/^cleanup_drill() {$/,/^}$/p' "$logical_drill"
+    grep -F 'trap cleanup_drill EXIT' "$logical_drill"
+    grep -F "trap 'exit 130' INT" "$logical_drill"
+    grep -F "trap 'exit 143' TERM" "$logical_drill"
+    sed -n '/^previous_target="\$restore_root\/\.uploads\.previous\.\$\$"$/,/^previous_target=""$/p' "$logical_drill"
+    printf '%s\n' ': >"$restore_root/continued-after-swap"'
+  } >"$harness_path"
+}
+
+run_logical_restore_signal_case() {
+  local signal_name="$1" expected_status="$2"
+  local case_suffix case_root harness_path status previous_entry
+  case "$signal_name" in
+    TERM) case_suffix=term ;;
+    INT) case_suffix=int ;;
+    *) echo "未知逻辑恢复测试信号：$signal_name" >&2; exit 1 ;;
+  esac
+  case_root="$fixture_dir/logical-restore-$case_suffix"
+  harness_path="$case_root/harness.sh"
+  mkdir -p "$case_root/uploads" "$case_root/.drill.fixture/extracted/uploads"
+  printf '%s\n' old-only >"$case_root/uploads/old-only"
+  printf '%s\n' new-only >"$case_root/.drill.fixture/extracted/uploads/new-only"
+  write_logical_restore_signal_harness "$harness_path"
+  set +e
+  bash "$harness_path" "$signal_name" "$case_root" >/dev/null 2>&1
+  status=$?
+  set -e
+  [[ "$status" == "$expected_status" ]] || {
+    echo "逻辑恢复收到 $signal_name 后退出码错误：$status" >&2
+    exit 1
+  }
+  [[ -f "$case_root/swap-window-hit" && ! -e "$case_root/continued-after-swap" ]] || {
+    echo "逻辑恢复 $signal_name 回归没有命中目录交换窗口或仍继续执行" >&2
+    exit 1
+  }
+  [[ -f "$case_root/uploads/old-only" && ! -e "$case_root/uploads/new-only" && ! -e "$case_root/uploads/uploads" ]] || {
+    echo "逻辑恢复 $signal_name 后没有原样恢复旧上传目录" >&2
+    exit 1
+  }
+  [[ ! -e "$case_root/.drill.fixture" ]] || { echo "逻辑恢复 $signal_name 后未清理工作目录" >&2; exit 1; }
+  previous_entry=""
+  for previous_entry in "$case_root"/.uploads.previous.*; do
+    [[ -e "$previous_entry" || -L "$previous_entry" ]] && break
+    previous_entry=""
+  done
+  [[ -z "$previous_entry" ]] || { echo "逻辑恢复 $signal_name 后残留旧上传临时目录" >&2; exit 1; }
+}
+
+run_logical_restore_signal_case TERM 143
+run_logical_restore_signal_case INT 130
+
+recovery_evidence_check="$ROOT_DIR/scripts/production-recovery-evidence-check.sh"
+rg -Fq 'trap cleanup_recovery_evidence EXIT' "$recovery_evidence_check"
+rg -Fq "trap 'exit 130' INT" "$recovery_evidence_check"
+rg -Fq "trap 'exit 143' TERM" "$recovery_evidence_check"
+if rg -q 'trap cleanup_recovery_evidence EXIT INT TERM' "$recovery_evidence_check"; then
+  echo "恢复证据门禁的资源清理 trap 会吞掉终止信号" >&2
+  exit 1
+fi
+
+# Exercise the production cleanup function and real signal traps after a
+# download workspace exists. A signal must remove that workspace, retain its
+# conventional status, and never reach the success/continuation path.
+write_recovery_evidence_signal_harness() {
+  local harness_path="$1"
+  {
+    printf '%s\n' \
+      '#!/usr/bin/env bash' \
+      'set -euo pipefail' \
+      'test_signal="$1"' \
+      'case_root="$2"' \
+      'recovery_evidence_tmp_parent="$case_root"' \
+      'recovery_evidence_work_dir="$case_root/wangzhe-recovery-evidence.fixture"' \
+      'mkdir -p "$recovery_evidence_work_dir"' \
+      ': >"$recovery_evidence_work_dir/download.partial"'
+    sed -n '/^cleanup_recovery_evidence() {$/,/^}$/p' "$recovery_evidence_check"
+    grep -F 'trap cleanup_recovery_evidence EXIT' "$recovery_evidence_check" | sed 's/^[[:space:]]*//'
+    grep -F "trap 'exit 130' INT" "$recovery_evidence_check" | sed 's/^[[:space:]]*//'
+    grep -F "trap 'exit 143' TERM" "$recovery_evidence_check" | sed 's/^[[:space:]]*//'
+    printf '%s\n' \
+      ': >"$case_root/signal-window-hit"' \
+      'kill -s "$test_signal" "$$"' \
+      ': >"$case_root/continued-after-signal"' \
+      ': >"$case_root/recovery-gate-success"'
+  } >"$harness_path"
+}
+
+run_recovery_evidence_signal_case() {
+  local signal_name="$1" expected_status="$2"
+  local case_root="$fixture_dir/recovery-evidence-${signal_name}" harness_path status
+  mkdir -p "$case_root"
+  harness_path="$case_root/harness.sh"
+  write_recovery_evidence_signal_harness "$harness_path"
+  set +e
+  bash "$harness_path" "$signal_name" "$case_root" >/dev/null 2>&1
+  status=$?
+  set -e
+  [[ "$status" == "$expected_status" && -f "$case_root/signal-window-hit" && \
+     ! -e "$case_root/wangzhe-recovery-evidence.fixture" && \
+     ! -e "$case_root/continued-after-signal" && ! -e "$case_root/recovery-gate-success" ]] || {
+    echo "恢复证据门禁收到 $signal_name 后仍继续、误报成功或未清理临时目录" >&2
+    exit 1
+  }
+}
+
+run_recovery_evidence_signal_case TERM 143
+run_recovery_evidence_signal_case INT 130
 ! rg -q 'run_source_rclone .*RESTORE_DRILL_STATUS_REMOTE_DESTINATION|run_status_rclone lsf|run_status_rclone copyto .*database_(backup|offsite)|run_status_rclone copyto .*upload_(backup|offsite)' "$logical_drill"
 ! rg -Fq '/var/backups/wangzhe' "$logical_drill_unit"
 rg -Fq 'release/deploy/env/restore-drill.env.example' "$ROOT_DIR/Makefile"
@@ -430,7 +625,9 @@ pitr_status="$ROOT_DIR/scripts/publish-pitr-drill-status.sh"
 pitr_status_env="$ROOT_DIR/deploy/env/pitr-status.env.example"
 rg -Fq 'temporary_directory="$(mktemp -d "$PITR_RESTORE_LOCAL_ARCHIVE_DIR/.restore-$WAL_NAME.XXXXXX")"' "$pitr_restore"
 rg -Fq 'temporary_remote="$temporary_directory/$WAL_NAME.age"' "$pitr_restore"
-rg -q 'trap cleanup_restore EXIT INT TERM' "$pitr_restore"
+rg -Fq 'trap cleanup_restore EXIT' "$pitr_restore"
+rg -Fq "trap 'exit 130' INT" "$pitr_restore"
+rg -Fq "trap 'exit 143' TERM" "$pitr_restore"
 rg -q '^Requires=wangzhe-pitr-source-sync\.service$' "$pitr_drill_unit"
 rg -q '^After=.*wangzhe-pitr-source-sync\.service$' "$pitr_drill_unit"
 rg -Fq 'RequiresMountsFor=/var/lib/wangzhe-pitr-drill' "$pitr_drill_unit"

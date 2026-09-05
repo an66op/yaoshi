@@ -40,7 +40,8 @@ func run(args []string, output io.Writer) error {
 		return fmt.Errorf("测试账号配置无效: %w", err)
 	}
 	config.LoadConfig()
-	if err := utils.InitFieldEncryption(config.GetConfig().Security.DataEncryptionKey); err != nil {
+	security := config.GetConfig().Security
+	if err := utils.InitFieldEncryptionWithFallbacks(security.DataEncryptionKey, security.DataEncryptionPreviousKeys); err != nil {
 		return fmt.Errorf("初始化敏感字段加密失败: %w", err)
 	}
 	// The deployed backend owns schema initialization. This utility checks its

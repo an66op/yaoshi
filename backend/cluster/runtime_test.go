@@ -66,7 +66,7 @@ func TestRunWithLeaseAllowsOptionalLocalFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	runs := 0
-	executed, err := RunWithLease(context.Background(), "test-local-fallback", time.Minute, func() error {
+	executed, err := RunWithLease(context.Background(), "test-local-fallback", time.Minute, func(context.Context) error {
 		runs++
 		return nil
 	})
@@ -84,7 +84,7 @@ func TestRunWithLeaseFailsClosedWhenRedisRequired(t *testing.T) {
 		t.Fatal("expected required Redis initialization to fail without an address")
 	}
 	runs := 0
-	executed, err := RunWithLease(context.Background(), "test-required", time.Minute, func() error {
+	executed, err := RunWithLease(context.Background(), "test-required", time.Minute, func(context.Context) error {
 		runs++
 		return nil
 	})
@@ -93,5 +93,128 @@ func TestRunWithLeaseFailsClosedWhenRedisRequired(t *testing.T) {
 	}
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("expected ErrUnavailable, got %v", err)
+	}
+}
+
+func TestRunWithLeaseRenewsLongRunningWork(t *testing.T) {
+	t.Cleanup(func() { _ = Init(context.Background(), Options{}) })
+	server := miniredis.RunT(t)
+	if err := Init(context.Background(), Options{Addr: server.Addr(), Required: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	workStarted := make(chan struct{})
+	workDone := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		_, err := RunWithLease(context.Background(), "test-renewal", time.Second, func(context.Context) error {
+			close(workStarted)
+			<-workDone
+			return nil
+		})
+		result <- err
+	}()
+	<-workStarted
+
+	// Wait beyond the original TTL. A second instance must still be unable to
+	// acquire the lease because the first worker renews it in the background.
+	time.Sleep(1300 * time.Millisecond)
+	second, acquired, err := AcquireLease(context.Background(), "test-renewal", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acquired {
+		_ = second.Release(context.Background())
+		t.Fatal("second worker acquired a lease while the first worker was active")
+	}
+	close(workDone)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunWithLeaseCancelsWorkWhenRenewalLosesOwnership(t *testing.T) {
+	t.Cleanup(func() { _ = Init(context.Background(), Options{}) })
+	server := miniredis.RunT(t)
+	if err := Init(context.Background(), Options{Addr: server.Addr(), Required: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	workStarted := make(chan struct{})
+	workCancelled := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		_, err := RunWithLease(context.Background(), "test-renewal-loss", time.Second, func(ctx context.Context) error {
+			close(workStarted)
+			<-ctx.Done()
+			close(workCancelled)
+			return ctx.Err()
+		})
+		result <- err
+	}()
+	<-workStarted
+	server.Set(Key("lock", "test-renewal-loss"), "replacement-owner")
+
+	select {
+	case <-workCancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("lease loss did not cancel blocked work")
+	}
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrLeaseLost) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected joined lease-loss and cancellation error, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("lease-loss run did not return")
+	}
+	if value, _ := server.Get(Key("lock", "test-renewal-loss")); value != "replacement-owner" {
+		t.Fatalf("stale release changed replacement owner: %q", value)
+	}
+}
+
+func TestRunWithLeaseReleasesOwnershipWhenWorkPanics(t *testing.T) {
+	t.Cleanup(func() { _ = Init(context.Background(), Options{}) })
+	server := miniredis.RunT(t)
+	if err := Init(context.Background(), Options{Addr: server.Addr(), Required: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != "scheduler panic" {
+				t.Fatalf("unexpected recovered panic: %v", recovered)
+			}
+		}()
+		_, _ = RunWithLease(context.Background(), "test-panic-cleanup", time.Second, func(context.Context) error {
+			panic("scheduler panic")
+		})
+	}()
+
+	lease, acquired, err := AcquireLease(context.Background(), "test-panic-cleanup", time.Second)
+	if err != nil || !acquired {
+		t.Fatalf("panic left scheduler lease owned: acquired=%v err=%v", acquired, err)
+	}
+	if err := lease.Release(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLeaseRenewDoesNotReviveReplacedOwner(t *testing.T) {
+	t.Cleanup(func() { _ = Init(context.Background(), Options{}) })
+	server := miniredis.RunT(t)
+	if err := Init(context.Background(), Options{Addr: server.Addr(), Required: true}); err != nil {
+		t.Fatal(err)
+	}
+	lease, acquired, err := AcquireLease(context.Background(), "test-replaced", time.Second)
+	if err != nil || !acquired {
+		t.Fatalf("acquire lease: acquired=%v err=%v", acquired, err)
+	}
+	server.Set(lease.key, "another-owner")
+	if err := lease.Renew(context.Background()); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("expected ErrLeaseLost, got %v", err)
+	}
+	if value, _ := server.Get(lease.key); value != "another-owner" {
+		t.Fatalf("stale renew changed replacement token: %q", value)
 	}
 }

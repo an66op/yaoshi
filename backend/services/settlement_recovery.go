@@ -101,12 +101,36 @@ func (s *BetAdminService) SettleIssue(gameID, issue, operator string) (*Settleme
 	return s.settleIssueGuarded(gameID, issue, operator, nil)
 }
 
+// SettleIssueContext is the cancellable settlement entry point used by
+// lease-protected recovery jobs. The context is attached to every GORM query
+// and transaction so a worker which loses its lease cannot keep advancing
+// financial state in the background.
+func (s *BetAdminService) SettleIssueContext(ctx context.Context, gameID, issue, operator string) (*SettlementResult, error) {
+	return s.settleIssueGuardedContext(ctx, gameID, issue, operator, nil)
+}
+
 // Historical recovery can fence its own worker at the real financial commit
 // boundary. Ordinary settlement retains its existing policy and idempotency.
 func (s *BetAdminService) settleIssueGuarded(gameID, issue, operator string, gate func(*gorm.DB) error) (*SettlementResult, error) {
+	ctx := context.Background()
+	if s != nil && s.db != nil && s.db.Statement != nil && s.db.Statement.Context != nil {
+		ctx = s.db.Statement.Context
+	}
+	return s.settleIssueGuardedContext(ctx, gameID, issue, operator, gate)
+}
+
+func (s *BetAdminService) settleIssueGuardedContext(ctx context.Context, gameID, issue, operator string, gate func(*gorm.DB) error) (*SettlementResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	worker := *s
+	worker.db = s.db.WithContext(ctx)
 	var lastErr error
 	for attempt := 0; attempt < settlementRetryAttempts; attempt++ {
-		result, err := s.settleIssueOnce(gameID, issue, operator, gate)
+		result, err := worker.settleIssueOnce(gameID, issue, operator, gate)
 		if err == nil {
 			return result, nil
 		}
@@ -114,7 +138,18 @@ func (s *BetAdminService) settleIssueGuarded(gameID, issue, operator string, gat
 		if !isRetryableTransactionError(err) || attempt == settlementRetryAttempts-1 {
 			return nil, err
 		}
-		time.Sleep(time.Duration(attempt+1) * settlementRetryBaseDelay)
+		timer := time.NewTimer(time.Duration(attempt+1) * settlementRetryBaseDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
 	return nil, lastErr
 }
@@ -214,11 +249,20 @@ func (s *BetAdminService) SettlementHealth(now time.Time) (SettlementHealthSumma
 // immutable draw. Missing results are recorded for reconciliation and never
 // replaced with random numbers. Repeated calls are idempotent.
 func (s *BetAdminService) RecoverSettlementBacklog(ctx context.Context, limit int, operator string) (SettlementRecoveryResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	result := SettlementRecoveryResult{StartedAt: time.Now().UTC(), Failures: make([]SettlementRecoveryFailure, 0)}
+	if err := ctx.Err(); err != nil {
+		result.FinishedAt = time.Now().UTC()
+		return result, err
+	}
+	worker := NewBetAdminService(s.db.WithContext(ctx))
+	worker.suppressNotifications = s.suppressNotifications
 	if !settlementRecoveryMu.TryLock() {
 		result.AlreadyRunning = true
 		result.FinishedAt = time.Now().UTC()
-		health, err := s.SettlementHealth(result.FinishedAt)
+		health, err := worker.SettlementHealth(result.FinishedAt)
 		result.Health = health
 		return result, err
 	}
@@ -231,17 +275,20 @@ func (s *BetAdminService) RecoverSettlementBacklog(ctx context.Context, limit in
 	}
 	operator = defaultString(strings.TrimSpace(operator), "系统对账恢复")
 
-	candidates, err := s.pendingSettlementCandidates(ctx, limit)
+	candidates, err := worker.pendingSettlementCandidates(ctx, limit)
 	if err != nil {
 		return result, err
 	}
 	now := time.Now().UTC()
 	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		result.ScannedIssues++
 		action, reason := recoveryActionForCandidate(candidate, now)
 		switch action {
 		case recoverySettle:
-			settled, settleErr := s.SettleIssue(candidate.GameID, candidate.Issue, operator)
+			settled, settleErr := worker.SettleIssueContext(ctx, candidate.GameID, candidate.Issue, operator)
 			if settleErr != nil {
 				result.addFailure(candidate.GameID, candidate.Issue, settleErr)
 				continue
@@ -249,7 +296,7 @@ func (s *BetAdminService) RecoverSettlementBacklog(ctx context.Context, limit in
 			result.SettledIssues++
 			result.SettledBets += settled.Won + settled.Lost + settled.Push
 		case recoveryMarkAbnormal:
-			markedIssue, markedBets, markErr := s.markUnsafeSettlement(ctx, candidate, reason)
+			markedIssue, markedBets, markErr := worker.markUnsafeSettlement(ctx, candidate, reason)
 			if markErr != nil {
 				result.addFailure(candidate.GameID, candidate.Issue, markErr)
 				continue
@@ -265,14 +312,20 @@ func (s *BetAdminService) RecoverSettlementBacklog(ctx context.Context, limit in
 
 	// Also recover stale lifecycle rows which have no pending bets. This clears
 	// periods left in settling after a process crash without inventing a draw.
-	marked, failures, staleErr := s.recoverStaleIssueRows(ctx, limit, operator)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	marked, failures, staleErr := worker.recoverStaleIssueRows(ctx, limit, operator)
 	result.MarkedErrorIssues += marked
 	result.Failures = append(result.Failures, failures...)
 	if staleErr != nil {
 		return result, staleErr
 	}
 	result.FinishedAt = time.Now().UTC()
-	health, healthErr := s.SettlementHealth(result.FinishedAt)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	health, healthErr := worker.SettlementHealth(result.FinishedAt)
 	result.Health = health
 	return result, healthErr
 }
@@ -524,8 +577,11 @@ func (s *BetAdminService) recoverStaleIssueRows(ctx context.Context, limit int, 
 	marked := 0
 	failures := make([]SettlementRecoveryFailure, 0)
 	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return marked, failures, err
+		}
 		if row.DrawID > 0 {
-			if _, err := s.SettleIssue(row.GameID, row.Issue, operator); err != nil {
+			if _, err := s.SettleIssueContext(ctx, row.GameID, row.Issue, operator); err != nil {
 				failures = append(failures, SettlementRecoveryFailure{GameID: row.GameID, Issue: row.Issue, Error: limitDBText(err.Error(), 500)})
 			}
 			continue
@@ -545,8 +601,8 @@ func (s *BetAdminService) recoverStaleIssueRows(ctx context.Context, limit int, 
 func StartSettlementRecovery(ctx context.Context, db *gorm.DB) {
 	go func() {
 		run := func() {
-			_, err := cluster.RunWithLease(ctx, "scheduler:settlement-recovery", 10*time.Minute, func() error {
-				result, recoveryErr := NewBetAdminService(db).RecoverSettlementBacklog(ctx, defaultRecoveryLimit, "系统自动对账")
+			_, err := cluster.RunWithLease(ctx, "scheduler:settlement-recovery", 10*time.Minute, func(workCtx context.Context) error {
+				result, recoveryErr := NewBetAdminService(db).RecoverSettlementBacklog(workCtx, defaultRecoveryLimit, "系统自动对账")
 				if recoveryErr != nil {
 					return recoveryErr
 				}

@@ -16,8 +16,10 @@ MAX_BACKUP_AGE_MINUTES="${MAX_BACKUP_AGE_MINUTES:-1560}"
 MAX_WAL_ARCHIVE_AGE_MINUTES="${MAX_WAL_ARCHIVE_AGE_MINUTES:-15}"
 MAX_BASEBACKUP_AGE_MINUTES="${MAX_BASEBACKUP_AGE_MINUTES:-11520}"
 PUBLIC_URL="${PUBLIC_URL:-https://wz6688.app}"
-ADMIN_URL="${ADMIN_URL:-https://admin.wz6688.app}"
-TLS_CERT_FILE="${TLS_CERT_FILE:-/etc/letsencrypt/live/wz6688.app/fullchain.pem}"
+PUBLIC_WWW_URL="${PUBLIC_WWW_URL:-https://www.wz6688.app}"
+ADMIN_URL="${ADMIN_URL:-https://admin.wz888.site}"
+PUBLIC_TLS_CERT_FILE="${PUBLIC_TLS_CERT_FILE:-/etc/letsencrypt/live/wz6688.app/fullchain.pem}"
+ADMIN_TLS_CERT_FILE="${ADMIN_TLS_CERT_FILE:-/etc/letsencrypt/live/admin.wz888.site/fullchain.pem}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/backend-env.sh
@@ -96,6 +98,23 @@ esac
 (( ${#BACKEND_JWT_SECRET} >= 32 )) || { echo "JWT 密钥少于 32 位" >&2; exit 1; }
 (( ${#BACKEND_SECURITY_DATA_ENCRYPTION_KEY} >= 32 )) || { echo "数据加密密钥少于 32 位" >&2; exit 1; }
 [[ "$BACKEND_JWT_SECRET" != "$BACKEND_SECURITY_DATA_ENCRYPTION_KEY" ]] || { echo "JWT 与数据加密必须使用不同密钥" >&2; exit 1; }
+previous_data_keys="${BACKEND_SECURITY_DATA_ENCRYPTION_PREVIOUS_KEYS:-[]}"
+if ! jq -e '
+    type == "array" and length <= 8 and
+    all(.[]; type == "string" and length >= 32 and (explode | all(. >= 32 and . != 127))) and
+    ((unique | length) == length)
+  ' <<<"$previous_data_keys" >/dev/null; then
+  echo "历史数据加密密钥配置无效" >&2
+  exit 1
+fi
+while IFS= read -r previous_data_key; do
+  if [[ "$previous_data_key" == "$BACKEND_SECURITY_DATA_ENCRYPTION_KEY" ||
+        "$previous_data_key" == "$BACKEND_JWT_SECRET" ||
+        "$previous_data_key" == "$BACKEND_DATABASE_PASSWORD" ]]; then
+    echo "历史数据加密密钥复用了当前密钥或其他凭据" >&2
+    exit 1
+  fi
+done < <(jq -r '.[]' <<<"$previous_data_keys")
 case "${BACKEND_JWT_SECRET,,}:${BACKEND_SECURITY_DATA_ENCRYPTION_KEY,,}:${BACKEND_DATABASE_PASSWORD,,}" in
   *change_me*|*changeme*|*replace_with*|*example*) echo "仍存在示例密钥或密码" >&2; exit 1 ;;
 esac
@@ -135,11 +154,24 @@ timeout 15 runuser --user wangzhe-monitor -- env -i PATH=/usr/bin:/bin HOME=/var
 
 curl -fsS --max-time 10 "$READINESS_API_URL/health" >/dev/null
 curl -fsS --max-time 10 "$READINESS_API_URL/ready" >/dev/null
-[[ -f "$TLS_CERT_FILE" ]] || { echo "找不到 TLS 证书：$TLS_CERT_FILE" >&2; exit 1; }
-openssl x509 -checkend 1209600 -noout -in "$TLS_CERT_FILE" >/dev/null || {
-  echo "TLS 证书将在 14 天内过期，拒绝上线" >&2
+curl -fsS --max-time 120 "$READINESS_API_URL/ready/encryption" >/dev/null || {
+  echo "敏感字段存在明文、未知信封或当前密钥配置无法鉴权的数据，拒绝上线" >&2
   exit 1
 }
+curl -fsS --max-time 10 "$READINESS_API_URL/ready/odds" >/dev/null || {
+  echo "会员可达房间已开放彩种的生产赔率不完整，拒绝上线" >&2
+  exit 1
+}
+check_tls_certificate() {
+  local label="$1" certificate="$2"
+  [[ -f "$certificate" ]] || { echo "找不到${label} TLS 证书：$certificate" >&2; exit 1; }
+  openssl x509 -checkend 1209600 -noout -in "$certificate" >/dev/null || {
+    echo "${label} TLS 证书将在 14 天内过期，拒绝上线" >&2
+    exit 1
+  }
+}
+check_tls_certificate "会员端" "$PUBLIC_TLS_CERT_FILE"
+check_tls_certificate "管理端" "$ADMIN_TLS_CERT_FILE"
 
 check_https_endpoint() {
   local url="$1" headers lower_headers redirect_headers lower_redirect_headers status_line expected_status
@@ -158,6 +190,7 @@ check_https_endpoint() {
   grep -q "^location:[[:space:]]*$url/" <<<"$lower_redirect_headers" || { echo "$url 的 HTTP 入口没有固定跳转到 HTTPS" >&2; exit 1; }
 }
 check_https_endpoint "$PUBLIC_URL"
+check_https_endpoint "$PUBLIC_WWW_URL"
 check_https_endpoint "$ADMIN_URL"
 
 games_payload="$(curl -fsS --max-time 10 "$READINESS_API_URL/api/public/lottery/games/enabled")"

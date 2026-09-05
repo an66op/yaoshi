@@ -29,8 +29,8 @@ func StartSGSSCBackfill(ctx context.Context, db *gorm.DB) {
 			case <-ctx.Done():
 				return
 			case <-timer.C:
-				_, err := cluster.RunWithLease(ctx, "scheduler:sgssc-history-backfill", sgSSCBackfillLease, func() error {
-					workCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+				_, err := cluster.RunWithLease(ctx, "scheduler:sgssc-history-backfill", sgSSCBackfillLease, func(leaseCtx context.Context) error {
+					workCtx, cancel := context.WithTimeout(leaseCtx, 90*time.Second)
 					defer cancel()
 					result, err := NewLotteryService(db).runSGSSCBackfill(workCtx, time.Now, fetchSGSSCVerifiedHistory)
 					if result.Claimed > 0 {

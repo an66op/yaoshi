@@ -103,7 +103,9 @@ cleanup_partial() {
   [[ -z "${signature_partial:-}" ]] || rm -f -- "$signature_partial"
   return 0
 }
-trap cleanup_partial EXIT INT TERM
+trap cleanup_partial EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 export PGPASSWORD="$BACKEND_DATABASE_PASSWORD"
 export PGSSLMODE="$BACKEND_DATABASE_SSLMODE"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import './overrides.css'
 import './game-polish.css'
@@ -24,13 +24,7 @@ import './control-surface.css'
 import './game-guide.css'
 import { BottomNav } from './components/BottomNav'
 import { SessionStartup } from './components/SessionStartup'
-import { GameRoom } from './pages/GameRoom'
-import { DrawResults } from './pages/DrawResults'
-import { Lobby } from './pages/Lobby'
-import { Wallet } from './pages/Wallet'
-import { Chats } from './pages/Chats'
-import { Profile } from './pages/Profile'
-import { GameGuidePage } from './pages/GameGuidePage'
+import { RouteChunkBoundary } from './components/RouteChunkBoundary'
 import { Login } from './pages/Login'
 import { Register } from './pages/Register'
 import { RoomEntry } from './pages/RoomEntry'
@@ -52,6 +46,18 @@ import {
   serverCountedUnreadNotificationCount,
   visibleUnreadNotificationCount,
 } from './utils/notificationVisibility'
+
+// Authentication and room entry stay in the initial bundle so a cold start can
+// paint immediately. The heavier authenticated routes are fetched only when
+// navigation reaches them; named exports are adapted to React.lazy's default
+// component contract without adding forwarding wrapper components.
+const GameRoom = lazy(() => import('./pages/GameRoom').then(module => ({ default: module.GameRoom })))
+const DrawResults = lazy(() => import('./pages/DrawResults').then(module => ({ default: module.DrawResults })))
+const Lobby = lazy(() => import('./pages/Lobby').then(module => ({ default: module.Lobby })))
+const Wallet = lazy(() => import('./pages/Wallet').then(module => ({ default: module.Wallet })))
+const Chats = lazy(() => import('./pages/Chats').then(module => ({ default: module.Chats })))
+const Profile = lazy(() => import('./pages/Profile').then(module => ({ default: module.Profile })))
+const GameGuidePage = lazy(() => import('./pages/GameGuidePage').then(module => ({ default: module.GameGuidePage })))
 
 type DemoState = {
   theme: Theme
@@ -469,33 +475,35 @@ function App() {
   if (!activeSession || !authenticated) return <Login theme={demo.theme} onContinue={continueLogin} />
 
   if (route.kind === 'game-guide') {
-    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div ref={appContentRef} className="app-content"><GameGuidePage games={liveGames} initialTab={route.tab} onBack={() => replace(pathForTab('profile'))} /></div></main>
+    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div ref={appContentRef} className="app-content"><RouteChunkBoundary resetKey={pathname} theme={demo.theme}><GameGuidePage games={liveGames} initialTab={route.tab} onBack={() => replace(pathForTab('profile'))} /></RouteChunkBoundary></div></main>
   }
 
   if (route.kind === 'results') {
     const returnPath = route.returnGameId ? pathForGame(route.returnGameId, false, route.returnLobbyFilter) : pathForLobby(route.returnLobbyFilter)
-    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div ref={appContentRef} className="app-content"><DrawResults games={liveGames} initialGameId={route.gameId} onBack={() => navigate(returnPath)} onSelectGame={(gameId) => replace(pathForResults(gameId, route.returnGameId, route.returnLobbyFilter))} /></div></main>
+    return <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale}`}><div ref={appContentRef} className="app-content"><RouteChunkBoundary resetKey={pathname} theme={demo.theme}><DrawResults games={liveGames} initialGameId={route.gameId} onBack={() => navigate(returnPath)} onSelectGame={(gameId) => replace(pathForResults(gameId, route.returnGameId, route.returnLobbyFilter))} /></RouteChunkBoundary></div></main>
   }
 
   if (activeGame) {
     return (
-      <GameRoom
-        // 彩种本身就是独立会话。切换时强制重建会话组件，避免上一个
-        // 彩种的本地注单回执、输入草稿或加载中的动态残留到新彩种。
-        key={activeGame.id}
-        game={activeGame}
-        games={liveGames}
-        theme={demo.theme}
-        nickname={displayName}
-        balance={activeSession.balance}
-        onBack={() => replace(pathForLobby(gameReturnLobbyFilter))}
-        onOpenGame={(gameId) => navigate(pathForGame(gameId, false, gameReturnLobbyFilter))}
-        onOpenService={() => navigate(pathForChat('service', activeGame.id, gameReturnLobbyFilter))}
-        onOpenWallet={(action) => navigate(pathForWallet(action, activeGame.id, gameReturnLobbyFilter))}
-        onOpenResults={() => navigate(pathForResults(activeGame.id, activeGame.id, gameReturnLobbyFilter))}
-        startWithQuickMenu={route.kind === 'game' && Boolean(route.quickMenu)}
-        onRefreshBalance={refreshBalance}
-      />
+      <RouteChunkBoundary resetKey={pathname} theme={demo.theme}>
+        <GameRoom
+          // 彩种本身就是独立会话。切换时强制重建会话组件，避免上一个
+          // 彩种的本地注单回执、输入草稿或加载中的动态残留到新彩种。
+          key={activeGame.id}
+          game={activeGame}
+          games={liveGames}
+          theme={demo.theme}
+          nickname={displayName}
+          balance={activeSession.balance}
+          onBack={() => replace(pathForLobby(gameReturnLobbyFilter))}
+          onOpenGame={(gameId) => navigate(pathForGame(gameId, false, gameReturnLobbyFilter))}
+          onOpenService={() => navigate(pathForChat('service', activeGame.id, gameReturnLobbyFilter))}
+          onOpenWallet={(action) => navigate(pathForWallet(action, activeGame.id, gameReturnLobbyFilter))}
+          onOpenResults={() => navigate(pathForResults(activeGame.id, activeGame.id, gameReturnLobbyFilter))}
+          startWithQuickMenu={route.kind === 'game' && Boolean(route.quickMenu)}
+          onRefreshBalance={refreshBalance}
+        />
+      </RouteChunkBoundary>
     )
   }
 
@@ -519,7 +527,7 @@ function App() {
 
   return (
     <main className={`mobile-app theme-${demo.theme} font-scale-${fontScale} ${showBottomNav ? 'has-bottom-nav' : ''}`}>
-      <div ref={appContentRef} className="app-content">{content}</div>
+      <div ref={appContentRef} className="app-content"><RouteChunkBoundary resetKey={pathname} theme={demo.theme}>{content}</RouteChunkBoundary></div>
       {showBottomNav && <BottomNav activeTab={activeTab} theme={demo.theme} unreadCount={chatUnread} onSelect={(tab) => navigate(tab === 'shop' ? pathForWallet() : tab === 'lobby' ? pathForLobby(lastLobbyFilter) : pathForTab(tab))} />}
     </main>
   )

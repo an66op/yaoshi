@@ -100,9 +100,9 @@ finish_maintenance_marker() {
   maintenance_marker_token=""
 }
 
-# Prove that the currently running Nginx has already placed both public
-# origins behind the persistent maintenance marker. This must run before any
-# release symlink is switched.
+# Prove that the currently running Nginx has already placed every configured
+# production origin behind the persistent maintenance marker. This must run
+# before any release symlink is switched.
 verify_maintenance_headers() {
   local label="$1" headers="$2" lower_headers status_code
   lower_headers="$(printf '%s' "$headers" | tr -d '\r' | tr '[:upper:]' '[:lower:]')"
@@ -143,7 +143,9 @@ verify_maintenance_origin() {
 }
 
 verify_maintenance_edge() {
-  [[ $# -eq 2 ]] || { echo "维护模式检查需要用户端和管理端两个 Origin" >&2; return 1; }
-  verify_maintenance_origin "$1" || return 1
-  verify_maintenance_origin "$2" || return 1
+  (( $# >= 2 )) || { echo "维护模式检查至少需要用户端和管理端两个 Origin" >&2; return 1; }
+  local url
+  for url in "$@"; do
+    verify_maintenance_origin "$url" || return 1
+  done
 }

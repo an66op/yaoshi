@@ -908,10 +908,12 @@ func (s *BetAdminService) SettleImportedDraw(gameID, issue string) {
 	if err := s.db.Model(&bet.Bet{}).Where("game_id = ? AND issue = ? AND status = ?", gameID, issue, "pending").Count(&pending).Error; err != nil {
 		return
 	}
-	var lifecycle lottery.Issue
-	issueErr := s.db.Where("game_id = ? AND issue = ?", gameID, issue).First(&lifecycle).Error
-	if pending == 0 && issueErr == nil && lifecycle.Status == lottery.IssueStatusSettled {
-		return
+	if pending == 0 {
+		var lifecycle lottery.Issue
+		result := s.db.Select("status").Where("game_id = ? AND issue = ?", gameID, issue).Limit(1).Find(&lifecycle)
+		if result.Error != nil || result.RowsAffected == 0 || lifecycle.Status == lottery.IssueStatusSettled {
+			return
+		}
 	}
 	_, _ = s.SettleIssue(gameID, issue, "官方开奖自动结算")
 }

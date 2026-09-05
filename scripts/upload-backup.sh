@@ -97,7 +97,9 @@ cleanup_partial() {
   case "${verify_dir:-}" in "$BACKUP_UPLOAD_PLAINTEXT_WORK_DIR"/.verify-*) rm -rf -- "$verify_dir" ;; esac
   return 0
 }
-trap cleanup_partial EXIT INT TERM
+trap cleanup_partial EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 (
   cd "$source_parent"

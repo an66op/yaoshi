@@ -1,4 +1,4 @@
-.PHONY: dev dev-init dev-first-run dev-audit health smoke test race verify release release-contract-check production-check production-config-check backup upload-backup backup-integrity monitor restore-drill pitr-restore-drill shellcheck readiness-test rclone-integration-test dev-reset-plan dev-full-reset-plan dev-reset-sentinel-plan production-test-install production-system-test integration-test migration-integration-test catalog-integration-test timing-integration-test e2e-test load-test
+.PHONY: dev dev-init dev-first-run dev-audit dev-lottery-acceptance health smoke test race verify release release-contract-check production-check production-config-check backup upload-backup backup-integrity monitor restore-drill pitr-restore-drill shellcheck readiness-test rclone-integration-test dev-reset-plan dev-full-reset-plan dev-reset-sentinel-plan production-test-install production-system-test integration-test migration-integration-test catalog-integration-test timing-integration-test e2e-test load-test
 
 RELEASE_GOOS ?= linux
 RELEASE_GOARCH ?= amd64
@@ -14,6 +14,13 @@ dev-first-run: dev-init
 
 dev-audit:
 	@if [ -n "$(ENV_FILE)" ]; then bash scripts/local-smoke.sh "$(ENV_FILE)"; else bash scripts/local-smoke.sh; fi
+
+# This intentionally requires artifacts produced by the explicit business reset
+# and a normal captcha-authenticated member login. It never resets data itself.
+dev-lottery-acceptance:
+	@test -n "$(RESET_RECEIPT)" || { echo "请设置 RESET_RECEIPT=/绝对路径/*.reset-receipt" >&2; exit 1; }
+	@test -n "$(COOKIE_JAR)" || { echo "请设置 COOKIE_JAR=/绝对路径/member.cookies" >&2; exit 1; }
+	bash scripts/dev-lottery-acceptance.sh --reset-receipt "$(RESET_RECEIPT)" --cookie-jar "$(COOKIE_JAR)" $(ACCEPTANCE_ARGS)
 
 health:
 	@if [ -n "$(ENV_FILE)" ]; then bash scripts/local-health.sh "$(ENV_FILE)"; else bash scripts/local-health.sh; fi
@@ -44,17 +51,20 @@ release: verify readiness-test
 	cd backend && CGO_ENABLED=0 GOOS=$(RELEASE_GOOS) GOARCH=$(RELEASE_GOARCH) go build -trimpath -ldflags="-s -w" -o ../release/bin/wangzhe-backend .
 	cd backend && CGO_ENABLED=0 GOOS=$(RELEASE_GOOS) GOARCH=$(RELEASE_GOARCH) go build -trimpath -ldflags="-s -w" -o ../release/bin/wangzhe-bootstrap-admin ./cmd/bootstrap-admin
 	cd backend && CGO_ENABLED=0 GOOS=$(RELEASE_GOOS) GOARCH=$(RELEASE_GOARCH) go build -trimpath -ldflags="-s -w" -o ../release/bin/wangzhe-test-site-accounts ./cmd/test-site-accounts
+	cd backend && CGO_ENABLED=0 GOOS=$(RELEASE_GOOS) GOARCH=$(RELEASE_GOARCH) go build -trimpath -ldflags="-s -w" -o ../release/bin/wangzhe-field-encryption-audit ./cmd/field-encryption-audit
 	printf '%s/%s\n' '$(RELEASE_GOOS)' '$(RELEASE_GOARCH)' > release/TARGET
+	printf '%s\n' 'format_version=1' 'read_versions=1,2' 'write_version=2' 'previous_key_fallback=true' > release/FIELD_ENCRYPTION_CAPABILITIES
 	cp -R new/dist/. release/member/
 	cp -R new-back/dist/. release/admin/
 	cp -R deploy/. release/deploy/
 	cp scripts/production-config-check.sh scripts/production-readiness.sh scripts/production-deploy.sh scripts/production-rollback.sh \
+		scripts/production-encryption-rewrap.sh \
 		scripts/postgres-backup.sh scripts/upload-backup.sh scripts/postgres-archive-wal.sh scripts/postgres-base-backup.sh \
 		scripts/postgres-restore-wal.sh scripts/production-restore-drill.sh scripts/production-monitor.sh scripts/production-backup-integrity.sh \
 		scripts/pitr-recovery-source-sync.sh scripts/production-pitr-restore-drill.sh scripts/publish-pitr-drill-status.sh \
 		scripts/production-unit-failure-alert.sh scripts/production-recovery-evidence-check.sh \
 		scripts/redis-production-check.sh scripts/release-integrity.sh release/scripts/
-	cp scripts/lib/backend-env.sh scripts/lib/safe-integer.sh scripts/lib/maintenance-edge.sh \
+	cp scripts/lib/backend-env.sh scripts/lib/safe-integer.sh scripts/lib/maintenance-edge.sh scripts/lib/encryption-capabilities.sh \
 		scripts/lib/strict-env.sh scripts/lib/encrypted-backup.sh release/scripts/lib/
 	cp PRODUCTION_OPERATIONS.md release/
 	test -f release/scripts/production-restore-drill.sh -a -f release/scripts/production-recovery-evidence-check.sh \
@@ -69,6 +79,10 @@ release: verify readiness-test
 # is accidentally packaged after the source has already enabled the board.
 release-contract-check:
 	@test -x release/bin/wangzhe-backend || { echo "发布包缺少后端二进制" >&2; exit 1; }
+	@test -x release/bin/wangzhe-field-encryption-audit || { echo "发布包缺少敏感字段加密审计工具" >&2; exit 1; }
+	@test -x release/scripts/production-encryption-rewrap.sh || { echo "发布包缺少可执行的受控敏感字段重加密工具" >&2; exit 1; }
+	@test -f release/scripts/lib/encryption-capabilities.sh || { echo "发布包缺少加密能力元数据解析器" >&2; exit 1; }
+	@printf '%s\n' 'format_version=1' 'read_versions=1,2' 'write_version=2' 'previous_key_fallback=true' | cmp -s - release/FIELD_ENCRYPTION_CAPABILITIES || { echo "发布包的加密信封能力元数据无效" >&2; exit 1; }
 	@grep -aFq 'mark6-v2' release/bin/wangzhe-backend || { echo "后端发布包缺少当前 mark6-v2" >&2; exit 1; }
 	@grep -aFRq 'mark-six-bet-board' release/member/assets || { echo "会员端发布包缺少宾果六合彩网投面板" >&2; exit 1; }
 	@grep -aFRq 'web-bets' release/member/assets || { echo "会员端发布包缺少批量网投接口" >&2; exit 1; }
@@ -161,7 +175,7 @@ catalog-integration-test:
 
 timing-integration-test:
 	@test -n "$$BACKEND_TIMING_TEST_DSN" || { echo "请设置独立空库 BACKEND_TIMING_TEST_DSN" >&2; exit 1; }
-	cd backend && go test ./services -run '^(TestLotteryTimingPostgres|TestUserAdminCreateMemberPostgresActivatesAgentRoomAtomically|TestSystemAuditHierarchyCountersPostgres|TestDevelopmentAcceptanceProfilePostgresFreshIdempotentAndNonOverwriting|TestDevelopmentAcceptanceOuterTransactionPostgresRollsBackEveryStep)' -count=1 -v
+	cd backend && go test ./services -run '^(TestLotteryTimingPostgres|TestUserAdminCreateMemberPostgresActivatesAgentRoomAtomically|TestSystemAuditHierarchyCountersPostgres|TestDevelopmentAcceptanceProfilePostgresFreshIdempotentAndNonOverwriting|TestDevelopmentAcceptanceOuterTransactionPostgresRollsBackEveryStep|TestSensitiveFieldRewrapPostgresCoversAllColumnsSoftDeletesAndCAS)' -count=1 -v
 
 e2e-test:
 	SYSTEM_TEST_SUITE=e2e bash scripts/release-system-test.sh

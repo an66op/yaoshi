@@ -25,8 +25,8 @@ func StartRedPacketExpiry(ctx context.Context, db *gorm.DB) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_, err := cluster.RunWithLease(ctx, "scheduler:red-packet-expiry", 2*time.Minute, func() error {
-					return service.CloseExpiredRedPackets(200)
+				_, err := cluster.RunWithLease(ctx, "scheduler:red-packet-expiry", 2*time.Minute, func(workCtx context.Context) error {
+					return service.CloseExpiredRedPacketsContext(workCtx, 200)
 				})
 				if err != nil {
 					log.Printf("关闭过期红包失败: %v", err)

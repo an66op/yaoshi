@@ -32,6 +32,7 @@ REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{8,96}$")
 GAME_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MEMBER_COOKIE = "wangzhe_member_session"
+DEFAULT_EXPECTED_GAMES = 22
 BLOCKED_WORDS = ("封盘", "未开放", "暂停", "暂未", "规则", "赔率", "开奖", "期号", "数据源", "同步", "维护")
 
 
@@ -589,7 +590,10 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--login-json", help="可选 owner-only 登录 JSON；必须含当前有效图片验证码")
     parser.add_argument("--api-base", default="http://127.0.0.1:8080/api")
     parser.add_argument("--stake", default="1", help="每项最低测试金额；实际会提升到后台 min_bet")
-    parser.add_argument("--expect-games", type=int, default=30, help="预期会员可见彩种数；0 表示不校验")
+    parser.add_argument(
+        "--expect-games", type=int, default=DEFAULT_EXPECTED_GAMES,
+        help=f"预期会员可见彩种数（本地验收配置默认 {DEFAULT_EXPECTED_GAMES}）；0 表示不校验",
+    )
     parser.add_argument("--game", action="append", default=[], help="只测试指定彩种，可重复；目录数量仍会校验")
     parser.add_argument(
         "--continue-blocked-from",

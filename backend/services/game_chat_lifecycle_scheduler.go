@@ -33,8 +33,8 @@ func startGameChatLifecycleLoop(ctx context.Context, db *gorm.DB) {
 				return
 			case <-timer.C:
 				runCtx, cancel := context.WithTimeout(ctx, gameChatCleanupRunBudget)
-				_, err := cluster.RunWithLease(runCtx, "scheduler:game-chat-lifecycle", 5*time.Minute, func() error {
-					return runScheduledGameChatLifecycle(runCtx, db, next)
+				_, err := cluster.RunWithLease(runCtx, "scheduler:game-chat-lifecycle", 5*time.Minute, func(workCtx context.Context) error {
+					return runScheduledGameChatLifecycle(workCtx, db, next)
 				})
 				cancel()
 				if err != nil && ctx.Err() == nil {

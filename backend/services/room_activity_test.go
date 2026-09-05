@@ -2,10 +2,28 @@ package services
 
 import (
 	workspacemodel "backend/data/models/workspace"
+	"context"
 	"errors"
 	"testing"
 	"time"
 )
+
+func TestRoomActivityCancelledLeaseContextCannotStartOrRecordWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	service := &RoomActivityService{}
+	setting := workspacemodel.RobotSetting{WorkspaceID: 99, Enabled: true}
+
+	if err := service.runWorkspaceWithContext(ctx, setting); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled scheduler context returned %v", err)
+	}
+	if service.status.Cycles != 0 || service.status.BetsPlaced != 0 || !service.status.LastRunAt.IsZero() {
+		t.Fatalf("cancelled scheduler mutated runtime status: %+v", service.status)
+	}
+	if err := service.finishWorkspaceRun(ctx, nil, setting, time.Now(), 1, 1, 1, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled completion returned %v", err)
+	}
+}
 
 func TestClampRoomActivity(t *testing.T) {
 	tests := []struct {

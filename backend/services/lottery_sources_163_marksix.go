@@ -404,7 +404,7 @@ func (s *LotteryService) sync163MarkSixGame(ctx context.Context, binding source1
 		publish(game)
 	}
 	if game.Enabled && source163MarkSixBound(&game, binding) {
-		settleImportedDrawBatch(s.db, binding.GameID, draws)
+		settleImportedDrawBatch(ctx, s.db, binding.GameID, draws)
 	}
 	latestIssue := ""
 	var latestAt time.Time

@@ -108,7 +108,7 @@ make release
    ```bash
    sudo install -d -o root -g root -m 0755 /usr/local/libexec/wangzhe /usr/local/libexec/wangzhe/lib
    sudo install -o root -g root -m 0755 \
-     scripts/production-deploy.sh scripts/production-rollback.sh \
+     scripts/production-deploy.sh scripts/production-rollback.sh scripts/production-encryption-rewrap.sh \
      scripts/production-config-check.sh scripts/production-readiness.sh \
      scripts/postgres-backup.sh scripts/upload-backup.sh scripts/redis-production-check.sh \
      scripts/postgres-archive-wal.sh scripts/postgres-base-backup.sh \
@@ -116,11 +116,12 @@ make release
      scripts/production-recovery-evidence-check.sh scripts/release-integrity.sh \
      /usr/local/libexec/wangzhe/
    sudo install -o root -g root -m 0644 \
-     scripts/lib/backend-env.sh scripts/lib/safe-integer.sh scripts/lib/maintenance-edge.sh \
+     scripts/lib/backend-env.sh scripts/lib/safe-integer.sh scripts/lib/maintenance-edge.sh scripts/lib/encryption-capabilities.sh \
      scripts/lib/strict-env.sh scripts/lib/encrypted-backup.sh \
      /usr/local/libexec/wangzhe/lib/
    sudo ln -sfn /usr/local/libexec/wangzhe/production-deploy.sh /usr/local/sbin/wangzhe-production-deploy
    sudo ln -sfn /usr/local/libexec/wangzhe/production-rollback.sh /usr/local/sbin/wangzhe-production-rollback
+   sudo ln -sfn /usr/local/libexec/wangzhe/production-encryption-rewrap.sh /usr/local/sbin/wangzhe-production-encryption-rewrap
    ```
 
 4. 从示例创建应用、逻辑备份、备份加密、PITR、Redis 检查和监控环境文件。先读取当前 PostgreSQL `system_identifier`，把它写入 root 保护的单行文件，并替换 `pitr.env`、`pitr-restore.env`、`monitor.env` 中所有 `CHANGE_ME_POSTGRES_SYSTEM_IDENTIFIER`。本地与异机的 WAL/基础备份均按此标识分目录，避免重建集群后复用同名 WAL。`age` recipient 是公钥；解密 identity 只放在隔离恢复主机。rclone 配置必须使用独立最小权限 remote、启用对象版本/保留锁，并通过显式 `*_RCLONE_CONFIG` 路径读取，不能依赖被 systemd 隔离的 `~/.config`：
@@ -174,6 +175,31 @@ make release
 
    `BACKEND_SERVER_BIND` 保持 `127.0.0.1`，JWT、数据加密、PostgreSQL、Redis、Webhook、rclone、两套制品来源签名密钥与两套恢复状态签名密钥必须分别生成。来源私钥只进入对应生产写入服务，恢复状态私钥绝不能进入生产机；公钥必须 root 所有且不可被非 root 修改。当前实现使用主机上的 OpenSSL 3 Ed25519 私钥；后续更高保障应把签名操作迁入 KMS/HSM，并保持相同的字段绑定和独立密钥域。远程 PostgreSQL 使用 `verify-ca`/`verify-full`；远程 Redis 必须启用 TLS。真实 `.env`、rclone 配置、AGE identity、签名私钥、证书私钥和备份不得进入 Git。
 
+   敏感字段加密使用版本化信封。新写入为 `enc:v2:<非秘密密钥指纹>:<密文>`，旧 `enc:v1` 密文仍可读取。轮换时在密码管理器生成新密钥，把它设为 `BACKEND_SECURITY_DATA_ENCRYPTION_KEY`，并把原密钥放入 JSON 字符串数组，例如 `BACKEND_SECURITY_DATA_ENCRYPTION_PREVIOUS_KEYS='["<原密钥>"]'`；真实值只编辑 root 所有且 `0600` 的 `/etc/wangzhe/backend.env`，不能写入命令行、发布包或 Git。历史列表仅用于解密，最多8把；新写入始终使用当前主密钥。发布包的 `FIELD_ENCRYPTION_CAPABILITIES` 是严格解析、随制品验签的非秘密读写能力合同；缺少或不自洽时发布、回滚都会 fail closed。首次从没有该元数据的旧版本升级时，不得猜测旧版能力或临时修改不可变 release，必须先制作并认证一个仍使用原密钥、能够读取现存信封且带完整能力合同和审计工具的桥接 release，再进入下面的轮换流程。
+
+   `/ready/encryption` 会读取包括软删除行在内的全部三个加密列，只返回按逻辑字段和信封类别聚合的计数；未知信封版本、未知密钥、认证失败、截断、格式错误或历史明文都会阻止生产就绪。密钥轮换不能只看这个在线快照：移除旧密钥前必须使用受控重加密脚本。脚本 dry-run 不停服务、不改数据库，也永远不会给出可移除授权；execute 会先验证三个公网入口都是维护 503，再停止并确认 `wangzhe-backend.service` 已完全 inactive，通过 systemd 只读凭证向审计进程证明停写，然后按最多 1000 行分批处理。每个更新都以主键和审计到的完整旧信封做 compare-and-swap，三列及软删除行全部覆盖；执行完成后会在后端仍停止时重新全量盘点。输出只有统计，不包含明文、密文、密钥指纹或密钥材料。
+
+   轮换步骤如下；示例中的 `1` 是 `BACKEND_SECURITY_DATA_ENCRYPTION_PREVIOUS_KEYS` 的一基位置，不是密钥 ID：
+
+   ```bash
+   # 1. 新主密钥和旧历史密钥已写入 /etc/wangzhe/backend.env，且完整备份已验证。
+   sudo /usr/local/sbin/wangzhe-production-encryption-rewrap --dry-run 1 100
+
+   # 2. 审核统计后执行。成功时后端仍停止、维护模式仍开启。
+   sudo /usr/local/sbin/wangzhe-production-encryption-rewrap --execute 1 100
+
+   # 3. 只有 execute 明确通过最终归零盘点后，才从 root 保护的环境文件
+   #    删除该位置的旧密钥；密码管理器中的恢复副本仍按轮换策略保留。
+   sudo editor /etc/wangzhe/backend.env
+   sudo /usr/local/libexec/wangzhe/production-config-check.sh /etc/wangzhe/backend.env
+   sudo systemctl start wangzhe-backend.service
+   sudo ALLOW_MAINTENANCE_503=1 BACKEND_URL=http://127.0.0.1:8080 \
+     /usr/local/libexec/wangzhe/production-readiness.sh /etc/wangzhe/backend.env
+   sudo rm /etc/wangzhe/maintenance
+   ```
+
+   任一步失败、出现 CAS miss 后仍有依赖、最终盘点非零，或执行结束后服务/维护入口不再冻结，都不得移除旧密钥。脚本收到 INT/TERM 或异常退出时会先停止并等待本次 transient rewrap unit 消失，只有确认审计进程已经终止才允许恢复后端；若清理超时，即使强制 kill 后仍无法确认 inactive，也会输出 `WANGZHE_ENCRYPTION_REWRAP_CLEANUP_FAILED`、保持后端停止并保留维护模式，绝不会让重加密与在线写入并跑。最终盘点到编辑配置之间必须保持后端停止和维护 503；不要另开终端启动服务。移除后若完整就绪失败，立即恢复环境文件中的原历史密钥并在维护状态下重新审计，不能清除维护标记。
+
    安装 Redis 6.2+ 配置时生成两套不同密码：应用使用 `wangzhe-app`（写入 `BACKEND_REDIS_USERNAME/PASSWORD`），监控使用 `wangzhe-monitor`（只把监控密码写入 `/etc/wangzhe/redis-check.env`），严禁复用。该检查文件另外只记录公开的 `REDIS_EXPECTED_APP_USERNAME`/`REDIS_EXPECTED_APP_PREFIX`，就绪门禁会将它们与后端配置精确比对，绝不写应用 Redis 明文密码。该 Redis 实例专用于本项目，ACL 必须且只能包含已 reset/off 的 `default`、应用和监控三个用户；`acl-pubsub-default` 固定为 `resetchannels`。应用 ACL 只允许 `wangzhe-production:*` 键/频道和代码实际使用的命令，监控用户没有任何键/频道权限，只额外允许只读 `ACL LIST/GETUSER`；AOF 使用 `everysec` 且内存策略为 `noeviction`：
 
    ```bash
@@ -186,7 +212,7 @@ make release
 
    PostgreSQL 加载 `deploy/postgresql/wangzhe-pitr.conf.example` 后重启。当前基础备份流程有意不兼容自定义 tablespace；上线门禁会查询 `pg_tablespace`，发现 `pg_default`、`pg_global` 以外的表空间就拒绝上线，避免生成看似成功但布局不完整的 PITR 制品。`archive_command` 只有在 WAL 已经 age 加密、SHA-256 校验且按策略完成异机回读时才返回成功；失败时 PostgreSQL 会保留 WAL 并重试。禁止手工删除 `pg_wal` 或尚未被较新基础备份覆盖的归档 WAL。
 
-5. 先用临时 HTTP 配置申请证书，再启用正式 TLS 配置。同一张 SAN 证书必须同时覆盖 `wz6688.app` 与 `admin.wz6688.app`，配置中的证书路径也由两个 HTTPS vhost 共用。正式配置会拒绝未知 Host、将固定域名从 HTTP 308 跳转到 HTTPS、添加 HSTS/CSP 等安全头、限制每 IP 连接/请求频率，并把普通请求体限制为 1MB；只有管理端活动图片上传允许 9MB。用户域名会直接拒绝 `/api/admin`、`/api/tenant` 和 `/api/agent`。当 `/etc/wangzhe/maintenance` 存在时，两个 HTTPS 站点统一返回 503；该标记跨重启保留，只有完整上线门禁成功后发布器才移除。Nginx 访问日志只记录 `$request_method` 与不含查询串的 `$uri`，不会把 `/api/ws?ticket=...` 的一次性票据写入磁盘；不要改回包含 `$request` 或 `$args` 的 combined 格式：
+5. 先用临时 HTTP 配置申请两张证书，再启用正式 TLS 配置。会员证书覆盖 `wz6688.app` 与 `www.wz6688.app`，管理证书只覆盖 `admin.wz888.site`；不得把旧管理域名留在证书、CORS 或 vhost 中。正式 split-host 配置以 `default_server` 对未知 HTTP Host 返回 444、以 `ssl_reject_handshake` 拒绝未知 SNI，将三个固定域名从 HTTP 308 跳转到各自 HTTPS，并添加 HSTS/CSP、请求 ID、连接/请求限速。普通请求体限制为 1MB，只有管理端活动图片上传允许 9MB；两个会员域名都直接拒绝 `/api/admin`、`/api/tenant` 和 `/api/agent`。当 `/etc/wangzhe/maintenance` 存在时，三个 HTTPS 入口统一返回 503；该标记跨重启保留，只有完整上线门禁成功后发布器才移除。Nginx JSON 访问日志包含来源地址、Host、方法、不含查询串的 `$uri`、协议、状态、字节数、耗时与 `$request_id`，不会把 `/api/ws?ticket=...` 的一次性票据写入磁盘；不要改回包含 `$request` 或 `$args` 的 combined 格式：
 
    ```bash
    sudo rm -f /etc/nginx/sites-enabled/default
@@ -194,11 +220,12 @@ make release
    sudo ln -s /etc/nginx/sites-available/wangzhe-bootstrap.conf /etc/nginx/sites-enabled/wangzhe-bootstrap.conf
    sudo nginx -t && sudo systemctl reload nginx
    sudo certbot certonly --webroot -w /var/www/acme --cert-name wz6688.app \
-     -d wz6688.app -d admin.wz6688.app
+     -d wz6688.app -d www.wz6688.app
+   sudo certbot certonly --webroot -w /var/www/acme --cert-name admin.wz888.site \
+     -d admin.wz888.site
    sudo rm /etc/nginx/sites-enabled/wangzhe-bootstrap.conf
-   sudo install -m 0644 deploy/nginx/snippets/*.conf /etc/nginx/snippets/
-   sudo install -m 0644 deploy/nginx/wz6688.app.conf /etc/nginx/sites-available/wz6688.app.conf
-   sudo ln -s /etc/nginx/sites-available/wz6688.app.conf /etc/nginx/sites-enabled/wz6688.app.conf
+   sudo install -m 0644 deploy/nginx/wz6688.split-hosts.conf /etc/nginx/sites-available/wz6688.split-hosts.conf
+   sudo ln -s /etc/nginx/sites-available/wz6688.split-hosts.conf /etc/nginx/sites-enabled/wz6688.split-hosts.conf
    sudo nginx -t && sudo systemctl reload nginx
    sudo certbot renew --dry-run
    ```
@@ -225,32 +252,64 @@ make release
 
 ## 版本化发布
 
-发布脚本拒绝覆盖已有版本，并按固定顺序执行：用外部摘要认证包清单 → 校验发布目录整条父路径、目标架构与全部文件 → `nginx -t` → 用隔离环境和独立备份账号创建且验证数据库及 uploads 备份 → 以 `wangzhe-monitor` 和 `/etc/wangzhe/monitor-rclone.conf` 的只读/list 最小权限身份实时回读数据库、uploads、PITR 基础备份及全部保留 WAL，逐个核对完整 SHA-256、远端证据和 Ed25519 来源绑定 → 使用另一份 status-only 凭据回读并验签近期逻辑恢复和 PITR 演练证据，精确绑定生产数据库、对象前缀及 `system_identifier` → 复制到同文件系统临时目录并再次比对外部摘要/全部文件 → 创建持久维护标记并实际访问两个公网域名，确认当前运行中的 Nginx 已返回 503 与安全头 → 原子安装并切换 `/opt/wangzhe/current` → 启动并等待 `/ready`（包括迁移清单/校验和）→ 在外部仍只收到 503 时使用固定安全阈值执行完整生产门禁 → 重载 Nginx 并移除维护标记。两类远端校验都发生在任何 release 目录创建或链接切换之前；网络不可达、只读 IAM 越权/缺权、对象缺失/多余、摘要或来源签名不一致、演练过期或签名域复用都会 fail closed，本地历史 `.offsite-ok` 不能单独放行。不要直接把文件覆盖进 `current`：
+发布脚本拒绝覆盖已有版本。普通发布（也就是下面首装阶段 2）按固定顺序执行：用外部摘要认证包清单 → 校验发布目录整条父路径、目标架构与全部文件 → `nginx -t` → 用隔离环境和独立备份账号创建且验证数据库及 uploads 备份；没有 `current` 的主机还会创建首份 PITR 基础备份 → 以 `wangzhe-monitor` 和 `/etc/wangzhe/monitor-rclone.conf` 的只读/list 最小权限身份实时回读数据库、uploads、PITR 基础备份及全部保留 WAL，逐个核对完整 SHA-256、远端证据和 Ed25519 来源绑定 → 使用另一份 status-only 凭据回读并验签近期逻辑恢复和 PITR 演练证据，精确绑定生产数据库、对象前缀及 `system_identifier` → 复制到同文件系统临时目录并再次比对外部摘要/全部文件 → 创建持久维护标记并实际访问三个公网域名，确认当前运行中的 Nginx 已返回 503 与安全头 → 把 `previous` 与 `current` 作为同一链接事务更新 → 启动并等待 `/ready`（包括迁移清单/校验和）→ 在外部仍只收到 503 时使用固定安全阈值执行完整生产门禁 → 重载 Nginx 并移除维护标记。普通发布的两类远端校验都发生在任何 release 目录创建或链接切换之前；网络不可达、只读 IAM 越权/缺权、对象缺失/多余、摘要或来源签名不一致、演练过期或签名域复用都会 fail closed，本地历史 `.offsite-ok` 不能单独放行。不要直接把文件覆盖进 `current`。
+
+真正的空库不可能预先拥有这套库的真实恢复证据，因此首装是不可合并的两阶段流程，不能伪造或永久跳过门禁。阶段 1 只在公网已确认维护 503 后，用已认证候选的受限 transient service 执行迁移并创建首位管理员；随后创建并完整异机回读数据库、uploads、PITR base/WAL 制品，然后成功退出，保持后端停止、维护标记存在且不创建 `current`。隔离恢复机必须消费这些真实异机制品并发布逻辑恢复与 PITR 两份独立签名状态。阶段 2 必须继续使用阶段 1 的**同一份受验发布包和同一个 `EXPECTED_MANIFEST_SHA256`**，只换一个新的 `RELEASE_ID`，并走不带 `--first-install` 的普通发布；演练期间不得重新构建或替换发布目录。只有两份证据均通过完整门禁时才切换 `current` 并解除维护。
+
+阶段 1 在启动管理员 transient unit 前，会把本次发布器拥有的维护标记原子升级成带摘要的 `bootstrap-pending` 状态；因此管理员已经写入但进程随后被 INT/TERM/断电打断时，下一次普通发布会识别为未完成首装并 fail closed，绝不会把它误当成普通 active-admin 主机。全部备份实时回读成功后，同一标记再原子升级为 `awaiting-recovery`，绑定阶段 1 `RELEASE_ID`、可信清单摘要、备份完成时间，以及本次数据库、uploads、PITR base 的对象名和密文 SHA-256（并记录 WAL inventory 摘要）。阶段 2 只会接管权限、payload 摘要、候选完整性、无 `current/previous` 及管理员状态全部吻合的这一枚标记；逻辑与 PITR 两份签名证据的完成时间都必须晚于阶段 1 备份完成时间，逻辑证据必须精确命中本次数据库/uploads 制品，PITR 证据必须精确命中本次 base 制品且恢复目标和源同步也发生在该时间之后。旧的近期证据不能放行。标记消失或变化立即失败；完整门禁失败时原标记继续生效，只有门禁全部通过才精确删除它。
+
+阶段 1 不接管既有操作员维护标记：若开始前 `/etc/wangzhe/maintenance` 已存在，命令会原样保留并在任何数据库修改前拒绝，原操作员按变更流程解除后才能重新执行阶段 1。普通发布同样不会改写、接管或自动删除人工维护标记。
+
+空生产库的首次安装必须显式提供首位管理员账号和密码文件。普通发布发现“没有 current 且数据库没有任何用户”时会在切换或启动前拒绝，避免后端因无管理员退出、管理员工具又只能在发布后运行的顺序死锁。先在密码管理器生成并保存满足复杂度要求的独立密码，再交互写入 root-only 的固定临时文件；密码不能出现在命令行、环境变量、Shell 历史或发布包中：
 
 ```bash
 sudo chown -R root:root /tmp/wangzhe-release
 sudo chmod -R a+rX,go-w /tmp/wangzhe-release
+sudo install -d -o root -g root -m 0700 /run/wangzhe-bootstrap-admin
+sudo bash -c 'umask 077; IFS= read -rsp "Initial admin password: " secret; echo; printf "%s\n" "$secret" > /run/wangzhe-bootstrap-admin/password; unset secret'
 sudo EXPECTED_MANIFEST_SHA256=构建机通过独立通道提供的64位摘要 \
-  RELEASE_ID=20260829-1 \
+  RELEASE_ID=20260829-bootstrap-1 \
+  /usr/local/sbin/wangzhe-production-deploy \
+  --first-install \
+  --first-admin-username platform-owner \
+  --first-admin-password-file /run/wangzhe-bootstrap-admin/password \
+  /tmp/wangzhe-release
+```
+
+上述命令返回成功只表示阶段 1 完成，不表示站点已上线。确认输出明确写着“`current` 尚未切换”，再按本文“加密备份、PITR 与恢复演练”一节在**隔离恢复机**安装同一份已认证 release，并执行两套真实演练：
+
+```bash
+# 以下三条只在已经完成本文恢复机隔离/LUKS/凭据配置的恢复机执行。
+sudo systemctl start wangzhe-restore-drill.service
+sudo systemctl start wangzhe-pitr-source-sync.service
+sudo systemctl start wangzhe-pitr-restore-drill.service
+sudo systemctl status wangzhe-restore-drill.service wangzhe-pitr-restore-drill.service wangzhe-pitr-status-publish.service
+```
+
+两份状态发布成功后，回到生产机用阶段 1 的同一已认证目录、同一 `EXPECTED_MANIFEST_SHA256` 和**新的**发布编号执行阶段 2；这里不得再传首次管理员参数，也不得在两阶段之间重新运行构建：
+
+```bash
+sudo EXPECTED_MANIFEST_SHA256=构建机通过独立通道提供的64位摘要 \
+  RELEASE_ID=20260829-online-1 \
   /usr/local/sbin/wangzhe-production-deploy /tmp/wangzhe-release
 sudo systemctl enable --now wangzhe-backup.timer wangzhe-upload-backup.timer wangzhe-base-backup.timer wangzhe-monitor.timer wangzhe-backup-integrity.timer
 ```
 
-每次后端启动会用 PostgreSQL advisory lock 顺序执行尚未应用的版本化迁移。迁移失败时服务不会就绪；禁止跳过迁移、修改已发布 SQL 或手改 `schema_migrations` 校验和。
+发布器验证密码源是固定路径下 root 所有、owner-only 且无硬链接的普通文件，并确认主机没有 current/previous 链接、数据库 schema/用户状态符合首次安装。它用 systemd `LoadCredential=` 把密码复制到仅一次性受限服务可读的 credential，不把源路径直接交给 `wangzhe` 进程；transient unit 回收时 systemd 清理私有副本，管理员创建成功后、后端启动前发布器删除源文件。脚本在验证源文件后异常退出时会只针对本次 unit 执行 stop、状态等待和必要的 KILL 再等待，并按 inode 身份清理密码源；如果仍无法确认 unit 已停止，会保留 armed 状态并输出可机器识别的 `WANGZHE_BOOTSTRAP_UNIT_CLEANUP_FAILED`/`WANGZHE_DEPLOY_CLEANUP_FAILED`，发布结果必为非零。若在验证前即拒绝，操作者必须手工删除密码文件。一次性命令只能在数据库没有任何用户时运行，应用内还会用 PostgreSQL advisory lock 再次拒绝第二位管理员。密码至少 14 位且必须包含大小写字母、数字和符号。
 
-首次发布完成后必须立即创建一个非默认密码的平台管理员。后端在 release 模式不会自动生成任何本地体验管理员，也不会把本地验收会员、租户、代理、模拟历史开奖或默认计划写入正式库。先在密码管理器生成并保存满足复杂度要求的密码，再通过交互输入写入 owner-only 文件；密码不能放在命令行、Shell 历史或环境变量：
+首次迁移或管理员创建失败时不切换 `current`、停止后端并保持维护模式；已认证候选目录和可能已提交的迁移保留供审计，不自动回退数据库。确认 transient unit 已停止后，源密码文件与 systemd 私有副本均被清理，不得从日志或历史记录恢复。库内仍无用户且尚未生成 `bootstrap-pending` 状态时，修复原因、重新交互生成密码文件并用新的 `RELEASE_ID` 重走 `--first-install`。一旦看到 `bootstrap-pending`（包括管理员可能已提交但阶段 1 未完成），普通发布和重复 first-install 都会保持维护并拒绝继续；必须先审计数据库、候选、unit 与备份结果，再按事故恢复流程完成或重置首装状态，禁止手工伪装 `awaiting-recovery`。任何情况下都禁止绕过流程添加默认密码。阶段 2 的完整门禁若在 `current` 切换后失败，则与普通发布相同：停止候选后端、保留维护标记和当前候选链接，人工核对迁移兼容性后再决定重跑或受控回滚。
+
+空库首装只有平台管理员、没有会员时，平台工作区的目录不会单独触发赔率门禁，因此管理员能够进入后台完成首次配置。租户或代理房间一旦显式开放彩种，或平台工作区实际存在活动会员，相应彩种就进入 `/ready/odds` 审计；每个当前玩法都必须已有后台显式确认的有效赔率。平台目录开启不等于凭空生成生产赔率，也不能用示例或本地验收赔率兜底。
+
+每次后端启动仍会用 PostgreSQL advisory lock 顺序执行尚未应用的版本化迁移。迁移失败时服务不会就绪；禁止跳过迁移、修改已发布 SQL 或手改 `schema_migrations` 校验和。后端在 release 模式不会自动生成任何本地体验管理员，也不会把本地验收会员、租户、代理、模拟历史开奖或默认计划写入正式库。
+
+已有 current 的后续发布不接受首次安装参数，使用普通命令：
 
 ```bash
-sudo install -o wangzhe -g wangzhe -m 0600 /dev/null /run/wangzhe-admin-password
-sudo -u wangzhe bash -c 'read -rsp "Initial admin password: " secret; echo; printf "%s\n" "$secret" > /run/wangzhe-admin-password'
-sudo systemd-run --wait --pipe --collect --uid=wangzhe \
-  -p EnvironmentFile=/etc/wangzhe/backend.env \
-  /opt/wangzhe/current/bin/wangzhe-bootstrap-admin \
-  --username platform-owner --password-file /run/wangzhe-admin-password
-sudo rm -f /run/wangzhe-admin-password
+sudo EXPECTED_MANIFEST_SHA256=构建机通过独立通道提供的64位摘要 \
+  RELEASE_ID=20260829-2 \
+  /usr/local/sbin/wangzhe-production-deploy /tmp/wangzhe-release
 ```
-
-该命令只能在库内尚无管理员时成功，密码至少 14 位且必须包含大小写字母、数字和符号。创建后按团队密钥管理规范保存凭据并定期轮换。
 
 上线前检查：
 
@@ -260,7 +319,7 @@ sudo BACKEND_URL=http://127.0.0.1:8080 /usr/local/libexec/wangzhe/production-rea
 
 如需正式启用机器人，必须按 `deploy/production-robot-activation.md` 在维护窗口执行“环境上限 + 按工作区启用”双门禁，不得用命令行临时变量绕过。
 
-就绪检查会验证 Redis 认证/6.2+/AOF/noeviction 及运行时 ACL 无漂移、两个公网域名的证书和安全头，并核验动态迁移、彩种、开奖源、异常数据、机器人、清理任务，以及数据库、uploads、WAL、基础备份的加密校验和异机回读凭证。任何已知异常默认阻止上线；只能修复后重新检查，不能为了通过检查擅自提高阈值。发布配置自身可先离线检查：
+就绪检查会验证 Redis 认证/6.2+/AOF/noeviction 及运行时 ACL 无漂移、三处公网入口的两张证书和安全头，并核验动态迁移、彩种、开奖源、异常数据、机器人、清理任务，以及数据库、uploads、WAL、基础备份的加密校验和异机回读凭证。任何已知异常默认阻止上线；只能修复后重新检查，不能为了通过检查擅自提高阈值。发布配置自身可先离线检查：
 
 ```bash
 make readiness-test
@@ -422,7 +481,7 @@ sudo systemctl list-timers 'wangzhe-*'
 sudo CONFIRM_SCHEMA_COMPATIBLE=YES /usr/local/sbin/wangzhe-production-rollback
 ```
 
-脚本只接受受控的 `/opt/wangzhe/previous`，原子交换链接并等待旧版 `/ready`；旧版若与当前数据库不兼容，会立即切回回滚前版本。人工回滚成功后维护模式仍然保留，使用 `ALLOW_MAINTENANCE_503=1` 重新运行完整就绪检查，确认两个外部站点确实处于受保护的 503 状态且其他门禁均通过后，才能由运维人员删除标记：
+脚本只接受受控的 `/opt/wangzhe/previous`。切换前会验证当前版和目标版随制品验签的加密能力元数据，要求目标能读取当前写入格式、当前也能读取目标写入格式；随后在三个公网入口已进入维护 503 且后端停止时，用当前审计工具对数据库所有加密列和当前密钥配置执行聚合兼容性门禁。任何旧-key v1、新写 v2、未知版本、未知密钥或认证失败只要目标无法读取，就会在链接切换前拒绝回滚。缺少能力元数据或审计工具的历史 release 也一律拒绝，必须先走经认证的桥接 release 流程，不能人工补文件冒充兼容。门禁通过后才原子交换链接并等待旧版 `/ready`；旧版若与当前数据库不兼容，会立即切回回滚前版本。人工回滚成功后维护模式仍然保留，使用 `ALLOW_MAINTENANCE_503=1` 重新运行完整就绪检查，确认三个外部站点确实处于受保护的 503 状态且其他门禁均通过后，才能由运维人员删除标记：
 
 ```bash
 sudo ALLOW_MAINTENANCE_503=1 BACKEND_URL=http://127.0.0.1:8080 \

@@ -117,8 +117,65 @@ sign_bundle "$logical" "$fixture/logical-private.pem"
 sign_bundle "$pitr" "$fixture/pitr-private.pem"
 verify_status_bundle "$logical" "$logical.sha256" "$logical.sig" last-success.status "$fixture/logical-public.pem" logical
 verify_status_bundle "$pitr" "$pitr.sha256" "$pitr.sig" last-pitr-success.status "$fixture/pitr-public.pem" pitr
+
+phase_epoch=$((now - 1200))
+phase_payload="$fixture/phase.payload"
+phase_marker="$fixture/maintenance"
+cat >"$phase_payload" <<EOF
+schema=wangzhe.first-install-phase1.v2
+status=awaiting-recovery
+manifest_sha256=1212121212121212121212121212121212121212121212121212121212121212
+release_id=bootstrap-1
+backup_completed_at_epoch=$phase_epoch
+database_artifact_name=wangzhe-20260830-000000-1.dump.age
+database_cipher_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+upload_artifact_name=uploads-20260830-000000-1.tar.age
+upload_cipher_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+basebackup_artifact_name=basebackup-20260830-000000-1.tar.age
+basebackup_cipher_sha256=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+wal_inventory_sha256=1313131313131313131313131313131313131313131313131313131313131313
+EOF
+phase_payload_sha="$(sha256sum "$phase_payload" | awk '{print $1}')"
+{ printf 'wangzhe-first-install-phase1:v2:%s\n' "$phase_payload_sha"; cat "$phase_payload"; } >"$phase_marker"
+chmod 0644 "$phase_marker"
+strict_env_stat() {
+  case "$1" in
+    %u) printf '%s\n' 0 ;;
+    %a) printf '%s\n' 644 ;;
+    %h) printf '%s\n' 1 ;;
+    %s) wc -c <"$3" | tr -d '[:space:]' ;;
+    *) return 1 ;;
+  esac
+}
+load_first_install_evidence_binding "$phase_marker"
+# Assigned by the production function sourced above.
+# shellcheck disable=SC2154
+[[ "$first_install_evidence_required" == 1 && "$first_install_evidence_not_before_epoch" == "$phase_epoch" ]] || {
+  echo "首次安装恢复证据绑定标记未被严格加载" >&2
+  exit 1
+}
 validate_logical_recovery_evidence "$logical" "$now" 2592000
 validate_pitr_recovery_evidence "$pitr" "$now" 2592000 172800
+
+first_install_evidence_database_sha="$(printf '0%.0s' {1..64})"
+if validate_logical_recovery_evidence "$logical" "$now" 2592000 >/dev/null 2>&1; then
+  echo "逻辑恢复门禁接受了非阶段 1 数据库制品" >&2
+  exit 1
+fi
+export first_install_evidence_database_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+first_install_evidence_base_sha="$(printf '0%.0s' {1..64})"
+if validate_pitr_recovery_evidence "$pitr" "$now" 2592000 172800 >/dev/null 2>&1; then
+  echo "PITR 门禁接受了非阶段 1 基础备份" >&2
+  exit 1
+fi
+export first_install_evidence_base_sha=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+first_install_evidence_not_before_epoch="$now"
+if validate_logical_recovery_evidence "$logical" "$now" 2592000 >/dev/null 2>&1 || \
+   validate_pitr_recovery_evidence "$pitr" "$now" 2592000 172800 >/dev/null 2>&1; then
+  echo "恢复门禁接受了阶段 1 备份完成前或同时完成的旧证据" >&2
+  exit 1
+fi
+first_install_evidence_not_before_epoch="$phase_epoch"
 
 if verify_status_bundle "$logical" "$logical.sha256" "$logical.sig" last-success.status "$fixture/pitr-public.pem" logical >/dev/null 2>&1; then
   echo "PITR 签名域错误接受了逻辑恢复证据" >&2

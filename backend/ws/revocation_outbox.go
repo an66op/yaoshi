@@ -197,8 +197,8 @@ func startRevocationOutboxWorker(ctx context.Context, db *gorm.DB) {
 	worker := newRevocationOutboxWorker(db)
 	go func() {
 		for {
-			_, err := cluster.RunWithLease(ctx, revocationOutboxLeaseName, 30*time.Second, func() error {
-				_, flushErr := worker.flush(ctx)
+			_, err := cluster.RunWithLease(ctx, revocationOutboxLeaseName, 30*time.Second, func(workCtx context.Context) error {
+				_, flushErr := worker.flush(workCtx)
 				return flushErr
 			})
 			if err != nil && ctx.Err() == nil {
@@ -222,8 +222,8 @@ func startRevocationOutboxWorker(ctx context.Context, db *gorm.DB) {
 func startRevocationRetention(ctx context.Context, db *gorm.DB) {
 	go func() {
 		for {
-			_, err := cluster.RunWithLease(ctx, revocationCleanupLeaseName, 5*time.Minute, func() error {
-				return cleanupRevocationHistory(ctx, db, time.Now().UTC())
+			_, err := cluster.RunWithLease(ctx, revocationCleanupLeaseName, 5*time.Minute, func(workCtx context.Context) error {
+				return cleanupRevocationHistory(workCtx, db, time.Now().UTC())
 			})
 			if err != nil && ctx.Err() == nil {
 				log.Printf("WebSocket 撤权历史清理失败: %v", err)

@@ -722,7 +722,7 @@ func (s *LotteryService) sync163BingoGame(ctx context.Context, binding bingo163B
 		publish(game)
 	}
 	if game.Enabled && bingo163SourceBound(&game, binding) {
-		settleImportedDrawBatch(s.db, binding.GameID, draws)
+		settleImportedDrawBatch(ctx, s.db, binding.GameID, draws)
 	}
 	latestIssue := ""
 	var latestAt time.Time
